@@ -23,6 +23,23 @@ class DeterministicPlanner:
         goal = user_goal.lower()
         path = self._extract_path(user_goal)
 
+        if ("scrivi" in goal or "write" in goal) and ("poi leggi" in goal or "then read" in goal):
+            target = path or "out/hello_exec.txt"
+            if iteration == 0:
+                return PlannerDecision(
+                    tool_name="sandbox_exec",
+                    tool_input={
+                        "command": f"mkdir -p out && echo 'hello from sandbox_exec' > {target} && cat {target}",
+                        "timeout_sec": 20,
+                    },
+                    why=f"Creo il file richiesto e verifico subito il contenuto: {target}.",
+                )
+            return PlannerDecision(
+                tool_name="sandbox_read_file",
+                tool_input={"path": target},
+                why=f"Rileggo il file appena creato: {target}.",
+            )
+
         if ("leggi" in goal or "mostra il file" in goal or "read" in goal) and path:
             return PlannerDecision(
                 tool_name="sandbox_read_file",
@@ -140,6 +157,23 @@ class OllamaPlanner:
     def choose_next_action(self, user_goal: str, iteration: int) -> PlannerDecision:
         goal = user_goal.lower()
         path = self.fallback._extract_path(user_goal)
+
+        if ("scrivi" in goal or "write" in goal) and ("poi leggi" in goal or "then read" in goal):
+            target = path or "out/hello_exec.txt"
+            if iteration == 0:
+                return PlannerDecision(
+                    tool_name="sandbox_exec",
+                    tool_input={
+                        "command": f"mkdir -p out && echo 'hello from sandbox_exec' > {target} && cat {target}",
+                        "timeout_sec": 20,
+                    },
+                    why=f"Creo il file richiesto e verifico subito il contenuto: {target}.",
+                )
+            return PlannerDecision(
+                tool_name="sandbox_read_file",
+                tool_input={"path": target},
+                why=f"Rileggo il file appena creato: {target}.",
+            )
 
         if ("leggi" in goal or "mostra il file" in goal or "read" in goal) and path:
             return PlannerDecision(
