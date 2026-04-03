@@ -75,9 +75,50 @@ class OpenShellAdapterReal:
         raise NotImplementedError("write_file non ancora collegato a OpenShell reale")
 
     def read_file(self, sandbox: dict, path: str) -> ToolResult:
-        if self.local_fallback is not None:
-            return self.local_fallback.read_file(sandbox, path)
-        raise NotImplementedError("read_file non ancora collegato a OpenShell reale")
+        started = time.time()
+        try:
+            r = requests.get(
+                f"{self.base_url}/sandboxes/{sandbox['id']}/read",
+                headers=self._headers(),
+                params={"path": path},
+                timeout=15,
+            )
+            if r.status_code == 404:
+                return self._envelope(
+                    "sandbox_read_file",
+                    started,
+                    ok=False,
+                    exit_code=1,
+                    stderr="file not found",
+                    error_type="not_found",
+                )
+            if r.status_code >= 400:
+                return self._envelope(
+                    "sandbox_read_file",
+                    started,
+                    ok=False,
+                    exit_code=1,
+                    stderr=f"http_status:{r.status_code}",
+                    error_type="request_error",
+                )
+
+            data = r.json()
+            return self._envelope(
+                "sandbox_read_file",
+                started,
+                ok=True,
+                exit_code=0,
+                stdout=data.get("content", ""),
+            )
+        except Exception as e:
+            return self._envelope(
+                "sandbox_read_file",
+                started,
+                ok=False,
+                exit_code=1,
+                stderr=str(e),
+                error_type="request_error",
+            )
 
     def list_dir(self, sandbox: dict, path: str) -> ToolResult:
         started = time.time()

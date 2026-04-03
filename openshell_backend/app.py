@@ -58,8 +58,29 @@ def list_dir(sid: str, path: str = Query(".")):
     for p in sorted(full.iterdir()):
         entries.append(f"{'d' if p.is_dir() else 'f'} {p.name}")
 
+    return {"ok": True, "path": path, "entries": entries}
+
+
+@app.get("/sandboxes/{sid}/read")
+def read_file(sid: str, path: str = Query(...)):
+    root = BASE_DIR / sid / "workspace"
+    if not root.exists():
+        raise HTTPException(status_code=404, detail="sandbox_not_found")
+
+    rel = path.lstrip("/")
+    full = (root / rel).resolve()
+
+    if root.resolve() not in full.parents and full != root.resolve():
+        raise HTTPException(status_code=403, detail="path_not_allowed")
+
+    if not full.exists():
+        raise HTTPException(status_code=404, detail="path_not_found")
+
+    if not full.is_file():
+        raise HTTPException(status_code=400, detail="not_a_file")
+
     return {
         "ok": True,
         "path": path,
-        "entries": entries,
+        "content": full.read_text(encoding="utf-8"),
     }
