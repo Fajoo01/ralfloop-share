@@ -111,3 +111,40 @@ def write_file(sid: str, payload: WriteRequest):
         "path": payload.path,
         "written": True,
     }
+
+import subprocess
+from pydantic import BaseModel
+
+
+class ExecRequest(BaseModel):
+    command: str
+    timeout_sec: int = 20
+
+
+@app.post("/sandboxes/{sid}/exec")
+def exec_in_sandbox(sid: str, payload: ExecRequest):
+    root = BASE_DIR / sid / "workspace"
+    if not root.exists():
+        raise HTTPException(status_code=404, detail="sandbox_not_found")
+
+    try:
+        proc = subprocess.run(
+            ["/bin/bash", "-lc", payload.command],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=payload.timeout_sec,
+        )
+        return {
+            "ok": proc.returncode == 0,
+            "exit_code": proc.returncode,
+            "stdout": proc.stdout,
+            "stderr": proc.stderr,
+        }
+    except subprocess.TimeoutExpired as e:
+        return {
+            "ok": False,
+            "exit_code": 124,
+            "stdout": e.stdout or "",
+            "stderr": e.stderr or "command timed out",
+        }

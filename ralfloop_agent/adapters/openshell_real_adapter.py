@@ -210,9 +210,64 @@ class OpenShellAdapterReal:
             )
 
     def exec(self, sandbox: dict, command: str, timeout_sec: int = 20) -> ToolResult:
-        if self.local_fallback is not None:
-            return self.local_fallback.exec(sandbox, command, timeout_sec=timeout_sec)
-        raise NotImplementedError("exec non ancora collegato a OpenShell reale")
+        started = time.time()
+        decision = self.policy.check_command(command)
+        if not decision.allowed:
+            return self._envelope(
+                "sandbox_exec",
+                started,
+                ok=False,
+                exit_code=1,
+                stderr=decision.reason,
+                allowed=False,
+                reason=decision.reason,
+                error_type="policy_denied",
+            )
+
+        try:
+            r = requests.post(
+                f"{self.base_url}/sandboxes/{sandbox['id']}/exec",
+                headers=self._headers(),
+                json={"command": command, "timeout_sec": timeout_sec},
+                timeout=max(timeout_sec + 5, 15),
+            )
+            if r.status_code == 404:
+                return self._envelope(
+                    "sandbox_exec",
+                    started,
+                    ok=False,
+                    exit_code=1,
+                    stderr="sandbox not found",
+                    error_type="not_found",
+                )
+            if r.status_code >= 400:
+                return self._envelope(
+                    "sandbox_exec",
+                    started,
+                    ok=False,
+                    exit_code=1,
+                    stderr=f"http_status:{r.status_code}",
+                    error_type="request_error",
+                )
+
+            data = r.json()
+            return self._envelope(
+                "sandbox_exec",
+                started,
+                ok=data.get("ok", False),
+                exit_code=data.get("exit_code", 0),
+                stdout=data.get("stdout", ""),
+                stderr=data.get("stderr", ""),
+            )
+        except Exception as e:
+            return self._envelope(
+                "sandbox_exec",
+                started,
+                ok=False,
+                exit_code=1,
+                stderr=str(e),
+                error_type="request_error",
+            )
 
     def http_fetch(self, sandbox: dict, url: str, method: str = "GET", headers: dict | None = None) -> ToolResult:
         started = time.time()
