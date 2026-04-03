@@ -20,12 +20,20 @@ class DeterministicPlanner:
         return m.group(1) if m else None
 
     def _extract_dir(self, goal: str) -> str | None:
-        m = re.search(r'\b(?:cartella|directory|dir|folder)\s+([A-Za-z0-9_.\-/]+)', goal.lower())
+        goal_l = goal.lower()
+
+        m = re.search(r'\b(?:cartella|directory|dir|folder)\s+([A-Za-z0-9_.\-/]+)', goal_l)
         if m:
             return m.group(1)
-        m = re.search(r'\b(?:in|nella|nel)\s+([A-Za-z0-9_.\-/]+)', goal.lower())
-        if m and m.group(1) not in {"workspace", "sandbox"}:
+
+        m = re.search(r'\b(?:nella|nel)\s+cartella\s+([A-Za-z0-9_.\-/]+)', goal_l)
+        if m:
             return m.group(1)
+
+        m = re.search(r'\b(?:in|nella|nel)\s+((?:out|tmp)(?:/[A-Za-z0-9_.\-/]+)?)\b', goal_l)
+        if m:
+            return m.group(1)
+
         return None
 
     def choose_next_action(self, user_goal: str, iteration: int) -> PlannerDecision:
@@ -48,6 +56,22 @@ class DeterministicPlanner:
                 tool_name="sandbox_read_file",
                 tool_input={"path": target},
                 why=f"Rileggo il file appena creato: {target}.",
+            )
+
+        if "hello" in goal or "ciao" in goal:
+            if iteration == 0:
+                return PlannerDecision(
+                    tool_name="sandbox_exec",
+                    tool_input={
+                        "command": "mkdir -p out && echo 'hello from sandbox_exec' > out/hello_exec.txt && cat out/hello_exec.txt",
+                        "timeout_sec": 20,
+                    },
+                    why="Creo il file tramite exec e verifico subito che il comando abbia funzionato.",
+                )
+            return PlannerDecision(
+                tool_name="sandbox_read_file",
+                tool_input={"path": "out/hello_exec.txt"},
+                why="Rileggo il file creato per confermare il contenuto finale.",
             )
 
         if ("leggi" in goal or "mostra il file" in goal or "read" in goal) and path:
@@ -155,6 +179,22 @@ class OllamaPlanner:
                 tool_name="sandbox_read_file",
                 tool_input={"path": target},
                 why=f"Rileggo il file appena creato: {target}.",
+            )
+
+        if "hello" in goal or "ciao" in goal:
+            if iteration == 0:
+                return PlannerDecision(
+                    tool_name="sandbox_exec",
+                    tool_input={
+                        "command": "mkdir -p out && echo 'hello from sandbox_exec' > out/hello_exec.txt && cat out/hello_exec.txt",
+                        "timeout_sec": 20,
+                    },
+                    why="Creo il file tramite exec e verifico subito che il comando abbia funzionato.",
+                )
+            return PlannerDecision(
+                tool_name="sandbox_read_file",
+                tool_input={"path": "out/hello_exec.txt"},
+                why="Rileggo il file creato per confermare il contenuto finale.",
             )
 
         if ("leggi" in goal or "mostra il file" in goal or "read" in goal) and path:
