@@ -15,8 +15,20 @@ class PlannerDecision:
 
 
 class DeterministicPlanner:
+    def _extract_path(self, goal: str) -> str | None:
+        m = re.search(r'((?:out|tmp)/[^\s]+|[A-Za-z0-9_.\-/]+\.[A-Za-z0-9]+)', goal)
+        return m.group(1) if m else None
+
     def choose_next_action(self, user_goal: str, iteration: int) -> PlannerDecision:
         goal = user_goal.lower()
+        path = self._extract_path(user_goal)
+
+        if ("leggi" in goal or "mostra il file" in goal or "read" in goal) and path:
+            return PlannerDecision(
+                tool_name="sandbox_read_file",
+                tool_input={"path": path},
+                why=f"Leggo il file richiesto: {path}.",
+            )
 
         if "hello" in goal or "ciao" in goal:
             if iteration == 0:
@@ -127,6 +139,14 @@ class OllamaPlanner:
 
     def choose_next_action(self, user_goal: str, iteration: int) -> PlannerDecision:
         goal = user_goal.lower()
+        path = self.fallback._extract_path(user_goal)
+
+        if ("leggi" in goal or "mostra il file" in goal or "read" in goal) and path:
+            return PlannerDecision(
+                tool_name="sandbox_read_file",
+                tool_input={"path": path},
+                why=f"Leggo il file richiesto: {path}.",
+            )
 
         if "ollama" in goal or "modelli" in goal or "models" in goal:
             return PlannerDecision(
@@ -177,6 +197,7 @@ Devi scegliere SOLO il prossimo passo minimo.
 
 Regole:
 - Non usare comandi distruttivi.
+- Se l'obiettivo parla di un file esplicito da leggere, usa sandbox_read_file con tool_input.path.
 - Se l'obiettivo parla di hello o ciao:
   - iteration 0 => usa sandbox_exec per creare out/hello_exec.txt con contenuto esatto: hello from sandbox_exec
   - iteration 1 => usa sandbox_read_file con tool_input.path = out/hello_exec.txt

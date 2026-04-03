@@ -117,4 +117,7 @@ class RalfloopAgent:
                 return "Contenuto della workspace:\n" + "\n".join(f"- {line}" for line in lines)
             return "La workspace è vuota."
 
+        if result.tool_name == "sandbox_read_file":
+            return "Contenuto del file:\n" + result.stdout.strip()
+
         return f"Task completato. Ultimo tool: {result.tool_name}. Output:\n{result.stdout.strip()}"
