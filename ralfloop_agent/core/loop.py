@@ -115,7 +115,28 @@ class RalfloopAgent:
                 and ("poi leggi" in goal or "then read" in goal)
             )
 
+            is_multi_file = ("leggili" in goal or "read them" in goal)
+
             if tool_name in {"sandbox_read_file", "sandbox_http_fetch"}:
+                if tool_name == "sandbox_read_file" and is_multi_file:
+                    write_pairs = []
+                    if hasattr(self.planner, "fallback") and hasattr(self.planner.fallback, "_extract_write_pairs"):
+                        write_pairs = self.planner.fallback._extract_write_pairs(state.user_goal)
+                    elif hasattr(self.planner, "_extract_write_pairs"):
+                        write_pairs = self.planner._extract_write_pairs(state.user_goal)
+
+                    expected_reads = len(write_pairs) if write_pairs else 2
+
+                    read_done = 0
+                    for step in state.plan:
+                        desc = getattr(step, "description", "")
+                        status = getattr(step, "status", "")
+                        if status == "done" and desc.lower().startswith("leggo il file richiesto"):
+                            read_done += 1
+
+                    if read_done < expected_reads:
+                        return False
+
                 state.stop_reason = "goal_completed"
                 return True
 
