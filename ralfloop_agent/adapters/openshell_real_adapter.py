@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+import json
 
 import requests
 
@@ -262,6 +263,44 @@ class OpenShellAdapterReal:
         except Exception as e:
             return self._envelope(
                 "sandbox_exec",
+                started,
+                ok=False,
+                exit_code=1,
+                stderr=str(e),
+                error_type="request_error",
+            )
+
+
+    def probe_stream(self, sandbox: dict, url: str, referer: str | None = None, user_agent: str | None = None) -> ToolResult:
+        started = time.time()
+        try:
+            r = requests.post(
+                f"{self.base_url}/sandboxes/{sandbox['id']}/probe_stream",
+                headers=self._headers(),
+                json={"url": url, "referer": referer, "user_agent": user_agent},
+                timeout=40,
+            )
+            if r.status_code >= 400:
+                return self._envelope(
+                    "sandbox_probe_stream",
+                    started,
+                    ok=False,
+                    exit_code=1,
+                    stderr=f"http_status:{r.status_code}",
+                    error_type="request_error",
+                )
+            data = r.json()
+            return self._envelope(
+                "sandbox_probe_stream",
+                started,
+                ok=True,
+                exit_code=0,
+                stdout=json.dumps(data, ensure_ascii=False),
+                artifacts=[data.get("artifact")] if data.get("artifact") else [],
+            )
+        except Exception as e:
+            return self._envelope(
+                "sandbox_probe_stream",
                 started,
                 ok=False,
                 exit_code=1,

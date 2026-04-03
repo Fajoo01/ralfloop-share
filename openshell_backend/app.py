@@ -261,3 +261,220 @@ def inspect_sandbox(sid: str):
     }
     audit("inspect_sandbox", sandbox_id=sid, file_count=file_count, dir_count=dir_count, total_bytes=total_bytes)
     return payload
+
+import re
+import requests
+from bs4 import BeautifulSoup
+
+
+class ProbeStreamRequest(BaseModel):
+    url: str
+    referer: str | None = None
+    user_agent: str | None = None
+
+
+def _video_headers(referer: str | None = None, user_agent: str | None = None) -> dict[str, str]:
+    headers = {
+        "User-Agent": user_agent or "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36"
+    }
+    if referer:
+        headers["Referer"] = referer
+    return headers
+
+
+def _guess_stream_type(url: str) -> str:
+    lower = url.lower()
+    if ".m3u8" in lower:
+        return "hls"
+    if ".mpd" in lower:
+        return "dash"
+    if lower.endswith(".mp4"):
+        return "mp4"
+    return "unknown"
+
+
+def _extract_candidate_urls(text: str) -> list[str]:
+    patterns = [
+        r'https?://[^"\'>\s]+\.m3u8[^"\'>\s]*',
+        r'https?://[^"\'>\s]+\.mpd[^"\'>\s]*',
+        r'https?://[^"\'>\s]+\.mp4[^"\'>\s]*',
+        r'//[^"\'>\s]+\.m3u8[^"\'>\s]*',
+        r'//[^"\'>\s]+\.mpd[^"\'>\s]*',
+        r'//[^"\'>\s]+\.mp4[^"\'>\s]*',
+        r'/[^"\'>\s]+\.m3u8[^"\'>\s]*',
+        r'/[^"\'>\s]+\.mpd[^"\'>\s]*',
+        r'/[^"\'>\s]+\.mp4[^"\'>\s]*',
+    ]
+    found = []
+    for pat in patterns:
+        found.extend(re.findall(pat, text, flags=re.IGNORECASE))
+    dedup = []
+    seen = set()
+    for u in found:
+        if u not in seen:
+            seen.add(u)
+            dedup.append(u)
+    return dedup
+
+
+def _parse_hls_manifest(text: str) -> dict:
+    variants = []
+    audios = []
+    subtitles = []
+    current_inf = None
+
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("#EXT-X-STREAM-INF:"):
+            current_inf = line
+            continue
+        if current_inf and not line.startswith("#"):
+            variants.append({"info": current_inf, "uri": line})
+            current_inf = None
+            continue
+        if line.startswith("#EXT-X-MEDIA:"):
+            if "TYPE=AUDIO" in line:
+                audios.append(line)
+            if "TYPE=SUBTITLES" in line:
+                subtitles.append(line)
+
+    drm_suspected = any(
+        tag in text
+        for tag in [
+            "#EXT-X-KEY",
+            "com.widevine",
+            "com.microsoft.playready",
+            "skd://",
+            "urn:uuid",
+        ]
+    )
+
+    return {
+        "variant_count": len(variants),
+        "audio_count": len(audios),
+        "subtitle_count": len(subtitles),
+        "variants": variants[:20],
+        "audios": audios[:20],
+        "subtitles": subtitles[:20],
+        "drm_suspected": drm_suspected,
+    }
+
+
+def _parse_dash_manifest(text: str) -> dict:
+    drm_suspected = any(
+        tag.lower() in text.lower()
+        for tag in [
+            "contentprotection",
+            "widevine",
+            "playready",
+            "clearkey",
+            "cenc:pssh",
+        ]
+    )
+    adaptation_sets = len(re.findall(r"<AdaptationSet\b", text, flags=re.IGNORECASE))
+    representations = len(re.findall(r"<Representation\b", text, flags=re.IGNORECASE))
+    return {
+        "adaptation_set_count": adaptation_sets,
+        "representation_count": representations,
+        "drm_suspected": drm_suspected,
+    }
+
+
+@app.post("/sandboxes/{sid}/probe_stream")
+def probe_stream(sid: str, payload: ProbeStreamRequest):
+    root = sandbox_root(sid)
+    if not root.exists():
+        raise HTTPException(status_code=404, detail="sandbox_not_found")
+
+    headers = _video_headers(payload.referer, payload.user_agent)
+    url = payload.url
+    kind = _guess_stream_type(url)
+
+    result = {
+        "ok": True,
+        "input_url": url,
+        "final_url": url,
+        "kind": kind,
+        "headers_used": headers,
+        "reachable": False,
+        "http_status": None,
+        "drm_suspected": False,
+        "manifest": {},
+        "page_candidates": [],
+        "notes": [],
+    }
+
+    try:
+        r = requests.get(url, headers=headers, timeout=20)
+        result["http_status"] = r.status_code
+        result["final_url"] = str(r.url)
+        result["reachable"] = 200 <= r.status_code < 300
+    except Exception as e:
+        audit("probe_stream_error", sandbox_id=sid, url=url, error=str(e))
+        raise HTTPException(status_code=400, detail=f"fetch_failed:{e}")
+
+    content_type = r.headers.get("Content-Type", "")
+    body = r.text
+
+    if kind == "hls" or ".m3u8" in result["final_url"].lower() or "mpegurl" in content_type.lower():
+        parsed = _parse_hls_manifest(body)
+        result["kind"] = "hls"
+        result["manifest"] = parsed
+        result["drm_suspected"] = parsed["drm_suspected"]
+        result["notes"].append("manifest_hls_parsed")
+
+    elif kind == "dash" or ".mpd" in result["final_url"].lower() or "dash+xml" in content_type.lower():
+        parsed = _parse_dash_manifest(body)
+        result["kind"] = "dash"
+        result["manifest"] = parsed
+        result["drm_suspected"] = parsed["drm_suspected"]
+        result["notes"].append("manifest_dash_parsed")
+
+    elif kind == "mp4" or "video/mp4" in content_type.lower():
+        result["kind"] = "mp4"
+        result["notes"].append("direct_mp4_detected")
+
+    else:
+        soup = BeautifulSoup(body, "lxml")
+        html_text = str(soup)
+        candidates = _extract_candidate_urls(html_text)
+        normalized = []
+        from urllib.parse import urljoin
+        base = str(r.url)
+        for c in candidates:
+            normalized.append(urljoin(base, c))
+        dedup = []
+        seen = set()
+        for c in normalized:
+            if c not in seen:
+                seen.add(c)
+                dedup.append(c)
+        result["page_candidates"] = dedup[:30]
+        result["notes"].append("page_scanned_for_video_candidates")
+
+        lower = body.lower()
+        if any(x in lower for x in ["widevine", "playready", "contentprotection", "fairplay"]):
+            result["drm_suspected"] = True
+            result["notes"].append("drm_markers_found_in_page")
+
+    out_dir = root / "out"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = out_dir / "probe_stream.json"
+    out_file.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    audit(
+        "probe_stream",
+        sandbox_id=sid,
+        url=url,
+        kind=result["kind"],
+        reachable=result["reachable"],
+        drm_suspected=result["drm_suspected"],
+        candidates=len(result["page_candidates"]),
+    )
+
+    return {
+        **result,
+        "artifact": "out/probe_stream.json",
+    }
