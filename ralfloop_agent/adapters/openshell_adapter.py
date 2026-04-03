@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
 import time
+import uuid
 from pathlib import Path
-from uuid import uuid4
 
 from ralfloop_agent.core.policy import PolicyLayer
 from ralfloop_agent.tools.contracts import ToolResult
@@ -12,91 +13,190 @@ from ralfloop_agent.tools.contracts import ToolResult
 class OpenShellAdapterStub:
     def __init__(self, base_dir: str = ".sandbox", policy: PolicyLayer | None = None) -> None:
         self.base_dir = Path(base_dir)
-        self.base_dir.mkdir(parents=True, exist_ok=True)
         self.policy = policy or PolicyLayer()
+        self.base_dir.mkdir(parents=True, exist_ok=True)
 
     def create_sandbox(self) -> dict:
-        sandbox_id = str(uuid4())
+        sandbox_id = str(uuid.uuid4())
         root = self.base_dir / sandbox_id / "workspace"
-        (root / "tmp").mkdir(parents=True, exist_ok=True)
         (root / "out").mkdir(parents=True, exist_ok=True)
-        return {"id": sandbox_id, "workspace": str(root)}
+        (root / "tmp").mkdir(parents=True, exist_ok=True)
+        return {
+            "id": sandbox_id,
+            "root": str(root),
+            "out": str(root / "out"),
+            "tmp": str(root / "tmp"),
+            "status": "running",
+        }
 
     def destroy_sandbox(self, sandbox_id: str) -> None:
-        # MVP: non cancella automaticamente per facilitare debug locale
-        _ = sandbox_id
+        target = self.base_dir / sandbox_id
+        if target.exists():
+            shutil.rmtree(target)
 
-    def _real_path(self, workspace: str, sandbox_path: str) -> Path:
-        rel = sandbox_path.removeprefix("/workspace/").removeprefix("/workspace")
-        return Path(workspace) / rel.lstrip("/")
+    def _policy_path(self, path: str) -> str:
+        rel = path.lstrip("/")
+        return f"/workspace/{rel}" if rel else "/workspace"
 
-    def exec(self, workspace: str, command: str, timeout_sec: int = 60) -> ToolResult:
+    def _full_path(self, sandbox: dict, path: str) -> Path:
+        return Path(sandbox["root"]) / path.lstrip("/")
+
+    def _envelope(
+        self,
+        tool_name: str,
+        started: float,
+        ok: bool = True,
+        exit_code: int = 0,
+        stdout: str = "",
+        stderr: str = "",
+        artifacts: list[str] | None = None,
+        allowed: bool = True,
+        reason: str = "allowed",
+        error_type: str | None = None,
+    ) -> ToolResult:
+        return ToolResult(
+            ok=ok,
+            tool_name=tool_name,
+            duration_ms=int((time.time() - started) * 1000),
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            artifacts=artifacts or [],
+            policy={"allowed": allowed, "reason": reason},
+            error_type=error_type,
+        )
+
+    def write_file(self, sandbox: dict, path: str, content: str) -> ToolResult:
+        started = time.time()
+        decision = self.policy.check_write_path(self._policy_path(path))
+        if not decision.allowed:
+            return self._envelope(
+                "sandbox_write_file",
+                started,
+                ok=False,
+                exit_code=1,
+                stderr=decision.reason,
+                allowed=False,
+                reason=decision.reason,
+                error_type="policy_denied",
+            )
+
+        full_path = self._full_path(sandbox, path)
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_text(content, encoding="utf-8")
+        return self._envelope(
+            "sandbox_write_file",
+            started,
+            stdout=f"written {full_path}",
+            artifacts=[str(full_path)],
+        )
+
+    def read_file(self, sandbox: dict, path: str) -> ToolResult:
+        started = time.time()
+        decision = self.policy.check_read_path(self._policy_path(path))
+        if not decision.allowed:
+            return self._envelope(
+                "sandbox_read_file",
+                started,
+                ok=False,
+                exit_code=1,
+                stderr=decision.reason,
+                allowed=False,
+                reason=decision.reason,
+                error_type="policy_denied",
+            )
+
+        full_path = self._full_path(sandbox, path)
+        if not full_path.exists():
+            return self._envelope(
+                "sandbox_read_file",
+                started,
+                ok=False,
+                exit_code=1,
+                stderr=f"file not found: {full_path}",
+                error_type="not_found",
+            )
+
+        return self._envelope(
+            "sandbox_read_file",
+            started,
+            stdout=full_path.read_text(encoding="utf-8"),
+        )
+
+    def list_dir(self, sandbox: dict, path: str) -> ToolResult:
+        started = time.time()
+        decision = self.policy.check_read_path(self._policy_path(path))
+        if not decision.allowed:
+            return self._envelope(
+                "sandbox_list_dir",
+                started,
+                ok=False,
+                exit_code=1,
+                stderr=decision.reason,
+                allowed=False,
+                reason=decision.reason,
+                error_type="policy_denied",
+            )
+
+        full_path = self._full_path(sandbox, path)
+        if not full_path.exists():
+            return self._envelope(
+                "sandbox_list_dir",
+                started,
+                ok=False,
+                exit_code=1,
+                stderr=f"path not found: {full_path}",
+                error_type="not_found",
+            )
+
+        entries = []
+        for p in sorted(full_path.iterdir()):
+            entries.append(f"{'d' if p.is_dir() else 'f'} {p.name}")
+
+        return self._envelope(
+            "sandbox_list_dir",
+            started,
+            stdout="\n".join(entries),
+        )
+
+    def exec(self, sandbox: dict, command: str, timeout_sec: int = 20) -> ToolResult:
+        started = time.time()
         decision = self.policy.check_command(command)
         if not decision.allowed:
-            return ToolResult(ok=False, tool_name="sandbox_exec", policy=decision, error_type="policy_denied")
-        start = time.perf_counter()
+            return self._envelope(
+                "sandbox_exec",
+                started,
+                ok=False,
+                exit_code=1,
+                stderr=decision.reason,
+                allowed=False,
+                reason=decision.reason,
+                error_type="policy_denied",
+            )
+
         try:
             proc = subprocess.run(
-                ["bash", "-lc", command],
-                cwd=workspace,
+                ["/bin/bash", "-lc", command],
+                cwd=sandbox["root"],
                 capture_output=True,
                 text=True,
                 timeout=timeout_sec,
             )
-            return ToolResult(
-                ok=proc.returncode == 0,
-                tool_name="sandbox_exec",
-                duration_ms=int((time.perf_counter() - start) * 1000),
+            return self._envelope(
+                "sandbox_exec",
+                started,
+                ok=(proc.returncode == 0),
                 exit_code=proc.returncode,
                 stdout=proc.stdout,
                 stderr=proc.stderr,
-                policy=decision,
-                error_type=None if proc.returncode == 0 else "command_failed",
             )
-        except subprocess.TimeoutExpired as exc:
-            return ToolResult(
+        except subprocess.TimeoutExpired as e:
+            return self._envelope(
+                "sandbox_exec",
+                started,
                 ok=False,
-                tool_name="sandbox_exec",
-                duration_ms=int((time.perf_counter() - start) * 1000),
-                stdout=exc.stdout or "",
-                stderr=exc.stderr or "",
-                policy=decision,
+                exit_code=124,
+                stdout=e.stdout or "",
+                stderr=e.stderr or "command timed out",
                 error_type="timeout",
             )
-
-    def read_file(self, workspace: str, path: str) -> ToolResult:
-        decision = self.policy.check_read_path(path)
-        if not decision.allowed:
-            return ToolResult(ok=False, tool_name="sandbox_read_file", policy=decision, error_type="policy_denied")
-        real = self._real_path(workspace, path)
-        try:
-            content = real.read_text(encoding="utf-8")
-            return ToolResult(ok=True, tool_name="sandbox_read_file", stdout=content, policy=decision)
-        except Exception as exc:
-            return ToolResult(ok=False, tool_name="sandbox_read_file", stderr=str(exc), policy=decision, error_type=type(exc).__name__)
-
-    def write_file(self, workspace: str, path: str, content: str) -> ToolResult:
-        decision = self.policy.check_write_path(path)
-        if not decision.allowed:
-            return ToolResult(ok=False, tool_name="sandbox_write_file", policy=decision, error_type="policy_denied")
-        real = self._real_path(workspace, path)
-        try:
-            real.parent.mkdir(parents=True, exist_ok=True)
-            real.write_text(content, encoding="utf-8")
-            return ToolResult(ok=True, tool_name="sandbox_write_file", stdout=str(real), artifacts=[str(real)], policy=decision)
-        except Exception as exc:
-            return ToolResult(ok=False, tool_name="sandbox_write_file", stderr=str(exc), policy=decision, error_type=type(exc).__name__)
-
-    def list_dir(self, workspace: str, path: str) -> ToolResult:
-        decision = self.policy.check_read_path(path)
-        if not decision.allowed:
-            return ToolResult(ok=False, tool_name="sandbox_list_dir", policy=decision, error_type="policy_denied")
-        real = self._real_path(workspace, path)
-        try:
-            lines = []
-            for item in sorted(real.iterdir()):
-                suffix = "/" if item.is_dir() else ""
-                lines.append(item.name + suffix)
-            return ToolResult(ok=True, tool_name="sandbox_list_dir", stdout="\n".join(lines), policy=decision)
-        except Exception as exc:
-            return ToolResult(ok=False, tool_name="sandbox_list_dir", stderr=str(exc), policy=decision, error_type=type(exc).__name__)
