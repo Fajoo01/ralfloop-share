@@ -15,8 +15,6 @@ class PlannerDecision:
 
 
 class DeterministicPlanner:
-    """Planner minimale per MVP: serve a validare il loop senza LLM reale."""
-
     def choose_next_action(self, user_goal: str, iteration: int) -> PlannerDecision:
         goal = user_goal.lower()
 
@@ -41,6 +39,13 @@ class DeterministicPlanner:
                 tool_name="sandbox_http_fetch",
                 tool_input={"url": "http://127.0.0.1:11434/api/tags", "method": "GET"},
                 why="Interrogo Ollama locale per osservare i modelli disponibili.",
+            )
+
+        if "file" in goal or "cartella" in goal or "directory" in goal or "workspace" in goal:
+            return PlannerDecision(
+                tool_name="sandbox_list_dir",
+                tool_input={"path": "."},
+                why="Elenco i file della workspace per mostrare il contenuto disponibile.",
             )
 
         return PlannerDecision(
@@ -110,6 +115,11 @@ class OllamaPlanner:
                 tool_input["command"] = cmd
             tool_input.setdefault("timeout_sec", 20)
 
+        if tool_name == "sandbox_http_fetch":
+            if "url" not in tool_input and "endpoint" in tool_input:
+                tool_input["url"] = tool_input.pop("endpoint")
+            tool_input.setdefault("method", "GET")
+
         if tool_name not in {"sandbox_exec", "sandbox_read_file", "sandbox_list_dir", "sandbox_http_fetch"}:
             raise ValueError(f"Unsupported tool_name from model: {tool_name}")
 
@@ -141,6 +151,13 @@ class OllamaPlanner:
                 why="Rileggo il file creato per confermare il contenuto finale.",
             )
 
+        if "file" in goal or "cartella" in goal or "directory" in goal or "workspace" in goal:
+            return PlannerDecision(
+                tool_name="sandbox_list_dir",
+                tool_input={"path": "."},
+                why="Elenco i file della workspace per mostrare il contenuto disponibile.",
+            )
+
         schema = {
             "type": "object",
             "properties": {
@@ -163,6 +180,10 @@ Regole:
 - Se l'obiettivo parla di hello o ciao:
   - iteration 0 => usa sandbox_exec per creare out/hello_exec.txt con contenuto esatto: hello from sandbox_exec
   - iteration 1 => usa sandbox_read_file con tool_input.path = out/hello_exec.txt
+- Se l'obiettivo parla di modelli Ollama:
+  - usa sandbox_http_fetch con url = http://127.0.0.1:11434/api/tags e method = GET
+- Se l'obiettivo parla di file/cartelle/workspace:
+  - usa sandbox_list_dir con path = .
 - Per sandbox_read_file usa SEMPRE la chiave path, non file_path.
 - Se non sei sicuro, usa sandbox_exec con un comando innocuo di osservazione.
 
@@ -178,9 +199,7 @@ iteration: {iteration}
                     "prompt": prompt,
                     "stream": False,
                     "format": schema,
-                    "options": {
-                        "temperature": 0
-                    }
+                    "options": {"temperature": 0},
                 },
                 timeout=self.timeout_sec,
             )

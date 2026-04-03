@@ -88,7 +88,7 @@ class RalfloopAgent:
             state.stop_reason = "repeated_failure"
             return True
         if state.last_action and state.last_result and state.last_result.ok:
-            if state.last_action["tool_name"] in {"sandbox_read_file", "sandbox_http_fetch"}:
+            if state.last_action["tool_name"] in {"sandbox_read_file", "sandbox_http_fetch", "sandbox_list_dir"}:
                 state.stop_reason = "goal_completed"
                 return True
         if state.iteration + 1 >= state.max_iterations:
@@ -110,5 +110,11 @@ class RalfloopAgent:
                         return "Modelli Ollama disponibili:\n" + "\n".join(f"- {name}" for name in names)
             except Exception:
                 pass
+
+        if result.tool_name == "sandbox_list_dir":
+            lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+            if lines:
+                return "Contenuto della workspace:\n" + "\n".join(f"- {line}" for line in lines)
+            return "La workspace è vuota."
 
         return f"Task completato. Ultimo tool: {result.tool_name}. Output:\n{result.stdout.strip()}"
