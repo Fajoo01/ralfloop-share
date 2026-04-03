@@ -1,0 +1,121 @@
+from __future__ import annotations
+
+import os
+import time
+import uuid
+
+import requests
+
+from ralfloop_agent.core.policy import PolicyLayer
+from ralfloop_agent.tools.contracts import ToolResult
+
+
+class OpenShellAdapterReal:
+    def __init__(
+        self,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        policy: PolicyLayer | None = None,
+        local_fallback=None,
+    ) -> None:
+        self.base_url = (base_url or os.getenv("OPENSHELL_BASE_URL") or "").rstrip("/")
+        self.api_key = api_key or os.getenv("OPENSHELL_API_KEY")
+        self.policy = policy or PolicyLayer()
+        self.local_fallback = local_fallback
+
+    def _envelope(
+        self,
+        tool_name: str,
+        started: float,
+        ok: bool = True,
+        exit_code: int = 0,
+        stdout: str = "",
+        stderr: str = "",
+        allowed: bool = True,
+        reason: str = "allowed",
+        artifacts: list[str] | None = None,
+        error_type: str | None = None,
+    ) -> ToolResult:
+        return ToolResult(
+            ok=ok,
+            tool_name=tool_name,
+            duration_ms=int((time.time() - started) * 1000),
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            artifacts=artifacts or [],
+            policy={"allowed": allowed, "reason": reason},
+            error_type=error_type,
+        )
+
+    def create_sandbox(self) -> dict:
+        sandbox_id = str(uuid.uuid4())
+        return {
+            "id": sandbox_id,
+            "root": "/workspace",
+            "status": "ready",
+        }
+
+    def destroy_sandbox(self, sandbox_id: str) -> None:
+        return None
+
+    def write_file(self, sandbox: dict, path: str, content: str) -> ToolResult:
+        if self.local_fallback is not None:
+            return self.local_fallback.write_file(sandbox, path, content)
+        raise NotImplementedError("write_file non ancora collegato a OpenShell reale")
+
+    def read_file(self, sandbox: dict, path: str) -> ToolResult:
+        if self.local_fallback is not None:
+            return self.local_fallback.read_file(sandbox, path)
+        raise NotImplementedError("read_file non ancora collegato a OpenShell reale")
+
+    def list_dir(self, sandbox: dict, path: str) -> ToolResult:
+        if self.local_fallback is not None:
+            return self.local_fallback.list_dir(sandbox, path)
+        raise NotImplementedError("list_dir non ancora collegato a OpenShell reale")
+
+    def exec(self, sandbox: dict, command: str, timeout_sec: int = 20) -> ToolResult:
+        if self.local_fallback is not None:
+            return self.local_fallback.exec(sandbox, command, timeout_sec=timeout_sec)
+        raise NotImplementedError("exec non ancora collegato a OpenShell reale")
+
+    def http_fetch(self, sandbox: dict, url: str, method: str = "GET", headers: dict | None = None) -> ToolResult:
+        started = time.time()
+
+        decision = self.policy.check_url(url)
+        if not decision.allowed:
+            return self._envelope(
+                "sandbox_http_fetch",
+                started,
+                ok=False,
+                exit_code=1,
+                stderr=decision.reason,
+                allowed=False,
+                reason=decision.reason,
+                error_type="policy_denied",
+            )
+
+        try:
+            response = requests.request(
+                method=method.upper(),
+                url=url,
+                headers=headers or {},
+                timeout=30,
+            )
+            return self._envelope(
+                "sandbox_http_fetch",
+                started,
+                ok=(200 <= response.status_code < 300),
+                exit_code=0 if 200 <= response.status_code < 300 else response.status_code,
+                stdout=response.text,
+                stderr="" if 200 <= response.status_code < 300 else f"http_status:{response.status_code}",
+            )
+        except Exception as e:
+            return self._envelope(
+                "sandbox_http_fetch",
+                started,
+                ok=False,
+                exit_code=1,
+                stderr=str(e),
+                error_type="request_error",
+            )
