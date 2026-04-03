@@ -19,9 +19,19 @@ class DeterministicPlanner:
         m = re.search(r'((?:out|tmp)/[^\s]+|[A-Za-z0-9_.\-/]+\.[A-Za-z0-9]+)', goal)
         return m.group(1) if m else None
 
+    def _extract_dir(self, goal: str) -> str | None:
+        m = re.search(r'\b(?:cartella|directory|dir|folder)\s+([A-Za-z0-9_.\-/]+)', goal.lower())
+        if m:
+            return m.group(1)
+        m = re.search(r'\b(?:in|nella|nel)\s+([A-Za-z0-9_.\-/]+)', goal.lower())
+        if m and m.group(1) not in {"workspace", "sandbox"}:
+            return m.group(1)
+        return None
+
     def choose_next_action(self, user_goal: str, iteration: int) -> PlannerDecision:
         goal = user_goal.lower()
         path = self._extract_path(user_goal)
+        dir_path = self._extract_dir(user_goal)
 
         if ("scrivi" in goal or "write" in goal) and ("poi leggi" in goal or "then read" in goal):
             target = path or "out/hello_exec.txt"
@@ -47,22 +57,6 @@ class DeterministicPlanner:
                 why=f"Leggo il file richiesto: {path}.",
             )
 
-        if "hello" in goal or "ciao" in goal:
-            if iteration == 0:
-                return PlannerDecision(
-                    tool_name="sandbox_exec",
-                    tool_input={
-                        "command": "mkdir -p out && echo 'hello from sandbox_exec' > out/hello_exec.txt && cat out/hello_exec.txt",
-                        "timeout_sec": 20,
-                    },
-                    why="Creo il file tramite exec e verifico subito che il comando abbia funzionato.",
-                )
-            return PlannerDecision(
-                tool_name="sandbox_read_file",
-                tool_input={"path": "out/hello_exec.txt"},
-                why="Rileggo il file creato per confermare il contenuto finale.",
-            )
-
         if "ollama" in goal or "modelli" in goal or "models" in goal:
             return PlannerDecision(
                 tool_name="sandbox_http_fetch",
@@ -71,10 +65,11 @@ class DeterministicPlanner:
             )
 
         if "file" in goal or "cartella" in goal or "directory" in goal or "workspace" in goal:
+            target_dir = dir_path or "."
             return PlannerDecision(
                 tool_name="sandbox_list_dir",
-                tool_input={"path": "."},
-                why="Elenco i file della workspace per mostrare il contenuto disponibile.",
+                tool_input={"path": target_dir},
+                why=f"Elenco i file della directory richiesta: {target_dir}.",
             )
 
         return PlannerDecision(
@@ -107,16 +102,13 @@ class OllamaPlanner:
 
     def _extract_json_object(self, text: str) -> dict:
         text = self._clean_raw(text)
-
         try:
             return json.loads(text)
         except json.JSONDecodeError:
             pass
-
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if not match:
             raise json.JSONDecodeError("No JSON object found", text, 0)
-
         return json.loads(match.group(0))
 
     def _normalize_decision(self, parsed: dict, user_goal: str, iteration: int) -> PlannerDecision:
@@ -133,17 +125,6 @@ class OllamaPlanner:
                 tool_input["path"] = tool_input.pop("file_path")
             tool_input.setdefault("path", ".")
 
-        goal = user_goal.lower()
-        if ("hello" in goal or "ciao" in goal) and iteration == 0 and tool_name == "sandbox_exec":
-            cmd = str(tool_input.get("command", "")).strip()
-            if "out/hello_exec.txt" in cmd:
-                if "mkdir -p out" not in cmd:
-                    cmd = f"mkdir -p out && {cmd}"
-                if "cat out/hello_exec.txt" not in cmd:
-                    cmd = f"{cmd} && cat out/hello_exec.txt"
-                tool_input["command"] = cmd
-            tool_input.setdefault("timeout_sec", 20)
-
         if tool_name == "sandbox_http_fetch":
             if "url" not in tool_input and "endpoint" in tool_input:
                 tool_input["url"] = tool_input.pop("endpoint")
@@ -157,6 +138,7 @@ class OllamaPlanner:
     def choose_next_action(self, user_goal: str, iteration: int) -> PlannerDecision:
         goal = user_goal.lower()
         path = self.fallback._extract_path(user_goal)
+        dir_path = self.fallback._extract_dir(user_goal)
 
         if ("scrivi" in goal or "write" in goal) and ("poi leggi" in goal or "then read" in goal):
             target = path or "out/hello_exec.txt"
@@ -189,27 +171,12 @@ class OllamaPlanner:
                 why="Interrogo Ollama locale per osservare i modelli disponibili.",
             )
 
-        if "hello" in goal or "ciao" in goal:
-            if iteration == 0:
-                return PlannerDecision(
-                    tool_name="sandbox_exec",
-                    tool_input={
-                        "command": "mkdir -p out && echo 'hello from sandbox_exec' > out/hello_exec.txt && cat out/hello_exec.txt",
-                        "timeout_sec": 20,
-                    },
-                    why="Creo il file tramite exec e verifico subito che il comando abbia funzionato.",
-                )
-            return PlannerDecision(
-                tool_name="sandbox_read_file",
-                tool_input={"path": "out/hello_exec.txt"},
-                why="Rileggo il file creato per confermare il contenuto finale.",
-            )
-
         if "file" in goal or "cartella" in goal or "directory" in goal or "workspace" in goal:
+            target_dir = dir_path or "."
             return PlannerDecision(
                 tool_name="sandbox_list_dir",
-                tool_input={"path": "."},
-                why="Elenco i file della workspace per mostrare il contenuto disponibile.",
+                tool_input={"path": target_dir},
+                why=f"Elenco i file della directory richiesta: {target_dir}.",
             )
 
         schema = {
@@ -231,21 +198,21 @@ Devi scegliere SOLO il prossimo passo minimo.
 
 Regole:
 - Non usare comandi distruttivi.
-- Se l'obiettivo parla di un file esplicito da leggere, usa sandbox_read_file con tool_input.path.
+- Se l'obiettivo parla di file esplicito da leggere, usa sandbox_read_file con tool_input.path.
+- Se l'obiettivo parla di scrivere e poi leggere, prima usa sandbox_exec e poi sandbox_read_file.
 - Se l'obiettivo parla di hello o ciao:
   - iteration 0 => usa sandbox_exec per creare out/hello_exec.txt con contenuto esatto: hello from sandbox_exec
   - iteration 1 => usa sandbox_read_file con tool_input.path = out/hello_exec.txt
 - Se l'obiettivo parla di modelli Ollama:
   - usa sandbox_http_fetch con url = http://127.0.0.1:11434/api/tags e method = GET
 - Se l'obiettivo parla di file/cartelle/workspace:
-  - usa sandbox_list_dir con path = .
+  - usa sandbox_list_dir con path uguale alla directory richiesta, altrimenti .
 - Per sandbox_read_file usa SEMPRE la chiave path, non file_path.
 - Se non sei sicuro, usa sandbox_exec con un comando innocuo di osservazione.
 
 user_goal: {user_goal}
 iteration: {iteration}
 """
-
         try:
             r = requests.post(
                 f"{self.base_url}/api/generate",
