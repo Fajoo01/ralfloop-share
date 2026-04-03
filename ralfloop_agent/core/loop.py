@@ -25,7 +25,7 @@ class RalfloopAgent:
         sandbox_info = self.adapter.create_sandbox()
         state.sandbox.id = sandbox_info["id"]
         state.sandbox.status = "ready"
-        state.sandbox.workspace_path = sandbox_info["workspace"]
+        state.sandbox.workspace_path = sandbox_info["root"]
         state.sandbox.created_at = datetime.now(UTC)
 
         self.logger.log(task_id=state.task_id, iteration=state.iteration, decision="sandbox_created", sandbox_id=state.sandbox.id)
@@ -37,7 +37,12 @@ class RalfloopAgent:
                 state.last_action = {"tool_name": decision.tool_name, "tool_input": decision.tool_input}
                 self.logger.log(task_id=state.task_id, iteration=state.iteration, tool_name=decision.tool_name, tool_input=decision.tool_input, decision="act")
 
-                result = self._dispatch(state.sandbox.workspace_path, decision.tool_name, decision.tool_input)
+                adapter_sandbox = {
+                    "id": state.sandbox.id,
+                    "root": state.sandbox.workspace_path,
+                    "status": state.sandbox.status,
+                }
+                result = self._dispatch(adapter_sandbox, decision.tool_name, decision.tool_input)
                 state.last_result = result
                 self.logger.log(task_id=state.task_id, iteration=state.iteration, tool_name=decision.tool_name, tool_output=result.model_dump(), decision="evaluate")
 
@@ -71,15 +76,15 @@ class RalfloopAgent:
 
         return state
 
-    def _dispatch(self, workspace: str, tool_name: str, tool_input: dict[str, Any]):
+    def _dispatch(self, sandbox: dict[str, Any], tool_name: str, tool_input: dict[str, Any]):
         if tool_name == "sandbox_exec":
-            return self.adapter.exec(workspace, **tool_input)
+            return self.adapter.exec(sandbox, **tool_input)
         if tool_name == "sandbox_write_file":
-            return self.adapter.write_file(workspace, **tool_input)
+            return self.adapter.write_file(sandbox, **tool_input)
         if tool_name == "sandbox_read_file":
-            return self.adapter.read_file(workspace, **tool_input)
+            return self.adapter.read_file(sandbox, **tool_input)
         if tool_name == "sandbox_list_dir":
-            return self.adapter.list_dir(workspace, **tool_input)
+            return self.adapter.list_dir(sandbox, **tool_input)
         raise ValueError(f"Unsupported tool: {tool_name}")
 
     def _should_stop(self, state: AgentState) -> bool:
