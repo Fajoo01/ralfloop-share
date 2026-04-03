@@ -11,3 +11,5 @@ build/
 .venv/
 logs/
 ralfloop_agent.egg-info/
+
+.openshell_backend/
