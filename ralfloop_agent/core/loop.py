@@ -1,0 +1,101 @@
+from __future__ import annotations
+
+from datetime import datetime, UTC
+from typing import Any
+
+from ralfloop_agent.adapters.openshell_adapter import OpenShellAdapterStub
+from ralfloop_agent.core.state import AgentState, MemoryEntry, PlanStep
+from ralfloop_agent.logging.audit import AuditLogger
+from ralfloop_agent.providers.ollama import DeterministicPlanner
+
+
+class RalfloopAgent:
+    def __init__(
+        self,
+        adapter: OpenShellAdapterStub,
+        planner: DeterministicPlanner,
+        logger: AuditLogger,
+    ) -> None:
+        self.adapter = adapter
+        self.planner = planner
+        self.logger = logger
+
+    def run(self, user_goal: str, constraints: list[str] | None = None, context: dict[str, Any] | None = None) -> AgentState:
+        state = AgentState(user_goal=user_goal, constraints=constraints or [], context=context or {}, status="running")
+        sandbox_info = self.adapter.create_sandbox()
+        state.sandbox.id = sandbox_info["id"]
+        state.sandbox.status = "ready"
+        state.sandbox.workspace_path = sandbox_info["workspace"]
+        state.sandbox.created_at = datetime.now(UTC)
+
+        self.logger.log(task_id=state.task_id, iteration=state.iteration, decision="sandbox_created", sandbox_id=state.sandbox.id)
+
+        try:
+            while state.iteration < state.max_iterations:
+                decision = self.planner.choose_next_action(state.user_goal, state.iteration)
+                state.plan.append(PlanStep(step_id=f"step-{state.iteration+1}", description=decision.why))
+                state.last_action = {"tool_name": decision.tool_name, "tool_input": decision.tool_input}
+                self.logger.log(task_id=state.task_id, iteration=state.iteration, tool_name=decision.tool_name, tool_input=decision.tool_input, decision="act")
+
+                result = self._dispatch(state.sandbox.workspace_path, decision.tool_name, decision.tool_input)
+                state.last_result = result
+                self.logger.log(task_id=state.task_id, iteration=state.iteration, tool_name=decision.tool_name, tool_output=result.model_dump(), decision="evaluate")
+
+                if result.ok:
+                    state.consecutive_failures = 0
+                    state.memory.append(MemoryEntry(kind="result", content=f"{decision.tool_name}: ok"))
+                    state.plan[-1].status = "done"
+                else:
+                    state.consecutive_failures += 1
+                    state.memory.append(MemoryEntry(kind="warning", content=f"{decision.tool_name}: {result.error_type or 'failed'}"))
+                    state.plan[-1].status = "failed"
+
+                if self._should_stop(state):
+                    break
+
+                state.iteration += 1
+
+            if state.last_result and state.last_result.ok:
+                state.status = "completed"
+                state.stop_reason = state.stop_reason or "goal_completed"
+                state.final_answer = self._build_final_answer(state)
+            else:
+                state.status = "failed"
+                state.stop_reason = state.stop_reason or "repeated_failure"
+                state.final_answer = "Task non completato."
+        finally:
+            self.adapter.destroy_sandbox(state.sandbox.id or "")
+            state.sandbox.status = "destroyed"
+            state.sandbox.destroyed_at = datetime.now(UTC)
+            self.logger.log(task_id=state.task_id, iteration=state.iteration, decision="sandbox_destroyed", sandbox_id=state.sandbox.id)
+
+        return state
+
+    def _dispatch(self, workspace: str, tool_name: str, tool_input: dict[str, Any]):
+        if tool_name == "sandbox_exec":
+            return self.adapter.exec(workspace, **tool_input)
+        if tool_name == "sandbox_write_file":
+            return self.adapter.write_file(workspace, **tool_input)
+        if tool_name == "sandbox_read_file":
+            return self.adapter.read_file(workspace, **tool_input)
+        if tool_name == "sandbox_list_dir":
+            return self.adapter.list_dir(workspace, **tool_input)
+        raise ValueError(f"Unsupported tool: {tool_name}")
+
+    def _should_stop(self, state: AgentState) -> bool:
+        if state.consecutive_failures >= 3:
+            state.stop_reason = "repeated_failure"
+            return True
+        if state.last_action and state.last_action["tool_name"] == "sandbox_read_file" and state.last_result and state.last_result.ok:
+            state.stop_reason = "goal_completed"
+            return True
+        if state.iteration + 1 >= state.max_iterations:
+            state.stop_reason = "max_iterations_reached"
+            return True
+        return False
+
+    def _build_final_answer(self, state: AgentState) -> str:
+        result = state.last_result
+        if result is None:
+            return "Nessun risultato disponibile."
+        return f"Task completato. Ultimo tool: {result.tool_name}. Output:\n{result.stdout.strip()}"
