@@ -181,3 +181,21 @@ def exec_in_sandbox(sid: str, payload: ExecRequest):
             "stdout": e.stdout or "",
             "stderr": e.stderr or "command timed out",
         }
+
+
+@app.get("/audit")
+def get_audit(limit: int = Query(100, ge=1, le=1000)):
+    if not AUDIT_LOG.exists():
+        return {"ok": True, "events": []}
+
+    lines = AUDIT_LOG.read_text(encoding="utf-8").splitlines()
+    rows = []
+    for line in lines[-limit:]:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except Exception:
+            rows.append({"event": "invalid_json_line", "raw": line})
+    return {"ok": True, "events": rows}
