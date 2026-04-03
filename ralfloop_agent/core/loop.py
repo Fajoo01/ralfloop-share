@@ -55,6 +55,14 @@ class RalfloopAgent:
                 if result.ok:
                     state.consecutive_failures = 0
                     state.memory.append(MemoryEntry(kind="result", content=f"{decision.tool_name}: ok"))
+                    if decision.tool_name == "sandbox_read_file":
+                        read_path = decision.tool_input.get("path", "")
+                        state.memory.append(
+                            MemoryEntry(
+                                kind="result",
+                                content=f"file_read::{read_path}::{result.stdout.rstrip()}",
+                            )
+                        )
                     state.plan[-1].status = "done"
                 else:
                     state.consecutive_failures += 1
@@ -179,6 +187,21 @@ class RalfloopAgent:
             return "La workspace è vuota." if requested_path == "." else f"La directory {requested_path} è vuota."
 
         if result.tool_name == "sandbox_read_file":
+            goal = state.user_goal.lower()
+            is_multi_file = ("leggili" in goal or "read them" in goal)
+
+            if is_multi_file:
+                collected: list[tuple[str, str]] = []
+                for mem in state.memory:
+                    content = getattr(mem, "content", "")
+                    if content.startswith("file_read::"):
+                        _, path, body = content.split("::", 2)
+                        collected.append((path, body))
+                if collected:
+                    return "Contenuto dei file:\n" + "\n\n".join(
+                        f"{path}:\n{body}" for path, body in collected
+                    )
+
             return "Contenuto del file:\n" + result.stdout.strip()
 
         return f"Task completato. Ultimo tool: {result.tool_name}. Output:\n{result.stdout.strip()}"

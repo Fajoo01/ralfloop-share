@@ -48,11 +48,48 @@ class DeterministicPlanner:
             return m.group(1)
         return None
 
+    def _extract_write_pairs(self, goal: str) -> list[tuple[str, str]]:
+        pairs = []
+        patterns = [
+            r'Scrivi\s+"([^"]+)"\s+in\s+([A-Za-z0-9_.\-/]+)',
+            r"Scrivi\s+'([^']+)'\s+in\s+([A-Za-z0-9_.\-/]+)",
+            r'Write\s+"([^"]+)"\s+to\s+([A-Za-z0-9_.\-/]+)',
+            r"Write\s+'([^']+)'\s+to\s+([A-Za-z0-9_.\-/]+)",
+        ]
+        for pat in patterns:
+            for m in re.finditer(pat, goal, flags=re.IGNORECASE):
+                text = m.group(1)
+                path = m.group(2).rstrip('.,;:')
+                pairs.append((text, path))
+        return pairs
+
     def choose_next_action(self, user_goal: str, iteration: int) -> PlannerDecision:
         goal = user_goal.lower()
         path = self._extract_path(user_goal)
         dir_path = self._extract_dir(user_goal)
         quoted_text = self._extract_quoted_text(user_goal)
+        write_pairs = self._extract_write_pairs(user_goal)
+
+        if len(write_pairs) >= 2 and ("leggili" in goal or "read them" in goal):
+            if iteration < len(write_pairs):
+                text, target = write_pairs[iteration]
+                escaped = shlex.quote(text)
+                return PlannerDecision(
+                    tool_name="sandbox_exec",
+                    tool_input={
+                        "command": f"mkdir -p $(dirname {shlex.quote(target)}) && printf '%s\\n' {escaped} > {shlex.quote(target)} && cat {shlex.quote(target)}",
+                        "timeout_sec": 20,
+                    },
+                    why=f"Scrivo il contenuto richiesto in {target}.",
+                )
+            read_index = iteration - len(write_pairs)
+            if read_index < len(write_pairs):
+                _, target = write_pairs[read_index]
+                return PlannerDecision(
+                    tool_name="sandbox_read_file",
+                    tool_input={"path": target},
+                    why=f"Leggo il file richiesto: {target}.",
+                )
 
         if ("scrivi" in goal or "write" in goal) and ("mostrami i file" in goal or "show me the files" in goal) and ("poi leggi" in goal or "then read" in goal):
             target = path or "out/hello_exec.txt"
@@ -205,6 +242,28 @@ class OllamaPlanner:
         path = self.fallback._extract_path(user_goal)
         dir_path = self.fallback._extract_dir(user_goal)
         quoted_text = self.fallback._extract_quoted_text(user_goal)
+        write_pairs = self.fallback._extract_write_pairs(user_goal)
+
+        if len(write_pairs) >= 2 and ("leggili" in goal or "read them" in goal):
+            if iteration < len(write_pairs):
+                text, target = write_pairs[iteration]
+                escaped = shlex.quote(text)
+                return PlannerDecision(
+                    tool_name="sandbox_exec",
+                    tool_input={
+                        "command": f"mkdir -p $(dirname {shlex.quote(target)}) && printf '%s\\n' {escaped} > {shlex.quote(target)} && cat {shlex.quote(target)}",
+                        "timeout_sec": 20,
+                    },
+                    why=f"Scrivo il contenuto richiesto in {target}.",
+                )
+            read_index = iteration - len(write_pairs)
+            if read_index < len(write_pairs):
+                _, target = write_pairs[read_index]
+                return PlannerDecision(
+                    tool_name="sandbox_read_file",
+                    tool_input={"path": target},
+                    why=f"Leggo il file richiesto: {target}.",
+                )
 
         if ("scrivi" in goal or "write" in goal) and ("mostrami i file" in goal or "show me the files" in goal) and ("poi leggi" in goal or "then read" in goal):
             target = path or "out/hello_exec.txt"
@@ -305,22 +364,6 @@ class OllamaPlanner:
 
         prompt = f"""Sei un planner per un agente sandbox.
 Devi scegliere SOLO il prossimo passo minimo.
-
-Regole:
-- Non usare comandi distruttivi.
-- Se l'obiettivo parla di file esplicito da leggere, usa sandbox_read_file con tool_input.path.
-- Se l'obiettivo parla di scrivere e poi leggere, prima usa sandbox_exec e poi sandbox_read_file.
-- Se l'obiettivo parla di scrivere, poi mostrare i file di una cartella, e poi leggere, usa nell'ordine: sandbox_exec, sandbox_list_dir, sandbox_read_file.
-- Se l'obiettivo parla di hello o ciao:
-  - iteration 0 => usa sandbox_exec per creare out/hello_exec.txt con contenuto esatto: hello from sandbox_exec
-  - iteration 1 => usa sandbox_read_file con tool_input.path = out/hello_exec.txt
-- Se l'obiettivo parla di modelli Ollama:
-  - usa sandbox_http_fetch con url = http://127.0.0.1:11434/api/tags e method = GET
-- Se l'obiettivo parla di file/cartelle/workspace:
-  - usa sandbox_list_dir con path uguale alla directory richiesta, altrimenti .
-- Per sandbox_read_file usa SEMPRE la chiave path, non file_path.
-- Se non sei sicuro, usa sandbox_exec con un comando innocuo di osservazione.
-
 user_goal: {user_goal}
 iteration: {iteration}
 """
