@@ -4,6 +4,8 @@ import shutil
 import subprocess
 import time
 import uuid
+
+import requests
 from pathlib import Path
 
 from ralfloop_agent.core.policy import PolicyLayer
@@ -199,4 +201,46 @@ class OpenShellAdapterStub:
                 stdout=e.stdout or "",
                 stderr=e.stderr or "command timed out",
                 error_type="timeout",
+            )
+
+
+    def http_fetch(self, sandbox: dict, url: str, method: str = "GET", headers: dict | None = None) -> ToolResult:
+        started = time.time()
+        decision = self.policy.check_url(url)
+        if not decision.allowed:
+            return self._envelope(
+                "sandbox_http_fetch",
+                started,
+                ok=False,
+                exit_code=1,
+                stderr=decision.reason,
+                allowed=False,
+                reason=decision.reason,
+                error_type="policy_denied",
+            )
+
+        try:
+            response = requests.request(
+                method=method.upper(),
+                url=url,
+                headers=headers or {},
+                timeout=30,
+            )
+            body = response.text
+            return self._envelope(
+                "sandbox_http_fetch",
+                started,
+                ok=(200 <= response.status_code < 300),
+                exit_code=0 if 200 <= response.status_code < 300 else response.status_code,
+                stdout=body,
+                stderr="" if 200 <= response.status_code < 300 else f"http_status:{response.status_code}",
+            )
+        except Exception as e:
+            return self._envelope(
+                "sandbox_http_fetch",
+                started,
+                ok=False,
+                exit_code=1,
+                stderr=str(e),
+                error_type="request_error",
             )

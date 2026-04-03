@@ -85,6 +85,8 @@ class RalfloopAgent:
             return self.adapter.read_file(sandbox, **tool_input)
         if tool_name == "sandbox_list_dir":
             return self.adapter.list_dir(sandbox, **tool_input)
+        if tool_name == "sandbox_http_fetch":
+            return self.adapter.http_fetch(sandbox, **tool_input)
         raise ValueError(f"Unsupported tool: {tool_name}")
 
     def _should_stop(self, state: AgentState) -> bool:
