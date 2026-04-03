@@ -36,6 +36,13 @@ class DeterministicPlanner:
                 why="Rileggo il file creato per confermare il contenuto finale.",
             )
 
+        if "ollama" in goal or "modelli" in goal or "models" in goal:
+            return PlannerDecision(
+                tool_name="sandbox_http_fetch",
+                tool_input={"url": "http://127.0.0.1:11434/api/tags", "method": "GET"},
+                why="Interrogo Ollama locale per osservare i modelli disponibili.",
+            )
+
         return PlannerDecision(
             tool_name="sandbox_exec",
             tool_input={"command": "pwd && ls -la && find . -maxdepth 2 -type f | sort", "timeout_sec": 10},
@@ -103,18 +110,43 @@ class OllamaPlanner:
                 tool_input["command"] = cmd
             tool_input.setdefault("timeout_sec", 20)
 
-        if tool_name not in {"sandbox_exec", "sandbox_read_file", "sandbox_list_dir"}:
+        if tool_name not in {"sandbox_exec", "sandbox_read_file", "sandbox_list_dir", "sandbox_http_fetch"}:
             raise ValueError(f"Unsupported tool_name from model: {tool_name}")
 
         return PlannerDecision(tool_name=tool_name, tool_input=tool_input, why=why)
 
     def choose_next_action(self, user_goal: str, iteration: int) -> PlannerDecision:
+        goal = user_goal.lower()
+
+        if "ollama" in goal or "modelli" in goal or "models" in goal:
+            return PlannerDecision(
+                tool_name="sandbox_http_fetch",
+                tool_input={"url": "http://127.0.0.1:11434/api/tags", "method": "GET"},
+                why="Interrogo Ollama locale per osservare i modelli disponibili.",
+            )
+
+        if "hello" in goal or "ciao" in goal:
+            if iteration == 0:
+                return PlannerDecision(
+                    tool_name="sandbox_exec",
+                    tool_input={
+                        "command": "mkdir -p out && echo 'hello from sandbox_exec' > out/hello_exec.txt && cat out/hello_exec.txt",
+                        "timeout_sec": 20,
+                    },
+                    why="Creo il file tramite exec e verifico subito che il comando abbia funzionato.",
+                )
+            return PlannerDecision(
+                tool_name="sandbox_read_file",
+                tool_input={"path": "out/hello_exec.txt"},
+                why="Rileggo il file creato per confermare il contenuto finale.",
+            )
+
         schema = {
             "type": "object",
             "properties": {
                 "tool_name": {
                     "type": "string",
-                    "enum": ["sandbox_exec", "sandbox_read_file", "sandbox_list_dir"],
+                    "enum": ["sandbox_exec", "sandbox_read_file", "sandbox_list_dir", "sandbox_http_fetch"],
                 },
                 "tool_input": {"type": "object"},
                 "why": {"type": "string"},

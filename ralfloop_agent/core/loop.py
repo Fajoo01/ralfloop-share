@@ -93,9 +93,10 @@ class RalfloopAgent:
         if state.consecutive_failures >= 3:
             state.stop_reason = "repeated_failure"
             return True
-        if state.last_action and state.last_action["tool_name"] == "sandbox_read_file" and state.last_result and state.last_result.ok:
-            state.stop_reason = "goal_completed"
-            return True
+        if state.last_action and state.last_result and state.last_result.ok:
+            if state.last_action["tool_name"] in {"sandbox_read_file", "sandbox_http_fetch"}:
+                state.stop_reason = "goal_completed"
+                return True
         if state.iteration + 1 >= state.max_iterations:
             state.stop_reason = "max_iterations_reached"
             return True
