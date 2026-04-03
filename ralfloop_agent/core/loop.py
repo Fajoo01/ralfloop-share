@@ -29,7 +29,13 @@ class RalfloopAgent:
                 decision = self.planner.choose_next_action(state.user_goal, state.iteration)
                 state.plan.append(PlanStep(step_id=f"step-{state.iteration+1}", description=decision.why))
                 state.last_action = {"tool_name": decision.tool_name, "tool_input": decision.tool_input}
-                self.logger.log(task_id=state.task_id, iteration=state.iteration, tool_name=decision.tool_name, tool_input=decision.tool_input, decision="act")
+                self.logger.log(
+                    task_id=state.task_id,
+                    iteration=state.iteration,
+                    tool_name=decision.tool_name,
+                    tool_input=decision.tool_input,
+                    decision="act",
+                )
 
                 adapter_sandbox = {
                     "id": state.sandbox.id,
@@ -38,7 +44,13 @@ class RalfloopAgent:
                 }
                 result = self._dispatch(adapter_sandbox, decision.tool_name, decision.tool_input)
                 state.last_result = result
-                self.logger.log(task_id=state.task_id, iteration=state.iteration, tool_name=decision.tool_name, tool_output=result.model_dump(), decision="evaluate")
+                self.logger.log(
+                    task_id=state.task_id,
+                    iteration=state.iteration,
+                    tool_name=decision.tool_name,
+                    tool_output=result.model_dump(),
+                    decision="evaluate",
+                )
 
                 if result.ok:
                     state.consecutive_failures = 0
@@ -87,20 +99,37 @@ class RalfloopAgent:
         if state.consecutive_failures >= 3:
             state.stop_reason = "repeated_failure"
             return True
+
         if state.last_action and state.last_result and state.last_result.ok:
-            if state.last_action["tool_name"] in {"sandbox_read_file", "sandbox_http_fetch"}:
+            tool_name = state.last_action["tool_name"]
+            goal = state.user_goal.lower()
+
+            is_three_step = (
+                ("scrivi" in goal or "write" in goal)
+                and ("mostrami i file" in goal or "show me the files" in goal)
+                and ("poi leggi" in goal or "then read" in goal)
+            )
+
+            is_two_step = (
+                ("scrivi" in goal or "write" in goal)
+                and ("poi leggi" in goal or "then read" in goal)
+            )
+
+            if tool_name in {"sandbox_read_file", "sandbox_http_fetch"}:
                 state.stop_reason = "goal_completed"
                 return True
-            if state.last_action["tool_name"] == "sandbox_list_dir":
-                goal = state.user_goal.lower()
-                if not (("scrivi" in goal or "write" in goal) and ("poi leggi" in goal or "then read" in goal)):
+
+            if tool_name == "sandbox_list_dir":
+                if is_three_step:
+                    return False
+                if not is_two_step:
                     state.stop_reason = "goal_completed"
                     return True
-                state.stop_reason = "goal_completed"
-                return True
+
         if state.iteration + 1 >= state.max_iterations:
             state.stop_reason = "max_iterations_reached"
             return True
+
         return False
 
     def _build_final_answer(self, state: AgentState) -> str:
