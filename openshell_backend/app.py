@@ -199,3 +199,65 @@ def get_audit(limit: int = Query(100, ge=1, le=1000)):
         except Exception:
             rows.append({"event": "invalid_json_line", "raw": line})
     return {"ok": True, "events": rows}
+
+
+@app.get("/sandboxes")
+def list_sandboxes():
+    rows = []
+    for d in sorted(BASE_DIR.iterdir()):
+        if not d.is_dir():
+            continue
+        if d.name.startswith("."):
+            continue
+        root = d / "workspace"
+        if not root.exists():
+            continue
+        rows.append(
+            {
+                "id": d.name,
+                "root": str(root),
+                "status": "ready",
+            }
+        )
+    return {"ok": True, "sandboxes": rows}
+
+
+@app.get("/sandboxes/{sid}")
+def inspect_sandbox(sid: str):
+    root = sandbox_root(sid)
+    if not root.exists():
+        raise HTTPException(status_code=404, detail="sandbox_not_found")
+
+    out_dir = root / "out"
+    tmp_dir = root / "tmp"
+
+    file_count = 0
+    dir_count = 0
+    total_bytes = 0
+
+    for p in root.rglob("*"):
+        if p.is_dir():
+            dir_count += 1
+        elif p.is_file():
+            file_count += 1
+            try:
+                total_bytes += p.stat().st_size
+            except Exception:
+                pass
+
+    payload = {
+        "ok": True,
+        "sandbox": {
+            "id": sid,
+            "root": str(root),
+            "status": "ready",
+            "exists": True,
+            "out_exists": out_dir.exists(),
+            "tmp_exists": tmp_dir.exists(),
+            "file_count": file_count,
+            "dir_count": dir_count,
+            "total_bytes": total_bytes,
+        },
+    }
+    audit("inspect_sandbox", sandbox_id=sid, file_count=file_count, dir_count=dir_count, total_bytes=total_bytes)
+    return payload
