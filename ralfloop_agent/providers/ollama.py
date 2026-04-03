@@ -58,6 +58,13 @@ class DeterministicPlanner:
                 why=f"Rileggo il file appena creato: {target}.",
             )
 
+        if ("leggi" in goal or "mostra il file" in goal or "read" in goal) and path:
+            return PlannerDecision(
+                tool_name="sandbox_read_file",
+                tool_input={"path": path},
+                why=f"Leggo il file richiesto: {path}.",
+            )
+
         if "hello" in goal or "ciao" in goal:
             if iteration == 0:
                 return PlannerDecision(
@@ -72,13 +79,6 @@ class DeterministicPlanner:
                 tool_name="sandbox_read_file",
                 tool_input={"path": "out/hello_exec.txt"},
                 why="Rileggo il file creato per confermare il contenuto finale.",
-            )
-
-        if ("leggi" in goal or "mostra il file" in goal or "read" in goal) and path:
-            return PlannerDecision(
-                tool_name="sandbox_read_file",
-                tool_input={"path": path},
-                why=f"Leggo il file richiesto: {path}.",
             )
 
         if "ollama" in goal or "modelli" in goal or "models" in goal:
@@ -181,6 +181,13 @@ class OllamaPlanner:
                 why=f"Rileggo il file appena creato: {target}.",
             )
 
+        if ("leggi" in goal or "mostra il file" in goal or "read" in goal) and path:
+            return PlannerDecision(
+                tool_name="sandbox_read_file",
+                tool_input={"path": path},
+                why=f"Leggo il file richiesto: {path}.",
+            )
+
         if "hello" in goal or "ciao" in goal:
             if iteration == 0:
                 return PlannerDecision(
@@ -195,13 +202,6 @@ class OllamaPlanner:
                 tool_name="sandbox_read_file",
                 tool_input={"path": "out/hello_exec.txt"},
                 why="Rileggo il file creato per confermare il contenuto finale.",
-            )
-
-        if ("leggi" in goal or "mostra il file" in goal or "read" in goal) and path:
-            return PlannerDecision(
-                tool_name="sandbox_read_file",
-                tool_input={"path": path},
-                why=f"Leggo il file richiesto: {path}.",
             )
 
         if "ollama" in goal or "modelli" in goal or "models" in goal:
