@@ -8,3 +8,6 @@ logs/
 dist/
 build/
 *.egg-info/
+.venv/
+logs/
+ralfloop_agent.egg-info/
