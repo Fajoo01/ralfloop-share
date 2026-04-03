@@ -1,24 +1,18 @@
 from __future__ import annotations
 
-from datetime import datetime, UTC
+import json
+from datetime import UTC, datetime
 from typing import Any
 
-from ralfloop_agent.adapters.openshell_adapter import OpenShellAdapterStub
 from ralfloop_agent.core.state import AgentState, MemoryEntry, PlanStep
 from ralfloop_agent.logging.audit import AuditLogger
-from ralfloop_agent.providers.ollama import DeterministicPlanner
 
 
 class RalfloopAgent:
-    def __init__(
-        self,
-        adapter: OpenShellAdapterStub,
-        planner: DeterministicPlanner,
-        logger: AuditLogger,
-    ) -> None:
+    def __init__(self, adapter, planner, logger: AuditLogger | None = None) -> None:
         self.adapter = adapter
         self.planner = planner
-        self.logger = logger
+        self.logger = logger or AuditLogger()
 
     def run(self, user_goal: str, constraints: list[str] | None = None, context: dict[str, Any] | None = None) -> AgentState:
         state = AgentState(user_goal=user_goal, constraints=constraints or [], context=context or {}, status="running")
@@ -106,4 +100,15 @@ class RalfloopAgent:
         result = state.last_result
         if result is None:
             return "Nessun risultato disponibile."
+
+        if result.tool_name == "sandbox_http_fetch":
+            try:
+                payload = json.loads(result.stdout)
+                if isinstance(payload, dict) and isinstance(payload.get("models"), list):
+                    names = [m.get("name") for m in payload["models"] if isinstance(m, dict) and m.get("name")]
+                    if names:
+                        return "Modelli Ollama disponibili:\n" + "\n".join(f"- {name}" for name in names)
+            except Exception:
+                pass
+
         return f"Task completato. Ultimo tool: {result.tool_name}. Output:\n{result.stdout.strip()}"
