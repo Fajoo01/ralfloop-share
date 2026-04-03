@@ -18,22 +18,24 @@ class PlannerDecision:
 class DeterministicPlanner:
     def _extract_path(self, goal: str) -> str | None:
         m = re.search(r'((?:out|tmp)/[^\s]+|[A-Za-z0-9_.\-/]+\.[A-Za-z0-9]+)', goal)
-        return m.group(1) if m else None
+        if not m:
+            return None
+        return m.group(1).rstrip('.,;:')
 
     def _extract_dir(self, goal: str) -> str | None:
         goal_l = goal.lower()
 
         m = re.search(r'\b(?:cartella|directory|dir|folder)\s+([A-Za-z0-9_.\-/]+)', goal_l)
         if m:
-            return m.group(1)
+            return m.group(1).rstrip('.,;:')
 
         m = re.search(r'\b(?:nella|nel)\s+cartella\s+([A-Za-z0-9_.\-/]+)', goal_l)
         if m:
-            return m.group(1)
+            return m.group(1).rstrip('.,;:')
 
         m = re.search(r'\b(?:in|nella|nel)\s+((?:out|tmp)(?:/[A-Za-z0-9_.\-/]+)?)\b', goal_l)
         if m:
-            return m.group(1)
+            return m.group(1).rstrip('.,;:')
 
         return None
 
@@ -51,6 +53,32 @@ class DeterministicPlanner:
         path = self._extract_path(user_goal)
         dir_path = self._extract_dir(user_goal)
         quoted_text = self._extract_quoted_text(user_goal)
+
+        if ("scrivi" in goal or "write" in goal) and ("mostrami i file" in goal or "show me the files" in goal) and ("poi leggi" in goal or "then read" in goal):
+            target = path or "out/hello_exec.txt"
+            target_dir = dir_path or "out"
+            content = quoted_text or "hello from sandbox_exec"
+            escaped = shlex.quote(content)
+            if iteration == 0:
+                return PlannerDecision(
+                    tool_name="sandbox_exec",
+                    tool_input={
+                        "command": f"mkdir -p $(dirname {shlex.quote(target)}) && printf '%s\\n' {escaped} > {shlex.quote(target)} && cat {shlex.quote(target)}",
+                        "timeout_sec": 20,
+                    },
+                    why=f"Creo il file richiesto e verifico subito il contenuto: {target}.",
+                )
+            if iteration == 1:
+                return PlannerDecision(
+                    tool_name="sandbox_list_dir",
+                    tool_input={"path": target_dir},
+                    why=f"Elenco i file nella directory richiesta: {target_dir}.",
+                )
+            return PlannerDecision(
+                tool_name="sandbox_read_file",
+                tool_input={"path": target},
+                why=f"Rileggo il file appena creato: {target}.",
+            )
 
         if ("scrivi" in goal or "write" in goal) and ("poi leggi" in goal or "then read" in goal):
             target = path or "out/hello_exec.txt"
@@ -178,6 +206,32 @@ class OllamaPlanner:
         dir_path = self.fallback._extract_dir(user_goal)
         quoted_text = self.fallback._extract_quoted_text(user_goal)
 
+        if ("scrivi" in goal or "write" in goal) and ("mostrami i file" in goal or "show me the files" in goal) and ("poi leggi" in goal or "then read" in goal):
+            target = path or "out/hello_exec.txt"
+            target_dir = dir_path or "out"
+            content = quoted_text or "hello from sandbox_exec"
+            escaped = shlex.quote(content)
+            if iteration == 0:
+                return PlannerDecision(
+                    tool_name="sandbox_exec",
+                    tool_input={
+                        "command": f"mkdir -p $(dirname {shlex.quote(target)}) && printf '%s\\n' {escaped} > {shlex.quote(target)} && cat {shlex.quote(target)}",
+                        "timeout_sec": 20,
+                    },
+                    why=f"Creo il file richiesto e verifico subito il contenuto: {target}.",
+                )
+            if iteration == 1:
+                return PlannerDecision(
+                    tool_name="sandbox_list_dir",
+                    tool_input={"path": target_dir},
+                    why=f"Elenco i file nella directory richiesta: {target_dir}.",
+                )
+            return PlannerDecision(
+                tool_name="sandbox_read_file",
+                tool_input={"path": target},
+                why=f"Rileggo il file appena creato: {target}.",
+            )
+
         if ("scrivi" in goal or "write" in goal) and ("poi leggi" in goal or "then read" in goal):
             target = path or "out/hello_exec.txt"
             content = quoted_text or "hello from sandbox_exec"
@@ -256,6 +310,7 @@ Regole:
 - Non usare comandi distruttivi.
 - Se l'obiettivo parla di file esplicito da leggere, usa sandbox_read_file con tool_input.path.
 - Se l'obiettivo parla di scrivere e poi leggere, prima usa sandbox_exec e poi sandbox_read_file.
+- Se l'obiettivo parla di scrivere, poi mostrare i file di una cartella, e poi leggere, usa nell'ordine: sandbox_exec, sandbox_list_dir, sandbox_read_file.
 - Se l'obiettivo parla di hello o ciao:
   - iteration 0 => usa sandbox_exec per creare out/hello_exec.txt con contenuto esatto: hello from sandbox_exec
   - iteration 1 => usa sandbox_read_file con tool_input.path = out/hello_exec.txt
