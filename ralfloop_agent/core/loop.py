@@ -113,9 +113,13 @@ class RalfloopAgent:
 
         if result.tool_name == "sandbox_list_dir":
             lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+            requested_path = "."
+            if state.last_action and isinstance(state.last_action, dict):
+                requested_path = state.last_action.get("tool_input", {}).get("path", ".")
             if lines:
-                return "Contenuto della workspace:\n" + "\n".join(f"- {line}" for line in lines)
-            return "La workspace è vuota."
+                title = "Contenuto della workspace:" if requested_path == "." else f"Contenuto della directory {requested_path}:"
+                return title + "\n" + "\n".join(f"- {line}" for line in lines)
+            return "La workspace è vuota." if requested_path == "." else f"La directory {requested_path} è vuota."
 
         if result.tool_name == "sandbox_read_file":
             return "Contenuto del file:\n" + result.stdout.strip()

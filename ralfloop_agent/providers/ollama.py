@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import re
+import shlex
 
 import requests
 
@@ -36,18 +37,30 @@ class DeterministicPlanner:
 
         return None
 
+    def _extract_quoted_text(self, goal: str) -> str | None:
+        m = re.search(r'"([^"]+)"', goal)
+        if m:
+            return m.group(1)
+        m = re.search(r"'([^']+)'", goal)
+        if m:
+            return m.group(1)
+        return None
+
     def choose_next_action(self, user_goal: str, iteration: int) -> PlannerDecision:
         goal = user_goal.lower()
         path = self._extract_path(user_goal)
         dir_path = self._extract_dir(user_goal)
+        quoted_text = self._extract_quoted_text(user_goal)
 
         if ("scrivi" in goal or "write" in goal) and ("poi leggi" in goal or "then read" in goal):
             target = path or "out/hello_exec.txt"
+            content = quoted_text or "hello from sandbox_exec"
+            escaped = shlex.quote(content)
             if iteration == 0:
                 return PlannerDecision(
                     tool_name="sandbox_exec",
                     tool_input={
-                        "command": f"mkdir -p out && echo 'hello from sandbox_exec' > {target} && cat {target}",
+                        "command": f"mkdir -p $(dirname {shlex.quote(target)}) && printf '%s\\n' {escaped} > {shlex.quote(target)} && cat {shlex.quote(target)}",
                         "timeout_sec": 20,
                     },
                     why=f"Creo il file richiesto e verifico subito il contenuto: {target}.",
@@ -163,14 +176,17 @@ class OllamaPlanner:
         goal = user_goal.lower()
         path = self.fallback._extract_path(user_goal)
         dir_path = self.fallback._extract_dir(user_goal)
+        quoted_text = self.fallback._extract_quoted_text(user_goal)
 
         if ("scrivi" in goal or "write" in goal) and ("poi leggi" in goal or "then read" in goal):
             target = path or "out/hello_exec.txt"
+            content = quoted_text or "hello from sandbox_exec"
+            escaped = shlex.quote(content)
             if iteration == 0:
                 return PlannerDecision(
                     tool_name="sandbox_exec",
                     tool_input={
-                        "command": f"mkdir -p out && echo 'hello from sandbox_exec' > {target} && cat {target}",
+                        "command": f"mkdir -p $(dirname {shlex.quote(target)}) && printf '%s\\n' {escaped} > {shlex.quote(target)} && cat {shlex.quote(target)}",
                         "timeout_sec": 20,
                     },
                     why=f"Creo il file richiesto e verifico subito il contenuto: {target}.",
