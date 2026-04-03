@@ -70,9 +70,51 @@ class OpenShellAdapterReal:
             pass
 
     def write_file(self, sandbox: dict, path: str, content: str) -> ToolResult:
-        if self.local_fallback is not None:
-            return self.local_fallback.write_file(sandbox, path, content)
-        raise NotImplementedError("write_file non ancora collegato a OpenShell reale")
+        started = time.time()
+        try:
+            r = requests.post(
+                f"{self.base_url}/sandboxes/{sandbox['id']}/write",
+                headers=self._headers(),
+                json={"path": path, "content": content},
+                timeout=15,
+            )
+            if r.status_code == 404:
+                return self._envelope(
+                    "sandbox_write_file",
+                    started,
+                    ok=False,
+                    exit_code=1,
+                    stderr="sandbox not found",
+                    error_type="not_found",
+                )
+            if r.status_code >= 400:
+                return self._envelope(
+                    "sandbox_write_file",
+                    started,
+                    ok=False,
+                    exit_code=1,
+                    stderr=f"http_status:{r.status_code}",
+                    error_type="request_error",
+                )
+
+            data = r.json()
+            return self._envelope(
+                "sandbox_write_file",
+                started,
+                ok=True,
+                exit_code=0,
+                stdout=f"written {data.get('path', path)}",
+                artifacts=[data.get("path", path)],
+            )
+        except Exception as e:
+            return self._envelope(
+                "sandbox_write_file",
+                started,
+                ok=False,
+                exit_code=1,
+                stderr=str(e),
+                error_type="request_error",
+            )
 
     def read_file(self, sandbox: dict, path: str) -> ToolResult:
         started = time.time()

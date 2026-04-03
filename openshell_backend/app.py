@@ -84,3 +84,30 @@ def read_file(sid: str, path: str = Query(...)):
         "path": path,
         "content": full.read_text(encoding="utf-8"),
     }
+
+
+class WriteRequest(BaseModel):
+    path: str
+    content: str
+
+
+@app.post("/sandboxes/{sid}/write")
+def write_file(sid: str, payload: WriteRequest):
+    root = BASE_DIR / sid / "workspace"
+    if not root.exists():
+        raise HTTPException(status_code=404, detail="sandbox_not_found")
+
+    rel = payload.path.lstrip("/")
+    full = (root / rel).resolve()
+
+    if root.resolve() not in full.parents and full != root.resolve():
+        raise HTTPException(status_code=403, detail="path_not_allowed")
+
+    full.parent.mkdir(parents=True, exist_ok=True)
+    full.write_text(payload.content, encoding="utf-8")
+
+    return {
+        "ok": True,
+        "path": payload.path,
+        "written": True,
+    }
