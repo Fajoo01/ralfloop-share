@@ -53,3 +53,16 @@ File principali:
 3. Verificare dipendenze e percorsi locali.
 4. Riavviare Cheshire Cat.
 5. Testare in ambiente controllato.
+
+
+## Codice core incluso
+
+Oltre al plugin Cheshire Cat, questa repo include anche il codice principale dello scaffold locale:
+
+- `openshell_backend/app.py`
+- `ralfloop_agent/`
+- `config/project.json`
+- `pyproject.toml`
+- `tests_scaffold/`
+
+Quindi la repo non contiene solo il bridge/plugin, ma anche il core agente e il backend emersi nello scaffold locale.

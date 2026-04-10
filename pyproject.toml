@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ralfloop-agent"
+version = "0.1.0"
+description = "Minimal scaffold for the Ralfloop OpenShell agent"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "pydantic>=2,<3",
+  "requests>=2.31,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<9",
+]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["ralfloop_agent*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
