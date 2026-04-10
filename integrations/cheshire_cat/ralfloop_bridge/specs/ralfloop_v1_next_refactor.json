@@ -1,0 +1,14 @@
+{
+  "next_refactor": {
+    "name": "ralfloop_v1_from_spec",
+    "priority": "high",
+    "steps": [
+      "separare routing da execution",
+      "separare baseline da ramo host-visible",
+      "usare contratti di output per task_type",
+      "rendere calculation stdout-first",
+      "spostare host-visible fuori dalla baseline",
+      "usare smoke test obbligatori dopo ogni patch"
+    ]
+  }
+}

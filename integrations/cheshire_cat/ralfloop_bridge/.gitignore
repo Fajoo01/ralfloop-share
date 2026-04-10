@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+settings.json
+settings.json
+generated_calcs/
+debug_working_memory.log
+ystemctl status jellyfin-novita-agent-run.service

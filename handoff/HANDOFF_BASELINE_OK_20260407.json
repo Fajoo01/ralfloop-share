@@ -1,0 +1,14 @@
+{
+  "project": "ralfloop_bridge / Cheshire Cat / OpenShell",
+  "handoff_date": "2026-04-07",
+  "current_status": "baseline_restored_and_verified",
+  "runtime": {
+    "active_file": "/home/sibilla-cumana/gatto/cat/plugins/ralfloop_bridge/main_plugin.py",
+    "host_visible_active": false
+  },
+  "do_not_touch": [
+    "non reinserire host-visible nel runtime attivo",
+    "non rimettere stable_snapshots dentro il package del plugin"
+  ],
+  "next_step": "lavorare host-visible solo in ramo separato/offline"
+}

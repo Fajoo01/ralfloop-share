@@ -1,0 +1,10 @@
+{
+  "name": "ralfloop_bridge",
+  "description": "Bridge Cheshire Cat verso backend Ralfloop/OpenShell",
+  "author_name": "Fabio Fagioli",
+  "author_url": "",
+  "plugin_url": "",
+  "tags": "ralfloop,openshell,bridge",
+  "thumb": "",
+  "version": "0.1.0"
+}
