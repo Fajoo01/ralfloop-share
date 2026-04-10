@@ -1,20 +1,55 @@
 # Ralfloop + OpenShell Agent
 
-## Cos'è
-Progetto per un agente con orchestrazione esterna in Ralfloop ed esecuzione confinata in OpenShell.
+## Cosè
 
-## Contenuto
-- `integrations/cheshire_cat/ralfloop_bridge/`: plugin Cheshire Cat
-- `handoff/`: note di stato e continuità
-- `docs/`, `scripts/`, `tests/`: spazio per sviluppo ordinato
+Snapshot condivisibile del lavoro su Ralfloop + OpenShell Agent
+e dellintegrazione con Cheshire Cat tramite il plugin ralfloop_bridge.
+
+## Plugin
+
+Il plugin si trova in:
+`integrations/cheshire_cat/ralfloop_bridge/`
+
+File principali:
+- `main_plugin.py`
+- `plugin.json`
+- `settings.py`
+- `settings.example.json`
+- `tools.py`
+- `requirements.txt`
+- `rag/`
+- `rag_addons/`
+- `specs/`
+
+## Handoff
+
+- `handoff/NEXT_SESSION_START_HERE.md`
+- `handoff/HANDOFF_BASELINE_OK_20260407.json`
 
 ## Stato attuale
+
 - baseline verificata
 - shell ok
 - calculation ok
-- host-visible non attivo
-- non toccare il runtime baseline senza ramo separato
+- host-visible non attivo nel runtime corrente
 
-## Note importanti
+## Cosa non contiene
+
+- runtime completo gia installato
+- settings.json reale
+- credenziali o token
+- log, backup sporchi, snapshot intermedi
+
+## Cosa non toccare
+
 - non reinserire host-visible nel runtime attivo
-- non rimettere stable_snapshots dentro il package del plugin
+- non rimettere stable_snapshots nel package del plugin
+- non mischiare baseline stabile ed esperimenti
+
+## Installazione minima
+
+1. Copiare il plugin nella cartella plugin di Cheshire Cat.
+2. Creare settings.json locale partendo da settings.example.json.
+3. Verificare dipendenze e percorsi locali.
+4. Riavviare Cheshire Cat.
+5. Testare in ambiente controllato.
