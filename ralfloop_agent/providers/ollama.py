@@ -159,6 +159,17 @@ class DeterministicPlanner:
                 why="Rileggo il file creato per confermare il contenuto finale.",
             )
 
+        if "stream probe" in goal or "verifica stream" in goal or "m3u8" in goal or "mpd" in goal or "mediaset" in goal:
+            url = "https://mediasetinfinity.mediaset.it/diretta/canale5_cC5"
+            m = re.search(r"source page:\s*(https?://\S+)", user_goal, re.I)
+            if m:
+                url = m.group(1).rstrip('.,;)')
+            return PlannerDecision(
+                tool_name="sandbox_http_fetch",
+                tool_input={"url": url, "method": "GET"},
+                why=f"Per stream probe parto da una fetch HTTP della source page: {url}.",
+            )
+
         if "ollama" in goal or "modelli" in goal or "models" in goal:
             return PlannerDecision(
                 tool_name="sandbox_http_fetch",

@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 from openshell_backend.skill_generalizer import llm_judge_reusability
+from openshell_backend.skill_grammar_rag import maybe_answer_grammar_request
 
 
 def skill_cache_dir() -> Path:
@@ -423,6 +424,17 @@ def route_common(user_goal: str, skill_context: str = "") -> dict | None:
             "final_answer": cached_answer,
             "current_role": "skill_cache",
             "role_history": ["skill_cache"],
+        }
+
+    grammar_answer = maybe_answer_grammar_request(user_goal or "")
+    if grammar_answer is not None:
+        return {
+            "ok": True,
+            "mode": "grammar_rag",
+            "stop_reason": "goal_completed",
+            "final_answer": grammar_answer,
+            "current_role": "grammar_rag",
+            "role_history": ["grammar_rag"],
         }
 
     fast_answer = fast_math_answer(user_goal or "")

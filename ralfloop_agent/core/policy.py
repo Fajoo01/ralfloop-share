@@ -16,7 +16,14 @@ class PolicyLayer:
     ) -> None:
         self.readable_paths = readable_paths or ["/workspace"]
         self.writable_paths = writable_paths or ["/workspace/tmp", "/workspace/out"]
-        self.network_allowlist = network_allowlist or ["127.0.0.1:11434"]
+        self.network_allowlist = network_allowlist or [
+            "127.0.0.1:11434",
+            "mediasetinfinity.mediaset.it",
+            "www.mediasetinfinity.mediaset.it",
+            "live03-col.msf.cdn.mediaset.net",
+            "live02-col.msf.cdn.mediaset.net",
+            "live01-col.msf.cdn.mediaset.net",
+        ]
         self.destructive_patterns = destructive_patterns or ["rm -rf", "dd", "mkfs", "shutdown", "reboot"]
 
     def check_command(self, command: str) -> PolicyDecision:
