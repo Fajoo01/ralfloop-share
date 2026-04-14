@@ -62,3 +62,13 @@ def diagnose_skill_failure(
         why="fallback diagnosis",
         confidence=0.35,
     )
+
+def diagnosis_to_dict(d: Diagnosis) -> dict[str, Any]:
+    return {
+        "kind": d.kind,
+        "target_file": d.target_file,
+        "target_symbol": d.target_symbol,
+        "why": d.why,
+        "confidence": d.confidence,
+    }
+

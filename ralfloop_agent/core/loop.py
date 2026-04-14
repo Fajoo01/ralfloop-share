@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from ralfloop_agent.core.state import AgentState, MemoryEntry, PlanStep
+from ralfloop_agent.core.decisions import ActionDecision
 from ralfloop_agent.logging.audit import AuditLogger
 import shlex
 
@@ -137,27 +138,17 @@ class RalfloopAgent:
                             read_paths.add(path.strip())
 
                     if "user_goal.txt" not in read_paths:
-                        decision = type("Decision", (), {
-                            "tool_name": "sandbox_read_file",
-                            "tool_input": {"path": "user_goal.txt"},
-                            "why": "Leggo user_goal.txt per recuperare il contesto richiesto",
-                            "model_dump": lambda self: {
-                                "tool_name": self.tool_name,
-                                "tool_input": self.tool_input,
-                                "why": self.why,
-                            },
-                        })()
+                        decision = ActionDecision(
+                            tool_name="sandbox_read_file",
+                            tool_input={"path": "user_goal.txt"},
+                            why="Leggo user_goal.txt per recuperare il contesto richiesto",
+                        )
                     elif "skill_context.txt" not in read_paths:
-                        decision = type("Decision", (), {
-                            "tool_name": "sandbox_read_file",
-                            "tool_input": {"path": "skill_context.txt"},
-                            "why": "Leggo skill_context.txt per recuperare il contesto richiesto",
-                            "model_dump": lambda self: {
-                                "tool_name": self.tool_name,
-                                "tool_input": self.tool_input,
-                                "why": self.why,
-                            },
-                        })()
+                        decision = ActionDecision(
+                            tool_name="sandbox_read_file",
+                            tool_input={"path": "skill_context.txt"},
+                            why="Leggo skill_context.txt per recuperare il contesto richiesto",
+                        )
                     else:
                         decision = self._planner_for_role(state).choose_next_action(state.user_goal, state.iteration)
                 else:

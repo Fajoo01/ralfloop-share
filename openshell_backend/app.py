@@ -1473,6 +1473,12 @@ def run_task(req: TaskRunRequest):
                 "autofix_candidate": {},
             }
 
+        diagnosis = diagnose_skill_failure(
+            skill_name=skill_name,
+            final_answer=skill_answer,
+            validation=validation,
+            audit_summary=[f"fastpath::skill::{skill_name}", "skill_output_insufficient"],
+        )
         return {
             "ok": False,
             "mode": f"skill::{skill_name}",
@@ -1489,6 +1495,7 @@ def run_task(req: TaskRunRequest):
                 "user_goal": req.user_goal or "",
                 "stop_reason": "skill_output_insufficient",
                 "validation_details": validation,
+                "diagnosis": diagnosis_to_dict(diagnosis),
                 "history": [
                     {
                         "tool_name": f"skill::{skill_name}",
