@@ -20,31 +20,30 @@ Checkpoint chiusi:
 - v0.5.12-seed-writer-extracted
 
 Stato verificato:
-- grammar fastpath: PASS
-- file_inspect seeded context: PASS
-- diagnoser integrato in autofix_candidate
-- skill insufficiency response deduplicata
-- completion policy estratta da loop.py
-- final answer renderer estratto da loop.py
-- tool dispatch estratto da loop.py
-- read-file postprocess estratto dal blocco speciale del run()
-- role helpers estratti da loop.py
-- state transitions estratte da loop.py
-- seeded context bootstrap estratto da loop.py
-- seed writer iniziale estratto da loop.py e collegato
+- loop alleggerito in moduli contracts/policy dedicati
+- grammar apostrophe autofix introdotto
+- self-heal suspicious apostrophe tokens introdotto
+- ricorsione self-heal corretta
+- grammar diagnostics API esposta
+- raw/final grammar diagnostics esposti
+- fallback grammaticale locale disattivabile via flag
 - test mirati verdi:
-  - 17 passed, 8 deselected
+  - grammar/diagnostics verdi
+  - con DISABLE_LOCAL_GRAMMAR_FALLBACK=1 il flusso continua a funzionare
 
 Commit chiave recenti:
-- 7b2dfdc refactor: extract seeded context bootstrap from loop
-- 1b3daad refactor: extract seed writer from loop
-- 018d111 refactor: wire seed writer into loop
+- 6880a4a fix: autofix apostrophe tokens in grammar fallback
+- c6a0f29 feat: self-heal suspicious apostrophe grammar tokens
+- 061d5fc fix: remove recursive self-heal loop in grammar fallback
+- 980242c feat: expose grammar diagnostics for validator issues
+- 9d0242c feat: expose raw and final grammar diagnostics
 
-Loop.py ora contiene ancora soprattutto:
-- orchestrazione run()
-- logging/audit del ciclo
+Stato reale del fallback:
+- non è più critico per il flusso provato
+- conviene tenerlo dietro flag per ora
+- non conviene rimuoverlo di colpo finché non gira un po'
 
 Prossimo target minimo:
-- valutare estrazione del logging/audit del ciclo
-- oppure fermarsi qui e consolidare
-- evitare refactor largo
+- portare i diagnostics grammar nel layer a monte
+- trasformare raw_issues in diagnostic strutturato per diagnoser/autofix_candidate
+- non patchare più a mano skill_grammar_rag.py per ogni caso
