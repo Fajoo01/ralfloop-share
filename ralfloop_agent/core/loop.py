@@ -7,6 +7,7 @@ from typing import Any
 
 from ralfloop_agent.core.state import AgentState, MemoryEntry, PlanStep
 from ralfloop_agent.logging.audit import AuditLogger
+import shlex
 
 
 
@@ -83,6 +84,35 @@ class RalfloopAgent:
 
         self.logger.log(task_id=state.task_id, iteration=state.iteration, decision="sandbox_created", sandbox_id=state.sandbox.id)
 
+        adapter_sandbox = {
+            "id": state.sandbox.id,
+            "root": state.sandbox.workspace_path,
+            "status": state.sandbox.status,
+        }
+
+        seed_files = {
+            "user_goal.txt": user_goal,
+            "skill_context.txt": str(ctx.get("skill_context", "") or ""),
+            "extra_context.json": json.dumps(ctx.get("extra_context", {}) or {}, ensure_ascii=False, indent=2),
+            "workspace_manifest.txt": (
+                "Seed files available at task start:\n"
+                "- user_goal.txt\n"
+                "- skill_context.txt\n"
+                "- extra_context.json\n"
+                "Read only these files for initial context unless you create new files yourself.\n"
+            ),
+        }
+        for seed_path, seed_content in seed_files.items():
+            seed_result = self.adapter.write_file(adapter_sandbox, path=seed_path, content=seed_content)
+            self.logger.log(
+                task_id=state.task_id,
+                iteration=state.iteration,
+                tool_name="sandbox_write_file",
+                tool_input={"path": seed_path},
+                tool_output=seed_result.model_dump(),
+                decision="seed",
+            )
+
         try:
             while state.iteration < state.max_iterations:
                 state.role_history.append(state.current_role)
@@ -108,6 +138,11 @@ class RalfloopAgent:
                       "model_name": _model_name_for_role(state),
                       "rag_collection": _rag_for_role(state),
                   }
+                state.action_history.append({
+                    "tool_name": decision.tool_name,
+                    "tool_input": dict(decision.tool_input or {}),
+                    "role": state.current_role,
+                })
                 self.logger.log(
                     task_id=state.task_id,
                     iteration=state.iteration,
@@ -116,14 +151,7 @@ class RalfloopAgent:
                     decision="act",
                 )
 
-                adapter_sandbox = {
-                    "id": state.sandbox.id,
-                    "root": state.sandbox.workspace_path,
-                    "status": state.sandbox.status,
-                }
-                print("[LOOP] role=", state.current_role, "iteration=", state.iteration, "tool=", decision.tool_name, "tool_input=", decision.tool_input, flush=True)
                 result = self._dispatch(adapter_sandbox, decision.tool_name, decision.tool_input)
-                print("[LOOP] result_ok=", result.ok, "tool_name=", result.tool_name, "stdout=", (result.stdout or "")[:500], "stderr=", (result.stderr or "")[:500], flush=True)
                 state.last_result = result
                 self.logger.log(
                     task_id=state.task_id,
@@ -173,6 +201,21 @@ class RalfloopAgent:
 
                     state.current_role = _next_role(state.current_role)
                     state.iteration += 1
+                    continue
+
+                if result.ok:
+                    if self._should_stop(state):
+                        break
+                    state.current_role = _next_role(state.current_role)
+                    state.iteration += 1
+                    continue
+
+                state.consecutive_failures += 1
+                state.memory.append(MemoryEntry(kind="warning", content=f"{decision.tool_name}: {result.stderr or 'failed'}"))
+                if self._should_stop(state):
+                    break
+                state.current_role = _next_role(state.current_role)
+                state.iteration += 1
 
             if state.last_result and state.last_result.ok:
                 state.status = "completed"
@@ -207,7 +250,15 @@ class RalfloopAgent:
                 tool_input["path"] = tool_input.pop("filename")
 
         if tool_name == "sandbox_exec":
-            return self.adapter.exec(sandbox, **tool_input)
+            normalized_input = dict(tool_input or {})
+            action = str(normalized_input.get("action") or "").strip().lower()
+            file_path = str(normalized_input.get("file_path") or normalized_input.get("path") or "").strip()
+
+            if "command" not in normalized_input or not normalized_input.get("command"):
+                if action in {"inspect", "inspect_file", "ispect_file", "read_file", "show_file"} and file_path:
+                    normalized_input["command"] = f"cat {shlex.quote(file_path)}"
+
+            return self.adapter.exec(sandbox, **normalized_input)
         if tool_name == "sandbox_write_file":
             return self.adapter.write_file(sandbox, **tool_input)
         if tool_name == "sandbox_read_file":
@@ -263,12 +314,39 @@ class RalfloopAgent:
                 state.stop_reason = "goal_completed"
                 return True
 
+            if tool_name == "sandbox_write_file":
+                if not is_three_step and not is_two_step and not is_multi_file:
+                    state.stop_reason = "goal_completed"
+                    return True
+
             if tool_name == "sandbox_list_dir":
                 if is_three_step:
                     return False
                 if not is_two_step:
                     state.stop_reason = "goal_completed"
                     return True
+
+        if len(state.action_history) >= 3:
+            tail = state.action_history[-3:]
+            first = tail[0]
+            same_action = all(
+                x.get("tool_name") == first.get("tool_name")
+                and x.get("tool_input") == first.get("tool_input")
+                for x in tail
+            )
+            same_stdout = bool(
+                state.last_result
+                and state.last_result.ok
+                and (state.last_result.stdout or "").strip()
+            )
+            if same_action and same_stdout:
+                state.stop_reason = "stalled_need_skill_patch"
+                state.autofix_candidate = {
+                    "user_goal": state.user_goal,
+                    "stop_reason": state.stop_reason,
+                    "history": tail,
+                }
+                return True
 
         if state.iteration + 1 >= state.max_iterations:
             state.stop_reason = "max_iterations_reached"

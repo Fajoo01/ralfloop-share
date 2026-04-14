@@ -57,4 +57,6 @@ class AgentState(BaseModel):
     last_result: ToolResult | None = None
     consecutive_failures: int = 0
     stop_reason: str | None = None
+    action_history: list[dict[str, Any]] = Field(default_factory=list)
+    autofix_candidate: dict[str, Any] = Field(default_factory=dict)
     final_answer: str | None = None

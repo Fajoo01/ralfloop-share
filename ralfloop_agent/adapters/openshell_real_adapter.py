@@ -210,8 +210,19 @@ class OpenShellAdapterReal:
                 error_type="request_error",
             )
 
-    def exec(self, sandbox: dict, command: str, timeout_sec: int = 20) -> ToolResult:
+    def exec(self, sandbox: dict, command: str | None = None, timeout_sec: int = 20, **kwargs) -> ToolResult:
         started = time.time()
+        if command is None:
+            command = kwargs.get("command")
+        if command is None:
+            return self._envelope(
+                "sandbox_exec",
+                started,
+                ok=False,
+                exit_code=1,
+                stderr="missing command",
+                error_type="bad_request",
+            )
         decision = self.policy.check_command(command)
         if not decision.allowed:
             return self._envelope(

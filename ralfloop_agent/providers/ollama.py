@@ -229,6 +229,22 @@ class OllamaPlanner:
         tool_input = parsed.get("tool_input", {}) or {}
         why = parsed.get("why", "Decisione generata da Ollama.")
 
+        if tool_name == "sandbox_exec" and tool_input.get("action") in {"create_file", "write_file"}:
+            target = tool_input.get("path") or tool_input.get("file_path") or tool_input.get("filename")
+            content = tool_input.get("content") or tool_input.get("text") or ""
+            if target:
+                tool_name = "sandbox_write_file"
+                tool_input = {"path": str(target), "content": str(content)}
+
+        if tool_name == "sandbox_write_file":
+            if "file_path" in tool_input and "path" not in tool_input:
+                tool_input["path"] = tool_input.pop("file_path")
+            if "filename" in tool_input and "path" not in tool_input:
+                tool_input["path"] = tool_input.pop("filename")
+            if "text" in tool_input and "content" not in tool_input:
+                tool_input["content"] = tool_input.pop("text")
+            tool_input.setdefault("content", "")
+
         if tool_name == "sandbox_read_file":
             if "file_path" in tool_input and "path" not in tool_input:
                 tool_input["path"] = tool_input.pop("file_path")
@@ -243,7 +259,7 @@ class OllamaPlanner:
                 tool_input["url"] = tool_input.pop("endpoint")
             tool_input.setdefault("method", "GET")
 
-        if tool_name not in {"sandbox_exec", "sandbox_read_file", "sandbox_list_dir", "sandbox_http_fetch"}:
+        if tool_name not in {"sandbox_exec", "sandbox_write_file", "sandbox_read_file", "sandbox_list_dir", "sandbox_http_fetch"}:
             raise ValueError(f"Unsupported tool_name from model: {tool_name}")
 
         return PlannerDecision(tool_name=tool_name, tool_input=tool_input, why=why)
@@ -364,7 +380,7 @@ class OllamaPlanner:
             "properties": {
                 "tool_name": {
                     "type": "string",
-                    "enum": ["sandbox_exec", "sandbox_read_file", "sandbox_list_dir", "sandbox_http_fetch"],
+                    "enum": ["sandbox_exec", "sandbox_write_file", "sandbox_read_file", "sandbox_list_dir", "sandbox_http_fetch"],
                 },
                 "tool_input": {"type": "object"},
                 "why": {"type": "string"},
@@ -375,6 +391,15 @@ class OllamaPlanner:
 
         prompt = f"""Sei un planner per un agente sandbox.
 Devi scegliere SOLO il prossimo passo minimo.
+La workspace parte vuota tranne questi file seed già presenti:
+- user_goal.txt
+- skill_context.txt
+- extra_context.json
+- workspace_manifest.txt
+Se ti serve contesto iniziale, leggi solo uno di questi file seed.
+Non inventare file come order_list.txt o user_goal.md se non sono già stati creati in precedenza.
+Se il goal chiede di creare qualcosa, preferisci creare o ispezionare file in out/ invece di leggere file inesistenti.
+Rispondi solo con un oggetto JSON conforme allo schema.
 user_goal: {user_goal}
 iteration: {iteration}
 """
