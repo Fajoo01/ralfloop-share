@@ -14,6 +14,7 @@ from ralfloop_agent.contracts.tool_dispatch import dispatch_tool
 from ralfloop_agent.contracts.read_file_postprocess import handle_read_file_result
 from ralfloop_agent.contracts.role_helpers import next_role, profile_for_role, model_name_for_role, rag_for_role, planner_for_role
 from ralfloop_agent.contracts.state_transitions import advance_role_and_iteration, finalize_state
+from ralfloop_agent.contracts.seeded_context_bootstrap import choose_seeded_context_action
 
 
 
@@ -90,35 +91,10 @@ class RalfloopAgent:
                     )
                 )
 
-                goal_low = (state.user_goal or "").lower()
-
-                if "user_goal.txt" in goal_low and "skill_context.txt" in goal_low:
-                    read_paths = set()
-                    for mem in state.memory:
-                        content = getattr(mem, "content", "")
-                        if content.startswith("file_read::"):
-                            try:
-                                _, path, _body = content.split("::", 2)
-                            except ValueError:
-                                continue
-                            read_paths.add(path.strip())
-
-                    if "user_goal.txt" not in read_paths:
-                        decision = ActionDecision(
-                            tool_name="sandbox_read_file",
-                            tool_input={"path": "user_goal.txt"},
-                            why="Leggo user_goal.txt per recuperare il contesto richiesto",
-                        )
-                    elif "skill_context.txt" not in read_paths:
-                        decision = ActionDecision(
-                            tool_name="sandbox_read_file",
-                            tool_input={"path": "skill_context.txt"},
-                            why="Leggo skill_context.txt per recuperare il contesto richiesto",
-                        )
-                    else:
-                        decision = planner_for_role(self, state).choose_next_action(state.user_goal, state.iteration)
-                else:
-                    decision = planner_for_role(self, state).choose_next_action(state.user_goal, state.iteration)
+                decision = choose_seeded_context_action(
+                    state,
+                    planner_for_role(self, state).choose_next_action,
+                )
                 state.plan.append(
                     PlanStep(
                         step_id=f"step-{state.iteration+1}",
