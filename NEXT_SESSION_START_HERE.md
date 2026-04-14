@@ -18,32 +18,33 @@ Checkpoint chiusi:
 - v0.5.10-state-transitions-extracted
 - v0.5.11-seeded-context-bootstrap-extracted
 - v0.5.12-seed-writer-extracted
+- v0.5.13-grammar-diagnostics-upstream-ready
+- v0.5.14-grammar-upstream-diagnoser
 
 Stato verificato:
-- loop alleggerito in moduli contracts/policy dedicati
-- grammar apostrophe autofix introdotto
-- self-heal suspicious apostrophe tokens introdotto
-- ricorsione self-heal corretta
-- grammar diagnostics API esposta
-- raw/final grammar diagnostics esposti
-- fallback grammaticale locale disattivabile via flag
-- test mirati verdi:
-  - grammar/diagnostics verdi
-  - con DISABLE_LOCAL_GRAMMAR_FALLBACK=1 il flusso continua a funzionare
+- grammar diagnostics espongono raw_items/raw_issues e final_items/final_issues
+- raw_issues grammar vengono instradati in autofix_candidate
+- il diagnoser riconosce grammar upstream issues
+- per suspicious_apostrophe_token non produce più solo contract_mismatch generico
+- tag locale creato:
+  - v0.5.14-grammar-upstream-diagnoser
 
 Commit chiave recenti:
-- 6880a4a fix: autofix apostrophe tokens in grammar fallback
-- c6a0f29 feat: self-heal suspicious apostrophe grammar tokens
-- 061d5fc fix: remove recursive self-heal loop in grammar fallback
 - 980242c feat: expose grammar diagnostics for validator issues
-- 9d0242c feat: expose raw and final grammar diagnostics
+- dad0ba6 feat: expose raw and final grammar diagnostics
+- f49d68a feat: route grammar raw issues into autofix candidate
+- db6f173 feat: diagnose grammar upstream issues for autofix
 
-Stato reale del fallback:
-- non è più critico per il flusso provato
-- conviene tenerlo dietro flag per ora
-- non conviene rimuoverlo di colpo finché non gira un po'
+Stato reale:
+- il sistema ora vede l'errore a monte e lo traduce in diagnosi strutturata
+- non genera ancora una patch concreta in automatico
+- prossimo step non è più capire il problema, ma insegnare all'autofix a proporre la patch
 
 Prossimo target minimo:
-- portare i diagnostics grammar nel layer a monte
-- trasformare raw_issues in diagnostic strutturato per diagnoser/autofix_candidate
-- non patchare più a mano skill_grammar_rag.py per ogni caso
+- agganciare diagnosis.kind=grammar_upstream_issue alla generazione di una patch candidate
+- caso iniziale da coprire: suspicious_apostrophe_token
+- target file atteso:
+  - openshell_backend/skill_grammar_rag.py
+- target symbol atteso:
+  - _simple_local_grammar_fallback
+- evitare refactor largo fuori dal flusso autofix
