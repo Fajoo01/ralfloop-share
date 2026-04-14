@@ -8,6 +8,7 @@ from typing import Any
 from ralfloop_agent.core.state import AgentState, MemoryEntry, PlanStep
 from ralfloop_agent.core.decisions import ActionDecision
 from ralfloop_agent.logging.audit import AuditLogger
+from ralfloop_agent.contracts.completion_policy import evaluate_completion_stop
 import shlex
 
 
@@ -299,108 +300,7 @@ class RalfloopAgent:
         raise ValueError(f"Unsupported tool: {tool_name}")
 
     def _should_stop(self, state: AgentState) -> bool:
-        if state.consecutive_failures >= 3:
-            state.stop_reason = "repeated_failure"
-            return True
-
-        if state.last_action and state.last_result and state.last_result.ok:
-            tool_name = state.last_action["tool_name"]
-            goal = state.user_goal.lower()
-
-            is_three_step = (
-                ("scrivi" in goal or "write" in goal)
-                and ("mostrami i file" in goal or "show me the files" in goal)
-                and ("poi leggi" in goal or "then read" in goal)
-            )
-
-            is_two_step = (
-                ("scrivi" in goal or "write" in goal)
-                and ("poi leggi" in goal or "then read" in goal)
-            )
-
-            is_multi_file = ("leggili" in goal or "read them" in goal)
-
-            if tool_name in {"sandbox_read_file", "sandbox_http_fetch"}:
-                if tool_name == "sandbox_read_file":
-                    goal_targets_both_seeded = (
-                        "user_goal.txt" in goal and "skill_context.txt" in goal
-                    )
-
-                    if goal_targets_both_seeded:
-                        read_paths = set()
-                        for mem in state.memory:
-                            content = getattr(mem, "content", "")
-                            if content.startswith("file_read::"):
-                                try:
-                                    _, path, _body = content.split("::", 2)
-                                except ValueError:
-                                    continue
-                                read_paths.add(path.strip())
-
-                        if not {"user_goal.txt", "skill_context.txt"}.issubset(read_paths):
-                            return False
-
-                    elif is_multi_file:
-                        write_pairs = []
-                        if hasattr(self.planner, "fallback") and hasattr(self.planner.fallback, "_extract_write_pairs"):
-                            write_pairs = self.planner.fallback._extract_write_pairs(state.user_goal)
-                        elif hasattr(self.planner, "_extract_write_pairs"):
-                            write_pairs = self.planner._extract_write_pairs(state.user_goal)
-
-                        expected_reads = len(write_pairs) if write_pairs else 2
-
-                        read_done = 0
-                        for step in state.plan:
-                            desc = getattr(step, "description", "")
-                            status = getattr(step, "status", "")
-                            if status == "done" and desc.lower().startswith("leggo il file richiesto"):
-                                read_done += 1
-
-                        if read_done < expected_reads:
-                            return False
-
-                state.stop_reason = "goal_completed"
-                return True
-
-            if tool_name == "sandbox_write_file":
-                if not is_three_step and not is_two_step and not is_multi_file:
-                    state.stop_reason = "goal_completed"
-                    return True
-
-            if tool_name == "sandbox_list_dir":
-                if is_three_step:
-                    return False
-                if not is_two_step:
-                    state.stop_reason = "goal_completed"
-                    return True
-
-        if len(state.action_history) >= 3:
-            tail = state.action_history[-3:]
-            first = tail[0]
-            same_action = all(
-                x.get("tool_name") == first.get("tool_name")
-                and x.get("tool_input") == first.get("tool_input")
-                for x in tail
-            )
-            same_stdout = bool(
-                state.last_result
-                and state.last_result.ok
-                and (state.last_result.stdout or "").strip()
-            )
-            if same_action and same_stdout:
-                state.stop_reason = "stalled_need_skill_patch"
-                state.autofix_candidate = {
-                    "user_goal": state.user_goal,
-                    "stop_reason": state.stop_reason,
-                    "history": tail,
-                }
-                return True
-
-        if state.iteration + 1 >= state.max_iterations:
-            state.stop_reason = "max_iterations_reached"
-            return True
-
-        return False
+        return evaluate_completion_stop(state, self.planner)
 
     def _build_final_answer(self, state: AgentState) -> str:
         result = state.last_result
