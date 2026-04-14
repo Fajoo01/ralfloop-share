@@ -185,6 +185,55 @@ def _enrich_analysis(arr):
     return out
 
 
+
+def _autofix_apostrophe_token(tok: str) -> list[dict[str, Any]] | None:
+    t = (tok or "").strip()
+    if not t or "'" not in t:
+        return None
+
+    low = t.lower()
+
+    prep_art_prefixes = (
+        "dall'", "all'", "nell'", "sull'", "coll'",
+        "dell'", "agl'", "dagl'", "negl'", "sugl'",
+    )
+    art_prefixes = ("l'", "un'")
+
+    for pref in prep_art_prefixes:
+        if low.startswith(pref) and len(t) > len(pref):
+            head = t[:len(pref)]
+            tail = t[len(pref):]
+            if tail and tail[0].isupper():
+                return [
+                    {"token": head, "categoria": "preposizione_articolata"},
+                    {"token": tail, "categoria": "nome_proprio"},
+                ]
+            return [
+                {"token": head, "categoria": "preposizione_articolata"},
+                {"token": tail, "categoria": "nome_comune"},
+            ]
+
+    for pref in art_prefixes:
+        if low.startswith(pref) and len(t) > len(pref):
+            head = t[:len(pref)]
+            tail = t[len(pref):]
+            if pref == "l'":
+                head_cat = "articolo_determinativo"
+            else:
+                head_cat = "articolo_indeterminativo"
+            if tail and tail[0].isupper():
+                return [
+                    {"token": head, "categoria": head_cat},
+                    {"token": tail, "categoria": "nome_proprio"},
+                ]
+            return [
+                {"token": head, "categoria": head_cat},
+                {"token": tail, "categoria": "nome_comune"},
+            ]
+
+    return None
+
+
 def _simple_local_grammar_fallback(phrase: str) -> list[dict[str, Any]] | None:
     p = (phrase or "").strip()
     if not p:
@@ -238,7 +287,11 @@ def _simple_local_grammar_fallback(phrase: str) -> list[dict[str, Any]] | None:
         elif low in modal_verbs or low in common_verbs or low.endswith(("are","ere","ire")):
             add(tok, "verbo")
         else:
-            add(tok, "nome_comune")
+            fixed = _autofix_apostrophe_token(tok)
+            if fixed:
+                out.extend(fixed)
+            else:
+                add(tok, "nome_comune")
 
     if punct:
         out.append({"token": punct, "categoria": "segno_punteggiatura"})
