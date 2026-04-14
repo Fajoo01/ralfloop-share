@@ -1,0 +1,26 @@
+[
+  {
+    "name": "base_simple",
+    "input": "Analisi grammaticale: La bambina legge un libro.",
+    "must_not_be_none": true,
+    "must_have_items": [
+      {"token": "La", "categoria": "articolo_determinativo", "genere": "femminile", "numero": "singolare"},
+      {"token": "bambina", "categoria": "nome_comune", "genere": "femminile", "numero": "singolare"},
+      {"token": "legge", "categoria": "verbo", "lemma": "leggere"},
+      {"token": "un", "categoria": "articolo_indeterminativo", "genere": "maschile", "numero": "singolare"},
+      {"token": "libro", "categoria": "nome_comune", "genere": "maschile", "numero": "singolare"}
+    ]
+  },
+  {
+    "name": "imperative_ikea_rich",
+    "input": "Analisi grammaticale: Devi ordinare lo scolapiatti dall'Ikea",
+    "must_not_be_none": true,
+    "must_have_items": [
+      {"token": "Devi", "categoria": "verbo", "lemma": "dovere", "modo": "indicativo", "tempo": "presente", "persona": "seconda", "numero": "singolare"},
+      {"token": "ordinare", "categoria": "verbo", "lemma": "ordinare"},
+      {"token": "lo", "categoria": "articolo_determinativo", "genere": "maschile", "numero": "singolare"},
+      {"token": "scolapiatti", "categoria": "nome_comune"},
+      {"token": "dall'Ikea", "categoria": "nome_comune"}
+    ]
+  }
+]

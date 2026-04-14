@@ -1,0 +1,10 @@
+{
+  "id": "math_binary_arithmetic_v1",
+  "problem_type": "math.binary_arithmetic",
+  "match": {
+    "regex": "(?:quanto fa|calcola)\\s+(-?\\d+(?:[.,]\\d+)?)\\s*([\\+\\-\\*x/])\\s*(-?\\d+(?:[.,]\\d+)?)"
+  },
+  "executor": "python_inline",
+  "input_names": ["a", "op", "b"],
+  "template": "a = float(\"{a}\".replace(\",\", \".\"))\nb = float(\"{b}\".replace(\",\", \".\"))\nop = \"{op}\"\nif op == \"+\":\n    print(a + b)\nelif op == \"-\":\n    print(a - b)\nelif op in (\"*\", \"x\"):\n    print(a * b)\nelif op == \"/\":\n    print(\"ERRORE: division_by_zero\" if b == 0 else round(a / b, 6))"
+}

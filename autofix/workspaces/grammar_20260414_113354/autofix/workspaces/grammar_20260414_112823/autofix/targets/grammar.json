@@ -1,0 +1,23 @@
+{
+  "name": "grammar",
+  "match": {
+    "task_contains_any": [
+      "analisi grammaticale",
+      "analizza grammaticalmente"
+    ],
+    "stop_reason_any": [
+      "repeated_failure",
+      "max_iterations_reached",
+      "stalled_need_skill_patch"
+    ]
+  },
+  "patch_files": [
+    "openshell_backend/skill_grammar_rag.py"
+  ],
+  "validator_cmd": "cd /home/sibilla-cumana/ralfloop_agent_scaffold && ./tests/grammar/validate_grammar_skill.sh",
+  "retry_payload_file": "/tmp/grammar_test.json",
+  "direct_skill": {
+    "module": "openshell_backend.skill_grammar_rag",
+    "function": "maybe_answer_grammar_request"
+  }
+}

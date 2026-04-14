@@ -1,0 +1,903 @@
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+import os
+import uuid
+from datetime import UTC, datetime
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel
+
+BASE_DIR = Path("/home/sibilla-cumana/ralfloop_agent_scaffold/.openshell_backend")
+BASE_DIR.mkdir(parents=True, exist_ok=True)
+
+AUDIT_LOG = BASE_DIR / "audit.jsonl"
+
+DESTRUCTIVE_PATTERNS = [
+    "rm -rf",
+    "mkfs",
+    "shutdown",
+    "reboot",
+    "dd ",
+]
+
+app = FastAPI(title="Ralfloop OpenShell Backend")
+
+BACKEND_VENV_BIN = os.path.expanduser("~/ralfloop_agent_scaffold/.venv/bin")
+
+
+def audit(event: str, **fields) -> None:
+    row = {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "event": event,
+        **fields,
+    }
+    with AUDIT_LOG.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def sandbox_root(sid: str) -> Path:
+    return BASE_DIR / sid / "workspace"
+
+
+def resolve_in_sandbox(root: Path, rel_path: str) -> Path:
+    rel = rel_path.lstrip("/")
+    full = (root / rel).resolve()
+    if root.resolve() not in full.parents and full != root.resolve():
+        raise HTTPException(status_code=403, detail="path_not_allowed")
+    return full
+
+
+def check_command_allowed(command: str) -> tuple[bool, str]:
+    lowered = command.lower()
+    for pat in DESTRUCTIVE_PATTERNS:
+        if pat in lowered:
+            return False, f"destructive_command:{pat.strip()}"
+    return True, "allowed"
+
+
+class SandboxCreateResponse(BaseModel):
+    id: str
+    root: str
+    status: str
+
+
+class WriteRequest(BaseModel):
+    path: str
+    content: str
+
+
+class ExecRequest(BaseModel):
+    command: str
+    timeout_sec: int = 20
+
+
+@app.post("/sandboxes", response_model=SandboxCreateResponse)
+def create_sandbox():
+    sid = str(uuid.uuid4())
+    root = sandbox_root(sid)
+    (root / "out").mkdir(parents=True, exist_ok=True)
+    (root / "tmp").mkdir(parents=True, exist_ok=True)
+    audit("sandbox_created", sandbox_id=sid, root=str(root))
+    return SandboxCreateResponse(id=sid, root=str(root), status="ready")
+
+
+@app.delete("/sandboxes/{sid}")
+def destroy_sandbox(sid: str):
+    target = BASE_DIR / sid
+    if target.exists():
+        shutil.rmtree(target)
+    audit("sandbox_destroyed", sandbox_id=sid)
+    return {"ok": True}
+
+
+@app.get("/sandboxes/{sid}/list")
+def list_dir(sid: str, path: str = Query(".")):
+    root = sandbox_root(sid)
+    if not root.exists():
+        raise HTTPException(status_code=404, detail="sandbox_not_found")
+
+    full = resolve_in_sandbox(root, path)
+
+    if not full.exists():
+        raise HTTPException(status_code=404, detail="path_not_found")
+    if not full.is_dir():
+        raise HTTPException(status_code=400, detail="not_a_directory")
+
+    entries = [f"{'d' if p.is_dir() else 'f'} {p.name}" for p in sorted(full.iterdir())]
+    audit("list_dir", sandbox_id=sid, path=path, entries_count=len(entries))
+    return {"ok": True, "path": path, "entries": entries}
+
+
+@app.get("/sandboxes/{sid}/read")
+def read_file(sid: str, path: str = Query(...)):
+    root = sandbox_root(sid)
+    if not root.exists():
+        raise HTTPException(status_code=404, detail="sandbox_not_found")
+
+    full = resolve_in_sandbox(root, path)
+
+    if not full.exists():
+        raise HTTPException(status_code=404, detail="path_not_found")
+    if not full.is_file():
+        raise HTTPException(status_code=400, detail="not_a_file")
+
+    content = full.read_text(encoding="utf-8")
+    audit("read_file", sandbox_id=sid, path=path, size=len(content))
+    return {"ok": True, "path": path, "content": content}
+
+
+@app.post("/sandboxes/{sid}/write")
+def write_file(sid: str, payload: WriteRequest):
+    root = sandbox_root(sid)
+    if not root.exists():
+        raise HTTPException(status_code=404, detail="sandbox_not_found")
+
+    full = resolve_in_sandbox(root, payload.path)
+    full.parent.mkdir(parents=True, exist_ok=True)
+    full.write_text(payload.content, encoding="utf-8")
+    audit("write_file", sandbox_id=sid, path=payload.path, size=len(payload.content))
+    return {"ok": True, "path": payload.path, "written": True}
+
+
+@app.post("/sandboxes/{sid}/exec")
+def exec_in_sandbox(sid: str, payload: ExecRequest):
+    root = sandbox_root(sid)
+    if not root.exists():
+        raise HTTPException(status_code=404, detail="sandbox_not_found")
+
+    allowed, reason = check_command_allowed(payload.command)
+    if not allowed:
+        audit("exec_denied", sandbox_id=sid, command=payload.command, reason=reason)
+        raise HTTPException(status_code=403, detail=reason)
+
+    try:
+        env = os.environ.copy()
+        env["PATH"] = BACKEND_VENV_BIN + os.pathsep + env.get("PATH", "")
+        proc = subprocess.run(
+            ["/bin/bash", "-lc", payload.command],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=payload.timeout_sec,
+            env=env,
+        )
+        audit(
+            "exec",
+            sandbox_id=sid,
+            command=payload.command,
+            exit_code=proc.returncode,
+            stdout_len=len(proc.stdout or ""),
+            stderr_len=len(proc.stderr or ""),
+        )
+        return {
+            "ok": proc.returncode == 0,
+            "exit_code": proc.returncode,
+            "stdout": proc.stdout,
+            "stderr": proc.stderr,
+        }
+    except subprocess.TimeoutExpired as e:
+        audit("exec_timeout", sandbox_id=sid, command=payload.command, timeout_sec=payload.timeout_sec)
+        return {
+            "ok": False,
+            "exit_code": 124,
+            "stdout": e.stdout or "",
+            "stderr": e.stderr or "command timed out",
+        }
+
+
+@app.get("/audit")
+def get_audit(limit: int = Query(100, ge=1, le=1000)):
+    if not AUDIT_LOG.exists():
+        return {"ok": True, "events": []}
+
+    lines = AUDIT_LOG.read_text(encoding="utf-8").splitlines()
+    rows = []
+    for line in lines[-limit:]:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except Exception:
+            rows.append({"event": "invalid_json_line", "raw": line})
+    return {"ok": True, "events": rows}
+
+
+@app.get("/sandboxes")
+def list_sandboxes():
+    rows = []
+    for d in sorted(BASE_DIR.iterdir()):
+        if not d.is_dir():
+            continue
+        if d.name.startswith("."):
+            continue
+        root = d / "workspace"
+        if not root.exists():
+            continue
+        rows.append(
+            {
+                "id": d.name,
+                "root": str(root),
+                "status": "ready",
+            }
+        )
+    return {"ok": True, "sandboxes": rows}
+
+
+@app.get("/sandboxes/{sid}")
+def inspect_sandbox(sid: str):
+    root = sandbox_root(sid)
+    if not root.exists():
+        raise HTTPException(status_code=404, detail="sandbox_not_found")
+
+    out_dir = root / "out"
+    tmp_dir = root / "tmp"
+
+    file_count = 0
+    dir_count = 0
+    total_bytes = 0
+
+    for p in root.rglob("*"):
+        if p.is_dir():
+            dir_count += 1
+        elif p.is_file():
+            file_count += 1
+            try:
+                total_bytes += p.stat().st_size
+            except Exception:
+                pass
+
+    payload = {
+        "ok": True,
+        "sandbox": {
+            "id": sid,
+            "root": str(root),
+            "status": "ready",
+            "exists": True,
+            "out_exists": out_dir.exists(),
+            "tmp_exists": tmp_dir.exists(),
+            "file_count": file_count,
+            "dir_count": dir_count,
+            "total_bytes": total_bytes,
+        },
+    }
+    audit("inspect_sandbox", sandbox_id=sid, file_count=file_count, dir_count=dir_count, total_bytes=total_bytes)
+    return payload
+
+import re
+import requests
+from bs4 import BeautifulSoup
+
+
+class ProbeStreamRequest(BaseModel):
+    url: str
+    referer: str | None = None
+    user_agent: str | None = None
+
+
+def _video_headers(referer: str | None = None, user_agent: str | None = None) -> dict[str, str]:
+    headers = {
+        "User-Agent": user_agent or "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36"
+    }
+    if referer:
+        headers["Referer"] = referer
+    return headers
+
+
+def _guess_stream_type(url: str) -> str:
+    lower = url.lower()
+    if ".m3u8" in lower:
+        return "hls"
+    if ".mpd" in lower:
+        return "dash"
+    if lower.endswith(".mp4"):
+        return "mp4"
+    return "unknown"
+
+
+def _extract_candidate_urls(text: str) -> list[str]:
+    patterns = [
+        r'https?://[^"\'>\s]+\.m3u8[^"\'>\s]*',
+        r'https?://[^"\'>\s]+\.mpd[^"\'>\s]*',
+        r'https?://[^"\'>\s]+\.mp4[^"\'>\s]*',
+        r'//[^"\'>\s]+\.m3u8[^"\'>\s]*',
+        r'//[^"\'>\s]+\.mpd[^"\'>\s]*',
+        r'//[^"\'>\s]+\.mp4[^"\'>\s]*',
+        r'/[^"\'>\s]+\.m3u8[^"\'>\s]*',
+        r'/[^"\'>\s]+\.mpd[^"\'>\s]*',
+        r'/[^"\'>\s]+\.mp4[^"\'>\s]*',
+    ]
+    found = []
+    for pat in patterns:
+        found.extend(re.findall(pat, text, flags=re.IGNORECASE))
+    dedup = []
+    seen = set()
+    for u in found:
+        if u not in seen:
+            seen.add(u)
+            dedup.append(u)
+    return dedup
+
+
+def _parse_hls_manifest(text: str) -> dict:
+    variants = []
+    audios = []
+    subtitles = []
+    current_inf = None
+
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("#EXT-X-STREAM-INF:"):
+            current_inf = line
+            continue
+        if current_inf and not line.startswith("#"):
+            variants.append({"info": current_inf, "uri": line})
+            current_inf = None
+            continue
+        if line.startswith("#EXT-X-MEDIA:"):
+            if "TYPE=AUDIO" in line:
+                audios.append(line)
+            if "TYPE=SUBTITLES" in line:
+                subtitles.append(line)
+
+    drm_suspected = any(
+        tag in text
+        for tag in [
+            "#EXT-X-KEY",
+            "com.widevine",
+            "com.microsoft.playready",
+            "skd://",
+            "urn:uuid",
+        ]
+    )
+
+    return {
+        "variant_count": len(variants),
+        "audio_count": len(audios),
+        "subtitle_count": len(subtitles),
+        "variants": variants[:20],
+        "audios": audios[:20],
+        "subtitles": subtitles[:20],
+        "drm_suspected": drm_suspected,
+    }
+
+
+def _parse_dash_manifest(text: str) -> dict:
+    drm_suspected = any(
+        tag.lower() in text.lower()
+        for tag in [
+            "contentprotection",
+            "widevine",
+            "playready",
+            "clearkey",
+            "cenc:pssh",
+        ]
+    )
+    adaptation_sets = len(re.findall(r"<AdaptationSet\b", text, flags=re.IGNORECASE))
+    representations = len(re.findall(r"<Representation\b", text, flags=re.IGNORECASE))
+    return {
+        "adaptation_set_count": adaptation_sets,
+        "representation_count": representations,
+        "drm_suspected": drm_suspected,
+    }
+
+
+@app.post("/sandboxes/{sid}/probe_stream")
+def probe_stream(sid: str, payload: ProbeStreamRequest):
+    root = sandbox_root(sid)
+    if not root.exists():
+        raise HTTPException(status_code=404, detail="sandbox_not_found")
+
+    headers = _video_headers(payload.referer, payload.user_agent)
+    url = payload.url
+    kind = _guess_stream_type(url)
+
+    result = {
+        "ok": True,
+        "input_url": url,
+        "final_url": url,
+        "kind": kind,
+        "headers_used": headers,
+        "reachable": False,
+        "http_status": None,
+        "drm_suspected": False,
+        "manifest": {},
+        "page_candidates": [],
+        "notes": [],
+    }
+
+    try:
+        r = requests.get(url, headers=headers, timeout=20)
+        result["http_status"] = r.status_code
+        result["final_url"] = str(r.url)
+        result["reachable"] = 200 <= r.status_code < 300
+    except Exception as e:
+        audit("probe_stream_error", sandbox_id=sid, url=url, error=str(e))
+        raise HTTPException(status_code=400, detail=f"fetch_failed:{e}")
+
+    content_type = r.headers.get("Content-Type", "")
+    body = r.text
+
+    if kind == "hls" or ".m3u8" in result["final_url"].lower() or "mpegurl" in content_type.lower():
+        parsed = _parse_hls_manifest(body)
+        result["kind"] = "hls"
+        result["manifest"] = parsed
+        result["drm_suspected"] = parsed["drm_suspected"]
+        result["notes"].append("manifest_hls_parsed")
+
+    elif kind == "dash" or ".mpd" in result["final_url"].lower() or "dash+xml" in content_type.lower():
+        parsed = _parse_dash_manifest(body)
+        result["kind"] = "dash"
+        result["manifest"] = parsed
+        result["drm_suspected"] = parsed["drm_suspected"]
+        result["notes"].append("manifest_dash_parsed")
+
+    elif kind == "mp4" or "video/mp4" in content_type.lower():
+        result["kind"] = "mp4"
+        result["notes"].append("direct_mp4_detected")
+
+    else:
+        soup = BeautifulSoup(body, "lxml")
+        html_text = str(soup)
+        candidates = _extract_candidate_urls(html_text)
+        normalized = []
+        from urllib.parse import urljoin
+        base = str(r.url)
+        for c in candidates:
+            normalized.append(urljoin(base, c))
+        dedup = []
+        seen = set()
+        for c in normalized:
+            if c not in seen:
+                seen.add(c)
+                dedup.append(c)
+        result["page_candidates"] = dedup[:30]
+        result["notes"].append("page_scanned_for_video_candidates")
+
+        lower = body.lower()
+        if any(x in lower for x in ["widevine", "playready", "contentprotection", "fairplay"]):
+            result["drm_suspected"] = True
+            result["notes"].append("drm_markers_found_in_page")
+
+    out_dir = root / "out"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = out_dir / "probe_stream.json"
+    out_file.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    audit(
+        "probe_stream",
+        sandbox_id=sid,
+        url=url,
+        kind=result["kind"],
+        reachable=result["reachable"],
+        drm_suspected=result["drm_suspected"],
+        candidates=len(result["page_candidates"]),
+    )
+
+    return {
+        **result,
+        "artifact": "out/probe_stream.json",
+    }
+
+from typing import Optional, Dict, Any
+from pydantic import BaseModel
+
+class TaskRunRequest(BaseModel):
+    user_goal: str
+    mode: str = "planner_coder_judge"
+    planner_model_profile: str = "generalist"
+    coder_model_profile: str = "coder"
+    judge_model_profile: str = "generalist"
+
+    planner_model_name: str = "qwen2.5:7b"
+    coder_model_name: str = "qwen2.5:7b"
+    judge_model_name: str = "qwen2.5:7b"
+
+    planner_rag_collection: str = "ralfloop_planner"
+    coder_rag_collection: str = "ralfloop_coder"
+    judge_rag_collection: str = "ralfloop_judge"
+
+    skill_context: Optional[str] = None
+    extra_context: Optional[Dict[str, Any]] = None
+
+@app.post("/tasks/run")
+def run_task(req: TaskRunRequest):
+    low_goal = (req.user_goal or "").lower()
+    low_skill = (req.skill_context or "").lower()
+
+    if (
+        "stream probe" in low_goal
+        or "canale5" in low_goal
+        or "canale 5" in low_goal
+        or "mediaset" in low_goal
+        or "canale5" in low_skill
+        or "canale 5" in low_skill
+        or "mediaset" in low_skill
+    ):
+        import json as _json
+        import re as _re
+        import sys
+        from pathlib import Path as _Path
+
+        plugin_root = _Path("/home/sibilla-cumana/gatto/cat/plugins/stream_scraper")
+        if str(plugin_root) not in sys.path:
+            sys.path.insert(0, str(plugin_root))
+
+        from main import (
+            get_sniffer_driver,
+            sniff_video_url,
+            _mediaset_file_url_to_manifest,
+            _mediaset_file_url_to_remote_base,
+        )
+        from mediaset_resolver import mediaset_headers
+
+        source_page = "https://mediasetinfinity.mediaset.it/diretta/canale5_cC5"
+        channel_name = "Canale5"
+
+        try:
+            skill = req.skill_context or ""
+            m = _re.search(r'"source_page":"([^"]+)"', skill)
+            if m:
+                source_page = m.group(1)
+            m = _re.search(r'"channel_id":"([^"]+)"', skill)
+            if m:
+                channel_name = m.group(1)
+        except Exception:
+            pass
+
+        driver = None
+        new_url = None
+        cookies = None
+        ua = None
+
+        try:
+            driver = get_sniffer_driver()
+            new_url, cookies, ua = sniff_video_url(driver, source_page, channel_name)
+        except Exception as e:
+            print("[STREAM_BRIDGE] sniff_video_url error:", e, flush=True)
+        finally:
+            try:
+                if driver:
+                    driver.quit()
+            except Exception:
+                pass
+
+        if new_url:
+            try:
+                new_url = _mediaset_file_url_to_manifest(new_url)
+            except Exception:
+                pass
+            try:
+                new_url = _mediaset_file_url_to_remote_base(new_url)
+            except Exception:
+                pass
+
+            headers = {}
+            try:
+                headers.update(mediaset_headers(cookies, ua))
+            except Exception:
+                if ua:
+                    headers["User-Agent"] = ua
+                if cookies:
+                    headers["Cookie"] = cookies
+
+            final_answer = _json.dumps({"stream_url": new_url, "headers": headers}, ensure_ascii=False)
+
+            return {
+                "ok": True,
+                "mode": req.mode,
+                "used_profiles": {
+                    "planner": req.planner_model_profile,
+                    "coder": req.coder_model_profile,
+                    "judge": req.judge_model_profile,
+                },
+                "used_models": {
+                    "planner": req.planner_model_name,
+                    "coder": req.coder_model_name,
+                    "judge": req.judge_model_name,
+                },
+                "used_rag": {
+                    "planner": req.planner_rag_collection,
+                    "coder": req.coder_rag_collection,
+                    "judge": req.judge_rag_collection,
+                },
+                "current_role": "stream_probe_bridge",
+                "role_history": ["stream_probe_bridge"],
+                "stop_reason": "goal_completed",
+                "final_answer": final_answer,
+                "artifacts": [],
+                "audit_summary": ["bridge::stream_scraper::sniff_video_url"],
+            }
+
+        return {
+            "ok": False,
+            "mode": req.mode,
+            "used_profiles": {
+                "planner": req.planner_model_profile,
+                "coder": req.coder_model_profile,
+                "judge": req.judge_model_profile,
+            },
+            "used_models": {
+                "planner": req.planner_model_name,
+                "coder": req.coder_model_name,
+                "judge": req.judge_model_name,
+            },
+            "used_rag": {
+                "planner": req.planner_rag_collection,
+                "coder": req.coder_rag_collection,
+                "judge": req.judge_rag_collection,
+            },
+            "current_role": "stream_probe_bridge",
+            "role_history": ["stream_probe_bridge"],
+            "stop_reason": "bridge_failed",
+            "final_answer": '{"stream_url":null}',
+            "artifacts": [],
+            "audit_summary": ["bridge::stream_scraper::sniff_video_url::failed"],
+        }
+
+    low_goal = (req.user_goal or "").lower()
+    low_skill = (req.skill_context or "").lower()
+
+    if (
+        "stream probe" in low_goal
+        or "canale5" in low_goal
+        or "canale 5" in low_goal
+        or "mediaset" in low_goal
+        or "canale5" in low_skill
+        or "canale 5" in low_skill
+        or "mediaset" in low_skill
+    ):
+        import json as _json
+        import re as _re
+        import sys
+        from pathlib import Path as _Path
+
+        plugin_root = _Path("/home/sibilla-cumana/gatto/cat/plugins/stream_scraper")
+        if str(plugin_root) not in sys.path:
+            sys.path.insert(0, str(plugin_root))
+
+        from main import (
+            get_sniffer_driver,
+            sniff_video_url,
+            _mediaset_file_url_to_manifest,
+            _mediaset_file_url_to_remote_base,
+        )
+        from mediaset_resolver import mediaset_headers
+
+        source_page = "https://mediasetinfinity.mediaset.it/diretta/canale5_cC5"
+        channel_name = "Canale5"
+
+        try:
+            skill = req.skill_context or ""
+            m = _re.search(r'"source_page":"([^"]+)"', skill)
+            if m:
+                source_page = m.group(1)
+            m = _re.search(r'"channel_id":"([^"]+)"', skill)
+            if m:
+                channel_name = m.group(1)
+        except Exception:
+            pass
+
+        driver = None
+        new_url = None
+        cookies = None
+        ua = None
+
+        try:
+            driver = get_sniffer_driver()
+            new_url, cookies, ua = sniff_video_url(driver, source_page, channel_name)
+        except Exception as e:
+            print("[STREAM_BRIDGE] sniff_video_url error:", e, flush=True)
+        finally:
+            try:
+                if driver:
+                    driver.quit()
+            except Exception:
+                pass
+
+        if new_url:
+            try:
+                new_url = _mediaset_file_url_to_manifest(new_url)
+            except Exception:
+                pass
+            try:
+                new_url = _mediaset_file_url_to_remote_base(new_url)
+            except Exception:
+                pass
+
+            headers = {}
+            try:
+                headers.update(mediaset_headers(cookies, ua))
+            except Exception:
+                if ua:
+                    headers["User-Agent"] = ua
+                if cookies:
+                    headers["Cookie"] = cookies
+
+            final_answer = _json.dumps({"stream_url": new_url, "headers": headers}, ensure_ascii=False)
+
+            return {
+                "ok": True,
+                "mode": req.mode,
+                "used_profiles": {
+                    "planner": req.planner_model_profile,
+                    "coder": req.coder_model_profile,
+                    "judge": req.judge_model_profile,
+                },
+                "used_models": {
+                    "planner": req.planner_model_name,
+                    "coder": req.coder_model_name,
+                    "judge": req.judge_model_name,
+                },
+                "used_rag": {
+                    "planner": req.planner_rag_collection,
+                    "coder": req.coder_rag_collection,
+                    "judge": req.judge_rag_collection,
+                },
+                "current_role": "stream_probe_bridge",
+                "role_history": ["stream_probe_bridge"],
+                "stop_reason": "goal_completed",
+                "final_answer": final_answer,
+                "artifacts": [],
+                "audit_summary": ["bridge::stream_scraper::sniff_video_url"],
+            }
+
+        return {
+            "ok": False,
+            "mode": req.mode,
+            "used_profiles": {
+                "planner": req.planner_model_profile,
+                "coder": req.coder_model_profile,
+                "judge": req.judge_model_profile,
+            },
+            "used_models": {
+                "planner": req.planner_model_name,
+                "coder": req.coder_model_name,
+                "judge": req.judge_model_name,
+            },
+            "used_rag": {
+                "planner": req.planner_rag_collection,
+                "coder": req.coder_rag_collection,
+                "judge": req.judge_rag_collection,
+            },
+            "current_role": "stream_probe_bridge",
+            "role_history": ["stream_probe_bridge"],
+            "stop_reason": "bridge_failed",
+            "final_answer": '{"stream_url":null}',
+            "artifacts": [],
+            "audit_summary": ["bridge::stream_scraper::sniff_video_url::failed"],
+        }
+
+    from ralfloop_agent.core.loop import RalfloopAgent
+    from ralfloop_agent.core.state import AgentState
+    from ralfloop_agent.adapters.openshell_real_adapter import OpenShellAdapterReal
+    from ralfloop_agent.logging.audit import AuditLogger
+    from ralfloop_agent.providers.ollama import OllamaPlanner, DeterministicPlanner
+
+    adapter = OpenShellAdapterReal(base_url="http://127.0.0.1:19090")
+
+    planner = OllamaPlanner(
+        base_url="http://127.0.0.1:11434",
+        model=req.planner_model_name,
+        fallback=DeterministicPlanner(),
+        timeout_sec=60,
+    )
+    coder_planner = OllamaPlanner(
+        base_url="http://127.0.0.1:11434",
+        model=req.coder_model_name,
+        fallback=DeterministicPlanner(),
+        timeout_sec=60,
+    )
+    judge_planner = OllamaPlanner(
+        base_url="http://127.0.0.1:11434",
+        model=req.judge_model_name,
+        fallback=DeterministicPlanner(),
+        timeout_sec=60,
+    )
+
+    logger = AuditLogger(store_path="./logs")
+
+    agent = RalfloopAgent(
+        adapter=adapter,
+        planner=planner,
+        coder_planner=coder_planner,
+        judge_planner=judge_planner,
+        logger=logger,
+    )
+
+    state = agent.run(
+        user_goal=req.user_goal,
+        constraints=[],
+        context={
+            "skill_context": req.skill_context or "",
+            "extra_context": req.extra_context or {},
+            "planner_model_profile": req.planner_model_profile,
+            "coder_model_profile": req.coder_model_profile,
+            "judge_model_profile": req.judge_model_profile,
+            "planner_model_name": req.planner_model_name,
+            "coder_model_name": req.coder_model_name,
+            "judge_model_name": req.judge_model_name,
+            "planner_rag_collection": req.planner_rag_collection,
+            "coder_rag_collection": req.coder_rag_collection,
+            "judge_rag_collection": req.judge_rag_collection,
+        },
+    )
+    try:
+        print("[TASKS_RUN] stop_reason=", state.stop_reason, flush=True)
+        print("[TASKS_RUN] current_role=", state.current_role, flush=True)
+        print("[TASKS_RUN] consecutive_failures=", state.consecutive_failures, flush=True)
+        print("[TASKS_RUN] last_action=", getattr(state, "last_action", None), flush=True)
+        print("[TASKS_RUN] last_result=", getattr(state, "last_result", None), flush=True)
+    except Exception as e:
+        print("[TASKS_RUN] debug_print_error=", e, flush=True)
+
+    state.planner_model_profile = req.planner_model_profile
+    state.coder_model_profile = req.coder_model_profile
+    state.judge_model_profile = req.judge_model_profile
+    state.planner_model_name = req.planner_model_name
+    state.coder_model_name = req.coder_model_name
+    state.judge_model_name = req.judge_model_name
+    state.planner_rag_collection = req.planner_rag_collection
+    state.coder_rag_collection = req.coder_rag_collection
+    state.judge_rag_collection = req.judge_rag_collection
+
+    try:
+        import re
+        import json as _json
+
+        blob_parts = []
+
+        final_answer = getattr(state, "final_answer", None)
+        if isinstance(final_answer, str):
+            blob_parts.append(final_answer)
+
+        last_result = getattr(state, "last_result", None)
+        if last_result is not None:
+            lr_stdout = getattr(last_result, "stdout", None)
+            lr_stderr = getattr(last_result, "stderr", None)
+            if isinstance(lr_stdout, str):
+                blob_parts.append(lr_stdout)
+            if isinstance(lr_stderr, str):
+                blob_parts.append(lr_stderr)
+
+        blob = "\n".join(blob_parts)
+
+        m = re.search(r'https?://[^\s"\']+\.(?:mpd|m3u8)[^\s"\']*', blob, re.I)
+        if m:
+            state.final_answer = _json.dumps({"stream_url": m.group(0), "headers": {}}, ensure_ascii=False)
+            state.status = "completed"
+            state.stop_reason = "goal_completed"
+    except Exception as e:
+        print("[TASKS_RUN] stream_extract_postprocess_error=", e, flush=True)
+
+    return {
+        "ok": state.status == "completed",
+        "mode": req.mode,
+        "used_profiles": {
+            "planner": req.planner_model_profile,
+            "coder": req.coder_model_profile,
+            "judge": req.judge_model_profile,
+        },
+        "used_models": {
+            "planner": req.planner_model_name,
+            "coder": req.coder_model_name,
+            "judge": req.judge_model_name,
+        },
+        "used_rag": {
+            "planner": req.planner_rag_collection,
+            "coder": req.coder_rag_collection,
+            "judge": req.judge_rag_collection,
+        },
+        "current_role": state.current_role,
+        "role_history": state.role_history,
+        "stop_reason": state.stop_reason,
+        "final_answer": state.final_answer or "",
+        "artifacts": [],
+        "audit_summary": [m.content for m in state.memory[-20:]],
+    }

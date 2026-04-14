@@ -1,0 +1,13 @@
+{
+  "name": "generic_python_skill",
+  "match": {
+    "stop_reason_any": [
+      "repeated_failure",
+      "max_iterations_reached",
+      "stalled_need_skill_patch"
+    ]
+  },
+  "patch_files": [],
+  "validator_cmd": "",
+  "retry_payload_file": ""
+}

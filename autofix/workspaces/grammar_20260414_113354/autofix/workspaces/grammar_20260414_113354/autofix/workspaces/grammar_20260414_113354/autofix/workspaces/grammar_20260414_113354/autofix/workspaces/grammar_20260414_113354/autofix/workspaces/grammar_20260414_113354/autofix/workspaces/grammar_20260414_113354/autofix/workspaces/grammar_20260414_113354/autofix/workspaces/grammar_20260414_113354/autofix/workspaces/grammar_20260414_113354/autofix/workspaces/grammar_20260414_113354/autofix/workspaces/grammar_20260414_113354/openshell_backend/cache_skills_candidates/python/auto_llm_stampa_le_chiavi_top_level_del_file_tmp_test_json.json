@@ -1,0 +1,18 @@
+{
+  "id": "auto_llm_stampa_le_chiavi_top_level_del_file_tmp_test_json",
+  "problem_type": "file_processing",
+  "match": {
+    "regex": ".*file\\s+(\\S+)"
+  },
+  "executor": "python_inline",
+  "input_names": [
+    "file_path"
+  ],
+  "template": "import json\nwith open('{file_path}', 'r') as file:\n    data = json.load(file)\nfor k in data.keys():\n    print(k)",
+  "source": "autopromote_llm",
+  "validated": true,
+  "hit_count": 2,
+  "promote_threshold": 2,
+  "example_input": "stampa le chiavi top-level del file /tmp/test.json",
+  "example_output": "name\nage\ncity"
+}

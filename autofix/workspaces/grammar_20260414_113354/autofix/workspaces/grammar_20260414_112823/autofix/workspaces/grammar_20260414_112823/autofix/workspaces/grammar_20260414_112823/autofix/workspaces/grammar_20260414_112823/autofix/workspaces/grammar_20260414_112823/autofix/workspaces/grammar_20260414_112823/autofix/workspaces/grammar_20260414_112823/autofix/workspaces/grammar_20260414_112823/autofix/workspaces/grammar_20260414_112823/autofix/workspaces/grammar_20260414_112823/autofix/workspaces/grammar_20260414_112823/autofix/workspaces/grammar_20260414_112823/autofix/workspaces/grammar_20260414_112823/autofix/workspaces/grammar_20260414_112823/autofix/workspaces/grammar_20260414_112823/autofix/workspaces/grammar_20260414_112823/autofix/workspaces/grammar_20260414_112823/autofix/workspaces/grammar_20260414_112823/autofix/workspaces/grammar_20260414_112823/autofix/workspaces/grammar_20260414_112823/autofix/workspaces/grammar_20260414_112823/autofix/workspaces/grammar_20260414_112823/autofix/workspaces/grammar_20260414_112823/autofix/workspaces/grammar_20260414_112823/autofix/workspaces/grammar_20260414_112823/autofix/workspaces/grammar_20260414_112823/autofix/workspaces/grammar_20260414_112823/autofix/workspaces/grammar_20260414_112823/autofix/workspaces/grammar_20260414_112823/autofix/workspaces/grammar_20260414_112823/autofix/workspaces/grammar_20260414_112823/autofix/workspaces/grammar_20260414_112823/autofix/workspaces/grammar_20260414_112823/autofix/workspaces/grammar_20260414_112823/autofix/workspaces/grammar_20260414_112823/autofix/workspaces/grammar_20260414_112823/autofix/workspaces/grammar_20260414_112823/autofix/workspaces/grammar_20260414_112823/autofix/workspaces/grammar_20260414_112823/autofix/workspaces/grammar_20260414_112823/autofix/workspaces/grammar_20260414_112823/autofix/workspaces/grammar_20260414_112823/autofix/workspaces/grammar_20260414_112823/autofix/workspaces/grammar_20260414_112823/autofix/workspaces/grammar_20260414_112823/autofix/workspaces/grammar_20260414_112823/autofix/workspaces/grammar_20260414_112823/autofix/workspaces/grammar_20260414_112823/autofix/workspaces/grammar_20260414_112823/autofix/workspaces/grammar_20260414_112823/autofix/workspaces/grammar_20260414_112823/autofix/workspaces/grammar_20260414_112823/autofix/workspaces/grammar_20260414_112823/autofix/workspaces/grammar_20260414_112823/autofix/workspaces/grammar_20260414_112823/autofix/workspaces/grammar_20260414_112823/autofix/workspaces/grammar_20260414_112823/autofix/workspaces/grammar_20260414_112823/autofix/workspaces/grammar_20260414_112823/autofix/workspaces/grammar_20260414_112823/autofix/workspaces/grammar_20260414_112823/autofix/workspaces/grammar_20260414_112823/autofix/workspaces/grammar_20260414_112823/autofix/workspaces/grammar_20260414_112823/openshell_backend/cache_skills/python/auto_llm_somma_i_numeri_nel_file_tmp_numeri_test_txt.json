@@ -1,0 +1,19 @@
+{
+  "id": "auto_llm_somma_i_numeri_nel_file_tmp_numeri_test_txt",
+  "problem_type": "file_processing",
+  "match": {
+    "regex": "somma i numeri nel file\\s+(.*)"
+  },
+  "executor": "python_inline",
+  "input_names": [
+    "file_path"
+  ],
+  "template": "file_path = '{file_path}'\nwith open(file_path, 'r') as file:\n    numbers = [int(line.strip()) for line in file]\nprint(sum(numbers))",
+  "source": "candidate_promoted",
+  "validated": true,
+  "hit_count": 2,
+  "promote_threshold": 2,
+  "example_input": "somma i numeri nel file /tmp/numeri_test.txt",
+  "example_output": "42",
+  "promoted_from_candidate": "/home/sibilla-cumana/ralfloop_agent_scaffold/openshell_backend/cache_skills_candidates/python/auto_llm_somma_i_numeri_nel_file_tmp_numeri_test_txt.json"
+}

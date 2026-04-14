@@ -1,0 +1,10 @@
+{
+  "id": "math_square_root_v1",
+  "problem_type": "math.square_root",
+  "match": {
+    "regex": "radice quadrata di\\s+(-?\\d+(?:[.,]\\d+)?)"
+  },
+  "executor": "python_inline",
+  "input_names": ["n"],
+  "template": "n = float(\"{n}\".replace(\",\", \".\"))\nif n < 0:\n    print(\"ERRORE: negative\")\nelse:\n    print(round(n ** 0.5, 6))"
+}
