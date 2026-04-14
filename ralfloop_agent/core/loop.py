@@ -123,7 +123,45 @@ class RalfloopAgent:
                     )
                 )
 
-                decision = self._planner_for_role(state).choose_next_action(state.user_goal, state.iteration)
+                goal_low = (state.user_goal or "").lower()
+
+                if "user_goal.txt" in goal_low and "skill_context.txt" in goal_low:
+                    read_paths = set()
+                    for mem in state.memory:
+                        content = getattr(mem, "content", "")
+                        if content.startswith("file_read::"):
+                            try:
+                                _, path, _body = content.split("::", 2)
+                            except ValueError:
+                                continue
+                            read_paths.add(path.strip())
+
+                    if "user_goal.txt" not in read_paths:
+                        decision = type("Decision", (), {
+                            "tool_name": "sandbox_read_file",
+                            "tool_input": {"path": "user_goal.txt"},
+                            "why": "Leggo user_goal.txt per recuperare il contesto richiesto",
+                            "model_dump": lambda self: {
+                                "tool_name": self.tool_name,
+                                "tool_input": self.tool_input,
+                                "why": self.why,
+                            },
+                        })()
+                    elif "skill_context.txt" not in read_paths:
+                        decision = type("Decision", (), {
+                            "tool_name": "sandbox_read_file",
+                            "tool_input": {"path": "skill_context.txt"},
+                            "why": "Leggo skill_context.txt per recuperare il contesto richiesto",
+                            "model_dump": lambda self: {
+                                "tool_name": self.tool_name,
+                                "tool_input": self.tool_input,
+                                "why": self.why,
+                            },
+                        })()
+                    else:
+                        decision = self._planner_for_role(state).choose_next_action(state.user_goal, state.iteration)
+                else:
+                    decision = self._planner_for_role(state).choose_next_action(state.user_goal, state.iteration)
                 state.plan.append(
                     PlanStep(
                         step_id=f"step-{state.iteration+1}",
@@ -292,24 +330,43 @@ class RalfloopAgent:
             is_multi_file = ("leggili" in goal or "read them" in goal)
 
             if tool_name in {"sandbox_read_file", "sandbox_http_fetch"}:
-                if tool_name == "sandbox_read_file" and is_multi_file:
-                    write_pairs = []
-                    if hasattr(self.planner, "fallback") and hasattr(self.planner.fallback, "_extract_write_pairs"):
-                        write_pairs = self.planner.fallback._extract_write_pairs(state.user_goal)
-                    elif hasattr(self.planner, "_extract_write_pairs"):
-                        write_pairs = self.planner._extract_write_pairs(state.user_goal)
+                if tool_name == "sandbox_read_file":
+                    goal_targets_both_seeded = (
+                        "user_goal.txt" in goal and "skill_context.txt" in goal
+                    )
 
-                    expected_reads = len(write_pairs) if write_pairs else 2
+                    if goal_targets_both_seeded:
+                        read_paths = set()
+                        for mem in state.memory:
+                            content = getattr(mem, "content", "")
+                            if content.startswith("file_read::"):
+                                try:
+                                    _, path, _body = content.split("::", 2)
+                                except ValueError:
+                                    continue
+                                read_paths.add(path.strip())
 
-                    read_done = 0
-                    for step in state.plan:
-                        desc = getattr(step, "description", "")
-                        status = getattr(step, "status", "")
-                        if status == "done" and desc.lower().startswith("leggo il file richiesto"):
-                            read_done += 1
+                        if not {"user_goal.txt", "skill_context.txt"}.issubset(read_paths):
+                            return False
 
-                    if read_done < expected_reads:
-                        return False
+                    elif is_multi_file:
+                        write_pairs = []
+                        if hasattr(self.planner, "fallback") and hasattr(self.planner.fallback, "_extract_write_pairs"):
+                            write_pairs = self.planner.fallback._extract_write_pairs(state.user_goal)
+                        elif hasattr(self.planner, "_extract_write_pairs"):
+                            write_pairs = self.planner._extract_write_pairs(state.user_goal)
+
+                        expected_reads = len(write_pairs) if write_pairs else 2
+
+                        read_done = 0
+                        for step in state.plan:
+                            desc = getattr(step, "description", "")
+                            status = getattr(step, "status", "")
+                            if status == "done" and desc.lower().startswith("leggo il file richiesto"):
+                                read_done += 1
+
+                        if read_done < expected_reads:
+                            return False
 
                 state.stop_reason = "goal_completed"
                 return True
@@ -395,18 +452,32 @@ class RalfloopAgent:
         if result.tool_name == "sandbox_read_file":
             goal = state.user_goal.lower()
             is_multi_file = ("leggili" in goal or "read them" in goal)
+            wants_seeded_context = ("user_goal.txt" in goal and "skill_context.txt" in goal)
 
-            if is_multi_file:
-                collected: list[tuple[str, str]] = []
-                for mem in state.memory:
-                    content = getattr(mem, "content", "")
-                    if content.startswith("file_read::"):
+            collected: list[tuple[str, str]] = []
+            for mem in state.memory:
+                content = getattr(mem, "content", "")
+                if content.startswith("file_read::"):
+                    try:
                         _, path, body = content.split("::", 2)
-                        collected.append((path, body))
-                if collected:
-                    return "Contenuto dei file:\n" + "\n\n".join(
-                        f"{path}:\n{body}" for path, body in collected
-                    )
+                    except ValueError:
+                        continue
+                    collected.append((path, body))
+
+            if wants_seeded_context and collected:
+                by_path = {path: body for path, body in collected}
+                parts = []
+                if "user_goal.txt" in by_path:
+                    parts.append("user_goal.txt:\n" + by_path["user_goal.txt"].strip())
+                if "skill_context.txt" in by_path:
+                    parts.append("skill_context.txt:\n" + by_path["skill_context.txt"].strip())
+                if parts:
+                    return "Contenuto dei file richiesti:\n\n" + "\n\n".join(parts)
+
+            if is_multi_file and collected:
+                return "Contenuto dei file:\n" + "\n\n".join(
+                    f"{path}:\n{body}" for path, body in collected
+                )
 
             return "Contenuto del file:\n" + result.stdout.strip()
 
