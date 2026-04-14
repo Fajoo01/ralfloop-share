@@ -9,7 +9,7 @@ from pathlib import Path
 from openshell_backend.skill_generalizer import llm_judge_reusability
 from openshell_backend.skills.registry import try_direct_skill
 from openshell_backend.skills.validators import is_skill_output_sufficient, validate_skill_output
-from ralfloop_agent.autofix.diagnoser import diagnose_skill_failure, diagnosis_to_dict
+from openshell_backend.skills.responses import build_skill_insufficient_response
 
 
 def skill_cache_dir() -> Path:
@@ -445,34 +445,13 @@ def route_common(user_goal: str, skill_context: str = "") -> dict | None:
                 "autofix_candidate": {},
             }
 
-        diagnosis = diagnose_skill_failure(
+        return build_skill_insufficient_response(
             skill_name=skill_name,
+            user_goal=user_goal or "",
             final_answer=skill_answer,
             validation=validation,
-            audit_summary=[f"fastpath::skill::{skill_name}", "skill_output_insufficient"],
+            include_runtime_fields=False,
         )
-        return {
-            "ok": False,
-            "mode": f"skill::{skill_name}",
-            "stop_reason": "skill_output_insufficient",
-            "final_answer": skill_answer,
-            "current_role": f"skill::{skill_name}",
-            "role_history": [f"skill::{skill_name}"],
-            "audit_summary": [f"fastpath::skill::{skill_name}", "skill_output_insufficient"],
-            "autofix_candidate": {
-                "user_goal": user_goal or "",
-                "stop_reason": "skill_output_insufficient",
-                "validation_details": validation,
-                "diagnosis": diagnosis_to_dict(diagnosis),
-                "history": [
-                    {
-                        "tool_name": f"skill::{skill_name}",
-                        "tool_input": {"user_goal": user_goal or ""},
-                        "role": f"skill::{skill_name}",
-                    }
-                ],
-            },
-        }
 
     fast_answer = fast_math_answer(user_goal or "")
     if fast_answer is not None:

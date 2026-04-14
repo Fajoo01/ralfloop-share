@@ -11,6 +11,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from openshell_backend.common_router import route_common, maybe_autopromote_candidate
+from openshell_backend.skills.responses import build_skill_insufficient_response
 
 BASE_DIR = Path("/home/sibilla-cumana/ralfloop_agent_scaffold/.openshell_backend")
 BASE_DIR.mkdir(parents=True, exist_ok=True)
@@ -545,7 +546,7 @@ def _probe_mediaset_from_source_page(channel_id: str, source_page: str) -> dict:
     candidates = []
     candidates.extend(_extract_mediaset_candidate_urls(html))
 
-    html_unescaped = html.replace("\/", "/")
+    html_unescaped = html.replace(r"\/", "/")
     if html_unescaped != html:
         candidates.extend(_extract_mediaset_candidate_urls(html_unescaped))
 
@@ -1473,38 +1474,13 @@ def run_task(req: TaskRunRequest):
                 "autofix_candidate": {},
             }
 
-        diagnosis = diagnose_skill_failure(
+        return build_skill_insufficient_response(
             skill_name=skill_name,
+            user_goal=req.user_goal or "",
             final_answer=skill_answer,
             validation=validation,
-            audit_summary=[f"fastpath::skill::{skill_name}", "skill_output_insufficient"],
+            include_runtime_fields=True,
         )
-        return {
-            "ok": False,
-            "mode": f"skill::{skill_name}",
-            "used_profiles": {},
-            "used_models": {},
-            "used_rag": {},
-            "current_role": f"skill::{skill_name}",
-            "role_history": [f"skill::{skill_name}"],
-            "stop_reason": "skill_output_insufficient",
-            "final_answer": skill_answer,
-            "artifacts": [],
-            "audit_summary": [f"fastpath::skill::{skill_name}", "skill_output_insufficient"],
-            "autofix_candidate": {
-                "user_goal": req.user_goal or "",
-                "stop_reason": "skill_output_insufficient",
-                "validation_details": validation,
-                "diagnosis": diagnosis_to_dict(diagnosis),
-                "history": [
-                    {
-                        "tool_name": f"skill::{skill_name}",
-                        "tool_input": {"user_goal": req.user_goal or ""},
-                        "role": f"skill::{skill_name}",
-                    }
-                ],
-            },
-        }
 
     state = agent.run(
         user_goal=req.user_goal,
