@@ -10,7 +10,7 @@ from ralfloop_agent.core.decisions import ActionDecision
 from ralfloop_agent.logging.audit import AuditLogger
 from ralfloop_agent.contracts.completion_policy import evaluate_completion_stop
 from ralfloop_agent.contracts.final_answer_renderer import render_final_answer
-import shlex
+from ralfloop_agent.contracts.tool_dispatch import dispatch_tool
 
 
 
@@ -265,40 +265,7 @@ class RalfloopAgent:
         return state
 
     def _dispatch(self, sandbox: dict[str, Any], tool_name: str, tool_input: dict[str, Any]):
-        tool_input = dict(tool_input or {})
-
-        if tool_name == "sandbox_read_file":
-            if "filename" in tool_input and "path" not in tool_input:
-                tool_input["path"] = tool_input.pop("filename")
-
-            path = str(tool_input.get("path", "") or "")
-            if path.startswith("http://") or path.startswith("https://"):
-                tool_name = "sandbox_http_fetch"
-                tool_input = {"url": path, "method": "GET"}
-
-        if tool_name == "sandbox_write_file":
-            if "filename" in tool_input and "path" not in tool_input:
-                tool_input["path"] = tool_input.pop("filename")
-
-        if tool_name == "sandbox_exec":
-            normalized_input = dict(tool_input or {})
-            action = str(normalized_input.get("action") or "").strip().lower()
-            file_path = str(normalized_input.get("file_path") or normalized_input.get("path") or "").strip()
-
-            if "command" not in normalized_input or not normalized_input.get("command"):
-                if action in {"inspect", "inspect_file", "ispect_file", "read_file", "show_file"} and file_path:
-                    normalized_input["command"] = f"cat {shlex.quote(file_path)}"
-
-            return self.adapter.exec(sandbox, **normalized_input)
-        if tool_name == "sandbox_write_file":
-            return self.adapter.write_file(sandbox, **tool_input)
-        if tool_name == "sandbox_read_file":
-            return self.adapter.read_file(sandbox, **tool_input)
-        if tool_name == "sandbox_list_dir":
-            return self.adapter.list_dir(sandbox, **tool_input)
-        if tool_name == "sandbox_http_fetch":
-            return self.adapter.http_fetch(sandbox, **tool_input)
-        raise ValueError(f"Unsupported tool: {tool_name}")
+        return dispatch_tool(self.adapter, sandbox, tool_name, tool_input)
 
     def _should_stop(self, state: AgentState) -> bool:
         return evaluate_completion_stop(state, self.planner)
