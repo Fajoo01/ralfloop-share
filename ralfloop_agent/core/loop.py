@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from datetime import UTC, datetime
 from typing import Any
@@ -15,6 +14,7 @@ from ralfloop_agent.contracts.read_file_postprocess import handle_read_file_resu
 from ralfloop_agent.contracts.role_helpers import next_role, profile_for_role, model_name_for_role, rag_for_role, planner_for_role
 from ralfloop_agent.contracts.state_transitions import advance_role_and_iteration, finalize_state
 from ralfloop_agent.contracts.seeded_context_bootstrap import choose_seeded_context_action
+from ralfloop_agent.contracts.seed_writer import write_seed_files
 
 
 
@@ -58,28 +58,7 @@ class RalfloopAgent:
             "status": state.sandbox.status,
         }
 
-        seed_files = {
-            "user_goal.txt": user_goal,
-            "skill_context.txt": str(ctx.get("skill_context", "") or ""),
-            "extra_context.json": json.dumps(ctx.get("extra_context", {}) or {}, ensure_ascii=False, indent=2),
-            "workspace_manifest.txt": (
-                "Seed files available at task start:\n"
-                "- user_goal.txt\n"
-                "- skill_context.txt\n"
-                "- extra_context.json\n"
-                "Read only these files for initial context unless you create new files yourself.\n"
-            ),
-        }
-        for seed_path, seed_content in seed_files.items():
-            seed_result = self.adapter.write_file(adapter_sandbox, path=seed_path, content=seed_content)
-            self.logger.log(
-                task_id=state.task_id,
-                iteration=state.iteration,
-                tool_name="sandbox_write_file",
-                tool_input={"path": seed_path},
-                tool_output=seed_result.model_dump(),
-                decision="seed",
-            )
+        write_seed_files(state, ctx, self.adapter, adapter_sandbox, self.logger)
 
         try:
             while state.iteration < state.max_iterations:
