@@ -38,16 +38,6 @@ def _read_paths_from_memory(state: Any) -> set[str]:
     return read_paths
 
 
-def _completed_read_steps(state: Any) -> int:
-    count = 0
-    for step in getattr(state, "plan", []) or []:
-        desc = getattr(step, "description", "")
-        status = getattr(step, "status", "")
-        if status == "done" and isinstance(desc, str) and desc.lower().startswith("leggo il file richiesto"):
-            count += 1
-    return count
-
-
 def _expected_reads(state: Any, planner: Any) -> int:
     write_pairs = []
     if hasattr(planner, "fallback") and hasattr(planner.fallback, "_extract_write_pairs"):
@@ -68,14 +58,15 @@ def evaluate_completion_stop(state: Any, planner: Any) -> bool:
 
         if tool_name in {"sandbox_read_file", "sandbox_http_fetch"}:
             if tool_name == "sandbox_read_file":
+                read_paths = _read_paths_from_memory(state)
+
                 if flags["goal_targets_both_seeded"]:
-                    read_paths = _read_paths_from_memory(state)
                     if not {"user_goal.txt", "skill_context.txt"}.issubset(read_paths):
                         return False
+
                 elif flags["is_multi_file"]:
                     expected_reads = _expected_reads(state, planner)
-                    read_done = _completed_read_steps(state)
-                    if read_done < expected_reads:
+                    if len(read_paths) < expected_reads:
                         return False
 
             state.stop_reason = "goal_completed"
