@@ -184,20 +184,21 @@ class RalfloopAgent:
                         state.last_action = decision.model_dump()
                         state.last_result = result
                         state.audit_summary.append(f"{decision.tool_name}: policy_denied")
-                        state.plan.append(
-                            PlanStep(
-                                iteration=state.iteration,
-                                role=state.current_role,
-                                description=decision.why,
-                                tool_name=decision.tool_name,
-                                status="error",
-                                summary="policy_denied",
+                        if self._should_stop(state):
+                            break
+                        state.current_role = _next_role(state.current_role)
+                        state.iteration += 1
+                        continue
+
+                    if result.ok:
+                        state.memory.append(
+                            MemoryEntry(
+                                kind="result",
+                                content=f"file_read::{path}::{result.stdout}",
                             )
                         )
                         if self._should_stop(state):
                             break
-                        state.iteration += 1
-                        continue
 
                     state.current_role = _next_role(state.current_role)
                     state.iteration += 1
@@ -217,9 +218,8 @@ class RalfloopAgent:
                 state.current_role = _next_role(state.current_role)
                 state.iteration += 1
 
-            if state.last_result and state.last_result.ok:
+            if state.stop_reason == "goal_completed":
                 state.status = "completed"
-                state.stop_reason = state.stop_reason or "goal_completed"
                 state.final_answer = self._build_final_answer(state)
             else:
                 state.status = "failed"

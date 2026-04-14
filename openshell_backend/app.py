@@ -1544,7 +1544,7 @@ def run_task(req: TaskRunRequest):
 
     state_data = state.model_dump() if hasattr(state, "model_dump") else dict(getattr(state, "__dict__", {}) or {})
     return {
-        "ok": bool(state_data.get("ok", False)),
+        "ok": state_data.get("status") == "completed",
         "mode": str(state_data.get("mode", "") or ""),
         "used_profiles": dict(state_data.get("used_profiles", {}) or {}),
         "used_models": dict(state_data.get("used_models", {}) or {}),
