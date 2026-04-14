@@ -13,6 +13,7 @@ from ralfloop_agent.contracts.final_answer_renderer import render_final_answer
 from ralfloop_agent.contracts.tool_dispatch import dispatch_tool
 from ralfloop_agent.contracts.read_file_postprocess import handle_read_file_result
 from ralfloop_agent.contracts.role_helpers import next_role, profile_for_role, model_name_for_role, rag_for_role, planner_for_role
+from ralfloop_agent.contracts.state_transitions import advance_role_and_iteration, finalize_state
 
 
 
@@ -182,16 +183,9 @@ class RalfloopAgent:
                 state.memory.append(MemoryEntry(kind="warning", content=f"{decision.tool_name}: {result.stderr or 'failed'}"))
                 if self._should_stop(state):
                     break
-                state.current_role = next_role(state.current_role)
-                state.iteration += 1
+                advance_role_and_iteration(state, next_role)
 
-            if state.stop_reason == "goal_completed":
-                state.status = "completed"
-                state.final_answer = self._build_final_answer(state)
-            else:
-                state.status = "failed"
-                state.stop_reason = state.stop_reason or "repeated_failure"
-                state.final_answer = "Task non completato."
+            finalize_state(state, self._build_final_answer)
         finally:
             self.adapter.destroy_sandbox(state.sandbox.id or "")
             state.sandbox.status = "destroyed"
