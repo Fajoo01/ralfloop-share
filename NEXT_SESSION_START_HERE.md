@@ -1,41 +1,44 @@
 # Next session start here
 
-## Closed on 2026-04-14
-- grammar validator generalized
-- grammar fastpath end-to-end passing
-- loop final completion mapping fixed
-- HTTP response ok/status mapping fixed
-- file inspect grounded on seeded files
-- deterministic read path for user_goal.txt + skill_context.txt added
-- shared ActionDecision model introduced
-- diagnoser integrated into autofix_candidate generation for skill insufficiency paths
-- skill insufficiency response assembly deduplicated into openshell_backend/skills/responses.py
-- minor SyntaxWarning in app.py fixed for escaped slash replacement
+Branch attivo:
+- feat/sandbox-inspect-api
 
-## Verified smoke tests
-- grammar: PASS
+Working tree:
+- pulito tranne eventuali aggiornamenti volontari di questo handoff
+
+Checkpoint chiusi:
+- v0.5.2-grammar-autofix-state-aligned
+- v0.5.3-loop-http-completion-consistent
+- v0.5.4-file-inspect-grounded
+- v0.5.5-decision-model-diagnoser
+- v0.5.6-loop-policy-renderer-extracted
+- v0.5.7-tool-dispatch-extracted
+- v0.5.8-read-file-postprocess-extracted
+
+Stato verificato:
+- grammar fastpath: PASS
 - file_inspect seeded context: PASS
+- diagnoser integrato in autofix_candidate
+- skill insufficiency response deduplicata
+- completion policy estratta da loop.py
+- final answer renderer estratto da loop.py
+- tool dispatch estratto da loop.py
+- read-file postprocess estratto dal blocco speciale del run()
+- test mirati verdi:
+  - 17 passed, 8 deselected
 
-## Verified targeted tests
-- synthetic skill_output_insufficient path in common_router includes autofix_candidate.diagnosis
-- pure diagnoser output serializes correctly with diagnosis_to_dict()
-- deduplicated response builder preserves runtime behavior
+Commit chiave recenti:
+- dd01d8e refactor: extract loop completion and final answer policies
+- bb6b769 refactor: extract tool dispatch from loop
+- HEAD refactor: wire read-file postprocess into loop
 
-## Current architecture status
-- autofix/grammar: substantially closed
-- loop/runtime transport consistency: fixed
-- seeded workspace context path: working
-- diagnoser now wired into skill insufficiency candidate generation
-- contracts file exists but is not yet fully enforced across runtime
-- common_router/app duplication reduced for skill insufficiency branch
+Loop.py ora contiene ancora soprattutto:
+- orchestrazione run()
+- helper di ruolo (_next_role, _profile_for_role, _model_name_for_role, _rag_for_role, _planner_for_role)
+- seeding iniziale user_goal.txt / skill_context.txt / extra_context.json
+- finalizzazione stato completed/failed
 
-## Known debt
-- loop.py still contains skill-specific special paths
-- completion policy should move out of loop.py into dedicated contract/policy layers
-- runtime smoke tests do not yet naturally hit diagnoser because current grammar validator accepts minimal valid outputs
-
-## Next priorities
-1. move skill-specific completion checks out of loop.py
-2. formalize promotion gate checks
-3. route more runtime validation through explicit contracts
-4. remove remaining special-case orchestration from loop.py
+Prossimo target minimo:
+- lasciare stare per ora il seeding iniziale
+- valutare estrazione dei role helpers oppure di una piccola state-transition helper
+- evitare refactor largo
