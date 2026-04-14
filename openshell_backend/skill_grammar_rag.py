@@ -234,6 +234,46 @@ def _autofix_apostrophe_token(tok: str) -> list[dict[str, Any]] | None:
     return None
 
 
+
+def _is_suspicious_grammar_item(item: dict[str, Any]) -> bool:
+    tok = str(item.get("token") or "")
+    cat = str(item.get("categoria") or "")
+    if "'" in tok and cat == "nome_comune":
+        low = tok.lower()
+        suspicious_prefixes = (
+            "dall'", "all'", "nell'", "sull'", "coll'",
+            "dell'", "agl'", "dagl'", "negl'", "sugl'",
+            "l'", "un'",
+        )
+        return low.startswith(suspicious_prefixes)
+    return False
+
+
+def _repair_suspicious_analysis(arr: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    changed = False
+
+    for item in arr:
+        if not isinstance(item, dict):
+            out.append(item)
+            continue
+
+        if _is_suspicious_grammar_item(item):
+            tok = str(item.get("token") or "")
+            fixed = _apply_autocorrect_rules(tok) or _autofix_apostrophe_token(tok)
+            if fixed:
+                out.extend(fixed)
+                changed = True
+                continue
+
+        out.append(item)
+
+    if changed:
+        out = _enrich_analysis(out)
+    out = _repair_suspicious_analysis(out)
+    return out
+
+
 def _simple_local_grammar_fallback(phrase: str) -> list[dict[str, Any]] | None:
     p = (phrase or "").strip()
     if not p:
