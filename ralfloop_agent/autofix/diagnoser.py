@@ -13,6 +13,39 @@ class Diagnosis:
     confidence: float
 
 
+
+def _diagnose_grammar_upstream(validation: dict[str, Any] | None):
+    if not isinstance(validation, dict):
+        return None
+
+    upstream = validation.get("upstream_diagnostic")
+    raw_issues = []
+    if isinstance(upstream, dict) and upstream.get("kind") == "grammar_analysis_suspicions":
+        raw_issues = upstream.get("raw_issues") or []
+    elif isinstance(validation.get("raw_issues"), list) and validation.get("raw_issues"):
+        raw_issues = validation.get("raw_issues") or []
+    else:
+        return None
+
+    first = raw_issues[0] if raw_issues else {}
+    issue_kind = first.get("kind") if isinstance(first, dict) else None
+
+    target_file = "openshell_backend/skill_grammar_rag.py"
+    target_symbol = "_simple_local_grammar_fallback"
+    why = "grammar raw issues indicate tokenizer/fallback defect"
+
+    if issue_kind == "suspicious_apostrophe_token":
+        why = "apostrophe token classified as nome_comune before repair; patch tokenizer/fallback before classification"
+
+    return {
+        "kind": "grammar_upstream_issue",
+        "confidence": 0.9,
+        "target_file": target_file,
+        "target_symbol": target_symbol,
+        "why": why,
+    }
+
+
 def diagnose_skill_failure(
     *,
     skill_name: str,
@@ -22,6 +55,10 @@ def diagnose_skill_failure(
 ) -> Diagnosis:
     skill = str(skill_name or "").strip().lower()
     validation = validation or {}
+
+    grammar_diag = _diagnose_grammar_upstream(validation)
+    if grammar_diag is not None:
+        return Diagnosis(**grammar_diag)
     audit_summary = audit_summary or []
 
     reason = str(validation.get("reason") or "").strip().lower()
