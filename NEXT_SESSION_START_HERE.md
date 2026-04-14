@@ -7,26 +7,32 @@
 - HTTP response ok/status mapping fixed
 - file inspect grounded on seeded files
 - deterministic read path for user_goal.txt + skill_context.txt added
+- shared ActionDecision model introduced
+- diagnoser integrated into autofix_candidate generation for skill insufficiency paths
 
 ## Verified smoke tests
 - grammar: PASS
 - file_inspect seeded context: PASS
 
+## Verified targeted tests
+- synthetic skill_output_insufficient path in common_router includes autofix_candidate.diagnosis
+- pure diagnoser output serializes correctly with diagnosis_to_dict()
+
 ## Current architecture status
 - autofix/grammar: substantially closed
 - loop/runtime transport consistency: fixed
 - seeded workspace context path: working
-- diagnoser skeleton exists but is not yet integrated in the autofix flow
+- diagnoser now wired into skill insufficiency candidate generation
 - contracts file exists but is not yet fully enforced across runtime
 
 ## Known debt
 - loop.py still contains skill-specific special paths
-- deterministic file-inspect path currently uses an inline synthetic decision object and should be replaced with a shared decision model
 - completion policy should move out of loop.py into dedicated contract/policy layers
-- audit_summary for some successful general-loop paths is still thin
+- app/common_router still duplicate some fastpath/autofix assembly logic
+- runtime smoke tests do not yet naturally hit diagnoser because current grammar validator accepts minimal valid outputs
 
 ## Next priorities
-1. integrate diagnoser into autofix_candidate generation
-2. introduce a proper shared decision model instead of inline synthetic decision objects
+1. deduplicate common_router/app skill insufficiency assembly
+2. move skill-specific completion checks out of loop.py
 3. formalize promotion gate checks
-4. move skill-specific completion checks out of loop.py
+4. route more runtime validation through explicit contracts
