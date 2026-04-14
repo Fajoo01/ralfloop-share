@@ -340,12 +340,25 @@ def _simple_local_grammar_fallback(phrase: str) -> list[dict[str, Any]] | None:
     return out
 
 def analyze_grammar_with_diagnostics(phrase: str) -> dict[str, Any] | None:
-    arr = _simple_local_grammar_fallback(phrase)
-    if not arr:
+    p = (phrase or "").strip()
+    if not p:
         return None
+
+    raw_arr = _simple_local_grammar_fallback(p)
+    if not raw_arr:
+        return None
+
+    final_arr = raw_arr
+    if "_repair_suspicious_analysis" in globals():
+        final_arr = _repair_suspicious_analysis(raw_arr)
+
     return {
-        "items": arr,
-        "issues": find_grammar_suspicions(arr),
+        "raw_items": raw_arr,
+        "raw_issues": find_grammar_suspicions(raw_arr),
+        "final_items": final_arr,
+        "final_issues": find_grammar_suspicions(final_arr),
+        "items": final_arr,
+        "issues": find_grammar_suspicions(final_arr),
     }
 
 
