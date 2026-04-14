@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from ralfloop_agent.autofix.diagnoser import diagnose_skill_failure, diagnosis_to_dict
+from ralfloop_agent.contracts.grammar_upstream_diagnostic import build_grammar_upstream_diagnostic
 
 
 def build_skill_insufficient_response(
@@ -21,6 +22,26 @@ def build_skill_insufficient_response(
         audit_summary=audit_summary,
     )
 
+    autofix_candidate: dict[str, Any] = {
+        "user_goal": user_goal or "",
+        "stop_reason": "skill_output_insufficient",
+        "validation_details": validation or {},
+        "diagnosis": diagnosis_to_dict(diagnosis),
+        "history": [
+            {
+                "tool_name": f"skill::{skill_name}",
+                "tool_input": {"user_goal": user_goal or ""},
+                "role": f"skill::{skill_name}",
+            }
+        ],
+    }
+
+    grammar_upstream = None
+    if skill_name == "grammar":
+        grammar_upstream = build_grammar_upstream_diagnostic(user_goal or "", validation or {})
+        if grammar_upstream:
+            autofix_candidate["upstream_diagnostic"] = grammar_upstream
+
     payload: dict[str, Any] = {
         "ok": False,
         "mode": f"skill::{skill_name}",
@@ -29,19 +50,7 @@ def build_skill_insufficient_response(
         "current_role": f"skill::{skill_name}",
         "role_history": [f"skill::{skill_name}"],
         "audit_summary": audit_summary,
-        "autofix_candidate": {
-            "user_goal": user_goal or "",
-            "stop_reason": "skill_output_insufficient",
-            "validation_details": validation or {},
-            "diagnosis": diagnosis_to_dict(diagnosis),
-            "history": [
-                {
-                    "tool_name": f"skill::{skill_name}",
-                    "tool_input": {"user_goal": user_goal or ""},
-                    "role": f"skill::{skill_name}",
-                }
-            ],
-        },
+        "autofix_candidate": autofix_candidate,
     }
 
     if include_runtime_fields:
