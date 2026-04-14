@@ -17,6 +17,7 @@ Checkpoint chiusi:
 - v0.5.9-role-helpers-extracted
 - v0.5.10-state-transitions-extracted
 - v0.5.11-seeded-context-bootstrap-extracted
+- v0.5.12-seed-writer-extracted
 
 Stato verificato:
 - grammar fastpath: PASS
@@ -30,23 +31,20 @@ Stato verificato:
 - role helpers estratti da loop.py
 - state transitions estratte da loop.py
 - seeded context bootstrap estratto da loop.py
+- seed writer iniziale estratto da loop.py e collegato
 - test mirati verdi:
   - 17 passed, 8 deselected
 
 Commit chiave recenti:
-- dd01d8e refactor: extract loop completion and final answer policies
-- bb6b769 refactor: extract tool dispatch from loop
-- 993da12 refactor: wire read-file postprocess into loop
-- f336234 refactor: extract role helpers from loop
-- ffa39ce refactor: extract state transitions from loop
-- HEAD refactor: extract seeded context bootstrap from loop
+- 7b2dfdc refactor: extract seeded context bootstrap from loop
+- 1b3daad refactor: extract seed writer from loop
+- 018d111 refactor: wire seed writer into loop
 
 Loop.py ora contiene ancora soprattutto:
 - orchestrazione run()
-- seed write iniziale user_goal.txt / skill_context.txt / extra_context.json
 - logging/audit del ciclo
 
 Prossimo target minimo:
-- lasciare stare per ora il seed write iniziale se non blocca altro
-- valutare estrazione del seed writer iniziale
+- valutare estrazione del logging/audit del ciclo
+- oppure fermarsi qui e consolidare
 - evitare refactor largo
