@@ -12,40 +12,9 @@ from ralfloop_agent.contracts.completion_policy import evaluate_completion_stop
 from ralfloop_agent.contracts.final_answer_renderer import render_final_answer
 from ralfloop_agent.contracts.tool_dispatch import dispatch_tool
 from ralfloop_agent.contracts.read_file_postprocess import handle_read_file_result
+from ralfloop_agent.contracts.role_helpers import next_role, profile_for_role, model_name_for_role, rag_for_role, planner_for_role
 
 
-
-
-def _next_role(current: str) -> str:
-    if current == "planner":
-        return "coder"
-    if current == "coder":
-        return "judge"
-    return "planner"
-
-
-def _profile_for_role(state) -> str:
-    if state.current_role == "planner":
-        return state.planner_model_profile
-    if state.current_role == "coder":
-        return state.coder_model_profile
-    return state.judge_model_profile
-
-
-def _model_name_for_role(state) -> str:
-    if state.current_role == "planner":
-        return state.planner_model_name
-    if state.current_role == "coder":
-        return state.coder_model_name
-    return state.judge_model_name
-
-
-def _rag_for_role(state) -> str:
-    if state.current_role == "planner":
-        return state.planner_rag_collection
-    if state.current_role == "coder":
-        return state.coder_rag_collection
-    return state.judge_rag_collection
 
 
 class RalfloopAgent:
@@ -55,13 +24,6 @@ class RalfloopAgent:
         self.coder_planner = coder_planner or planner
         self.judge_planner = judge_planner or planner
         self.logger = logger or AuditLogger()
-
-    def _planner_for_role(self, state):
-        if state.current_role == "planner":
-            return self.planner
-        if state.current_role == "coder":
-            return self.coder_planner
-        return self.judge_planner
 
     def run(self, user_goal: str, constraints: list[str] | None = None, context: dict[str, Any] | None = None) -> AgentState:
         ctx = context or {}
@@ -123,7 +85,7 @@ class RalfloopAgent:
                 state.memory.append(
                     MemoryEntry(
                         kind="decision",
-                        content=f"role::{state.current_role}::profile::{_profile_for_role(state)}::model::{_model_name_for_role(state)}::rag::{_rag_for_role(state)}"
+                        content=f"role::{state.current_role}::profile::{profile_for_role(state)}::model::{model_name_for_role(state)}::rag::{rag_for_role(state)}"
                     )
                 )
 
@@ -153,9 +115,9 @@ class RalfloopAgent:
                             why="Leggo skill_context.txt per recuperare il contesto richiesto",
                         )
                     else:
-                        decision = self._planner_for_role(state).choose_next_action(state.user_goal, state.iteration)
+                        decision = planner_for_role(self, state).choose_next_action(state.user_goal, state.iteration)
                 else:
-                    decision = self._planner_for_role(state).choose_next_action(state.user_goal, state.iteration)
+                    decision = planner_for_role(self, state).choose_next_action(state.user_goal, state.iteration)
                 state.plan.append(
                     PlanStep(
                         step_id=f"step-{state.iteration+1}",
@@ -166,9 +128,9 @@ class RalfloopAgent:
                       "tool_name": decision.tool_name,
                       "tool_input": decision.tool_input,
                       "role": state.current_role,
-                      "model_profile": _profile_for_role(state),
-                      "model_name": _model_name_for_role(state),
-                      "rag_collection": _rag_for_role(state),
+                      "model_profile": profile_for_role(state),
+                      "model_name": model_name_for_role(state),
+                      "rag_collection": rag_for_role(state),
                   }
                 state.action_history.append({
                     "tool_name": decision.tool_name,
@@ -203,7 +165,7 @@ class RalfloopAgent:
                     if self._should_stop(state):
                         break
                     if read_outcome["force_role_advance"]:
-                        state.current_role = _next_role(state.current_role)
+                        state.current_role = next_role(state.current_role)
                     if read_outcome["force_iteration_advance"]:
                         state.iteration += 1
                     if read_outcome["should_continue"]:
@@ -212,7 +174,7 @@ class RalfloopAgent:
                 if result.ok:
                     if self._should_stop(state):
                         break
-                    state.current_role = _next_role(state.current_role)
+                    state.current_role = next_role(state.current_role)
                     state.iteration += 1
                     continue
 
@@ -220,7 +182,7 @@ class RalfloopAgent:
                 state.memory.append(MemoryEntry(kind="warning", content=f"{decision.tool_name}: {result.stderr or 'failed'}"))
                 if self._should_stop(state):
                     break
-                state.current_role = _next_role(state.current_role)
+                state.current_role = next_role(state.current_role)
                 state.iteration += 1
 
             if state.stop_reason == "goal_completed":
