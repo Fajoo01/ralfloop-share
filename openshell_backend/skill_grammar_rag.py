@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
+from openshell_backend.grammar_validator import find_grammar_suspicions
 import requests
 
 from openshell_backend.rag_manual import retrieve_manual_snippets
@@ -337,6 +338,17 @@ def _simple_local_grammar_fallback(phrase: str) -> list[dict[str, Any]] | None:
 
     out = _enrich_analysis(out)
     return out
+
+def analyze_grammar_with_diagnostics(phrase: str) -> dict[str, Any] | None:
+    arr = _simple_local_grammar_fallback(phrase)
+    if not arr:
+        return None
+    return {
+        "items": arr,
+        "issues": find_grammar_suspicions(arr),
+    }
+
+
 def maybe_answer_grammar_request(user_goal: str) -> str | None:
     text = (user_goal or "").strip()
 
