@@ -15,6 +15,7 @@ Checkpoint chiusi:
 - v0.5.7-tool-dispatch-extracted
 - v0.5.8-read-file-postprocess-extracted
 - v0.5.9-role-helpers-extracted
+- v0.5.10-state-transitions-extracted
 
 Stato verificato:
 - grammar fastpath: PASS
@@ -26,6 +27,7 @@ Stato verificato:
 - tool dispatch estratto da loop.py
 - read-file postprocess estratto dal blocco speciale del run()
 - role helpers estratti da loop.py
+- state transitions estratte da loop.py
 - test mirati verdi:
   - 17 passed, 8 deselected
 
@@ -34,13 +36,14 @@ Commit chiave recenti:
 - bb6b769 refactor: extract tool dispatch from loop
 - 993da12 refactor: wire read-file postprocess into loop
 - f336234 refactor: extract role helpers from loop
+- ffa39ce refactor: extract state transitions from loop
 
 Loop.py ora contiene ancora soprattutto:
 - orchestrazione run()
 - seeding iniziale user_goal.txt / skill_context.txt / extra_context.json
-- finalizzazione stato completed/failed
+- logging/audit del ciclo
 
 Prossimo target minimo:
 - lasciare stare per ora il seeding iniziale se non blocca altro
-- valutare una piccola state-transition helper per il ciclo run()
+- valutare estrazione del seeded-context bootstrap dal run()
 - evitare refactor largo
