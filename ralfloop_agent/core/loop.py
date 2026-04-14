@@ -11,6 +11,7 @@ from ralfloop_agent.logging.audit import AuditLogger
 from ralfloop_agent.contracts.completion_policy import evaluate_completion_stop
 from ralfloop_agent.contracts.final_answer_renderer import render_final_answer
 from ralfloop_agent.contracts.tool_dispatch import dispatch_tool
+from ralfloop_agent.contracts.read_file_postprocess import handle_read_file_result
 
 
 
@@ -196,44 +197,17 @@ class RalfloopAgent:
                     state.consecutive_failures = 0
                     state.memory.append(MemoryEntry(kind="result", content=f"{decision.tool_name}: ok"))
                 if decision.tool_name == "sandbox_read_file":
-                    raw_path = decision.tool_input.get("path")
-                    if raw_path is None:
-                        raw_path = decision.tool_input.get("filename")
-                    path = str(raw_path or "")
-
-                    if path.startswith("http://") or path.startswith("https://"):
-                        decision.tool_name = "sandbox_http_fetch"
-                        decision.tool_input = {"url": path, "method": "GET"}
-                    elif not path or path.startswith("/") or ".." in path:
-                        result = ToolResult(
-                            tool_name=decision.tool_name,
-                            ok=False,
-                            stdout="",
-                            stderr="policy_denied",
-                        )
-                        state.consecutive_failures += 1
-                        state.last_action = decision.model_dump()
-                        state.last_result = result
-                        state.audit_summary.append(f"{decision.tool_name}: policy_denied")
-                        if self._should_stop(state):
-                            break
+                    read_outcome = handle_read_file_result(state, decision, result)
+                    result = read_outcome["result"]
+                    state.last_result = result
+                    if self._should_stop(state):
+                        break
+                    if read_outcome["force_role_advance"]:
                         state.current_role = _next_role(state.current_role)
+                    if read_outcome["force_iteration_advance"]:
                         state.iteration += 1
+                    if read_outcome["should_continue"]:
                         continue
-
-                    if result.ok:
-                        state.memory.append(
-                            MemoryEntry(
-                                kind="result",
-                                content=f"file_read::{path}::{result.stdout}",
-                            )
-                        )
-                        if self._should_stop(state):
-                            break
-
-                    state.current_role = _next_role(state.current_role)
-                    state.iteration += 1
-                    continue
 
                 if result.ok:
                     if self._should_stop(state):
