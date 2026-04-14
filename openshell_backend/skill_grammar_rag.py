@@ -270,7 +270,6 @@ def _repair_suspicious_analysis(arr: list[dict[str, Any]]) -> list[dict[str, Any
 
     if changed:
         out = _enrich_analysis(out)
-    out = _repair_suspicious_analysis(out)
     return out
 
 
