@@ -59,15 +59,18 @@ async def _post_json_inprocess(path: str, payload: dict) -> tuple[int, dict]:
     return start['status'], json.loads(response_body.decode('utf-8'))
 
 
-def _post_tasks_run(user_goal: str) -> dict:
+def _post_tasks_run(user_goal: str, extra_payload: dict | None = None) -> dict:
+    request_payload = {
+        'user_goal': user_goal,
+        'skill_context': '',
+        'extra_context': {},
+    }
+    if extra_payload:
+        request_payload.update(extra_payload)
     status_code, payload = asyncio.run(
         _post_json_inprocess(
             '/tasks/run',
-            {
-                'user_goal': user_goal,
-                'skill_context': '',
-                'extra_context': {},
-            },
+            request_payload,
         )
     )
     assert status_code == 200
@@ -116,3 +119,39 @@ def test_tasks_run_inprocess_multi_file_variant_is_not_hardcoded(tmp_path, monke
     assert 'with open(' not in payload['final_answer']
     assert 'cat >' not in payload['final_answer']
     assert 'print(' not in payload['final_answer']
+
+
+def test_tasks_run_inprocess_uses_request_llm_selection_as_authoritative(tmp_path, monkeypatch) -> None:
+    _patch_runtime_dependencies(tmp_path, monkeypatch)
+
+    payload = _post_tasks_run(
+        'Crea due file out/a.txt e out/b.txt con contenuti diversi, poi leggili entrambi e dimmi il contenuto finale.',
+        extra_payload={
+            'planner_model_profile': 'planner-x',
+            'coder_model_profile': 'coder-x',
+            'judge_model_profile': 'judge-x',
+            'planner_model_name': 'model-planner-x',
+            'coder_model_name': 'model-coder-x',
+            'judge_model_name': 'model-judge-x',
+            'planner_rag_collection': 'rag-planner-x',
+            'coder_rag_collection': 'rag-coder-x',
+            'judge_rag_collection': 'rag-judge-x',
+        },
+    )
+
+    assert payload['ok'] is True
+    assert payload['used_profiles'] == {
+        'planner': 'planner-x',
+        'coder': 'coder-x',
+        'judge': 'judge-x',
+    }
+    assert payload['used_models'] == {
+        'planner': 'model-planner-x',
+        'coder': 'model-coder-x',
+        'judge': 'model-judge-x',
+    }
+    assert payload['used_rag'] == {
+        'planner': 'rag-planner-x',
+        'coder': 'rag-coder-x',
+        'judge': 'rag-judge-x',
+    }

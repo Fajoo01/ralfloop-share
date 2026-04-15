@@ -494,23 +494,61 @@ from pydantic import BaseModel
 from openshell_backend.skills.registry import try_direct_skill
 from openshell_backend.skills.validators import is_skill_output_sufficient, validate_skill_output
 
+TASK_RUN_DEFAULTS = {
+    "planner_model_profile": "generalist",
+    "coder_model_profile": "coder",
+    "judge_model_profile": "generalist",
+    "planner_model_name": "qwen2.5:7b",
+    "coder_model_name": "qwen2.5:7b",
+    "judge_model_name": "qwen2.5:7b",
+    "planner_rag_collection": "ralfloop_planner",
+    "coder_rag_collection": "ralfloop_coder",
+    "judge_rag_collection": "ralfloop_judge",
+}
+
+
 class TaskRunRequest(BaseModel):
     user_goal: str
     mode: str = "planner_coder_judge"
-    planner_model_profile: str = "generalist"
-    coder_model_profile: str = "coder"
-    judge_model_profile: str = "generalist"
+    planner_model_profile: Optional[str] = None
+    coder_model_profile: Optional[str] = None
+    judge_model_profile: Optional[str] = None
 
-    planner_model_name: str = "qwen2.5:7b"
-    coder_model_name: str = "qwen2.5:7b"
-    judge_model_name: str = "qwen2.5:7b"
+    planner_model_name: Optional[str] = None
+    coder_model_name: Optional[str] = None
+    judge_model_name: Optional[str] = None
 
-    planner_rag_collection: str = "ralfloop_planner"
-    coder_rag_collection: str = "ralfloop_coder"
-    judge_rag_collection: str = "ralfloop_judge"
+    planner_rag_collection: Optional[str] = None
+    coder_rag_collection: Optional[str] = None
+    judge_rag_collection: Optional[str] = None
 
     skill_context: Optional[str] = None
     extra_context: Optional[Dict[str, Any]] = None
+
+
+
+def _task_run_selection(req: TaskRunRequest) -> dict[str, dict[str, str]]:
+    effective = {
+        key: getattr(req, key) if getattr(req, key) is not None else default
+        for key, default in TASK_RUN_DEFAULTS.items()
+    }
+    return {
+        "profiles": {
+            "planner": effective["planner_model_profile"],
+            "coder": effective["coder_model_profile"],
+            "judge": effective["judge_model_profile"],
+        },
+        "models": {
+            "planner": effective["planner_model_name"],
+            "coder": effective["coder_model_name"],
+            "judge": effective["judge_model_name"],
+        },
+        "rag": {
+            "planner": effective["planner_rag_collection"],
+            "coder": effective["coder_rag_collection"],
+            "judge": effective["judge_rag_collection"],
+        },
+    }
 
 
 
@@ -1123,6 +1161,7 @@ def run_task(req: TaskRunRequest):
 
     low_goal = (req.user_goal or "").lower()
     low_skill = (req.skill_context or "").lower()
+    selection = _task_run_selection(req)
 
     explicit_stream_request = (
         "stream probe" in low_goal
@@ -1275,19 +1314,19 @@ def run_task(req: TaskRunRequest):
                         "ok": True,
                         "mode": req.mode,
                         "used_profiles": {
-                            "planner": req.planner_model_profile,
-                            "coder": req.coder_model_profile,
-                            "judge": req.judge_model_profile,
+                            "planner": selection["profiles"]["planner"],
+                            "coder": selection["profiles"]["coder"],
+                            "judge": selection["profiles"]["judge"],
                         },
                         "used_models": {
-                            "planner": req.planner_model_name,
-                            "coder": req.coder_model_name,
-                            "judge": req.judge_model_name,
+                            "planner": selection["models"]["planner"],
+                            "coder": selection["models"]["coder"],
+                            "judge": selection["models"]["judge"],
                         },
                         "used_rag": {
-                            "planner": req.planner_rag_collection,
-                            "coder": req.coder_rag_collection,
-                            "judge": req.judge_rag_collection,
+                            "planner": selection["rag"]["planner"],
+                            "coder": selection["rag"]["coder"],
+                            "judge": selection["rag"]["judge"],
                         },
                         "current_role": "stream_probe_bridge",
                         "role_history": ["stream_probe_bridge"],
@@ -1327,19 +1366,19 @@ def run_task(req: TaskRunRequest):
                 "ok": True,
                 "mode": req.mode,
                 "used_profiles": {
-                    "planner": req.planner_model_profile,
-                    "coder": req.coder_model_profile,
-                    "judge": req.judge_model_profile,
+                    "planner": selection["profiles"]["planner"],
+                    "coder": selection["profiles"]["coder"],
+                    "judge": selection["profiles"]["judge"],
                 },
                 "used_models": {
-                    "planner": req.planner_model_name,
-                    "coder": req.coder_model_name,
-                    "judge": req.judge_model_name,
+                    "planner": selection["models"]["planner"],
+                    "coder": selection["models"]["coder"],
+                    "judge": selection["models"]["judge"],
                 },
                 "used_rag": {
-                    "planner": req.planner_rag_collection,
-                    "coder": req.coder_rag_collection,
-                    "judge": req.judge_rag_collection,
+                    "planner": selection["rag"]["planner"],
+                    "coder": selection["rag"]["coder"],
+                    "judge": selection["rag"]["judge"],
                 },
                 "current_role": "stream_probe_bridge",
                 "role_history": ["stream_probe_bridge"],
@@ -1370,19 +1409,19 @@ def run_task(req: TaskRunRequest):
                 "ok": True,
                 "mode": req.mode,
                 "used_profiles": {
-                    "planner": req.planner_model_profile,
-                    "coder": req.coder_model_profile,
-                    "judge": req.judge_model_profile,
+                    "planner": selection["profiles"]["planner"],
+                    "coder": selection["profiles"]["coder"],
+                    "judge": selection["profiles"]["judge"],
                 },
                 "used_models": {
-                    "planner": req.planner_model_name,
-                    "coder": req.coder_model_name,
-                    "judge": req.judge_model_name,
+                    "planner": selection["models"]["planner"],
+                    "coder": selection["models"]["coder"],
+                    "judge": selection["models"]["judge"],
                 },
                 "used_rag": {
-                    "planner": req.planner_rag_collection,
-                    "coder": req.coder_rag_collection,
-                    "judge": req.judge_rag_collection,
+                    "planner": selection["rag"]["planner"],
+                    "coder": selection["rag"]["coder"],
+                    "judge": selection["rag"]["judge"],
                 },
                 "current_role": "stream_probe_bridge",
                 "role_history": ["stream_probe_bridge"],
@@ -1396,19 +1435,19 @@ def run_task(req: TaskRunRequest):
             "ok": False,
             "mode": req.mode,
             "used_profiles": {
-                "planner": req.planner_model_profile,
-                "coder": req.coder_model_profile,
-                "judge": req.judge_model_profile,
+                "planner": selection["profiles"]["planner"],
+                "coder": selection["profiles"]["coder"],
+                "judge": selection["profiles"]["judge"],
             },
             "used_models": {
-                "planner": req.planner_model_name,
-                "coder": req.coder_model_name,
-                "judge": req.judge_model_name,
+                "planner": selection["models"]["planner"],
+                "coder": selection["models"]["coder"],
+                "judge": selection["models"]["judge"],
             },
             "used_rag": {
-                "planner": req.planner_rag_collection,
-                "coder": req.coder_rag_collection,
-                "judge": req.judge_rag_collection,
+                "planner": selection["rag"]["planner"],
+                "coder": selection["rag"]["coder"],
+                "judge": selection["rag"]["judge"],
             },
             "current_role": "stream_probe_bridge",
             "role_history": ["stream_probe_bridge"],
@@ -1428,19 +1467,19 @@ def run_task(req: TaskRunRequest):
 
     planner = OllamaPlanner(
         base_url="http://127.0.0.1:11434",
-        model=req.planner_model_name,
+        model=selection["models"]["planner"],
         fallback=DeterministicPlanner(),
         timeout_sec=60,
     )
     coder_planner = OllamaPlanner(
         base_url="http://127.0.0.1:11434",
-        model=req.coder_model_name,
+        model=selection["models"]["coder"],
         fallback=DeterministicPlanner(),
         timeout_sec=60,
     )
     judge_planner = OllamaPlanner(
         base_url="http://127.0.0.1:11434",
-        model=req.judge_model_name,
+        model=selection["models"]["judge"],
         fallback=DeterministicPlanner(),
         timeout_sec=60,
     )
@@ -1485,7 +1524,7 @@ def run_task(req: TaskRunRequest):
         )
         payload = maybe_attach_coder_text(
             payload=payload,
-            model_name=req.coder_model_name,
+            model_name=selection["models"]["coder"],
             base_url="http://127.0.0.1:11434",
             timeout_sec=60,
         )
@@ -1551,15 +1590,15 @@ def run_task(req: TaskRunRequest):
         context={
             "skill_context": req.skill_context or "",
             "extra_context": req.extra_context or {},
-            "planner_model_profile": req.planner_model_profile,
-            "coder_model_profile": req.coder_model_profile,
-            "judge_model_profile": req.judge_model_profile,
-            "planner_model_name": req.planner_model_name,
-            "coder_model_name": req.coder_model_name,
-            "judge_model_name": req.judge_model_name,
-            "planner_rag_collection": req.planner_rag_collection,
-            "coder_rag_collection": req.coder_rag_collection,
-            "judge_rag_collection": req.judge_rag_collection,
+            "planner_model_profile": selection["profiles"]["planner"],
+            "coder_model_profile": selection["profiles"]["coder"],
+            "judge_model_profile": selection["profiles"]["judge"],
+            "planner_model_name": selection["models"]["planner"],
+            "coder_model_name": selection["models"]["coder"],
+            "judge_model_name": selection["models"]["judge"],
+            "planner_rag_collection": selection["rag"]["planner"],
+            "coder_rag_collection": selection["rag"]["coder"],
+            "judge_rag_collection": selection["rag"]["judge"],
         },
     )
     try:
@@ -1571,15 +1610,15 @@ def run_task(req: TaskRunRequest):
     except Exception as e:
         print("[TASKS_RUN] debug_print_error=", e, flush=True)
 
-    state.planner_model_profile = req.planner_model_profile
-    state.coder_model_profile = req.coder_model_profile
-    state.judge_model_profile = req.judge_model_profile
-    state.planner_model_name = req.planner_model_name
-    state.coder_model_name = req.coder_model_name
-    state.judge_model_name = req.judge_model_name
-    state.planner_rag_collection = req.planner_rag_collection
-    state.coder_rag_collection = req.coder_rag_collection
-    state.judge_rag_collection = req.judge_rag_collection
+    state.planner_model_profile = selection["profiles"]["planner"]
+    state.coder_model_profile = selection["profiles"]["coder"]
+    state.judge_model_profile = selection["profiles"]["judge"]
+    state.planner_model_name = selection["models"]["planner"]
+    state.coder_model_name = selection["models"]["coder"]
+    state.judge_model_name = selection["models"]["judge"]
+    state.planner_rag_collection = selection["rag"]["planner"]
+    state.coder_rag_collection = selection["rag"]["coder"]
+    state.judge_rag_collection = selection["rag"]["judge"]
 
     promoted_skill_path = maybe_autopromote_candidate(
         req.user_goal or "",
@@ -1593,9 +1632,9 @@ def run_task(req: TaskRunRequest):
     payload = {
         "ok": state_data.get("status") == "completed",
         "mode": str(state_data.get("mode", "") or ""),
-        "used_profiles": dict(state_data.get("used_profiles", {}) or {}),
-        "used_models": dict(state_data.get("used_models", {}) or {}),
-        "used_rag": dict(state_data.get("used_rag", {}) or {}),
+        "used_profiles": dict(selection["profiles"]),
+        "used_models": dict(selection["models"]),
+        "used_rag": dict(selection["rag"]),
         "current_role": str(state_data.get("current_role", "") or ""),
         "role_history": list(state_data.get("role_history", []) or []),
         "stop_reason": str(state_data.get("stop_reason", "") or ""),
