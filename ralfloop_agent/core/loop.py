@@ -12,11 +12,10 @@ from ralfloop_agent.contracts.final_answer_renderer import render_final_answer
 from ralfloop_agent.contracts.tool_dispatch import dispatch_tool
 from ralfloop_agent.contracts.read_file_postprocess import handle_read_file_result
 from ralfloop_agent.contracts.role_helpers import next_role, profile_for_role, model_name_for_role, rag_for_role, planner_for_role
+from ralfloop_agent.contracts.runtime_multifile_guard import apply_runtime_multifile_guard
 from ralfloop_agent.contracts.state_transitions import advance_role_and_iteration, finalize_state
 from ralfloop_agent.contracts.seeded_context_bootstrap import choose_seeded_context_action
 from ralfloop_agent.contracts.seed_writer import write_seed_files
-
-
 
 
 class RalfloopAgent:
@@ -70,10 +69,12 @@ class RalfloopAgent:
                     )
                 )
 
+                active_planner = planner_for_role(self, state)
                 decision = choose_seeded_context_action(
                     state,
-                    planner_for_role(self, state).choose_next_action,
+                    active_planner.choose_next_action,
                 )
+                decision = apply_runtime_multifile_guard(state, decision, active_planner)
                 state.plan.append(
                     PlanStep(
                         step_id=f"step-{state.iteration+1}",

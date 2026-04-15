@@ -10,12 +10,13 @@ def choose_seeded_context_action(state, choose_next_action_fn):
         read_paths = set()
         for mem in state.memory:
             content = getattr(mem, "content", "")
-            if content.startswith("file_read::"):
-                try:
-                    _, path, _body = content.split("::", 2)
-                except ValueError:
-                    continue
-                read_paths.add(path.strip())
+            if not content.startswith("file_read::"):
+                continue
+            try:
+                _, path, _body = content.split("::", 2)
+            except ValueError:
+                continue
+            read_paths.add(path.strip())
 
         if "user_goal.txt" not in read_paths:
             return ActionDecision(

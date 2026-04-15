@@ -1,6 +1,20 @@
 from __future__ import annotations
 
+import re
 from typing import Any
+
+
+_RAW_CODE_PATTERNS = (
+    r"^```",
+    r"\bwith\s+open\s*\(",
+    r"\bprint\s*\(",
+    r"^\s*(?:import|from)\s+\w+",
+    r"^\s*(?:def|class)\s+\w+",
+    r"cat\s*>",
+    r"<<['\"]?\w+['\"]?",
+    r"\bjson\.dump(?:s)?\s*\(",
+    r"#!/(?:usr/bin/env\s+)?(?:python|bash|sh)",
+)
 
 
 def _goal_flags(goal: str) -> dict[str, bool]:
@@ -22,20 +36,57 @@ def _goal_flags(goal: str) -> dict[str, bool]:
     }
 
 
+def _is_workspace_operational_goal(goal: str) -> bool:
+    goal = (goal or "").lower()
+    has_action = any(
+        token in goal
+        for token in (
+            "scrivi",
+            "write",
+            "crea",
+            "create",
+            "trasforma",
+            "transform",
+            "aggiorna",
+            "update",
+            "modifica",
+            "edit",
+        )
+    )
+    has_workspace_target = (
+        any(
+            token in goal
+            for token in ("file", "files", "cartella", "directory", "dir", "workspace", "json")
+        )
+        or bool(re.search(r"\b(?:out|tmp)/[^\s]+", goal))
+        or bool(re.search(r"\b[\w.-]+\.(?:txt|md|json|log|csv|ya?ml)\b", goal))
+    )
+    return has_action and has_workspace_target
+
+
+def _looks_like_raw_code(text: str) -> bool:
+    body = (text or "").strip()
+    if not body:
+        return False
+    return any(re.search(pattern, body, re.IGNORECASE | re.MULTILINE) for pattern in _RAW_CODE_PATTERNS)
+
+
 def _read_paths_from_memory(state: Any) -> set[str]:
-    read_paths: set[str] = set()
+    return set(_latest_read_bodies_by_path(state))
+
+
+def _latest_read_bodies_by_path(state: Any) -> dict[str, str]:
+    latest: dict[str, str] = {}
     for mem in getattr(state, "memory", []) or []:
         content = getattr(mem, "content", "")
-        if not isinstance(content, str):
-            continue
-        if not content.startswith("file_read::"):
+        if not isinstance(content, str) or not content.startswith("file_read::"):
             continue
         try:
-            _, path, _body = content.split("::", 2)
+            _, path, body = content.split("::", 2)
         except ValueError:
             continue
-        read_paths.add(path.strip())
-    return read_paths
+        latest[path.strip()] = body
+    return latest
 
 
 def _expected_reads(state: Any, planner: Any) -> int:
@@ -58,7 +109,8 @@ def evaluate_completion_stop(state: Any, planner: Any) -> bool:
 
         if tool_name in {"sandbox_read_file", "sandbox_http_fetch"}:
             if tool_name == "sandbox_read_file":
-                read_paths = _read_paths_from_memory(state)
+                latest_reads = _latest_read_bodies_by_path(state)
+                read_paths = set(latest_reads)
 
                 if flags["goal_targets_both_seeded"]:
                     if not {"user_goal.txt", "skill_context.txt"}.issubset(read_paths):
@@ -68,6 +120,18 @@ def evaluate_completion_stop(state: Any, planner: Any) -> bool:
                     expected_reads = _expected_reads(state, planner)
                     if len(read_paths) < expected_reads:
                         return False
+
+                if _is_workspace_operational_goal(getattr(state, "user_goal", "")):
+                    if flags["is_multi_file"]:
+                        expected_reads = _expected_reads(state, planner)
+                        meaningful = [body for body in latest_reads.values() if str(body or "").strip()]
+                        if len(meaningful) < expected_reads:
+                            return False
+                        if any(_looks_like_raw_code(body) for body in meaningful):
+                            return False
+                    else:
+                        if _looks_like_raw_code(getattr(state.last_result, "stdout", "")):
+                            return False
 
             state.stop_reason = "goal_completed"
             return True

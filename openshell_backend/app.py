@@ -1589,7 +1589,8 @@ def run_task(req: TaskRunRequest):
     )
 
     state_data = state.model_dump() if hasattr(state, "model_dump") else dict(getattr(state, "__dict__", {}) or {})
-    return {
+    runtime_debug = list((state_data.get("context", {}) or {}).get("runtime_debug", []) or [])
+    payload = {
         "ok": state_data.get("status") == "completed",
         "mode": str(state_data.get("mode", "") or ""),
         "used_profiles": dict(state_data.get("used_profiles", {}) or {}),
@@ -1603,3 +1604,6 @@ def run_task(req: TaskRunRequest):
         "audit_summary": list(state_data.get("audit_summary", []) or []),
         "autofix_candidate": dict(state_data.get("autofix_candidate", {}) or {}),
     }
+    if not payload["ok"]:
+        payload["debug_runtime"] = runtime_debug
+    return payload
