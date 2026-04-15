@@ -1,35 +1,25 @@
 # Ralfloop Agent Scaffold
 
-Scaffold MVP per un agente stile NemoClaw con:
-- orchestrazione esterna
-- sandbox confinata
-- policy default-deny
-- audit JSONL
-- loop minimo a iterazioni controllate
+Backend/runtime per Ralfloop:
+- planner/coder/judge loop
+- runtime multifile progression
+- internal prompt style selection
+- pending skill manuals upload / preview / promote
+- in-process /tasks/run integration coverage
 
-## Stato
-Questo scaffold non dipende ancora da OpenShell reale: l'adapter è uno stub locale che simula una sandbox sotto una directory workspace.
+## Main features
+- request-authoritative LLM selection
+- runtime guard against raw-code final answers for workspace tasks
+- multifile task progression using runtime memory
+- pending skill workflow:
+  - manuals upload
+  - preview
+  - promote to stable skill structure
 
-## Cosa c'è
-- `ralfloop_agent/core/state.py`: modelli Pydantic dello stato
-- `ralfloop_agent/tools/contracts.py`: result envelope unico
-- `ralfloop_agent/core/policy.py`: policy layer filesystem/network/comandi distruttivi
-- `ralfloop_agent/adapters/openshell_adapter.py`: adapter stub
-- `ralfloop_agent/logging/audit.py`: logger JSONL
-- `ralfloop_agent/core/loop.py`: loop minimo
-- `ralfloop_agent/providers/ollama.py`: stub provider
-- `tests/test_loop_minimal.py`: test end-to-end di fumo
-- `config/project.json`: spec del progetto
-
-## Avvio rapido
-```bash
-cd ralfloop_agent_scaffold
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e '.[dev]'
-pytest -q
-python -m ralfloop_agent.main
-```
-
-## Nota
-Per ora il loop usa un planner deterministico minimale invece di chiamare davvero Ollama. Serve per validare contratti, policy e lifecycle.
+## Relevant tags
+- v0.5.20-runtime-multifile-guard
+- v0.5.21-tasks-run-inprocess-test
+- v0.5.22-backend-request-llm-selection
+- v0.5.23-internal-prompt-style-runtime
+- v0.5.24-pending-skill-manual-upload-ui
+- v0.5.25-pending-skill-preview-promote

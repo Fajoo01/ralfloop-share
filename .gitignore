@@ -13,3 +13,34 @@ logs/
 ralfloop_agent.egg-info/
 
 .openshell_backend/
+
+# local handoff / codex
+CODEX_*.md
+NEXT_SESSION_START_HERE.md
+HANDOFF_*.json
+HANDOFF_*.md
+
+# backups / junk
+*.bak
+*.bak.*
+*.before_*
+*.orig
+*.rej
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+
+# runtime / logs
+logs/
+tmp/
+*.log
+
+# local env
+.venv/
+.env
+
+# os/editor
+.DS_Store
