@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from email.parser import BytesParser
 from email.policy import default as email_policy
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -100,6 +100,34 @@ def _list_pending_manual_names(skill_name: str) -> list[str]:
     return sorted(p.name for p in manual_dir.iterdir() if p.is_file())
 
 
+def _stable_skill_dir(skill_name: str) -> Path:
+    safe_skill_name = _sanitize_pending_skill_name(skill_name)
+    target = (STABLE_SKILLS_DIR / safe_skill_name).resolve()
+    stable_root = STABLE_SKILLS_DIR.resolve()
+    if stable_root not in target.parents:
+        raise HTTPException(status_code=400, detail="invalid_skill_name")
+    return target
+
+
+def _pending_skill_status(skill_name: str) -> dict[str, object]:
+    safe_skill_name = _sanitize_pending_skill_name(skill_name)
+    manual_dir = _pending_skill_manuals_dir(safe_skill_name)
+    manuals = _list_pending_manual_names(safe_skill_name)
+    pending_root = (PENDING_SKILLS_DIR / safe_skill_name).resolve()
+    stable_root = _stable_skill_dir(safe_skill_name)
+    promotable = pending_root.exists() and manual_dir.exists() and bool(manuals)
+    return {
+        "skill_name": safe_skill_name,
+        "pending_root": pending_root,
+        "manual_dir": manual_dir,
+        "manuals": manuals,
+        "manual_count": len(manuals),
+        "promotable": promotable,
+        "stable_root": stable_root,
+        "stable_exists": stable_root.exists(),
+    }
+
+
 def _parse_multipart_form_data(content_type: str, body: bytes) -> tuple[dict[str, list[str]], list[dict[str, object]]]:
     header = f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("utf-8")
     message = BytesParser(policy=email_policy).parsebytes(header + body)
@@ -135,9 +163,11 @@ def _pending_manuals_page_html(skill_name: str, manual_names: list[str], message
     escaped_skill = html.escape(skill_name)
     escaped_message = html.escape(message)
     escaped_error = html.escape(error)
+    preview_url = f"/pending-skills/preview?{urlencode({'skill_name': skill_name})}" if skill_name else ""
     items = "\n".join(f"<li>{html.escape(name)}</li>" for name in manual_names) or "<li>Nessun manuale caricato.</li>"
     success_html = f"<div class='msg ok'>{escaped_message}</div>" if escaped_message else ""
     error_html = f"<div class='msg err'>{escaped_error}</div>" if escaped_error else ""
+    preview_html = f"<p><a href='{html.escape(preview_url)}'>Apri preview skill pending</a></p>" if preview_url else ""
     return f'''<!doctype html>
 <html lang="it">
 <head>
@@ -166,6 +196,7 @@ def _pending_manuals_page_html(skill_name: str, manual_names: list[str], message
     <input id="manual_files" name="manual_files" type="file" multiple required>
     <p><button type="submit">Carica manuali</button></p>
   </form>
+  {preview_html}
   <h2>Manuali caricati</h2>
   <p>Skill selezionata: <code>{escaped_skill or "nessuna"}</code></p>
   <ul>
@@ -173,6 +204,7 @@ def _pending_manuals_page_html(skill_name: str, manual_names: list[str], message
   </ul>
 </body>
 </html>'''
+
 
 
 class SandboxCreateResponse(BaseModel):
@@ -442,6 +474,115 @@ async def upload_pending_skill_manuals(request: Request):
         "message": f"Caricati {len(saved_names)} manuali: {', '.join(saved_names)}",
     })
     return RedirectResponse(url=f"/pending-skills/manuals?{query}", status_code=303)
+
+
+@app.get("/pending-skills/preview", response_class=HTMLResponse)
+def preview_pending_skill(skill_name: str = Query(""), message: str = Query(""), error: str = Query("")):
+    if not skill_name:
+        return HTMLResponse(_pending_manuals_page_html("", [], message=message, error=error))
+
+    status = _pending_skill_status(skill_name)
+    escaped_skill = html.escape(str(status["skill_name"]))
+    manual_items = "\n".join(f"<li>{html.escape(name)}</li>" for name in status["manuals"]) or "<li>Nessun manuale caricato.</li>"
+    success_html = f"<div class='msg ok'>{html.escape(message)}</div>" if message else ""
+    error_html = f"<div class='msg err'>{html.escape(error)}</div>" if error else ""
+    promote_disabled = "disabled" if (not status["promotable"] or status["stable_exists"]) else ""
+    back_url = f"/pending-skills/manuals?{urlencode({'skill_name': str(status['skill_name'])})}"
+    return HTMLResponse(f'''<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <title>Pending Skill Preview</title>
+  <style>
+    body {{ font-family: sans-serif; margin: 2rem auto; max-width: 760px; padding: 0 1rem; }}
+    .card {{ border: 1px solid #ccc; padding: 1rem; border-radius: 8px; margin-bottom: 1rem; }}
+    .msg {{ padding: 0.75rem 1rem; border-radius: 6px; margin: 1rem 0; }}
+    .ok {{ background: #eef8ee; border: 1px solid #b8d8b8; }}
+    .err {{ background: #fff1f1; border: 1px solid #e3b3b3; }}
+    code {{ background: #f5f5f5; padding: 0.1rem 0.25rem; }}
+  </style>
+</head>
+<body>
+  <h1>Preview skill pending</h1>
+  {success_html}
+  {error_html}
+  <p><a href="{html.escape(back_url)}">Torna ai manuali</a></p>
+  <div class="card">
+    <p>Skill: <code>{escaped_skill}</code></p>
+    <p>Pending root: <code>{html.escape(str(status['pending_root']))}</code></p>
+    <p>Manuals path: <code>{html.escape(str(status['manual_dir']))}</code></p>
+    <p>Stable target: <code>{html.escape(str(status['stable_root']))}</code></p>
+    <p>Manuali caricati: {status['manual_count']}</p>
+    <p>Promotable: {'si' if status['promotable'] else 'no'}</p>
+    <p>Stable già esistente: {'si' if status['stable_exists'] else 'no'}</p>
+  </div>
+  <div class="card">
+    <h2>Manuali</h2>
+    <ul>{manual_items}</ul>
+  </div>
+  <form method="post" action="/pending-skills/promote">
+    <input type="hidden" name="skill_name" value="{escaped_skill}">
+    <button type="submit" {promote_disabled}>Promote verso skill stabile</button>
+  </form>
+</body>
+</html>''')
+
+
+@app.post("/pending-skills/promote")
+async def promote_pending_skill(request: Request):
+    content_type = request.headers.get("content-type", "")
+    if "application/x-www-form-urlencoded" in content_type:
+        raw = (await request.body()).decode("utf-8", errors="replace")
+        fields = {key: values[0] for key, values in parse_qs(raw, keep_blank_values=True).items()}
+        skill_name = fields.get("skill_name", "")
+    elif "multipart/form-data" in content_type:
+        fields, _ = _parse_multipart_form_data(content_type, await request.body())
+        skill_name = (fields.get("skill_name") or [""])[0]
+    else:
+        raise HTTPException(status_code=400, detail="form_required")
+
+    status = _pending_skill_status(skill_name)
+    safe_skill_name = str(status["skill_name"])
+    if not status["promotable"]:
+        query = urlencode({"skill_name": safe_skill_name, "error": "Skill pending non promotable: servono manuali caricati."})
+        return RedirectResponse(url=f"/pending-skills/preview?{query}", status_code=303)
+
+    stable_root = status["stable_root"]
+    if stable_root.exists():
+        query = urlencode({"skill_name": safe_skill_name, "error": "Skill stabile già esistente: overwrite rifiutato."})
+        return RedirectResponse(url=f"/pending-skills/preview?{query}", status_code=303)
+
+    stable_manual_dir = (stable_root / "manuals").resolve()
+    stable_manual_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(status["manual_dir"], stable_manual_dir)
+
+    promoted_at = datetime.now(UTC).isoformat()
+    metadata = {
+        "skill_name": safe_skill_name,
+        "status": "promoted_from_pending",
+        "source_pending_skill": safe_skill_name,
+        "promoted_at": promoted_at,
+        "manual_count": status["manual_count"],
+    }
+    (stable_root / "skill.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    pending_marker = {
+        "skill_name": safe_skill_name,
+        "stable_root": str(stable_root),
+        "promoted_at": promoted_at,
+        "mode": "copy",
+    }
+    (status["pending_root"] / "promoted.json").write_text(json.dumps(pending_marker, ensure_ascii=False, indent=2), encoding="utf-8")
+    audit(
+        "pending_skill_promoted",
+        skill_name=safe_skill_name,
+        stable_root=str(stable_root),
+        manual_count=status["manual_count"],
+        mode="copy",
+    )
+    query = urlencode({"skill_name": safe_skill_name, "message": "Skill pending promossa con copia verso struttura stabile."})
+    return RedirectResponse(url=f"/pending-skills/preview?{query}", status_code=303)
+
 
 
 class ProbeStreamRequest(BaseModel):
