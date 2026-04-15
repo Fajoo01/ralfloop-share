@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from openshell_backend.common_router import route_common, maybe_autopromote_candidate
 from openshell_backend.skills.responses import build_skill_insufficient_response
+from openshell_backend.contracts.coder_autofix_runner import maybe_attach_coder_text
 
 BASE_DIR = Path("/home/sibilla-cumana/ralfloop_agent_scaffold/.openshell_backend")
 BASE_DIR.mkdir(parents=True, exist_ok=True)
@@ -1474,13 +1475,20 @@ def run_task(req: TaskRunRequest):
                 "autofix_candidate": {},
             }
 
-        return build_skill_insufficient_response(
+        payload = build_skill_insufficient_response(
             skill_name=skill_name,
             user_goal=req.user_goal or "",
             final_answer=skill_answer,
             validation=validation,
             include_runtime_fields=True,
         )
+        payload = maybe_attach_coder_text(
+            payload=payload,
+            model_name=req.coder_model_name,
+            base_url="http://127.0.0.1:11434",
+            timeout_sec=60,
+        )
+        return payload
 
     state = agent.run(
         user_goal=req.user_goal,
