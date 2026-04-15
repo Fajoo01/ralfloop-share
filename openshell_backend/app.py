@@ -1504,6 +1504,44 @@ def run_task(req: TaskRunRequest):
                 )
                 if apply_attempt:
                     af["coder_apply_attempt"] = apply_attempt
+
+                    rerun_skill = try_direct_skill(req.user_goal or "")
+                    rerun_validation = None
+                    rerun_answer = None
+                    rerun_ok = False
+
+                    if rerun_skill:
+                        rerun_skill_name, rerun_answer = rerun_skill
+                        rerun_validation = validate_skill_output(rerun_skill_name, rerun_answer)
+                        rerun_ok = is_skill_output_sufficient(rerun_skill_name, rerun_answer)
+
+                    af["post_apply_rerun"] = {
+                        "ok": rerun_ok,
+                        "skill_name": rerun_skill[0] if rerun_skill else "",
+                        "final_answer": rerun_answer or "",
+                        "validation": rerun_validation or {},
+                    }
+
+                    if rerun_ok:
+                        payload = {
+                            "ok": True,
+                            "mode": f"skill::{rerun_skill[0]}",
+                            "used_profiles": {},
+                            "used_models": {},
+                            "used_rag": {},
+                            "current_role": f"skill::{rerun_skill[0]}",
+                            "role_history": [f"skill::{rerun_skill[0]}"],
+                            "stop_reason": "goal_completed_after_autofix",
+                            "final_answer": rerun_answer or "",
+                            "artifacts": [],
+                            "audit_summary": [
+                                f"fastpath::skill::{rerun_skill[0]}",
+                                "autofix::coder_patch_applied",
+                                "autofix::post_apply_rerun_ok",
+                            ],
+                            "autofix_candidate": af,
+                        }
+                        return payload
             payload["autofix_candidate"] = af
         return payload
 
