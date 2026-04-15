@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from openshell_backend.grammar_validator import find_grammar_suspicions
 
 def validate_grammar_output(final_answer: str) -> dict:
     try:
@@ -54,6 +55,18 @@ def validate_grammar_output(final_answer: str) -> dict:
             "ok": False,
             "reason": "no_valid_grammar_entries",
             "details": missing or [{"error": "no_items_with_token_and_categoria"}],
+            "suggested_target": "grammar",
+            "suggested_file": "openshell_backend/skill_grammar_rag.py",
+        }
+
+    issues = find_grammar_suspicions(arr)
+    if issues:
+        return {
+            "ok": False,
+            "reason": "grammar_suspicions_found",
+            "details": issues,
+            "raw_issues": issues,
+            "final_issues": issues,
             "suggested_target": "grammar",
             "suggested_file": "openshell_backend/skill_grammar_rag.py",
         }
