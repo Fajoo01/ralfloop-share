@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from openshell_backend.common_router import route_common, maybe_autopromote_candidate
 from openshell_backend.skills.responses import build_skill_insufficient_response
 from openshell_backend.contracts.coder_autofix_runner import maybe_attach_coder_text
-from openshell_backend.contracts.coder_patch_apply import maybe_apply_and_validate_coder_patch
+from openshell_backend.contracts.coder_patch_apply import maybe_apply_and_validate_coder_patch, apply_coder_patch_permanently
 
 BASE_DIR = Path("/home/sibilla-cumana/ralfloop_agent_scaffold/.openshell_backend")
 BASE_DIR.mkdir(parents=True, exist_ok=True)
@@ -1497,6 +1497,13 @@ def run_task(req: TaskRunRequest):
         )
         if validation_attempt:
             af["coder_validation_attempt"] = validation_attempt
+            if validation_attempt.get("ok"):
+                apply_attempt = apply_coder_patch_permanently(
+                    repo_root="/home/sibilla-cumana/ralfloop_agent_scaffold",
+                    autofix_candidate=af,
+                )
+                if apply_attempt:
+                    af["coder_apply_attempt"] = apply_attempt
             payload["autofix_candidate"] = af
         return payload
 
