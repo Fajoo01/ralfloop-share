@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import html
 import json
 import shutil
 import subprocess
 import os
+import re
 import uuid
 from datetime import UTC, datetime
+from email.parser import BytesParser
+from email.policy import default as email_policy
 from pathlib import Path
+from urllib.parse import urlencode
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from openshell_backend.common_router import route_common, maybe_autopromote_candidate
 from openshell_backend.skills.responses import build_skill_insufficient_response
@@ -19,6 +25,9 @@ BASE_DIR = Path("/home/sibilla-cumana/ralfloop_agent_scaffold/.openshell_backend
 BASE_DIR.mkdir(parents=True, exist_ok=True)
 
 AUDIT_LOG = BASE_DIR / "audit.jsonl"
+RALFLOOP_DATA_DIR = Path("/home/sibilla-cumana/ralfloop_data")
+STABLE_SKILLS_DIR = RALFLOOP_DATA_DIR / "skills"
+PENDING_SKILLS_DIR = RALFLOOP_DATA_DIR / "skills_pending"
 
 DESTRUCTIVE_PATTERNS = [
     "rm -rf",
@@ -61,6 +70,109 @@ def check_command_allowed(command: str) -> tuple[bool, str]:
         if pat in lowered:
             return False, f"destructive_command:{pat.strip()}"
     return True, "allowed"
+
+
+def _sanitize_pending_skill_name(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9._-]+", "-", str(value or "").strip().lower())
+    normalized = normalized.strip("._-")
+    return normalized or "pending-skill"
+
+
+def _sanitize_manual_filename(value: str) -> str:
+    filename = Path(str(value or "")).name
+    normalized = re.sub(r"[^A-Za-z0-9._-]+", "_", filename).strip("._")
+    return normalized or "manual.bin"
+
+
+def _pending_skill_manuals_dir(skill_name: str) -> Path:
+    safe_skill_name = _sanitize_pending_skill_name(skill_name)
+    target = (PENDING_SKILLS_DIR / safe_skill_name / "manuals").resolve()
+    pending_root = PENDING_SKILLS_DIR.resolve()
+    if pending_root not in target.parents:
+        raise HTTPException(status_code=400, detail="invalid_skill_name")
+    return target
+
+
+def _list_pending_manual_names(skill_name: str) -> list[str]:
+    manual_dir = _pending_skill_manuals_dir(skill_name)
+    if not manual_dir.exists():
+        return []
+    return sorted(p.name for p in manual_dir.iterdir() if p.is_file())
+
+
+def _parse_multipart_form_data(content_type: str, body: bytes) -> tuple[dict[str, list[str]], list[dict[str, object]]]:
+    header = f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("utf-8")
+    message = BytesParser(policy=email_policy).parsebytes(header + body)
+    if not message.is_multipart():
+        raise HTTPException(status_code=400, detail="multipart_required")
+
+    fields: dict[str, list[str]] = {}
+    files: list[dict[str, object]] = []
+
+    for part in message.iter_parts():
+        if part.get_content_disposition() != "form-data":
+            continue
+        field_name = str(part.get_param("name", header="content-disposition") or "").strip()
+        if not field_name:
+            continue
+        filename = part.get_filename()
+        payload = part.get_payload(decode=True) or b""
+        if filename:
+            files.append({
+                "field_name": field_name,
+                "filename": filename,
+                "content": payload,
+            })
+            continue
+        charset = part.get_content_charset() or "utf-8"
+        value = payload.decode(charset, errors="replace")
+        fields.setdefault(field_name, []).append(value)
+
+    return fields, files
+
+
+def _pending_manuals_page_html(skill_name: str, manual_names: list[str], message: str = "", error: str = "") -> str:
+    escaped_skill = html.escape(skill_name)
+    escaped_message = html.escape(message)
+    escaped_error = html.escape(error)
+    items = "\n".join(f"<li>{html.escape(name)}</li>" for name in manual_names) or "<li>Nessun manuale caricato.</li>"
+    success_html = f"<div class='msg ok'>{escaped_message}</div>" if escaped_message else ""
+    error_html = f"<div class='msg err'>{escaped_error}</div>" if escaped_error else ""
+    return f'''<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <title>Pending Skill Manuals</title>
+  <style>
+    body {{ font-family: sans-serif; margin: 2rem auto; max-width: 760px; padding: 0 1rem; }}
+    form {{ border: 1px solid #ccc; padding: 1rem; border-radius: 8px; }}
+    label {{ display: block; margin: 0.75rem 0 0.25rem; font-weight: 600; }}
+    input[type="text"], input[type="file"] {{ width: 100%; max-width: 100%; }}
+    .msg {{ padding: 0.75rem 1rem; border-radius: 6px; margin: 1rem 0; }}
+    .ok {{ background: #eef8ee; border: 1px solid #b8d8b8; }}
+    .err {{ background: #fff1f1; border: 1px solid #e3b3b3; }}
+    code {{ background: #f5f5f5; padding: 0.1rem 0.25rem; }}
+  </style>
+</head>
+<body>
+  <h1>Manuali skill pending</h1>
+  <p>I manuali pending sono separati dalle skill stabili in <code>{html.escape(str(PENDING_SKILLS_DIR))}</code>.</p>
+  {success_html}
+  {error_html}
+  <form method="post" action="/pending-skills/manuals/upload" enctype="multipart/form-data">
+    <label for="skill_name">Nome skill pending</label>
+    <input id="skill_name" name="skill_name" type="text" value="{escaped_skill}" placeholder="es. parser-bilancio" required>
+    <label for="manual_files">Manuali</label>
+    <input id="manual_files" name="manual_files" type="file" multiple required>
+    <p><button type="submit">Carica manuali</button></p>
+  </form>
+  <h2>Manuali caricati</h2>
+  <p>Skill selezionata: <code>{escaped_skill or "nessuna"}</code></p>
+  <ul>
+    {items}
+  </ul>
+</body>
+</html>'''
 
 
 class SandboxCreateResponse(BaseModel):
@@ -275,6 +387,61 @@ def inspect_sandbox(sid: str):
 import re
 import requests
 from bs4 import BeautifulSoup
+
+
+@app.get("/pending-skills/manuals", response_class=HTMLResponse)
+def pending_skill_manuals_page(skill_name: str = Query(""), message: str = Query(""), error: str = Query("")):
+    manual_names = _list_pending_manual_names(skill_name) if skill_name else []
+    return HTMLResponse(_pending_manuals_page_html(skill_name, manual_names, message=message, error=error))
+
+
+@app.get("/pending-skills/manuals/list")
+def list_pending_skill_manuals(skill_name: str = Query(...)):
+    safe_skill_name = _sanitize_pending_skill_name(skill_name)
+    return {
+        "ok": True,
+        "skill_name": safe_skill_name,
+        "manuals": _list_pending_manual_names(safe_skill_name),
+        "storage_dir": str(_pending_skill_manuals_dir(safe_skill_name)),
+    }
+
+
+@app.post("/pending-skills/manuals/upload")
+async def upload_pending_skill_manuals(request: Request):
+    content_type = request.headers.get("content-type", "")
+    if "multipart/form-data" not in content_type:
+        raise HTTPException(status_code=400, detail="multipart_required")
+
+    fields, files = _parse_multipart_form_data(content_type, await request.body())
+    skill_name = (fields.get("skill_name") or [""])[0]
+    safe_skill_name = _sanitize_pending_skill_name(skill_name)
+    manual_dir = _pending_skill_manuals_dir(safe_skill_name)
+
+    uploaded_files = [f for f in files if f.get("field_name") == "manual_files"]
+    if not uploaded_files:
+        query = urlencode({"skill_name": safe_skill_name, "error": "Nessun file selezionato."})
+        return RedirectResponse(url=f"/pending-skills/manuals?{query}", status_code=303)
+
+    manual_dir.mkdir(parents=True, exist_ok=True)
+    manual_dir_resolved = manual_dir.resolve()
+    saved_names: list[str] = []
+    for item in uploaded_files:
+        safe_filename = _sanitize_manual_filename(str(item.get("filename") or ""))
+        target = (manual_dir / safe_filename).resolve()
+        if manual_dir_resolved not in target.parents:
+            raise HTTPException(status_code=400, detail="invalid_filename")
+        payload = item.get("content")
+        if not isinstance(payload, (bytes, bytearray)):
+            raise HTTPException(status_code=400, detail="invalid_file_payload")
+        target.write_bytes(bytes(payload))
+        saved_names.append(safe_filename)
+
+    audit("pending_skill_manuals_uploaded", skill_name=safe_skill_name, files=saved_names, count=len(saved_names))
+    query = urlencode({
+        "skill_name": safe_skill_name,
+        "message": f"Caricati {len(saved_names)} manuali: {', '.join(saved_names)}",
+    })
+    return RedirectResponse(url=f"/pending-skills/manuals?{query}", status_code=303)
 
 
 class ProbeStreamRequest(BaseModel):
