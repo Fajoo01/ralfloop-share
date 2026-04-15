@@ -4,6 +4,7 @@ from typing import Any
 
 from ralfloop_agent.autofix.diagnoser import diagnose_skill_failure, diagnosis_to_dict
 from ralfloop_agent.contracts.grammar_upstream_diagnostic import build_grammar_upstream_diagnostic
+from ralfloop_agent.contracts.coder_patch_candidate import build_coder_patch_candidate
 
 
 def build_skill_insufficient_response(
@@ -41,6 +42,10 @@ def build_skill_insufficient_response(
         grammar_upstream = build_grammar_upstream_diagnostic(user_goal or "", validation or {})
         if grammar_upstream:
             autofix_candidate["upstream_diagnostic"] = grammar_upstream
+
+    coder_patch_candidate = build_coder_patch_candidate(autofix_candidate)
+    if coder_patch_candidate:
+        autofix_candidate["coder_patch_candidate"] = coder_patch_candidate
 
     payload: dict[str, Any] = {
         "ok": False,
