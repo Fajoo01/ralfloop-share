@@ -136,6 +136,7 @@ def test_tasks_run_inprocess_uses_request_llm_selection_as_authoritative(tmp_pat
             'planner_rag_collection': 'rag-planner-x',
             'coder_rag_collection': 'rag-coder-x',
             'judge_rag_collection': 'rag-judge-x',
+            'internal_prompt_style': 'cinese-x',
         },
     )
 
@@ -155,3 +156,4 @@ def test_tasks_run_inprocess_uses_request_llm_selection_as_authoritative(tmp_pat
         'coder': 'rag-coder-x',
         'judge': 'rag-judge-x',
     }
+    assert payload['used_internal_prompt_style'] == 'cinese-x'

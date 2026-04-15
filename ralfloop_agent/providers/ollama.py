@@ -204,6 +204,50 @@ class OllamaPlanner:
         self.model = model
         self.fallback = fallback or DeterministicPlanner()
         self.timeout_sec = timeout_sec
+        self.role_name = "planner"
+        self.internal_prompt_style = "standard"
+
+    def _normalized_prompt_style(self) -> str:
+        style = str(getattr(self, "internal_prompt_style", "standard") or "standard").strip().lower()
+        if style not in {"standard", "caveman", "cinese"}:
+            return "standard"
+        return style
+
+    def _runtime_prompt(self, user_goal: str, iteration: int) -> str:
+        role = str(getattr(self, "role_name", "planner") or "planner").strip().lower()
+        style = self._normalized_prompt_style()
+        if style == "caveman":
+            return f"""Tu {role} sandbox. Solo prossimo passo minimo.
+Workspace seed: user_goal.txt, skill_context.txt, extra_context.json, workspace_manifest.txt.
+Se serve contesto, leggi un seed solo.
+No inventare file non esistenti. Se goal crea file, prefer out/.
+Output solo JSON schema valido.
+user_goal: {user_goal}
+iteration: {iteration}
+"""
+        if style == "cinese":
+            return f"""Ruolo={role}. Sandbox. Un passo solo.
+Seed: user_goal.txt; skill_context.txt; extra_context.json; workspace_manifest.txt.
+Serve contesto -> leggi 1 seed.
+No file inventati. Creazione -> preferisci out/.
+Risposta: solo JSON conforme schema.
+user_goal={user_goal}
+iteration={iteration}
+"""
+        return f"""Sei un {role} per un agente sandbox.
+Devi scegliere SOLO il prossimo passo minimo.
+La workspace parte vuota tranne questi file seed già presenti:
+- user_goal.txt
+- skill_context.txt
+- extra_context.json
+- workspace_manifest.txt
+Se ti serve contesto iniziale, leggi solo uno di questi file seed.
+Non inventare file come order_list.txt o user_goal.md se non sono già stati creati in precedenza.
+Se il goal chiede di creare qualcosa, preferisci creare o ispezionare file in out/ invece di leggere file inesistenti.
+Rispondi solo con un oggetto JSON conforme allo schema.
+user_goal: {user_goal}
+iteration: {iteration}
+"""
 
     def _clean_raw(self, text: str) -> str:
         text = text.strip()
@@ -389,20 +433,7 @@ class OllamaPlanner:
             "additionalProperties": False,
         }
 
-        prompt = f"""Sei un planner per un agente sandbox.
-Devi scegliere SOLO il prossimo passo minimo.
-La workspace parte vuota tranne questi file seed già presenti:
-- user_goal.txt
-- skill_context.txt
-- extra_context.json
-- workspace_manifest.txt
-Se ti serve contesto iniziale, leggi solo uno di questi file seed.
-Non inventare file come order_list.txt o user_goal.md se non sono già stati creati in precedenza.
-Se il goal chiede di creare qualcosa, preferisci creare o ispezionare file in out/ invece di leggere file inesistenti.
-Rispondi solo con un oggetto JSON conforme allo schema.
-user_goal: {user_goal}
-iteration: {iteration}
-"""
+        prompt = self._runtime_prompt(user_goal, iteration)
         try:
             r = requests.post(
                 f"{self.base_url}/api/generate",

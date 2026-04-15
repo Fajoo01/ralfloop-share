@@ -42,6 +42,7 @@ class RalfloopAgent:
             planner_rag_collection=ctx.get("planner_rag_collection", "ralfloop_planner"),
             coder_rag_collection=ctx.get("coder_rag_collection", "ralfloop_coder"),
             judge_rag_collection=ctx.get("judge_rag_collection", "ralfloop_judge"),
+            internal_prompt_style=ctx.get("internal_prompt_style", "standard"),
         )
         sandbox_info = self.adapter.create_sandbox()
         state.sandbox.id = sandbox_info["id"]

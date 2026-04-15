@@ -504,6 +504,7 @@ TASK_RUN_DEFAULTS = {
     "planner_rag_collection": "ralfloop_planner",
     "coder_rag_collection": "ralfloop_coder",
     "judge_rag_collection": "ralfloop_judge",
+    "internal_prompt_style": "standard",
 }
 
 
@@ -521,6 +522,7 @@ class TaskRunRequest(BaseModel):
     planner_rag_collection: Optional[str] = None
     coder_rag_collection: Optional[str] = None
     judge_rag_collection: Optional[str] = None
+    internal_prompt_style: Optional[str] = None
 
     skill_context: Optional[str] = None
     extra_context: Optional[Dict[str, Any]] = None
@@ -548,6 +550,7 @@ def _task_run_selection(req: TaskRunRequest) -> dict[str, dict[str, str]]:
             "coder": effective["coder_rag_collection"],
             "judge": effective["judge_rag_collection"],
         },
+        "internal_prompt_style": effective["internal_prompt_style"],
     }
 
 
@@ -1471,18 +1474,24 @@ def run_task(req: TaskRunRequest):
         fallback=DeterministicPlanner(),
         timeout_sec=60,
     )
+    planner.role_name = "planner"
+    planner.internal_prompt_style = selection["internal_prompt_style"]
     coder_planner = OllamaPlanner(
         base_url="http://127.0.0.1:11434",
         model=selection["models"]["coder"],
         fallback=DeterministicPlanner(),
         timeout_sec=60,
     )
+    coder_planner.role_name = "coder"
+    coder_planner.internal_prompt_style = selection["internal_prompt_style"]
     judge_planner = OllamaPlanner(
         base_url="http://127.0.0.1:11434",
         model=selection["models"]["judge"],
         fallback=DeterministicPlanner(),
         timeout_sec=60,
     )
+    judge_planner.role_name = "judge"
+    judge_planner.internal_prompt_style = selection["internal_prompt_style"]
 
     logger = AuditLogger(store_path="./logs")
 
@@ -1599,6 +1608,7 @@ def run_task(req: TaskRunRequest):
             "planner_rag_collection": selection["rag"]["planner"],
             "coder_rag_collection": selection["rag"]["coder"],
             "judge_rag_collection": selection["rag"]["judge"],
+            "internal_prompt_style": selection["internal_prompt_style"],
         },
     )
     try:
@@ -1635,6 +1645,7 @@ def run_task(req: TaskRunRequest):
         "used_profiles": dict(selection["profiles"]),
         "used_models": dict(selection["models"]),
         "used_rag": dict(selection["rag"]),
+        "used_internal_prompt_style": str(selection["internal_prompt_style"]),
         "current_role": str(state_data.get("current_role", "") or ""),
         "role_history": list(state_data.get("role_history", []) or []),
         "stop_reason": str(state_data.get("stop_reason", "") or ""),

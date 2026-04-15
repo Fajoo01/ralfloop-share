@@ -50,6 +50,7 @@ class AgentState(BaseModel):
     planner_rag_collection: str = "ralfloop_planner"
     coder_rag_collection: str = "ralfloop_coder"
     judge_rag_collection: str = "ralfloop_judge"
+    internal_prompt_style: str = "standard"
     sandbox: SandboxState = Field(default_factory=SandboxState)
     plan: list[PlanStep] = Field(default_factory=list)
     memory: list[MemoryEntry] = Field(default_factory=list)
