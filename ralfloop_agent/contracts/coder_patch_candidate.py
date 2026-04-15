@@ -46,3 +46,41 @@ def build_coder_patch_candidate(autofix_candidate: dict[str, Any]) -> dict[str, 
             "Il gatto è sull'albero",
         ],
     }
+
+
+
+def build_coder_handoff_prompt(autofix_candidate: dict[str, Any]) -> str | None:
+    patch = build_coder_patch_candidate(autofix_candidate)
+    if not isinstance(patch, dict):
+        return None
+
+    instructions = patch.get("instructions") or []
+    example_cases = patch.get("example_cases") or []
+
+    lines = [
+        "Produce a minimal patch for the target symbol.",
+        f"Target file: {patch.get('target_file')}",
+        f"Target symbol: {patch.get('target_symbol')}",
+        f"Issue kind: {patch.get('issue_kind')}",
+        f"Why: {patch.get('why')}",
+        "",
+        "Required changes:",
+    ]
+    for item in instructions:
+        lines.append(f"- {item}")
+
+    if example_cases:
+        lines.append("")
+        lines.append("Example cases to preserve/fix:")
+        for item in example_cases:
+            lines.append(f"- {item}")
+
+    lines.extend([
+        "",
+        "Return only the patch-ready code change for the target file.",
+        "Do not refactor unrelated code.",
+        "Keep existing tests green.",
+    ])
+    return "\n".join(lines)
+
+
