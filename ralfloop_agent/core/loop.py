@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import re
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from ralfloop_agent.core.state import AgentState, MemoryEntry, PlanStep
@@ -112,6 +114,7 @@ class RalfloopAgent:
                     tool_output=result.model_dump(),
                     decision="evaluate",
                 )
+                self._record_runtime_evidence(state, decision, result)
 
                 if result.ok:
                     state.consecutive_failures = 0
@@ -143,6 +146,7 @@ class RalfloopAgent:
                 advance_role_and_iteration(state, next_role)
 
             finalize_state(state, self._build_final_answer)
+            self._write_runtime_summaries(state, adapter_sandbox)
         finally:
             self.adapter.destroy_sandbox(state.sandbox.id or "")
             state.sandbox.status = "destroyed"
@@ -159,3 +163,142 @@ class RalfloopAgent:
 
     def _build_final_answer(self, state: AgentState) -> str:
         return render_final_answer(state)
+
+    def _record_runtime_evidence(self, state: AgentState, decision: ActionDecision, result: Any) -> None:
+        if result.ok:
+            for artifact in list(getattr(result, "artifacts", []) or []):
+                if artifact and artifact not in state.artifacts:
+                    state.artifacts.append(artifact)
+
+        path = str((decision.tool_input or {}).get("path", "") or "").strip()
+        if not result.ok or not path:
+            return
+        if decision.tool_name == "sandbox_write_file" and path not in state.written_files:
+            state.written_files.append(path)
+        if decision.tool_name == "sandbox_read_file" and path not in state.read_files:
+            state.read_files.append(path)
+
+    def _write_runtime_summaries(self, state: AgentState, sandbox: dict[str, Any]) -> None:
+        planned_paths = [
+            "tmp/debug/run_scorecard.json",
+            "tmp/debug/session_summary.json",
+        ]
+        sandbox_root = Path(str(sandbox.get("root", "") or ""))
+        for rel_path in planned_paths:
+            absolute_path = str(sandbox_root / rel_path)
+            if absolute_path not in state.artifacts:
+                state.artifacts.append(absolute_path)
+            if rel_path not in state.written_files:
+                state.written_files.append(rel_path)
+
+        scorecard = self._build_run_scorecard(state)
+        session_summary = self._build_session_summary(state)
+        generated_paths: list[str] = []
+
+        for rel_path, payload in (
+            (planned_paths[0], scorecard),
+            (planned_paths[1], session_summary),
+        ):
+            write_result = self.adapter.write_file(
+                sandbox,
+                path=rel_path,
+                content=json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            )
+            if write_result.ok:
+                for artifact in list(write_result.artifacts or []):
+                    if artifact and artifact not in state.artifacts:
+                        state.artifacts.append(artifact)
+                    if artifact and artifact not in generated_paths:
+                        generated_paths.append(artifact)
+            else:
+                state.audit_summary.append(f"runtime_summary_write_failed::{rel_path}::{write_result.stderr or write_result.error_type or 'unknown'}")
+
+        if state.last_result is not None:
+            merged = list(state.last_result.artifacts or [])
+            for artifact in generated_paths:
+                if artifact not in merged:
+                    merged.append(artifact)
+            state.last_result.artifacts = merged
+
+        runtime_debug = list((state.context or {}).get("runtime_debug", []) or [])
+        runtime_debug.append(
+            {
+                "action": "runtime_temp_summaries_written",
+                "paths": generated_paths,
+                "storage": "temporary_runtime_only",
+                "ingest": False,
+                "vectorized": False,
+            }
+        )
+        state.context["runtime_debug"] = runtime_debug[-20:]
+
+    def _build_run_scorecard(self, state: AgentState) -> dict[str, Any]:
+        evidence_items = []
+        for path in state.read_files:
+            evidence_items.append({"type": "read_file", "path": path})
+        for path in state.written_files:
+            evidence_items.append({"type": "written_file", "path": path})
+
+        evidence_backed = state.status == "completed" and bool(state.read_files or state.last_result)
+        return {
+            "goal": {
+                "user_goal": state.user_goal,
+                "constraints": list(state.constraints),
+            },
+            "execution": {
+                "task_id": state.task_id,
+                "status": state.status,
+                "stop_reason": state.stop_reason,
+                "iterations_completed": state.iteration,
+                "current_role": state.current_role,
+                "role_history": list(state.role_history),
+                "last_action": dict(state.last_action or {}),
+            },
+            "evidence": {
+                "read_files": list(state.read_files),
+                "written_files": list(state.written_files),
+                "artifacts": list(state.artifacts),
+                "items": evidence_items,
+                "runtime_debug_tail": list((state.context or {}).get("runtime_debug", []) or []),
+            },
+            "result_quality": {
+                "final_answer_present": bool((state.final_answer or "").strip()),
+                "last_result_ok": bool(getattr(state.last_result, "ok", False)),
+                "evidence_backed": evidence_backed,
+            },
+            "promotion_decision": {
+                "decision": "keep_temp" if evidence_backed else "discard",
+                "reason": "successful evidence-backed run" if evidence_backed else "failed or weak run",
+                "temporary_only": True,
+                "rag_ingest": False,
+                "vectorize": False,
+                "stable_memory_write": False,
+                "manuals_write": False,
+            },
+        }
+
+    def _build_session_summary(self, state: AgentState) -> dict[str, Any]:
+        last_result = None
+        if state.last_result is not None:
+            last_result = {
+                "tool_name": state.last_result.tool_name,
+                "ok": state.last_result.ok,
+                "exit_code": state.last_result.exit_code,
+                "error_type": state.last_result.error_type,
+                "artifacts": list(state.last_result.artifacts or []),
+                "stdout_preview": (state.last_result.stdout or "")[:400],
+                "stderr_preview": (state.last_result.stderr or "")[:400],
+            }
+
+        summary_text = (state.final_answer or "").strip() or f"Run stopped with reason: {state.stop_reason or 'unknown'}"
+        return {
+            "user_goal": state.user_goal,
+            "stop_reason": state.stop_reason,
+            "current_role": state.current_role,
+            "role_history": list(state.role_history),
+            "last_action": dict(state.last_action or {}),
+            "last_result": last_result,
+            "read_files": list(state.read_files),
+            "written_files": list(state.written_files),
+            "summary_text": summary_text,
+        }

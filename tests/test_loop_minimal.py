@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 from typing import Any
 
 from ralfloop_agent.adapters.openshell_adapter import OpenShellAdapterStub
@@ -43,6 +44,11 @@ class RepeatingReadPlanner:
 
     def _extract_write_pairs(self, goal: str) -> list[tuple[str, str]]:
         return [(path, content.rstrip("\n")) for path, content in self._write_pairs]
+
+
+class KeepSandboxAdapter(OpenShellAdapterStub):
+    def destroy_sandbox(self, sandbox_id: str) -> None:
+        _ = sandbox_id
 
 
 def _decision(tool_name: str, tool_input: dict[str, Any], why: str = "test") -> ActionDecision:
@@ -237,3 +243,44 @@ def test_runtime_like_case_two_passes_with_real_deterministic_planner(tmp_path: 
     assert "out/b.txt" in state.final_answer
     assert "contenuto a" in state.final_answer
     assert "contenuto b" in state.final_answer
+
+
+def test_runtime_writes_temp_scorecard_and_session_summary_as_artifacts(tmp_path: Path) -> None:
+    adapter = KeepSandboxAdapter(base_dir=str(tmp_path / ".sandbox"))
+    logger = AuditLogger(store_path=str(tmp_path / "logs"))
+    planner = DeterministicPlanner()
+    agent = RalfloopAgent(adapter=adapter, planner=planner, logger=logger)
+
+    state = agent.run("Scrivi hello in un file e verifica il contenuto")
+
+    artifact_names = {Path(path).name for path in state.artifacts}
+    assert "run_scorecard.json" in artifact_names
+    assert "session_summary.json" in artifact_names
+    assert state.last_result is not None
+    last_artifact_names = {Path(path).name for path in state.last_result.artifacts}
+    assert "run_scorecard.json" in last_artifact_names
+    assert "session_summary.json" in last_artifact_names
+
+    sandbox_root = tmp_path / ".sandbox"
+    scorecards = list(sandbox_root.glob("*/workspace/tmp/debug/run_scorecard.json"))
+    summaries = list(sandbox_root.glob("*/workspace/tmp/debug/session_summary.json"))
+    assert len(scorecards) == 1
+    assert len(summaries) == 1
+
+    scorecard = json.loads(scorecards[0].read_text(encoding="utf-8"))
+    session_summary = json.loads(summaries[0].read_text(encoding="utf-8"))
+
+    assert scorecard["goal"]["user_goal"] == "Scrivi hello in un file e verifica il contenuto"
+    assert scorecard["promotion_decision"] == {
+        "decision": "keep_temp",
+        "reason": "successful evidence-backed run",
+        "temporary_only": True,
+        "rag_ingest": False,
+        "vectorize": False,
+        "stable_memory_write": False,
+        "manuals_write": False,
+    }
+    assert session_summary["user_goal"] == "Scrivi hello in un file e verifica il contenuto"
+    assert session_summary["stop_reason"] == "goal_completed"
+    assert session_summary["read_files"]
+    assert any(path.endswith("run_scorecard.json") for path in scorecard["evidence"]["artifacts"])

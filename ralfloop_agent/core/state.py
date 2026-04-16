@@ -54,10 +54,14 @@ class AgentState(BaseModel):
     sandbox: SandboxState = Field(default_factory=SandboxState)
     plan: list[PlanStep] = Field(default_factory=list)
     memory: list[MemoryEntry] = Field(default_factory=list)
+    read_files: list[str] = Field(default_factory=list)
+    written_files: list[str] = Field(default_factory=list)
     last_action: dict[str, Any] | None = None
     last_result: ToolResult | None = None
     consecutive_failures: int = 0
     stop_reason: str | None = None
     action_history: list[dict[str, Any]] = Field(default_factory=list)
+    artifacts: list[str] = Field(default_factory=list)
+    audit_summary: list[str] = Field(default_factory=list)
     autofix_candidate: dict[str, Any] = Field(default_factory=dict)
     final_answer: str | None = None
