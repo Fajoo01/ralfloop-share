@@ -270,3 +270,114 @@ def test_pending_skill_promote_refuses_existing_stable_target(tmp_path, monkeypa
     assert parsed["error"] == ["Skill stabile già esistente: overwrite rifiutato."]
     assert (existing_root / "skill.json").read_text(encoding="utf-8") == '{"status": "existing"}'
     assert not (pending_root / "existing-skill" / "promoted.json").exists()
+
+
+def test_stable_skill_ingest_preview_and_search(tmp_path, monkeypatch) -> None:
+    pending_root = tmp_path / "skills_pending"
+    stable_root = tmp_path / "skills"
+    monkeypatch.setattr(backend_app, "PENDING_SKILLS_DIR", pending_root)
+    monkeypatch.setattr(backend_app, "STABLE_SKILLS_DIR", stable_root)
+    monkeypatch.setattr(backend_app, "AUDIT_LOG", tmp_path / "audit.jsonl")
+
+    manual_dir = pending_root / "parser-bilancio-2026" / "manuals"
+    manual_dir.mkdir(parents=True)
+    (manual_dir / "intro.md").write_text(
+        "# Parser Bilancio\n\nLa skill normalizza il bilancio analitico e accorpa le voci duplicate.\n",
+        encoding="utf-8",
+    )
+    (manual_dir / "faq.txt").write_text(
+        "Query esempio: come accorpare costi affiliazione e tessere.\n",
+        encoding="utf-8",
+    )
+    (manual_dir / "manual.pdf").write_bytes(b"%PDF-1.4 binary")
+
+    status, _, _ = asyncio.run(
+        _request_inprocess(
+            "POST",
+            "/pending-skills/promote",
+            headers=[(b"content-type", b"application/x-www-form-urlencoded")],
+            body=urlencode({"skill_name": "Parser Bilancio 2026"}).encode("utf-8"),
+        )
+    )
+    assert status == 303
+
+    status, _, body = asyncio.run(
+        _request_inprocess(
+            "POST",
+            "/skills/ingest",
+            query=urlencode({"skill_name": "Parser Bilancio 2026"}),
+        )
+    )
+    ingest_payload = json.loads(body.decode("utf-8"))
+    assert status == 200
+    assert ingest_payload["ok"] is True
+    assert ingest_payload["ingest_kind"] == "local_indexed_text_search"
+    assert ingest_payload["document_count"] == 2
+    assert ingest_payload["chunk_count"] >= 2
+
+    stable_skill_root = stable_root / "parser-bilancio-2026"
+    manifest = json.loads((stable_skill_root / "ingest_manifest.json").read_text(encoding="utf-8"))
+    preview_cache = json.loads((stable_skill_root / "preview_cache.json").read_text(encoding="utf-8"))
+    search_index = json.loads((stable_skill_root / "search_index.json").read_text(encoding="utf-8"))
+
+    assert manifest["status"] == "ingested"
+    assert manifest["manual_files"] == ["manuals/faq.txt", "manuals/intro.md", "manuals/manual.pdf"]
+    assert manifest["unsupported_files"] == ["manuals/manual.pdf"]
+    assert preview_cache["document_count"] == 2
+    assert len(search_index["chunks"]) >= 2
+
+    status, _, body = asyncio.run(
+        _request_inprocess(
+            "GET",
+            "/skills/preview",
+            query=urlencode({"skill_name": "Parser Bilancio 2026"}),
+        )
+    )
+    preview_payload = json.loads(body.decode("utf-8"))
+    assert status == 200
+    assert preview_payload["skill_name"] == "parser-bilancio-2026"
+    assert preview_payload["ingest_status"] == "ingested"
+    assert preview_payload["manuals"] == ["manuals/faq.txt", "manuals/intro.md", "manuals/manual.pdf"]
+
+    status, _, body = asyncio.run(
+        _request_inprocess(
+            "GET",
+            "/skills/search",
+            query=urlencode({"skill_name": "Parser Bilancio 2026", "q": "accorpare costi affiliazione", "limit": 3}),
+        )
+    )
+    search_payload = json.loads(body.decode("utf-8"))
+    assert status == 200
+    assert search_payload["hits"]
+    assert search_payload["hits"][0]["source_file"] == "manuals/faq.txt"
+    assert "accorpare costi affiliazione e tessere" in search_payload["hits"][0]["snippet"].lower()
+
+
+def test_stable_skill_preview_and_search_fail_cleanly_when_missing_or_not_ingested(tmp_path, monkeypatch) -> None:
+    stable_root = tmp_path / "skills"
+    monkeypatch.setattr(backend_app, "STABLE_SKILLS_DIR", stable_root)
+    monkeypatch.setattr(backend_app, "AUDIT_LOG", tmp_path / "audit.jsonl")
+
+    skill_root = stable_root / "existing-skill"
+    (skill_root / "manuals").mkdir(parents=True)
+    (skill_root / "skill.json").write_text('{"status":"promoted_from_pending"}', encoding="utf-8")
+
+    status, _, body = asyncio.run(
+        _request_inprocess(
+            "GET",
+            "/skills/preview",
+            query=urlencode({"skill_name": "missing-skill"}),
+        )
+    )
+    assert status == 404
+    assert json.loads(body.decode("utf-8"))["detail"] == "skill_not_found"
+
+    status, _, body = asyncio.run(
+        _request_inprocess(
+            "GET",
+            "/skills/search",
+            query=urlencode({"skill_name": "existing-skill", "q": "anything"}),
+        )
+    )
+    assert status == 404
+    assert json.loads(body.decode("utf-8"))["detail"] == "skill_not_ingested"

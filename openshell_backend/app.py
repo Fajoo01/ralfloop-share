@@ -109,6 +109,191 @@ def _stable_skill_dir(skill_name: str) -> Path:
     return target
 
 
+def _stable_skill_manuals_dir(skill_name: str) -> Path:
+    return (_stable_skill_dir(skill_name) / "manuals").resolve()
+
+
+def _stable_skill_ingest_artifact_paths(skill_name: str) -> dict[str, Path]:
+    root = _stable_skill_dir(skill_name)
+    return {
+        "root": root,
+        "manifest": root / "ingest_manifest.json",
+        "index": root / "search_index.json",
+        "preview": root / "preview_cache.json",
+    }
+
+
+_SKILL_TEXT_EXTENSIONS = {
+    ".txt",
+    ".md",
+    ".markdown",
+    ".json",
+    ".csv",
+    ".html",
+    ".htm",
+    ".py",
+    ".yaml",
+    ".yml",
+    ".ini",
+    ".cfg",
+    ".log",
+}
+
+
+def _iter_stable_skill_manual_files(skill_name: str) -> list[Path]:
+    manual_dir = _stable_skill_manuals_dir(skill_name)
+    if not manual_dir.exists():
+        return []
+    return sorted(p for p in manual_dir.iterdir() if p.is_file())
+
+
+def _read_searchable_skill_text(path: Path) -> str | None:
+    if path.suffix.lower() not in _SKILL_TEXT_EXTENSIONS:
+        return None
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    text = raw.replace("\r\n", "\n").replace("\r", "\n").strip()
+    return text or None
+
+
+def _split_skill_text_chunks(text: str, max_chars: int = 500) -> list[str]:
+    chunks: list[str] = []
+    current = ""
+    for part in [segment.strip() for segment in re.split(r"\n\s*\n", text) if segment.strip()]:
+        if not current:
+            current = part
+            continue
+        if len(current) + 2 + len(part) <= max_chars:
+            current += "\n\n" + part
+            continue
+        chunks.append(current)
+        current = part
+    if current:
+        chunks.append(current)
+
+    if chunks:
+        return chunks
+
+    flat = " ".join(text.split()).strip()
+    if not flat:
+        return []
+    return [flat[i:i + max_chars] for i in range(0, len(flat), max_chars)]
+
+
+def _build_skill_search_artifacts(skill_name: str) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+    safe_skill_name = _sanitize_pending_skill_name(skill_name)
+    skill_root = _stable_skill_dir(safe_skill_name)
+    manual_dir = _stable_skill_manuals_dir(safe_skill_name)
+    if not skill_root.exists():
+        raise HTTPException(status_code=404, detail="skill_not_found")
+    if not manual_dir.exists():
+        raise HTTPException(status_code=404, detail="skill_manuals_not_found")
+
+    documents: list[dict[str, object]] = []
+    chunks: list[dict[str, object]] = []
+    unsupported_files: list[str] = []
+    manual_files = _iter_stable_skill_manual_files(safe_skill_name)
+
+    for manual_file in manual_files:
+        rel_path = str(manual_file.relative_to(skill_root))
+        text = _read_searchable_skill_text(manual_file)
+        if text is None:
+            unsupported_files.append(rel_path)
+            continue
+        chunk_list = _split_skill_text_chunks(text)
+        documents.append({
+            "source_file": rel_path,
+            "char_count": len(text),
+            "chunk_count": len(chunk_list),
+        })
+        for idx, chunk_text in enumerate(chunk_list):
+            chunks.append(
+                {
+                    "chunk_id": f"{rel_path}#{idx}",
+                    "source_file": rel_path,
+                    "text": chunk_text,
+                }
+            )
+
+    ingested_at = datetime.now(UTC).isoformat()
+    manifest = {
+        "skill_name": safe_skill_name,
+        "status": "ingested" if chunks else "no_searchable_content",
+        "ingest_kind": "local_indexed_text_search",
+        "ingested_at": ingested_at,
+        "manual_dir": str(manual_dir),
+        "manual_files": [str(path.relative_to(skill_root)) for path in manual_files],
+        "document_count": len(documents),
+        "chunk_count": len(chunks),
+        "unsupported_files": unsupported_files,
+    }
+    index = {
+        "skill_name": safe_skill_name,
+        "index_kind": "local_indexed_text_search",
+        "documents": documents,
+        "chunks": chunks,
+    }
+    preview = {
+        "ok": True,
+        "skill_name": safe_skill_name,
+        "stable_root": str(skill_root),
+        "manual_dir": str(manual_dir),
+        "manuals": manifest["manual_files"],
+        "ingest_status": manifest["status"],
+        "ingest_kind": manifest["ingest_kind"],
+        "last_ingest_at": ingested_at,
+        "document_count": manifest["document_count"],
+        "chunk_count": manifest["chunk_count"],
+        "unsupported_files": unsupported_files,
+        "artifacts": {
+            "manifest": str(_stable_skill_ingest_artifact_paths(safe_skill_name)["manifest"]),
+            "index": str(_stable_skill_ingest_artifact_paths(safe_skill_name)["index"]),
+            "preview": str(_stable_skill_ingest_artifact_paths(safe_skill_name)["preview"]),
+        },
+    }
+    return manifest, index, preview
+
+
+def _load_skill_ingest_artifacts(skill_name: str) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+    safe_skill_name = _sanitize_pending_skill_name(skill_name)
+    paths = _stable_skill_ingest_artifact_paths(safe_skill_name)
+    if not paths["root"].exists():
+        raise HTTPException(status_code=404, detail="skill_not_found")
+    if not paths["manifest"].exists() or not paths["index"].exists() or not paths["preview"].exists():
+        raise HTTPException(status_code=404, detail="skill_not_ingested")
+    manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
+    index = json.loads(paths["index"].read_text(encoding="utf-8"))
+    preview = json.loads(paths["preview"].read_text(encoding="utf-8"))
+    return manifest, index, preview
+
+
+def _score_skill_chunk(query: str, text: str) -> int:
+    q = str(query or "").strip().lower()
+    body = str(text or "")
+    body_low = body.lower()
+    if not q or not body_low:
+        return 0
+    score = body_low.count(q) * 10
+    for token in [tok for tok in re.split(r"\W+", q) if tok]:
+        if token in body_low:
+            score += 1 + body_low.count(token)
+    return score
+
+
+def _snippet_for_query(text: str, query: str, radius: int = 90) -> str:
+    body = " ".join(str(text or "").split()).strip()
+    if not body:
+        return ""
+    q = str(query or "").strip()
+    idx = body.lower().find(q.lower()) if q else -1
+    if idx < 0:
+        return body[: radius * 2]
+    start = max(0, idx - radius)
+    end = min(len(body), idx + len(q) + radius)
+    prefix = "..." if start > 0 else ""
+    suffix = "..." if end < len(body) else ""
+    return prefix + body[start:end] + suffix
+
+
 def _pending_skill_status(skill_name: str) -> dict[str, object]:
     safe_skill_name = _sanitize_pending_skill_name(skill_name)
     manual_dir = _pending_skill_manuals_dir(safe_skill_name)
@@ -582,6 +767,72 @@ async def promote_pending_skill(request: Request):
     )
     query = urlencode({"skill_name": safe_skill_name, "message": "Skill pending promossa con copia verso struttura stabile."})
     return RedirectResponse(url=f"/pending-skills/preview?{query}", status_code=303)
+
+
+@app.post("/skills/ingest")
+def ingest_stable_skill(skill_name: str = Query(...)):
+    safe_skill_name = _sanitize_pending_skill_name(skill_name)
+    manifest, index, preview = _build_skill_search_artifacts(safe_skill_name)
+    paths = _stable_skill_ingest_artifact_paths(safe_skill_name)
+    paths["manifest"].write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    paths["index"].write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
+    paths["preview"].write_text(json.dumps(preview, ensure_ascii=False, indent=2), encoding="utf-8")
+    audit(
+        "stable_skill_ingested",
+        skill_name=safe_skill_name,
+        document_count=manifest["document_count"],
+        chunk_count=manifest["chunk_count"],
+        unsupported_files=manifest["unsupported_files"],
+    )
+    return {
+        "ok": True,
+        "skill_name": safe_skill_name,
+        "ingest_status": manifest["status"],
+        "ingest_kind": manifest["ingest_kind"],
+        "document_count": manifest["document_count"],
+        "chunk_count": manifest["chunk_count"],
+        "artifacts": {
+            "manifest": str(paths["manifest"]),
+            "index": str(paths["index"]),
+            "preview": str(paths["preview"]),
+        },
+    }
+
+
+@app.get("/skills/preview")
+def preview_stable_skill(skill_name: str = Query(...)):
+    _manifest, _index, preview = _load_skill_ingest_artifacts(skill_name)
+    return preview
+
+
+@app.get("/skills/search")
+def search_stable_skill(skill_name: str = Query(...), q: str = Query(..., min_length=1), limit: int = Query(5, ge=1, le=20)):
+    manifest, index, preview = _load_skill_ingest_artifacts(skill_name)
+    hits = []
+    for chunk in list(index.get("chunks", []) or []):
+        text = str(chunk.get("text") or "")
+        score = _score_skill_chunk(q, text)
+        if score <= 0:
+            continue
+        hits.append(
+            {
+                "chunk_id": chunk.get("chunk_id"),
+                "source_file": chunk.get("source_file"),
+                "score": score,
+                "snippet": _snippet_for_query(text, q),
+            }
+        )
+    hits.sort(key=lambda item: (-int(item["score"]), str(item["source_file"]), str(item["chunk_id"])))
+    return {
+        "ok": True,
+        "skill_name": _sanitize_pending_skill_name(skill_name),
+        "query": q,
+        "ingest_status": manifest.get("status"),
+        "ingest_kind": manifest.get("ingest_kind"),
+        "document_count": preview.get("document_count", 0),
+        "chunk_count": preview.get("chunk_count", 0),
+        "hits": hits[:limit],
+    }
 
 
 
