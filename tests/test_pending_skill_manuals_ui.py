@@ -314,6 +314,8 @@ def test_stable_skill_ingest_preview_and_search(tmp_path, monkeypatch) -> None:
     assert ingest_payload["ingest_kind"] == "local_indexed_text_search"
     assert ingest_payload["document_count"] == 2
     assert ingest_payload["chunk_count"] >= 2
+    assert ingest_payload["used_ocr_backend"] == "none"
+    assert ingest_payload["used_ocr_model_name"] == ""
 
     stable_skill_root = stable_root / "parser-bilancio-2026"
     manifest = json.loads((stable_skill_root / "ingest_manifest.json").read_text(encoding="utf-8"))
@@ -322,6 +324,10 @@ def test_stable_skill_ingest_preview_and_search(tmp_path, monkeypatch) -> None:
 
     assert manifest["status"] == "ingested"
     assert manifest["manual_files"] == ["manuals/faq.txt", "manuals/intro.md", "manuals/manual.pdf"]
+    assert manifest["used_ocr_backend"] == "none"
+    assert manifest["used_ocr_model_name"] == ""
+    assert manifest["derived_text_files"] == []
+    assert manifest["ocr_failed_files"] == []
     assert manifest["unsupported_files"] == ["manuals/manual.pdf"]
     assert preview_cache["document_count"] == 2
     assert len(search_index["chunks"]) >= 2
@@ -337,6 +343,7 @@ def test_stable_skill_ingest_preview_and_search(tmp_path, monkeypatch) -> None:
     assert status == 200
     assert preview_payload["skill_name"] == "parser-bilancio-2026"
     assert preview_payload["ingest_status"] == "ingested"
+    assert preview_payload["used_ocr_backend"] == "none"
     assert preview_payload["manuals"] == ["manuals/faq.txt", "manuals/intro.md", "manuals/manual.pdf"]
 
     status, _, body = asyncio.run(
@@ -348,9 +355,87 @@ def test_stable_skill_ingest_preview_and_search(tmp_path, monkeypatch) -> None:
     )
     search_payload = json.loads(body.decode("utf-8"))
     assert status == 200
+    assert search_payload["used_ocr_backend"] == "none"
     assert search_payload["hits"]
     assert search_payload["hits"][0]["source_file"] == "manuals/faq.txt"
+    assert search_payload["hits"][0]["source_kind"] == "manual_text"
     assert "accorpare costi affiliazione e tessere" in search_payload["hits"][0]["snippet"].lower()
+
+
+def test_stable_skill_ingest_with_deepseek_ocr_is_honest_when_runtime_unavailable(tmp_path, monkeypatch) -> None:
+    stable_root = tmp_path / "skills"
+    monkeypatch.setattr(backend_app, "STABLE_SKILLS_DIR", stable_root)
+    monkeypatch.setattr(backend_app, "AUDIT_LOG", tmp_path / "audit.jsonl")
+
+    skill_root = stable_root / "ocr-skill"
+    manual_dir = skill_root / "manuals"
+    manual_dir.mkdir(parents=True)
+    (skill_root / "skill.json").write_text('{"status":"promoted_from_pending"}', encoding="utf-8")
+    (manual_dir / "scan.pdf").write_bytes(b"%PDF-1.4 fake scan")
+
+    status, _, body = asyncio.run(
+        _request_inprocess(
+            "POST",
+            "/skills/ingest",
+            query=urlencode({
+                "skill_name": "ocr-skill",
+                "ocr_backend": "deepseek_ocr",
+                "ocr_model_name": "deepseek-ocr-v1",
+            }),
+        )
+    )
+    ingest_payload = json.loads(body.decode("utf-8"))
+
+    assert status == 200
+    assert ingest_payload["ok"] is True
+    assert ingest_payload["used_ocr_backend"] == "deepseek_ocr"
+    assert ingest_payload["used_ocr_model_name"] == "deepseek-ocr-v1"
+    assert ingest_payload["document_count"] == 0
+    assert ingest_payload["chunk_count"] == 0
+
+    manifest = json.loads((skill_root / "ingest_manifest.json").read_text(encoding="utf-8"))
+    preview_cache = json.loads((skill_root / "preview_cache.json").read_text(encoding="utf-8"))
+    search_index = json.loads((skill_root / "search_index.json").read_text(encoding="utf-8"))
+
+    assert manifest["status"] == "ocr_failed_no_searchable_content"
+    assert manifest["used_ocr_backend"] == "deepseek_ocr"
+    assert manifest["used_ocr_model_name"] == "deepseek-ocr-v1"
+    assert manifest["ocr_processed_files"] == []
+    assert manifest["derived_text_files"] == []
+    assert manifest["unsupported_files"] == ["manuals/scan.pdf"]
+    assert manifest["ocr_failed_files"] == [
+        {
+            "source_file": "manuals/scan.pdf",
+            "error": "deepseek_ocr_unavailable_in_runtime",
+        }
+    ]
+    assert preview_cache["ocr_failed_files"] == manifest["ocr_failed_files"]
+    assert search_index["chunks"] == []
+
+    status, _, body = asyncio.run(
+        _request_inprocess(
+            "GET",
+            "/skills/preview",
+            query=urlencode({"skill_name": "ocr-skill"}),
+        )
+    )
+    preview_payload = json.loads(body.decode("utf-8"))
+    assert status == 200
+    assert preview_payload["used_ocr_backend"] == "deepseek_ocr"
+    assert preview_payload["derived_text_files"] == []
+    assert preview_payload["ocr_failed_files"] == manifest["ocr_failed_files"]
+
+    status, _, body = asyncio.run(
+        _request_inprocess(
+            "GET",
+            "/skills/search",
+            query=urlencode({"skill_name": "ocr-skill", "q": "qualunque"}),
+        )
+    )
+    search_payload = json.loads(body.decode("utf-8"))
+    assert status == 200
+    assert search_payload["used_ocr_backend"] == "deepseek_ocr"
+    assert search_payload["hits"] == []
 
 
 def test_stable_skill_preview_and_search_fail_cleanly_when_missing_or_not_ingested(tmp_path, monkeypatch) -> None:

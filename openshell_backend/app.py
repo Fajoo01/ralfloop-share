@@ -123,6 +123,20 @@ def _stable_skill_ingest_artifact_paths(skill_name: str) -> dict[str, Path]:
     }
 
 
+def _stable_skill_derived_text_dir(skill_name: str) -> Path:
+    return (_stable_skill_dir(skill_name) / "derived_text").resolve()
+
+
+def _normalize_ocr_config(ocr_backend: str | None = None, ocr_model_name: str | None = None) -> dict[str, str]:
+    backend = str(ocr_backend or "none").strip().lower() or "none"
+    if backend not in {"none", "deepseek_ocr"}:
+        backend = "none"
+    return {
+        "backend": backend,
+        "model_name": str(ocr_model_name or "").strip(),
+    }
+
+
 _SKILL_TEXT_EXTENSIONS = {
     ".txt",
     ".md",
@@ -138,6 +152,11 @@ _SKILL_TEXT_EXTENSIONS = {
     ".cfg",
     ".log",
 }
+
+
+def _safe_derived_text_filename(path: Path) -> str:
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", path.stem).strip("._-") or "manual"
+    return f"{stem}.ocr.txt"
 
 
 def _iter_stable_skill_manual_files(skill_name: str) -> list[Path]:
@@ -179,7 +198,11 @@ def _split_skill_text_chunks(text: str, max_chars: int = 500) -> list[str]:
     return [flat[i:i + max_chars] for i in range(0, len(flat), max_chars)]
 
 
-def _build_skill_search_artifacts(skill_name: str) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+def _build_skill_search_artifacts(
+    skill_name: str,
+    ocr_backend: str | None = None,
+    ocr_model_name: str | None = None,
+) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
     safe_skill_name = _sanitize_pending_skill_name(skill_name)
     skill_root = _stable_skill_dir(safe_skill_name)
     manual_dir = _stable_skill_manuals_dir(safe_skill_name)
@@ -187,14 +210,60 @@ def _build_skill_search_artifacts(skill_name: str) -> tuple[dict[str, object], d
         raise HTTPException(status_code=404, detail="skill_not_found")
     if not manual_dir.exists():
         raise HTTPException(status_code=404, detail="skill_manuals_not_found")
+    ocr_config = _normalize_ocr_config(ocr_backend, ocr_model_name)
 
     documents: list[dict[str, object]] = []
     chunks: list[dict[str, object]] = []
     unsupported_files: list[str] = []
+    ocr_failed_files: list[dict[str, str]] = []
+    ocr_processed_files: list[str] = []
+    derived_text_files: list[str] = []
     manual_files = _iter_stable_skill_manual_files(safe_skill_name)
+    derived_dir = _stable_skill_derived_text_dir(safe_skill_name)
+    if derived_dir.exists():
+        shutil.rmtree(derived_dir)
+    derived_dir.mkdir(parents=True, exist_ok=True)
 
     for manual_file in manual_files:
         rel_path = str(manual_file.relative_to(skill_root))
+        if manual_file.suffix.lower() == ".pdf":
+            ocr_result = _extract_pdf_text_via_ocr(manual_file, ocr_config["backend"], ocr_config["model_name"])
+            text = str(ocr_result.get("text") or "").strip()
+            if ocr_result.get("ok") and text:
+                derived_path = derived_dir / _safe_derived_text_filename(manual_file)
+                derived_path.write_text(text + "\n", encoding="utf-8")
+                derived_rel_path = str(derived_path.relative_to(skill_root))
+                derived_text_files.append(derived_rel_path)
+                ocr_processed_files.append(rel_path)
+                chunk_list = _split_skill_text_chunks(text)
+                documents.append({
+                    "source_file": derived_rel_path,
+                    "source_kind": "ocr_derived_pdf",
+                    "source_pdf": rel_path,
+                    "char_count": len(text),
+                    "chunk_count": len(chunk_list),
+                })
+                for idx, chunk_text in enumerate(chunk_list):
+                    chunks.append(
+                        {
+                            "chunk_id": f"{derived_rel_path}#{idx}",
+                            "source_file": derived_rel_path,
+                            "source_kind": "ocr_derived_pdf",
+                            "source_pdf": rel_path,
+                            "text": chunk_text,
+                        }
+                    )
+                continue
+            unsupported_files.append(rel_path)
+            if ocr_config["backend"] != "none":
+                ocr_failed_files.append(
+                    {
+                        "source_file": rel_path,
+                        "error": str(ocr_result.get("error") or "ocr_failed"),
+                    }
+                )
+            continue
+
         text = _read_searchable_skill_text(manual_file)
         if text is None:
             unsupported_files.append(rel_path)
@@ -202,6 +271,7 @@ def _build_skill_search_artifacts(skill_name: str) -> tuple[dict[str, object], d
         chunk_list = _split_skill_text_chunks(text)
         documents.append({
             "source_file": rel_path,
+            "source_kind": "manual_text",
             "char_count": len(text),
             "chunk_count": len(chunk_list),
         })
@@ -210,20 +280,35 @@ def _build_skill_search_artifacts(skill_name: str) -> tuple[dict[str, object], d
                 {
                     "chunk_id": f"{rel_path}#{idx}",
                     "source_file": rel_path,
+                    "source_kind": "manual_text",
                     "text": chunk_text,
                 }
             )
 
     ingested_at = datetime.now(UTC).isoformat()
+    if chunks and ocr_failed_files:
+        ingest_status = "ingested_with_ocr_failures"
+    elif chunks:
+        ingest_status = "ingested"
+    elif ocr_failed_files:
+        ingest_status = "ocr_failed_no_searchable_content"
+    else:
+        ingest_status = "no_searchable_content"
     manifest = {
         "skill_name": safe_skill_name,
-        "status": "ingested" if chunks else "no_searchable_content",
+        "status": ingest_status,
         "ingest_kind": "local_indexed_text_search",
         "ingested_at": ingested_at,
         "manual_dir": str(manual_dir),
+        "derived_text_dir": str(derived_dir),
         "manual_files": [str(path.relative_to(skill_root)) for path in manual_files],
         "document_count": len(documents),
         "chunk_count": len(chunks),
+        "used_ocr_backend": ocr_config["backend"],
+        "used_ocr_model_name": ocr_config["model_name"],
+        "ocr_processed_files": ocr_processed_files,
+        "ocr_failed_files": ocr_failed_files,
+        "derived_text_files": derived_text_files,
         "unsupported_files": unsupported_files,
     }
     index = {
@@ -243,6 +328,11 @@ def _build_skill_search_artifacts(skill_name: str) -> tuple[dict[str, object], d
         "last_ingest_at": ingested_at,
         "document_count": manifest["document_count"],
         "chunk_count": manifest["chunk_count"],
+        "used_ocr_backend": ocr_config["backend"],
+        "used_ocr_model_name": ocr_config["model_name"],
+        "ocr_processed_files": ocr_processed_files,
+        "ocr_failed_files": ocr_failed_files,
+        "derived_text_files": derived_text_files,
         "unsupported_files": unsupported_files,
         "artifacts": {
             "manifest": str(_stable_skill_ingest_artifact_paths(safe_skill_name)["manifest"]),
@@ -292,6 +382,32 @@ def _snippet_for_query(text: str, query: str, radius: int = 90) -> str:
     prefix = "..." if start > 0 else ""
     suffix = "..." if end < len(body) else ""
     return prefix + body[start:end] + suffix
+
+
+def _extract_pdf_text_via_ocr(pdf_path: Path, ocr_backend: str, ocr_model_name: str) -> dict[str, object]:
+    config = _normalize_ocr_config(ocr_backend, ocr_model_name)
+    if config["backend"] == "none":
+        return {
+            "ok": False,
+            "status": "disabled",
+            "error": "ocr_disabled",
+            "text": "",
+        }
+    if config["backend"] == "deepseek_ocr":
+        return {
+            "ok": False,
+            "status": "unavailable",
+            "error": "deepseek_ocr_unavailable_in_runtime",
+            "text": "",
+            "source_file": str(pdf_path),
+            "model_name": config["model_name"],
+        }
+    return {
+        "ok": False,
+        "status": "unsupported_backend",
+        "error": "unsupported_ocr_backend",
+        "text": "",
+    }
 
 
 def _pending_skill_status(skill_name: str) -> dict[str, object]:
@@ -770,9 +886,18 @@ async def promote_pending_skill(request: Request):
 
 
 @app.post("/skills/ingest")
-def ingest_stable_skill(skill_name: str = Query(...)):
+def ingest_stable_skill(
+    skill_name: str = Query(...),
+    ocr_backend: str = Query("none"),
+    ocr_model_name: str = Query(""),
+):
     safe_skill_name = _sanitize_pending_skill_name(skill_name)
-    manifest, index, preview = _build_skill_search_artifacts(safe_skill_name)
+    ocr_config = _normalize_ocr_config(ocr_backend, ocr_model_name)
+    manifest, index, preview = _build_skill_search_artifacts(
+        safe_skill_name,
+        ocr_backend=ocr_config["backend"],
+        ocr_model_name=ocr_config["model_name"],
+    )
     paths = _stable_skill_ingest_artifact_paths(safe_skill_name)
     paths["manifest"].write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     paths["index"].write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -791,6 +916,8 @@ def ingest_stable_skill(skill_name: str = Query(...)):
         "ingest_kind": manifest["ingest_kind"],
         "document_count": manifest["document_count"],
         "chunk_count": manifest["chunk_count"],
+        "used_ocr_backend": manifest["used_ocr_backend"],
+        "used_ocr_model_name": manifest["used_ocr_model_name"],
         "artifacts": {
             "manifest": str(paths["manifest"]),
             "index": str(paths["index"]),
@@ -818,6 +945,8 @@ def search_stable_skill(skill_name: str = Query(...), q: str = Query(..., min_le
             {
                 "chunk_id": chunk.get("chunk_id"),
                 "source_file": chunk.get("source_file"),
+                "source_kind": chunk.get("source_kind", "manual_text"),
+                "source_pdf": chunk.get("source_pdf"),
                 "score": score,
                 "snippet": _snippet_for_query(text, q),
             }
@@ -829,6 +958,8 @@ def search_stable_skill(skill_name: str = Query(...), q: str = Query(..., min_le
         "query": q,
         "ingest_status": manifest.get("status"),
         "ingest_kind": manifest.get("ingest_kind"),
+        "used_ocr_backend": manifest.get("used_ocr_backend", "none"),
+        "used_ocr_model_name": manifest.get("used_ocr_model_name", ""),
         "document_count": preview.get("document_count", 0),
         "chunk_count": preview.get("chunk_count", 0),
         "hits": hits[:limit],
@@ -1064,6 +1195,8 @@ TASK_RUN_DEFAULTS = {
     "coder_rag_collection": "ralfloop_coder",
     "judge_rag_collection": "ralfloop_judge",
     "internal_prompt_style": "standard",
+    "ocr_backend": "none",
+    "ocr_model_name": "",
 }
 
 
@@ -1082,6 +1215,8 @@ class TaskRunRequest(BaseModel):
     coder_rag_collection: Optional[str] = None
     judge_rag_collection: Optional[str] = None
     internal_prompt_style: Optional[str] = None
+    ocr_backend: Optional[str] = None
+    ocr_model_name: Optional[str] = None
 
     skill_context: Optional[str] = None
     extra_context: Optional[Dict[str, Any]] = None
@@ -1093,6 +1228,7 @@ def _task_run_selection(req: TaskRunRequest) -> dict[str, dict[str, str]]:
         key: getattr(req, key) if getattr(req, key) is not None else default
         for key, default in TASK_RUN_DEFAULTS.items()
     }
+    ocr = _normalize_ocr_config(effective.get("ocr_backend"), effective.get("ocr_model_name"))
     return {
         "profiles": {
             "planner": effective["planner_model_profile"],
@@ -1110,6 +1246,7 @@ def _task_run_selection(req: TaskRunRequest) -> dict[str, dict[str, str]]:
             "judge": effective["judge_rag_collection"],
         },
         "internal_prompt_style": effective["internal_prompt_style"],
+        "ocr": ocr,
     }
 
 
@@ -1890,6 +2027,8 @@ def run_task(req: TaskRunRequest):
                             "coder": selection["rag"]["coder"],
                             "judge": selection["rag"]["judge"],
                         },
+                        "used_ocr_backend": str(selection["ocr"]["backend"]),
+                        "used_ocr_model_name": str(selection["ocr"]["model_name"]),
                         "current_role": "stream_probe_bridge",
                         "role_history": ["stream_probe_bridge"],
                         "stop_reason": "goal_completed",
@@ -1942,6 +2081,8 @@ def run_task(req: TaskRunRequest):
                     "coder": selection["rag"]["coder"],
                     "judge": selection["rag"]["judge"],
                 },
+                "used_ocr_backend": str(selection["ocr"]["backend"]),
+                "used_ocr_model_name": str(selection["ocr"]["model_name"]),
                 "current_role": "stream_probe_bridge",
                 "role_history": ["stream_probe_bridge"],
                 "stop_reason": "goal_completed",
@@ -1985,6 +2126,8 @@ def run_task(req: TaskRunRequest):
                     "coder": selection["rag"]["coder"],
                     "judge": selection["rag"]["judge"],
                 },
+                "used_ocr_backend": str(selection["ocr"]["backend"]),
+                "used_ocr_model_name": str(selection["ocr"]["model_name"]),
                 "current_role": "stream_probe_bridge",
                 "role_history": ["stream_probe_bridge"],
                 "stop_reason": "goal_completed_partial",
@@ -2011,6 +2154,8 @@ def run_task(req: TaskRunRequest):
                 "coder": selection["rag"]["coder"],
                 "judge": selection["rag"]["judge"],
             },
+            "used_ocr_backend": str(selection["ocr"]["backend"]),
+            "used_ocr_model_name": str(selection["ocr"]["model_name"]),
             "current_role": "stream_probe_bridge",
             "role_history": ["stream_probe_bridge"],
             "stop_reason": "bridge_failed",
@@ -2074,6 +2219,8 @@ def run_task(req: TaskRunRequest):
                 "used_profiles": {},
                 "used_models": {},
                 "used_rag": {},
+                "used_ocr_backend": str(selection["ocr"]["backend"]),
+                "used_ocr_model_name": str(selection["ocr"]["model_name"]),
                 "current_role": f"skill::{skill_name}",
                 "role_history": [f"skill::{skill_name}"],
                 "stop_reason": "goal_completed",
@@ -2136,6 +2283,8 @@ def run_task(req: TaskRunRequest):
                             "used_profiles": {},
                             "used_models": {},
                             "used_rag": {},
+                            "used_ocr_backend": str(selection["ocr"]["backend"]),
+                            "used_ocr_model_name": str(selection["ocr"]["model_name"]),
                             "current_role": f"skill::{rerun_skill[0]}",
                             "role_history": [f"skill::{rerun_skill[0]}"],
                             "stop_reason": "goal_completed_after_autofix",
@@ -2168,6 +2317,8 @@ def run_task(req: TaskRunRequest):
             "coder_rag_collection": selection["rag"]["coder"],
             "judge_rag_collection": selection["rag"]["judge"],
             "internal_prompt_style": selection["internal_prompt_style"],
+            "ocr_backend": selection["ocr"]["backend"],
+            "ocr_model_name": selection["ocr"]["model_name"],
         },
     )
     try:
@@ -2205,6 +2356,8 @@ def run_task(req: TaskRunRequest):
         "used_models": dict(selection["models"]),
         "used_rag": dict(selection["rag"]),
         "used_internal_prompt_style": str(selection["internal_prompt_style"]),
+        "used_ocr_backend": str(selection["ocr"]["backend"]),
+        "used_ocr_model_name": str(selection["ocr"]["model_name"]),
         "current_role": str(state_data.get("current_role", "") or ""),
         "role_history": list(state_data.get("role_history", []) or []),
         "stop_reason": str(state_data.get("stop_reason", "") or ""),

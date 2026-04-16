@@ -137,6 +137,8 @@ def test_tasks_run_inprocess_uses_request_llm_selection_as_authoritative(tmp_pat
             'coder_rag_collection': 'rag-coder-x',
             'judge_rag_collection': 'rag-judge-x',
             'internal_prompt_style': 'cinese-x',
+            'ocr_backend': 'deepseek_ocr',
+            'ocr_model_name': 'deepseek-ocr-x',
         },
     )
 
@@ -157,3 +159,5 @@ def test_tasks_run_inprocess_uses_request_llm_selection_as_authoritative(tmp_pat
         'judge': 'rag-judge-x',
     }
     assert payload['used_internal_prompt_style'] == 'cinese-x'
+    assert payload['used_ocr_backend'] == 'deepseek_ocr'
+    assert payload['used_ocr_model_name'] == 'deepseek-ocr-x'
