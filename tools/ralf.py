@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import shutil
+import subprocess
 from pathlib import Path
 from urllib import request, error
 
@@ -24,7 +25,7 @@ def build_payload(prompt: str, args: argparse.Namespace) -> dict:
         "extra_context": {
             "cwd": cwd,
             "workspace_root": cwd,
-            "keep_sandbox": bool(args.apply_back),
+            "keep_sandbox": bool(args.apply_back or args.preview_diff),
         },
         "planner_model_profile": args.planner_profile,
         "coder_model_profile": args.coder_profile,
@@ -66,6 +67,49 @@ def apply_back_from_sandbox(obj: dict, target_root: str) -> list[str]:
     return copied
 
 
+def collect_sandbox_files(obj: dict, target_root: str, preview_root: str) -> list[tuple[str, str]]:
+    workspace = str(obj.get("sandbox_workspace") or "").strip()
+    if not workspace:
+        return []
+
+    root = Path(target_root).resolve()
+    sandbox_root = Path(workspace).resolve()
+    preview = Path(preview_root).resolve()
+    preview.mkdir(parents=True, exist_ok=True)
+
+    collected: list[tuple[str, str]] = []
+    for art in obj.get("artifacts") or []:
+        rel = str(art or "").strip()
+        if not rel or rel.startswith("/") or rel.startswith("tmp/debug/"):
+            continue
+        src_path = (sandbox_root / rel).resolve()
+        if not src_path.exists() or not src_path.is_file():
+            continue
+        real_path = (root / rel).resolve()
+        if root not in real_path.parents:
+            continue
+        preview_path = (preview / rel).resolve()
+        if preview not in preview_path.parents and preview_path != preview:
+            continue
+        preview_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src_path, preview_path)
+        collected.append((str(real_path), str(preview_path)))
+    return collected
+
+def render_diff_pairs(pairs: list[tuple[str, str]]) -> str:
+    chunks: list[str] = []
+    for real_path, preview_path in pairs:
+        real_exists = Path(real_path).exists()
+        if real_exists:
+            cmd = ["git", "--no-pager", "diff", "--no-index", "--", real_path, preview_path]
+        else:
+            cmd = ["git", "--no-pager", "diff", "--no-index", "--", "/dev/null", preview_path]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        out = (proc.stdout or "") + (proc.stderr or "")
+        if out.strip():
+            chunks.append(out.rstrip())
+    return "\n\n".join(chunks)
+
 def print_human(obj: dict) -> None:
     for key in [
         "ok",
@@ -94,6 +138,7 @@ def main() -> int:
     parser.add_argument("prompt", nargs="+")
     parser.add_argument("--url", default=DEFAULT_URL)
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--preview-diff", action="store_true")
     parser.add_argument("--apply-back", action="store_true")
     parser.add_argument("--skill-context", default="")
     parser.add_argument("--planner-profile", default="generalist")
@@ -124,14 +169,28 @@ def main() -> int:
         return 1
 
     copied = []
-    if args.apply_back and obj.get("ok"):
-        copied = apply_back_from_sandbox(obj, os.getcwd())
-        obj["applied_back_files"] = copied
+    preview_pairs = []
+    diff_text = ""
+
+    if obj.get("ok"):
+        preview_dir = os.path.join(os.getcwd(), ".ralf_preview")
+        preview_pairs = collect_sandbox_files(obj, os.getcwd(), preview_dir)
+        if args.preview_diff:
+            diff_text = render_diff_pairs(preview_pairs)
+            obj["preview_diff"] = diff_text
+            obj["preview_pairs"] = preview_pairs
+
+        if args.apply_back:
+            copied = apply_back_from_sandbox(obj, os.getcwd())
+            obj["applied_back_files"] = copied
 
     if args.json:
         print(json.dumps(obj, ensure_ascii=False, indent=2))
     else:
         print_human(obj)
+        if args.preview_diff:
+            print("\npreview_diff:")
+            print(diff_text or "(nessuna differenza)")
         if copied:
             print("\napplied_back_files:")
             for path in copied:
