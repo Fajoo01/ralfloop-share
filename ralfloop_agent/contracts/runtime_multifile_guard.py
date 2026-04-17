@@ -7,7 +7,7 @@ from typing import Any
 from ralfloop_agent.core.decisions import ActionDecision
 
 
-_PATH_PATTERN = re.compile(r"\b(?:out|tmp)/[^\s,;:()]+|\b[\w.-]+\.(?:txt|md|json|log|csv|ya?ml)\b")
+_PATH_PATTERN = re.compile(r"\b(?:out|tmp|tools|tests|openshell_backend|ralfloop_agent)/[^\s,;:()]+|\b[\w./-]+\.(?:txt|md|json|log|csv|ya?ml|py)\b")
 
 
 def _looks_like_path(value: str) -> bool:
@@ -39,10 +39,10 @@ def _normalized_explicit_specs(goal: str, planner: Any) -> dict[str, str]:
             specs[str(first).strip()] = str(second)
 
     patterns = [
-        r'((?:out|tmp)/[^\s,;:()]+|[\w.-]+\.(?:txt|md|json|log|csv|ya?ml))\s+con\s+"([^"]+)"',
-        r"((?:out|tmp)/[^\s,;:()]+|[\w.-]+\.(?:txt|md|json|log|csv|ya?ml))\s+con\s+'([^']+)'",
-        r'"([^"]+)"\s+in\s+((?:out|tmp)/[^\s,;:()]+|[\w.-]+\.(?:txt|md|json|log|csv|ya?ml))',
-        r"'([^']+)'\s+in\s+((?:out|tmp)/[^\s,;:()]+|[\w.-]+\.(?:txt|md|json|log|csv|ya?ml))",
+        r'((?:out|tmp|tools|tests|openshell_backend|ralfloop_agent)/[^\s,;:()]+|[\w./-]+\.(?:txt|md|json|log|csv|ya?ml|py))\s+con\s+"([^"]+)"',
+        r"((?:out|tmp|tools|tests|openshell_backend|ralfloop_agent)/[^\s,;:()]+|[\w./-]+\.(?:txt|md|json|log|csv|ya?ml|py))\s+con\s+'([^']+)'",
+        r'"([^"]+)"\s+in\s+((?:out|tmp|tools|tests|openshell_backend|ralfloop_agent)/[^\s,;:()]+|[\w./-]+\.(?:txt|md|json|log|csv|ya?ml|py))',
+        r"'([^']+)'\s+in\s+((?:out|tmp|tools|tests|openshell_backend|ralfloop_agent)/[^\s,;:()]+|[\w./-]+\.(?:txt|md|json|log|csv|ya?ml|py))",
     ]
     for pattern in patterns:
         for match in re.finditer(pattern, goal, flags=re.IGNORECASE):
@@ -52,6 +52,17 @@ def _normalized_explicit_specs(goal: str, planner: Any) -> dict[str, str]:
                 specs[first] = second
             elif _looks_like_path(second):
                 specs[second] = first
+
+    single_file_body = re.search(
+        r'((?:out|tmp|tools|tests|openshell_backend|ralfloop_agent)/[^\s,;:()]+|[\w./-]+\.(?:txt|md|json|log|csv|ya?ml|py))\s+che\s+contenga\s+solo\s+(.+?)(?:\s+e\s+poi\b|\s+poi\b|$)',
+        goal,
+        flags=re.IGNORECASE,
+    )
+    if single_file_body:
+        path = single_file_body.group(1).strip().rstrip('.,;:')
+        body = single_file_body.group(2).strip()
+        if body and _looks_like_path(path):
+            specs[path] = body
 
     return specs
 
@@ -126,6 +137,7 @@ def apply_runtime_multifile_guard(state: Any, decision: ActionDecision, planner:
     goal_low = (getattr(state, "user_goal", "") or "").lower()
     is_operational = any(token in goal_low for token in ("scrivi", "write", "crea", "create", "modifica", "edit", "aggiorna", "update"))
     wants_multi_read = ("leggili" in goal_low or "read them" in goal_low)
+    wants_single_read = ("leggilo" in goal_low or "read it" in goal_low)
 
     specs = requested_file_specs(getattr(state, "user_goal", "") or "", planner)
     requested_paths = list(specs)
@@ -143,7 +155,9 @@ def apply_runtime_multifile_guard(state: Any, decision: ActionDecision, planner:
         "action": "keep",
     }
 
-    if not is_operational or not wants_multi_read or len(requested_paths) < 2:
+    wants_followup_read = wants_multi_read or wants_single_read
+
+    if not is_operational or not wants_followup_read or not requested_paths:
         _append_runtime_debug(state, debug)
         return decision
 

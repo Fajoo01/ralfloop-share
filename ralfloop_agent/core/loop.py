@@ -46,7 +46,7 @@ class RalfloopAgent:
             judge_rag_collection=ctx.get("judge_rag_collection", "ralfloop_judge"),
             internal_prompt_style=ctx.get("internal_prompt_style", "standard"),
         )
-        sandbox_info = self.adapter.create_sandbox()
+        sandbox_info = self.adapter.create_sandbox(source_root=ctx.get("workspace_root") or ctx.get("cwd"))
         state.sandbox.id = sandbox_info["id"]
         state.sandbox.status = "ready"
         state.sandbox.workspace_path = sandbox_info["root"]
@@ -148,10 +148,15 @@ class RalfloopAgent:
             finalize_state(state, self._build_final_answer)
             self._write_runtime_summaries(state, adapter_sandbox)
         finally:
-            self.adapter.destroy_sandbox(state.sandbox.id or "")
-            state.sandbox.status = "destroyed"
-            state.sandbox.destroyed_at = datetime.now(UTC)
-            self.logger.log(task_id=state.task_id, iteration=state.iteration, decision="sandbox_destroyed", sandbox_id=state.sandbox.id)
+            keep_sandbox = bool(
+                ctx.get("keep_sandbox")
+                or (ctx.get("extra_context", {}) or {}).get("keep_sandbox")
+            )
+            if not keep_sandbox:
+                self.adapter.destroy_sandbox(state.sandbox.id or "")
+                state.sandbox.status = "destroyed"
+                state.sandbox.destroyed_at = datetime.now(UTC)
+                self.logger.log(task_id=state.task_id, iteration=state.iteration, decision="sandbox_destroyed", sandbox_id=state.sandbox.id)
 
         return state
 

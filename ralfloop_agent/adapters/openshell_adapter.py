@@ -18,9 +18,33 @@ class OpenShellAdapterStub:
         self.policy = policy or PolicyLayer()
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
-    def create_sandbox(self) -> dict:
+    def create_sandbox(self, source_root: str | None = None) -> dict:
         sandbox_id = str(uuid.uuid4())
         root = self.base_dir / sandbox_id / "workspace"
+        if source_root:
+            source = Path(source_root).expanduser().resolve()
+            if not source.exists() or not source.is_dir():
+                raise FileNotFoundError(f"invalid source_root: {source_root}")
+            root.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(
+                source,
+                root,
+                dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns(
+                    ".openshell_backend",
+                    ".git",
+                    ".venv",
+                    "__pycache__",
+                    ".pytest_cache",
+                    ".sandbox",
+                    "workspaces",
+                    "autofix",
+                    "*.bak",
+                    "*.bak.*",
+                    "*.snapshot*",
+                    "*.before_*",
+                ),
+            )
         (root / "out").mkdir(parents=True, exist_ok=True)
         (root / "tmp").mkdir(parents=True, exist_ok=True)
         return {

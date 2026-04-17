@@ -524,13 +524,44 @@ class ExecRequest(BaseModel):
     timeout_sec: int = 20
 
 
+class SandboxCreateRequest(BaseModel):
+    source_root: str | None = None
+
+
 @app.post("/sandboxes", response_model=SandboxCreateResponse)
-def create_sandbox():
+def create_sandbox(payload: SandboxCreateRequest | None = None):
     sid = str(uuid.uuid4())
     root = sandbox_root(sid)
+    source_root = str((payload.source_root if payload else "") or "").strip()
+
+    if source_root:
+        source = Path(source_root).expanduser().resolve()
+        if not source.exists() or not source.is_dir():
+            raise HTTPException(status_code=400, detail="invalid_source_root")
+        root.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(
+            source,
+            root,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns(
+                ".openshell_backend",
+                ".git",
+                ".venv",
+                "__pycache__",
+                ".pytest_cache",
+                ".sandbox",
+                "workspaces",
+                "autofix",
+                "*.bak",
+                "*.bak.*",
+                "*.snapshot*",
+                "*.before_*",
+            ),
+        )
+
     (root / "out").mkdir(parents=True, exist_ok=True)
     (root / "tmp").mkdir(parents=True, exist_ok=True)
-    audit("sandbox_created", sandbox_id=sid, root=str(root))
+    audit("sandbox_created", sandbox_id=sid, root=str(root), source_root=source_root)
     return SandboxCreateResponse(id=sid, root=str(root), status="ready")
 
 
@@ -2307,6 +2338,8 @@ def run_task(req: TaskRunRequest):
         context={
             "skill_context": req.skill_context or "",
             "extra_context": req.extra_context or {},
+            "cwd": str((req.extra_context or {}).get("cwd", "") or ""),
+            "workspace_root": str((req.extra_context or {}).get("workspace_root", "") or ""),
             "planner_model_profile": selection["profiles"]["planner"],
             "coder_model_profile": selection["profiles"]["coder"],
             "judge_model_profile": selection["profiles"]["judge"],
@@ -2365,6 +2398,7 @@ def run_task(req: TaskRunRequest):
         "artifacts": list(state_data.get("artifacts", []) or []),
         "audit_summary": list(state_data.get("audit_summary", []) or []),
         "autofix_candidate": dict(state_data.get("autofix_candidate", {}) or {}),
+        "sandbox_workspace": str(getattr(getattr(state, "sandbox", None), "workspace_path", "") or ""),
     }
     if not payload["ok"]:
         payload["debug_runtime"] = runtime_debug

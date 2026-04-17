@@ -54,8 +54,16 @@ class OpenShellAdapterReal:
             error_type=error_type,
         )
 
-    def create_sandbox(self) -> dict:
-        r = requests.post(f"{self.base_url}/sandboxes", headers=self._headers(), timeout=15)
+    def create_sandbox(self, source_root: str | None = None) -> dict:
+        payload = {}
+        if source_root:
+            payload["source_root"] = source_root
+        r = requests.post(
+            f"{self.base_url}/sandboxes",
+            headers=self._headers(),
+            json=payload or None,
+            timeout=300,
+        )
         r.raise_for_status()
         data = r.json()
         return {
