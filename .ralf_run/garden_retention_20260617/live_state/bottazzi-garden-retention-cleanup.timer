@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Bot-tazzi Garden retention cleanup daily
+
+[Timer]
+OnBootSec=3min
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
