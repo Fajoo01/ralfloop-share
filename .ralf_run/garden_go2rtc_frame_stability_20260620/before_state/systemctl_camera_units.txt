@@ -1,0 +1,26 @@
+  blueman-mechanism.service                                                                 loaded    inactive   dead         Bluetooth management mechanism
+  bottazzi-access-ui.service                                                                loaded    active     running      Bot-tazzi Access UI
+  bottazzi-camera-wake-watcher.service                                                      loaded    active     running      Bot-tazzi Camera Wake Watcher
+  bottazzi-face-api.service                                                                 loaded    active     running      Bot-tazzi Face Recognition API
+  bottazzi-garden-deferred-reviewer.service                                                 loaded    inactive   dead         Bot-tazzi Garden Deferred AI Reviewer
+  bottazzi-garden-detector.service                                                          loaded    active     running      Bot-tazzi Garden Person Detector
+  bottazzi-garden-retention-cleanup.service                                                 loaded    inactive   dead         Bot-tazzi Garden retention cleanup
+  bottazzi-garden-stream-warmer.service                                                     loaded    active     running      Bot-tazzi Garden Stream Warmer
+  bottazzi-garden-watchdog.service                                                          loaded    inactive   dead         Bot-tazzi Garden Camera Watchdog
+  bottazzi-garden-yolo-fallback.service                                                     loaded    inactive   dead         Bot-tazzi Garden YOLO Fallback
+  bottazzi-guest-tracker.service                                                            loaded    inactive   dead         Bot-tazzi Guest Tracker
+  bottazzi-ha-bridge.service                                                                loaded    active     running      Bot-tazzi Home Assistant Bridge
+  bottazzi-listener.service                                                                 loaded    active     running      Bot-tazzi Doorbell Listener
+  bottazzi-passage-tracker.service                                                          loaded    inactive   dead         Bot-tazzi Passage Tracker
+  bottazzi-poller.service                                                                   loaded    active     running      Bot-tazzi Camera Poller
+  bottazzi-presence-correlator.service                                                      loaded    inactive   dead         Bot-tazzi Presence Correlator
+  gpu-manager.service                                                                       loaded    inactive   dead         Detect the available GPUs and deal with any system changes
+  lm-sensors.service                                                                        loaded    active     exited       Initialize hardware monitoring sensors
+  snapd.failure.service                                                                     loaded    inactive   dead         Failure handling of the snapd snap
+  systemd-hwdb-update.service                                                               loaded    inactive   dead         Rebuild Hardware Database
+  systemd-pcrphase-initrd.service                                                           loaded    inactive   dead         TPM2 PCR Barrier (initrd)
+  systemd-pcrphase-sysinit.service                                                          loaded    inactive   dead         TPM2 PCR Barrier (Initialization)
+  systemd-pcrphase.service                                                                  loaded    inactive   dead         TPM2 PCR Barrier (User)
+  systemd-update-utmp-runlevel.service                                                      loaded    inactive   dead         Record Runlevel Change in UTMP
+  tpm-udev.service                                                                          loaded    inactive   dead         Handle dynamically added tpm devices
+  update-notifier-download.service                                                          loaded    inactive   dead         Download data for packages that failed at package install time

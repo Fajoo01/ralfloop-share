@@ -1,0 +1,2 @@
+timestamp=20260626_130013
+backup_dir=/home/sibilla-cumana/ralfloop_agent_scaffold/.ralf_run/garden_go2rtc_frame_stability_20260620/backups

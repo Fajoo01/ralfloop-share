@@ -1,0 +1,151 @@
+# /etc/systemd/system/bottazzi-garden-stream-warmer.service
+[Unit]
+Description=Bot-tazzi Garden Stream Warmer
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ffmpeg -nostdin -hide_banner -loglevel error -rtsp_transport tcp -i rtsp://127.0.0.1:8555/camera_giardino_anteriore -an -f null -
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+
+# /etc/systemd/system/bottazzi-garden-stream-warmer.service.d/30-frame-curl-warmer.conf
+[Service]
+ExecStart=
+ExecStart=/usr/local/sbin/bottazzi-garden-frame-warmer
+Restart=always
+RestartSec=3
+
+# /etc/systemd/system/bottazzi-garden-detector.service
+[Unit]
+Description=Bot-tazzi Garden Person Detector
+After=network-online.target meowgram.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sibilla-cumana
+WorkingDirectory=/opt/bottazzi-garden
+Environment=BOTTAZZI_GARDEN_CHAT_ID=7303247209
+ExecStart=/usr/bin/python3 /opt/bottazzi-garden/garden_person_detector.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+
+# /etc/systemd/system/bottazzi-garden-detector.service.d/10-frame-timeout.conf
+[Service]
+Environment=BOTTAZZI_GARDEN_CHECK_SECONDS=1.0
+Environment=BOTTAZZI_GARDEN_FRAME_TIMEOUT_SECONDS=4
+Environment=BOTTAZZI_GARDEN_MAX_GRAB_ATTEMPTS=1
+Environment=BOTTAZZI_GARDEN_GRAB_RETRY_SLEEP_SECONDS=0.1
+Environment=BOTTAZZI_GARDEN_GRAB_FAILURE_BACKOFF_SECONDS=2
+
+# /etc/systemd/system/bottazzi-garden-detector.service.d/30-gemma4-vision.conf
+[Service]
+Environment=BOTTAZZI_GARDEN_VISION_MODEL=gemma4:12b-it-qat
+Environment=BOTTAZZI_GARDEN_VISION_KEEP_ALIVE=0s
+Environment=BOTTAZZI_GARDEN_VISION_BORDERLINE_CONFIDENCE=0.78
+Environment=BOTTAZZI_GARDEN_VISION_STRONG_BYPASS_CONFIDENCE=0.85
+Environment=BOTTAZZI_GARDEN_VISION_STRONG_BYPASS_MAX_AREA=0.35
+
+# /etc/systemd/system/bottazzi-garden-detector.service.d/40-false-negative-20260611.conf
+[Service]
+Environment=BOTTAZZI_GARDEN_VISION_MODEL=gemma4:12b-it-qat
+Environment=BOTTAZZI_GARDEN_VISION_KEEP_ALIVE=0s
+Environment=BOTTAZZI_GARDEN_VISION_FAIL_OPEN_DNN=1
+Environment=BOTTAZZI_GARDEN_VALIDATE_DNN_NIGHT=1
+Environment=BOTTAZZI_GARDEN_VALIDATE_DNN_BORDERLINE=1
+Environment=BOTTAZZI_GARDEN_VISION_BORDERLINE_CONFIDENCE=0.78
+Environment=BOTTAZZI_GARDEN_CONFIDENCE_NIGHT=0.55
+
+# /etc/systemd/system/bottazzi-garden-detector.service.d/50-motion-gemma-partial-human.conf
+[Service]
+Environment=BOTTAZZI_GARDEN_VISION_MODEL=gemma4:12b-it-qat
+Environment=BOTTAZZI_GARDEN_VISION_KEEP_ALIVE=0s
+Environment=BOTTAZZI_GARDEN_VALIDATE_MOTION=1
+Environment=BOTTAZZI_GARDEN_VALIDATE_DNN_NIGHT=1
+Environment=BOTTAZZI_GARDEN_VALIDATE_DNN_BORDERLINE=1
+Environment=BOTTAZZI_GARDEN_VISION_BORDERLINE_CONFIDENCE=0.78
+Environment=BOTTAZZI_GARDEN_VISION_FAIL_OPEN_DNN=1
+Environment=BOTTAZZI_GARDEN_CONFIDENCE_NIGHT=0.55
+
+# /etc/systemd/system/bottazzi-garden-detector.service.d/60-motion-gemma-strict.conf
+[Service]
+Environment=BOTTAZZI_GARDEN_VISION_MODEL=gemma4:12b-it-qat
+Environment=BOTTAZZI_GARDEN_VISION_KEEP_ALIVE=0s
+Environment=BOTTAZZI_GARDEN_VALIDATE_MOTION=1
+Environment=BOTTAZZI_GARDEN_VALIDATE_DNN_NIGHT=1
+Environment=BOTTAZZI_GARDEN_VALIDATE_DNN_BORDERLINE=1
+Environment=BOTTAZZI_GARDEN_VISION_BORDERLINE_CONFIDENCE=0.78
+Environment=BOTTAZZI_GARDEN_VISION_MOTION_MIN_CONFIDENCE=0.85
+Environment=BOTTAZZI_GARDEN_VISION_FAIL_OPEN_DNN=1
+Environment=BOTTAZZI_GARDEN_CONFIDENCE_NIGHT=0.55
+
+# /etc/systemd/system/bottazzi-garden-detector.service.d/70-force-gemma-supervisor-top-edge.conf
+[Service]
+Environment=BOTTAZZI_GARDEN_FORCE_GEMMA_SUPERVISOR_TOP_EDGE=1
+Environment=BOTTAZZI_GARDEN_FORCE_GEMMA_TOP_Y=12
+Environment=BOTTAZZI_GARDEN_FORCE_GEMMA_CONF_BELOW=0.92
+Environment=BOTTAZZI_GARDEN_FORCE_GEMMA_AREA_BELOW=0.12
+Environment=BOTTAZZI_GARDEN_VISION_MODEL=gemma4:12b-it-qat
+Environment=BOTTAZZI_GARDEN_VISION_KEEP_ALIVE=0s
+Environment=BOTTAZZI_GARDEN_VALIDATE_MOTION=1
+Environment=BOTTAZZI_GARDEN_VISION_MOTION_MIN_CONFIDENCE=0.85
+
+# /etc/systemd/system/bottazzi-garden-detector.service.d/80-fp-fn-gemma-filter-20260614.conf
+[Service]
+Environment=BOTTAZZI_GARDEN_VISION_MODEL=gemma4:12b-it-qat
+Environment=BOTTAZZI_GARDEN_VISION_KEEP_ALIVE=0s
+Environment=BOTTAZZI_GARDEN_VALIDATE_MOTION=1
+Environment=BOTTAZZI_GARDEN_VALIDATE_DNN_NIGHT=1
+Environment=BOTTAZZI_GARDEN_VALIDATE_DNN_BORDERLINE=1
+Environment=BOTTAZZI_GARDEN_VISION_FAIL_OPEN_DNN=1
+Environment=BOTTAZZI_GARDEN_CONFIDENCE_NIGHT=0.55
+Environment=BOTTAZZI_GARDEN_FORCE_GEMMA_NIGHT_SUPERVISOR=1
+Environment=BOTTAZZI_GARDEN_FORCE_GEMMA_NIGHT_START=23
+Environment=BOTTAZZI_GARDEN_FORCE_GEMMA_NIGHT_END=8
+Environment=BOTTAZZI_GARDEN_VISION_NIGHT_MIN_CONFIDENCE=0.90
+Environment=BOTTAZZI_GARDEN_VISION_MORNING_FP_MIN_CONFIDENCE=0.90
+Environment=BOTTAZZI_GARDEN_ALLOW_STRONG_FAST_MOTION_BYPASS=***
+Environment=BOTTAZZI_GARDEN_VISION_MOTION_MIN_CONFIDENCE=0.85
+
+# /etc/systemd/system/bottazzi-garden-detector.service.d/95-gemma-schema-strict.conf
+[Service]
+Environment=BOTTAZZI_GARDEN_VISION_JSON_SCHEMA=1
+Environment=BOTTAZZI_GARDEN_VISION_TIMEOUT_SECONDS=70
+Environment=BOTTAZZI_GARDEN_VISION_KEEP_ALIVE=0s
+Environment=BOTTAZZI_GARDEN_VISION_MODEL=gemma4:12b-it-qat
+
+# /etc/systemd/system/bottazzi-garden-detector.service.d/96-glitch-failsoft-retry.conf
+[Service]
+Environment=BOTTAZZI_GARDEN_GLITCH_FAILSOFT=1
+Environment=BOTTAZZI_GARDEN_GLITCH_FAILSOFT_WINDOW_SECONDS=120
+Environment=BOTTAZZI_GARDEN_GLITCH_FAILSOFT_RETRY=1
+Environment=BOTTAZZI_GARDEN_GLITCH_FAILSOFT_REVIEW_COOLDOWN_SECONDS=45
+Environment=BOTTAZZI_GARDEN_ENABLE_LOWER_MOTION_OVERRIDE=0
+
+# /etc/systemd/system/bottazzi-garden-detector.service.d/97-frame-timeout.conf
+[Service]
+Environment=BOTTAZZI_GARDEN_FRAME_TIMEOUT_SECONDS=10
+Environment=BOTTAZZI_GARDEN_MAX_GRAB_ATTEMPTS=2
+
+# /etc/systemd/system/bottazzi-garden-detector.service.d/98-yolo-primary-gemma-gate.conf
+[Service]
+ExecStart=
+ExecStart=/home/bandi/bottazzi-yolo/.venv/bin/python3 /opt/bottazzi-garden/garden_person_detector.py
+Environment=BOTTAZZI_GARDEN_USE_YOLO=1
+Environment=BOTTAZZI_GARDEN_YOLO_MODEL=/home/bandi/bottazzi-access-ui/yolov8n.pt
+Environment=BOTTAZZI_GARDEN_YOLO_CONFIDENCE=0.22
+Environment=BOTTAZZI_GARDEN_YOLO_IMGSZ=640
+Environment=BOTTAZZI_GARDEN_VALIDATE_YOLO=1
+Environment=BOTTAZZI_GARDEN_GLITCH_FAILSOFT_REVIEW_COOLDOWN_SECONDS=240
+Environment=BOTTAZZI_GARDEN_REVIEW_COOLDOWN_SECONDS=240
+Environment=BOTTAZZI_GARDEN_MAX_GRAB_ATTEMPTS=3
+Environment=BOTTAZZI_GARDEN_FRAME_TIMEOUT_SECONDS=8
+Environment=BOTTAZZI_GARDEN_GRAB_RETRY_SLEEP_SECONDS=0.2

@@ -1,0 +1,11 @@
+● bottazzi-garden-detector.service - Bot-tazzi Garden Person Detector
+     Loaded: loaded (/etc/systemd/system/bottazzi-garden-detector.service; enabled; preset: enabled)
+    Drop-In: /etc/systemd/system/bottazzi-garden-detector.service.d
+             └─10-frame-timeout.conf, 30-gemma4-vision.conf, 40-false-negative-20260611.conf, 50-motion-gemma-partial-human.conf, 60-motion-gemma-strict.conf, 70-force-gemma-supervisor-top-edge.conf, 80-fp-fn-gemma-filter-20260614.conf, 95-gemma-schema-strict.conf, 96-glitch-failsoft-retry.conf, 97-frame-timeout.conf, 98-yolo-primary-gemma-gate.conf
+     Active: active (running) since Fri 2026-06-26 11:09:03 CEST; 1h 35min ago
+   Main PID: 454832 (python3)
+      Tasks: 26 (limit: 76624)
+     Memory: 753.2M (peak: 1.6G)
+        CPU: 48.019s
+     CGroup: /system.slice/bottazzi-garden-detector.service
+             └─454832 /home/bandi/bottazzi-yolo/.venv/bin/python3 /opt/bottazzi-garden/garden_person_detector.py

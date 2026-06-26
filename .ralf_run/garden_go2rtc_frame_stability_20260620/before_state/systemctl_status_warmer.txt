@@ -1,0 +1,15 @@
+● bottazzi-garden-stream-warmer.service - Bot-tazzi Garden Stream Warmer
+     Loaded: loaded (/etc/systemd/system/bottazzi-garden-stream-warmer.service; enabled; preset: enabled)
+    Drop-In: /etc/systemd/system/bottazzi-garden-stream-warmer.service.d
+             └─30-frame-curl-warmer.conf
+     Active: active (running) since Sun 2026-06-21 15:28:11 CEST; 4 days ago
+   Main PID: 6907 (bash)
+      Tasks: 3 (limit: 76624)
+     Memory: 4.2M (peak: 5.9M)
+        CPU: 27min 19.553s
+     CGroup: /system.slice/bottazzi-garden-stream-warmer.service
+             ├─  6907 bash /usr/local/sbin/bottazzi-garden-frame-warmer
+             ├─684356 timeout 12 curl -fsS "http://127.0.0.1:1984/api/frame.jpeg?src=camera_giardino_anteriore" -o /run/bottazzi-garden-warmer-frame.jpg.tmp
+             └─684357 curl -fsS "http://127.0.0.1:1984/api/frame.jpeg?src=camera_giardino_anteriore" -o /run/bottazzi-garden-warmer-frame.jpg.tmp
+
+Warning: some journal files were not opened due to insufficient permissions.
