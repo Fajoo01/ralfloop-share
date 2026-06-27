@@ -114,6 +114,8 @@ class RalfloopAgent:
 
         no_progress_key = None
         no_progress_count = 0
+        force_read_task_md = False
+        task_md_read = False
 
         try:
             while state.iteration < state.max_iterations:
@@ -132,6 +134,17 @@ class RalfloopAgent:
                         description=f"[{state.current_role}] {decision.why}"
                     )
                 )
+                if force_read_task_md and not task_md_read:
+                    from ralfloop_agent.providers.ollama import PlannerDecision
+
+                    decision = PlannerDecision(
+                        tool_name="sandbox_read_file",
+                        tool_input={"path": "task.md"},
+                        why="Read seeded task.md after sandbox listing for patch workflow.",
+                    )
+                    force_read_task_md = False
+                    task_md_read = True
+
                 state.last_action = {
                       "tool_name": decision.tool_name,
                       "tool_input": decision.tool_input,
@@ -165,12 +178,39 @@ class RalfloopAgent:
                     decision="evaluate",
                 )
 
+                if (
+                    result.tool_name == "sandbox_list_dir"
+                    and result.ok
+                    and not task_md_read
+                    and "task.md" in result.stdout.splitlines()
+                    and (state.capability_route or {}).get("task_mode") == "patch_allowed"
+                ):
+                    force_read_task_md = True
+
                 if result.tool_name == "sandbox_list_dir" and result.ok:
                     progress_key = (
                         decision.tool_name,
                         json.dumps(decision.tool_input, sort_keys=True),
                         result.stdout,
                     )
+                    no_progress_reason = "no_progress::repeated_identical_list_dir"
+                elif (
+                    result.tool_name == "sandbox_exec"
+                    and result.ok
+                    and not result.stdout.strip()
+                    and not result.stderr.strip()
+                    and not result.artifacts
+                ):
+                    progress_key = (
+                        decision.tool_name,
+                        "empty_output_no_artifacts",
+                    )
+                    no_progress_reason = "no_progress::repeated_empty_exec"
+                else:
+                    progress_key = None
+                    no_progress_reason = None
+
+                if progress_key is not None:
                     if progress_key == no_progress_key:
                         no_progress_count += 1
                     else:
@@ -178,7 +218,7 @@ class RalfloopAgent:
                         no_progress_count = 1
                     if no_progress_count >= 3:
                         state.stop_reason = "no_progress"
-                        state.audit_summary.append("no_progress::repeated_identical_list_dir")
+                        state.audit_summary.append(no_progress_reason)
                         break
                 else:
                     no_progress_key = None
@@ -264,6 +304,12 @@ class RalfloopAgent:
                 tool_input["path"] = tool_input.pop("filename")
 
         if tool_name == "sandbox_exec":
+            if "command" not in tool_input and "code" in tool_input:
+                code = str(tool_input.get("code", ""))
+                tool_input = {
+                    "command": "python3 - <<'PY'\n" + code + "\nPY",
+                    "timeout_sec": int(tool_input.get("timeout_sec", 20)),
+                }
             return self.adapter.exec(sandbox, **tool_input)
         if tool_name == "sandbox_write_file":
             return self.adapter.write_file(sandbox, **tool_input)
