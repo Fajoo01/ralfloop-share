@@ -57,7 +57,8 @@ def test_reasoning_cycle_output_is_json_serializable():
     assert "internal_state_packet" in encoded
     assert packet.node == "reasoning_cycle_node"
     assert packet.decision.status == "continue"
-    assert packet.selected_next_action["action_type"] == "write_experimental_module"
+    assert packet.selected_next_action["action_type"] == "inspect_failure"
+    assert packet.selected_next_action["writes_allowed"] is False
 
 
 def test_output_json_dumps_compatible_with_tool_observation():
@@ -177,6 +178,24 @@ def test_hard_policy_violation_blocks_forbidden_goal():
     assert packet.evidence_needed
     assert payload["decision"]["selected_next_action"]["action_type"] == "none"
     assert json.dumps(payload, ensure_ascii=False)
+
+
+def test_failed_tool_traceback_prioritizes_inspection_before_write():
+    packet = run_reasoning_cycle(
+        user_goal="Fix the failing parser with the smallest safe change.",
+        constraints=["non toccare runtime attivo", "patch minima", "nessuna rete"],
+        last_result={
+            "ok": False,
+            "exit_code": 1,
+            "stderr": "Traceback (most recent call last): RuntimeError: parser exploded",
+        },
+    )
+
+    assert packet.decision.status == "continue"
+    assert packet.selected_next_action["action_type"] in {"inspect_failure", "run_targeted_verification"}
+    assert packet.selected_next_action["action_type"] != "write_experimental_module"
+    assert packet.selected_next_action["writes_allowed"] is False
+    assert packet.selected_next_action["commands"]
 
 
 def test_ambiguous_readonly_goal_can_still_inspect():

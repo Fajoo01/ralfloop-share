@@ -561,6 +561,23 @@ def _select_next_action(
             "human_confirmation_required",
         )
 
+    if _last_result_failed(packet.last_result, tool_observation):
+        return (
+            "continue",
+            {
+                "action_type": "inspect_failure",
+                "description": "Inspect or reproduce the last failed tool result before any write action." + failure_description,
+                "commands": [
+                    "rg --files",
+                    "rg -n 'Traceback|RuntimeError|SyntaxError|timeout|failed|failure'",
+                ],
+                "writes_allowed": False,
+                "requires_human_confirmation": False,
+            },
+            0.64,
+            None,
+        )
+
     if flags["no_write"] and task_mode == "patch_candidate":
         return (
             "continue",
