@@ -106,7 +106,9 @@ def test_empty_goal_stops_parseably():
 
     assert packet.decision.status == "stop"
     assert packet.stop_reason == "empty_user_goal"
+    assert packet.selected_next_action["action_type"] == "none"
     assert packet.selected_next_action["commands"] == []
+    assert packet.selected_next_action["writes_allowed"] is False
 
 
 def test_external_action_requires_confirmation():

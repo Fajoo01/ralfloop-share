@@ -537,7 +537,7 @@ def _select_next_action(
         return (
             "stop",
             {
-                "action_type": "stop",
+                "action_type": "none",
                 "description": "No action selected because user_goal is empty.",
                 "commands": [],
                 "writes_allowed": False,
