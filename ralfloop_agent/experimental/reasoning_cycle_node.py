@@ -21,6 +21,7 @@ FAILURE_TERMS = ("traceback", "syntaxerror", "runtimeerror", "failed", "failure"
 WRITE_TERMS = (
     "patch",
     "write",
+    "aggiorna",
     "scrivi",
     "scrivere",
     "modifica",
@@ -28,9 +29,33 @@ WRITE_TERMS = (
     "implement",
     "implementa",
     "fix",
+    "tocca",
 )
-NETWORK_TERMS = ("fetch", "http", "https", "network", "rete", "external action", "azione esterna")
-RUNTIME_TERMS = ("runtime", "cheshire", "baseline", "core")
+NETWORK_TERMS = (
+    "download",
+    "fetch",
+    "http://",
+    "https://",
+    "network",
+    "rete",
+    "scarica",
+    "servizio remoto",
+    "remoto",
+)
+EXTERNAL_ACTION_TERMS = (
+    "azione esterna",
+    "azioni esterne",
+    "email",
+    "external action",
+    "invia",
+    "mail",
+    "manda",
+    "manda la mail",
+    "pubblica",
+    "send",
+    "servizio remoto",
+)
+RUNTIME_TERMS = ("runtime", "cheshire", "baseline", "core", "produzione")
 
 
 @dataclass(frozen=True)
@@ -126,20 +151,24 @@ def _constraints_protect_runtime(text: str) -> bool:
             "active runtime",
             "baseline attiva",
             "baseline intoccabile",
+            "produzione intoccabile",
             "runtime intoccabile",
         ),
     ) or (
-        _contains_any(text, ("runtime", "baseline"))
+        _contains_any(text, ("runtime", "baseline", "produzione"))
         and _contains_any(text, ("non toccare", "intoccabile", "do not touch", "untouchable"))
     )
 
 
 def _constraints_no_write(text: str) -> bool:
-    return _contains_any(text, ("no write", "read-only", "readonly", "non modificare", "non scrivere"))
+    return _contains_any(
+        text,
+        ("no write", "read-only", "readonly", "non modificare", "non scrivere", "sola lettura", "solo lettura"),
+    )
 
 
 def _constraints_no_network(text: str) -> bool:
-    return _contains_any(text, ("no network", "nessuna rete", "offline"))
+    return _contains_any(text, ("no network", "nessuna rete", "niente rete", "senza rete", "no rete", "offline"))
 
 
 def _hard_policy_violations(packet: ReasoningCycleInput) -> list[str]:
@@ -259,7 +288,7 @@ def _infer_task_mode(packet: ReasoningCycleInput) -> str:
     text = _combined_text(packet)
     if not packet.user_goal:
         return "empty"
-    if any(term in text for term in ("send email", "manda email", "pagamento", "external action")):
+    if _contains_any(text, EXTERNAL_ACTION_TERMS) or "pagamento" in text:
         return "external_action"
     if any(term in text for term in ("implementa", "implement", "patch", "fix", "correggi", "add ", "aggiungi")):
         return "patch_candidate"

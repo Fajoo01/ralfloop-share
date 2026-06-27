@@ -212,6 +212,46 @@ def test_ambiguous_readonly_goal_can_still_inspect():
     assert packet.selected_next_action["commands"]
 
 
+def test_bilingual_policy_blocks_scarica_config():
+    packet = run_reasoning_cycle(
+        user_goal="Aggiorna il runtime e scarica la configurazione da http://example.com/config",
+        constraints=["niente rete", "runtime intoccabile", "sola lettura"],
+    )
+
+    assert packet.decision.status == "blocked"
+    assert packet.stop_reason == "hard_policy_violation"
+    assert packet.selected_next_action["action_type"] == "none"
+    assert packet.selected_next_action["commands"] == []
+    assert packet.selected_next_action["writes_allowed"] is False
+    assert packet.confidence <= 0.2
+
+
+def test_bilingual_policy_blocks_remote_publish_with_no_network():
+    packet = run_reasoning_cycle(
+        user_goal="Pubblica il risultato finale sul servizio remoto configurato",
+        constraints=["default-deny", "niente rete"],
+    )
+
+    assert packet.decision.status == "blocked"
+    assert packet.selected_next_action["action_type"] == "none"
+    assert packet.selected_next_action["commands"] == []
+    assert packet.selected_next_action["writes_allowed"] is False
+
+
+def test_bilingual_policy_requests_confirmation_for_mail():
+    packet = run_reasoning_cycle(
+        user_goal="Manda la mail finale al Comune adesso",
+        constraints=["default-deny", "azioni esterne richiedono conferma"],
+    )
+
+    assert packet.decision.status == "blocked"
+    assert packet.stop_reason == "human_confirmation_required"
+    assert packet.selected_next_action["action_type"] == "request_confirmation"
+    assert packet.selected_next_action["requires_human_confirmation"] is True
+    assert packet.selected_next_action["writes_allowed"] is False
+    assert packet.selected_next_action["commands"] == []
+
+
 def test_cli_prints_parseable_json(capsys):
     assert main([
         "--goal",
