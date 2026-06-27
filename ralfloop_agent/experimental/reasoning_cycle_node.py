@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+"""Experimental operational deliberation node.
+
+This module is not a frontier reasoning model and does not activate runtime
+behavior by itself. It provides deterministic, JSON-safe operational
+deliberation: build hypotheses, critique contradictions, collect explicit
+evidence needs, and return the smallest verifiable next action.
+"""
+
 import argparse
 import json
 import re
@@ -9,6 +17,20 @@ from typing import Any, Mapping, Sequence
 
 NODE_NAME = "reasoning_cycle_node"
 NODE_VERSION = "0.1"
+FAILURE_TERMS = ("traceback", "syntaxerror", "runtimeerror", "failed", "failure", "timeout", "error")
+WRITE_TERMS = (
+    "patch",
+    "write",
+    "scrivi",
+    "scrivere",
+    "modifica",
+    "modificare",
+    "implement",
+    "implementa",
+    "fix",
+)
+NETWORK_TERMS = ("fetch", "http", "https", "network", "rete", "external action", "azione esterna")
+RUNTIME_TERMS = ("runtime", "cheshire", "baseline", "core")
 
 
 @dataclass(frozen=True)
@@ -75,6 +97,63 @@ class ReasoningCyclePacket:
         return payload
 
 
+def _shorten_text(value: Any, limit: int = 180) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"\s+", " ", text)
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _contains_any(text: str, terms: Sequence[str]) -> bool:
+    return any(term in text for term in terms)
+
+
+def observation_from_tool_result(last_result: dict[str, Any] | None) -> str | None:
+    """Summarize a tool result into one deterministic operational observation."""
+    if not last_result:
+        return None
+
+    parts: list[str] = []
+    payload_text = json.dumps(last_result, ensure_ascii=False, sort_keys=True).lower()
+
+    if last_result.get("ok") is False:
+        parts.append("ok=false")
+
+    exit_code = last_result.get("exit_code")
+    if isinstance(exit_code, int) and exit_code != 0:
+        parts.append(f"exit_code={exit_code}")
+
+    for term, label in (
+        ("timeout", "timeout"),
+        ("traceback", "traceback"),
+        ("syntaxerror", "syntaxerror"),
+        ("runtimeerror", "runtimeerror"),
+        ("failed", "failed"),
+        ("failure", "failure"),
+        ("error", "error"),
+    ):
+        if term in payload_text and label not in parts:
+            parts.append(label)
+
+    stderr = _shorten_text(last_result.get("stderr"))
+    stdout = _shorten_text(last_result.get("stdout"))
+    if stderr:
+        parts.append(f"stderr: {stderr}")
+    if stdout:
+        parts.append(f"stdout: {stdout}")
+
+    return "; ".join(parts) if parts else None
+
+
+def _clamp_confidence(value: float) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return min(1.0, max(0.0, numeric))
+
+
 def _as_text_list(value: Sequence[str] | str | None) -> list[str]:
     if value is None:
         return []
@@ -138,29 +217,42 @@ def _infer_task_mode(packet: ReasoningCycleInput) -> str:
     return "exploration"
 
 
-def _last_result_failed(last_result: dict[str, Any] | None) -> bool:
-    if not last_result:
+def _last_result_failed(last_result: dict[str, Any] | None, tool_observation: str | None = None) -> bool:
+    if not last_result and not tool_observation:
         return False
+    if not last_result:
+        return _contains_any((tool_observation or "").lower(), FAILURE_TERMS)
     if last_result.get("ok") is False:
         return True
     exit_code = last_result.get("exit_code")
     if isinstance(exit_code, int) and exit_code != 0:
         return True
-    text = json.dumps(last_result, ensure_ascii=False).lower()
-    return any(term in text for term in ("traceback", "syntaxerror", "runtimeerror", "timeout", "failed"))
+    text = (tool_observation or json.dumps(last_result, ensure_ascii=False)).lower()
+    return _contains_any(text, FAILURE_TERMS)
 
 
 def _build_hypotheses(packet: ReasoningCycleInput, task_mode: str, flags: dict[str, bool]) -> list[OperationalHypothesis]:
     hypotheses: list[OperationalHypothesis] = []
+    tool_observation = observation_from_tool_result(packet.last_result)
 
-    if _last_result_failed(packet.last_result):
+    if _last_result_failed(packet.last_result, tool_observation):
         hypotheses.append(
             OperationalHypothesis(
                 hypothesis_id="h_last_result",
-                claim="The most recent failure is the best first operational target.",
+                claim=f"The most recent tool result is the best first operational target: {tool_observation}.",
                 rationale="A fresh failing result gives concrete evidence and avoids guessing.",
                 risk="Anchoring on one symptom can hide a broader integration issue.",
                 verification="Reproduce the smallest failing command or inspect the exact error payload.",
+            )
+        )
+    elif tool_observation:
+        hypotheses.append(
+            OperationalHypothesis(
+                hypothesis_id="h_last_result_observation",
+                claim=f"The most recent tool result gives usable evidence: {tool_observation}.",
+                rationale="Fresh command output can narrow the next action even when it is not a failure.",
+                risk="A successful stdout sample can still be incomplete.",
+                verification="Compare the observation with the requested constraints before acting.",
             )
         )
 
@@ -246,26 +338,48 @@ def _build_hypotheses(packet: ReasoningCycleInput, task_mode: str, flags: dict[s
 
 
 def _find_text_contradictions(packet: ReasoningCycleInput) -> list[str]:
+    goal_text = packet.user_goal.lower()
+    constraint_text = "\n".join(packet.constraints).lower()
     text = _combined_text(packet)
+    contradictions: list[str] = []
+
+    runtime_protected = (
+        _contains_any(constraint_text, ("non toccare runtime", "runtime attivo", "active runtime", "baseline attiva"))
+        or ("runtime" in constraint_text and _contains_any(constraint_text, ("non toccare", "intoccabile", "do not touch")))
+    )
+    if runtime_protected and _contains_any(goal_text, WRITE_TERMS) and _contains_any(goal_text, RUNTIME_TERMS):
+        contradictions.append("Runtime protected but goal asks to modify it.")
+
+    no_write = _contains_any(constraint_text, ("no write", "read-only", "readonly", "non modificare", "non scrivere"))
+    if no_write and _contains_any(goal_text, WRITE_TERMS):
+        contradictions.append("No-write constraint conflicts with requested mutation.")
+
+    no_network = _contains_any(constraint_text, ("no network", "nessuna rete", "offline"))
+    if no_network and _contains_any(goal_text, NETWORK_TERMS):
+        contradictions.append("No-network constraint conflicts with requested network/external action.")
+
+    success_seen = _contains_any(text, (" ok ", "ok=true", "success", "passed", "riuscito"))
+    failure_seen = _contains_any(text, FAILURE_TERMS)
+    if success_seen and failure_seen:
+        contradictions.append("State mixes success and failure signals.")
+
     pairs = [
         ("works", "timeout"),
         ("funziona", "timeout"),
         ("active", "inactive"),
-        ("ok", "failed"),
-        ("success", "error"),
         ("cache", "fallback only"),
     ]
-    contradictions = []
     for left, right in pairs:
         if left in text and right in text:
-            contradictions.append(f"Both '{left}' and '{right}' appear in the state packet.")
+            contradictions.append(f"State contains both '{left}' and '{right}'.")
+
     if packet.last_result:
         result_text = json.dumps(packet.last_result, ensure_ascii=False).lower()
-        if packet.last_result.get("ok") is True and any(term in result_text for term in ("traceback", "failed", "timeout")):
+        if packet.last_result.get("ok") is True and _contains_any(result_text, FAILURE_TERMS):
             contradictions.append("last_result.ok is true but the payload contains failure language.")
         if packet.last_result.get("ok") is False and any(term in result_text for term in ("success", "passed")):
             contradictions.append("last_result.ok is false but the payload contains success language.")
-    return contradictions
+    return _dedupe_preserve_order(contradictions)
 
 
 def _critique_hypotheses(
@@ -274,6 +388,7 @@ def _critique_hypotheses(
     flags: dict[str, bool],
 ) -> list[ReasoningObjection]:
     objections: list[ReasoningObjection] = []
+    tool_observation = observation_from_tool_result(packet.last_result)
 
     for hypothesis in hypotheses:
         claim_text = hypothesis.claim.lower()
@@ -316,6 +431,16 @@ def _critique_hypotheses(
             )
         )
 
+    if _last_result_failed(packet.last_result, tool_observation):
+        objections.append(
+            ReasoningObjection(
+                hypothesis_id="h_last_result",
+                objection="Last tool result contains a failure signal.",
+                severity="high",
+                evidence_needed=f"Verify or reproduce last tool result: {tool_observation}.",
+            )
+        )
+
     for item in _find_text_contradictions(packet):
         objections.append(
             ReasoningObjection(
@@ -348,6 +473,8 @@ def _select_next_action(
     objections: list[ReasoningObjection],
 ) -> tuple[str, dict[str, Any], float, str | None]:
     high_objection = any(item.severity == "high" for item in objections)
+    tool_observation = observation_from_tool_result(packet.last_result)
+    failure_description = f" Last result: {tool_observation}." if tool_observation else ""
 
     if task_mode == "empty":
         return (
@@ -410,7 +537,7 @@ def _select_next_action(
             "continue",
             {
                 "action_type": "run_minimal_probe",
-                "description": "Resolve high-severity objection with the smallest local verification.",
+                "description": "Resolve high-severity objection with the smallest local verification." + failure_description,
                 "commands": ["python3 -m py_compile <target>", "pytest <targeted tests>"],
                 "writes_allowed": False,
                 "requires_human_confirmation": False,
@@ -455,12 +582,22 @@ def run_reasoning_cycle(
     last_result: Mapping[str, Any] | None = None,
 ) -> ReasoningCyclePacket:
     packet_input = build_reasoning_input(user_goal, observations, constraints, memory, last_result)
+    tool_observation = observation_from_tool_result(packet_input.last_result)
+    if tool_observation and tool_observation not in packet_input.observations:
+        packet_input = ReasoningCycleInput(
+            user_goal=packet_input.user_goal,
+            observations=[*packet_input.observations, tool_observation],
+            constraints=packet_input.constraints,
+            memory=packet_input.memory,
+            last_result=packet_input.last_result,
+        )
     flags = _constraint_flags(packet_input.constraints)
     task_mode = _infer_task_mode(packet_input)
     hypotheses = _build_hypotheses(packet_input, task_mode, flags)
     objections = _critique_hypotheses(packet_input, hypotheses, flags)
     evidence_needed = _dedupe_preserve_order([item.evidence_needed for item in objections])
     status, selected_next_action, confidence, stop_reason = _select_next_action(packet_input, task_mode, flags, objections)
+    confidence = _clamp_confidence(confidence)
     decision = ReasoningCycleDecision(
         status=status,
         selected_next_action=selected_next_action,

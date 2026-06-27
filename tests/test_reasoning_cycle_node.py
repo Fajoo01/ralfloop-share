@@ -1,6 +1,46 @@
 import json
 
+from ralfloop_agent.experimental import reasoning_cycle_node as node
 from ralfloop_agent.experimental.reasoning_cycle_node import main, run_reasoning_cycle
+from ralfloop_agent.experimental.reasoning_cycle_node import observation_from_tool_result
+
+
+def test_observation_from_tool_result_empty_payloads():
+    assert observation_from_tool_result(None) is None
+    assert observation_from_tool_result({}) is None
+
+
+def test_observation_from_tool_result_ok_false():
+    observation = observation_from_tool_result({"ok": False})
+
+    assert observation == "ok=false"
+
+
+def test_observation_from_tool_result_exit_code_non_zero():
+    observation = observation_from_tool_result({"ok": True, "exit_code": 2})
+
+    assert "exit_code=2" in observation
+
+
+def test_observation_from_tool_result_stderr_traceback():
+    observation = observation_from_tool_result({"stderr": "Traceback\nRuntimeError: boom"})
+
+    assert "traceback" in observation
+    assert "runtimeerror" in observation
+    assert "stderr: Traceback RuntimeError: boom" in observation
+
+
+def test_observation_from_tool_result_stdout_useful():
+    observation = observation_from_tool_result({"stdout": "6 passed in 0.02s"})
+
+    assert observation == "stdout: 6 passed in 0.02s"
+
+
+def test_observation_from_tool_result_timeout():
+    observation = observation_from_tool_result({"ok": False, "stderr": "command timeout after 8s"})
+
+    assert "ok=false" in observation
+    assert "timeout" in observation
 
 
 def test_reasoning_cycle_output_is_json_serializable():
@@ -18,6 +58,18 @@ def test_reasoning_cycle_output_is_json_serializable():
     assert packet.node == "reasoning_cycle_node"
     assert packet.decision.status == "continue"
     assert packet.selected_next_action["action_type"] == "write_experimental_module"
+
+
+def test_output_json_dumps_compatible_with_tool_observation():
+    packet = run_reasoning_cycle(
+        user_goal="verifica errore locale",
+        last_result={"ok": False, "exit_code": 1, "stderr": "failed"},
+    )
+
+    payload = json.dumps(packet.to_dict(), ensure_ascii=False)
+
+    assert "ok=false" in payload
+    assert "internal_state_packet" in payload
 
 
 def test_no_write_constraint_selects_evidence_before_mutation():
@@ -64,6 +116,44 @@ def test_external_action_requires_confirmation():
     assert packet.decision.status == "blocked"
     assert packet.stop_reason == "human_confirmation_required"
     assert packet.selected_next_action["requires_human_confirmation"] is True
+
+
+def test_confidence_is_clamped(monkeypatch):
+    def fake_select(*args):
+        return (
+            "continue",
+            {
+                "action_type": "orient_readonly",
+                "commands": [],
+                "writes_allowed": False,
+                "requires_human_confirmation": False,
+            },
+            2.5,
+            None,
+        )
+
+    monkeypatch.setattr(node, "_select_next_action", fake_select)
+
+    packet = node.run_reasoning_cycle(user_goal="verifica")
+
+    assert packet.confidence == 1.0
+    assert packet.decision.confidence == 1.0
+
+
+def test_contradiction_detection_adds_actionable_objections():
+    packet = run_reasoning_cycle(
+        user_goal="patch runtime core and fetch http status",
+        observations=["success path reported"],
+        constraints=["NON toccare runtime attivo", "read-only", "Nessuna rete"],
+        last_result={"ok": True, "stderr": "Traceback: failed"},
+    )
+
+    objections = [item.objection for item in packet.objections]
+
+    assert "Runtime protected but goal asks to modify it." in objections
+    assert "No-write constraint conflicts with requested mutation." in objections
+    assert "No-network constraint conflicts with requested network/external action." in objections
+    assert "State mixes success and failure signals." in objections
 
 
 def test_cli_prints_parseable_json(capsys):

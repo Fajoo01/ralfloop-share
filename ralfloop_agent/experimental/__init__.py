@@ -4,6 +4,7 @@ __all__ = [
     "ReasoningCycleDecision",
     "ReasoningCycleInput",
     "ReasoningCyclePacket",
+    "observation_from_tool_result",
     "run_reasoning_cycle",
 ]
 
