@@ -83,6 +83,38 @@ class RalfloopAgent:
 
         self.logger.log(task_id=state.task_id, iteration=state.iteration, decision="sandbox_created", sandbox_id=state.sandbox.id)
 
+        seed_payload = {
+            "user_goal": state.user_goal,
+            "constraints": state.constraints,
+            "context": state.context,
+            "created_at": state.sandbox.created_at.isoformat() if state.sandbox.created_at else None,
+        }
+        seed_result = self.adapter.write_file(
+            {
+                "id": state.sandbox.id,
+                "root": state.sandbox.workspace_path,
+                "status": state.sandbox.status,
+            },
+            "task.md",
+            "# Ralfloop task\n\n```json\n"
+            + json.dumps(seed_payload, ensure_ascii=False, indent=2)
+            + "\n```\n",
+        )
+        self.logger.log(
+            task_id=state.task_id,
+            iteration=state.iteration,
+            decision="seed_task",
+            tool_name="sandbox_write_file",
+            tool_output=seed_result.model_dump(),
+        )
+        if seed_result.ok:
+            state.memory.append(MemoryEntry(kind="result", content="sandbox_write_file: task.md seeded"))
+        else:
+            state.audit_summary.append("sandbox_write_file: task.md seed_failed")
+
+        no_progress_key = None
+        no_progress_count = 0
+
         try:
             while state.iteration < state.max_iterations:
                 state.role_history.append(state.current_role)
@@ -133,6 +165,25 @@ class RalfloopAgent:
                     decision="evaluate",
                 )
 
+                if result.tool_name == "sandbox_list_dir" and result.ok:
+                    progress_key = (
+                        decision.tool_name,
+                        json.dumps(decision.tool_input, sort_keys=True),
+                        result.stdout,
+                    )
+                    if progress_key == no_progress_key:
+                        no_progress_count += 1
+                    else:
+                        no_progress_key = progress_key
+                        no_progress_count = 1
+                    if no_progress_count >= 3:
+                        state.stop_reason = "no_progress"
+                        state.audit_summary.append("no_progress::repeated_identical_list_dir")
+                        break
+                else:
+                    no_progress_key = None
+                    no_progress_count = 0
+
                 if result.ok:
                     state.consecutive_failures = 0
                     state.memory.append(MemoryEntry(kind="result", content=f"{decision.tool_name}: ok"))
@@ -171,10 +222,16 @@ class RalfloopAgent:
                         state.iteration += 1
                         continue
 
-                    state.current_role = _next_role(state.current_role)
-                    state.iteration += 1
+                if self._should_stop(state):
+                    break
 
-            if state.last_result and state.last_result.ok:
+                state.current_role = _next_role(state.current_role)
+                state.iteration += 1
+
+            if state.stop_reason in {"no_progress", "max_iterations_reached", "repeated_failure"}:
+                state.status = "failed"
+                state.final_answer = f"Task non completato: {state.stop_reason}."
+            elif state.last_result and state.last_result.ok:
                 state.status = "completed"
                 state.stop_reason = state.stop_reason or "goal_completed"
                 state.final_answer = self._build_final_answer(state)
@@ -264,9 +321,32 @@ class RalfloopAgent:
                 return True
 
             if tool_name == "sandbox_list_dir":
-                if is_three_step:
-                    return False
-                if not is_two_step:
+                list_intent = any(
+                    token in goal
+                    for token in (
+                        "mostrami",
+                        "show",
+                        "lista",
+                        "list",
+                        "elenca",
+                        "contenuto",
+                        "workspace",
+                    )
+                )
+                patch_intent = any(
+                    token in goal
+                    for token in (
+                        "implementa",
+                        "crea",
+                        "patch",
+                        "pytest",
+                        "modulo",
+                        "codice",
+                        "add ",
+                    )
+                )
+
+                if list_intent and not patch_intent and not (is_three_step or is_two_step):
                     state.stop_reason = "goal_completed"
                     return True
 
