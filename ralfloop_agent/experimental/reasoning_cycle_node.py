@@ -109,6 +109,57 @@ def _contains_any(text: str, terms: Sequence[str]) -> bool:
     return any(term in text for term in terms)
 
 
+def _constraints_text(packet: ReasoningCycleInput) -> str:
+    return "\n".join(packet.constraints).lower()
+
+
+def _goal_text(packet: ReasoningCycleInput) -> str:
+    return packet.user_goal.lower()
+
+
+def _constraints_protect_runtime(text: str) -> bool:
+    return _contains_any(
+        text,
+        (
+            "non toccare runtime",
+            "runtime attivo",
+            "active runtime",
+            "baseline attiva",
+            "baseline intoccabile",
+            "runtime intoccabile",
+        ),
+    ) or (
+        _contains_any(text, ("runtime", "baseline"))
+        and _contains_any(text, ("non toccare", "intoccabile", "do not touch", "untouchable"))
+    )
+
+
+def _constraints_no_write(text: str) -> bool:
+    return _contains_any(text, ("no write", "read-only", "readonly", "non modificare", "non scrivere"))
+
+
+def _constraints_no_network(text: str) -> bool:
+    return _contains_any(text, ("no network", "nessuna rete", "offline"))
+
+
+def _hard_policy_violations(packet: ReasoningCycleInput) -> list[str]:
+    goal_text = _goal_text(packet)
+    constraint_text = _constraints_text(packet)
+    violations: list[str] = []
+
+    if _constraints_protect_runtime(constraint_text) and _contains_any(goal_text, WRITE_TERMS) and _contains_any(goal_text, RUNTIME_TERMS):
+        violations.append("Runtime protected but goal asks to modify it.")
+    if _constraints_no_network(constraint_text) and _contains_any(goal_text, NETWORK_TERMS):
+        violations.append("No-network constraint conflicts with requested network/external action.")
+    if _constraints_no_write(constraint_text) and _contains_any(goal_text, WRITE_TERMS):
+        violations.append("No-write constraint conflicts with requested mutation.")
+    return _dedupe_preserve_order(violations)
+
+
+def has_hard_policy_violation(packet: ReasoningCycleInput) -> bool:
+    return bool(_hard_policy_violations(packet))
+
+
 def observation_from_tool_result(last_result: dict[str, Any] | None) -> str | None:
     """Summarize a tool result into one deterministic operational observation."""
     if not last_result:
@@ -196,9 +247,9 @@ def _combined_text(packet: ReasoningCycleInput) -> str:
 def _constraint_flags(constraints: list[str]) -> dict[str, bool]:
     text = "\n".join(constraints).lower()
     return {
-        "no_write": any(term in text for term in ("no write", "read-only", "readonly", "non modificare", "non scrivere")),
-        "no_network": any(term in text for term in ("no network", "nessuna rete", "offline")),
-        "no_runtime": any(term in text for term in ("runtime attivo", "active runtime", "baseline attiva")),
+        "no_write": _constraints_no_write(text),
+        "no_network": _constraints_no_network(text),
+        "no_runtime": _constraints_protect_runtime(text),
         "no_destructive": any(term in text for term in ("non distrutt", "no destructive", "nessuna modifica distruttiva")),
         "default_deny": any(term in text for term in ("default-deny", "default deny")),
     }
@@ -338,25 +389,8 @@ def _build_hypotheses(packet: ReasoningCycleInput, task_mode: str, flags: dict[s
 
 
 def _find_text_contradictions(packet: ReasoningCycleInput) -> list[str]:
-    goal_text = packet.user_goal.lower()
-    constraint_text = "\n".join(packet.constraints).lower()
     text = _combined_text(packet)
-    contradictions: list[str] = []
-
-    runtime_protected = (
-        _contains_any(constraint_text, ("non toccare runtime", "runtime attivo", "active runtime", "baseline attiva"))
-        or ("runtime" in constraint_text and _contains_any(constraint_text, ("non toccare", "intoccabile", "do not touch")))
-    )
-    if runtime_protected and _contains_any(goal_text, WRITE_TERMS) and _contains_any(goal_text, RUNTIME_TERMS):
-        contradictions.append("Runtime protected but goal asks to modify it.")
-
-    no_write = _contains_any(constraint_text, ("no write", "read-only", "readonly", "non modificare", "non scrivere"))
-    if no_write and _contains_any(goal_text, WRITE_TERMS):
-        contradictions.append("No-write constraint conflicts with requested mutation.")
-
-    no_network = _contains_any(constraint_text, ("no network", "nessuna rete", "offline"))
-    if no_network and _contains_any(goal_text, NETWORK_TERMS):
-        contradictions.append("No-network constraint conflicts with requested network/external action.")
+    contradictions = _hard_policy_violations(packet)
 
     success_seen = _contains_any(text, (" ok ", "ok=true", "success", "passed", "riuscito"))
     failure_seen = _contains_any(text, FAILURE_TERMS)
@@ -441,6 +475,16 @@ def _critique_hypotheses(
             )
         )
 
+    for item in _hard_policy_violations(packet):
+        objections.append(
+            ReasoningObjection(
+                hypothesis_id="hard_policy",
+                objection=item,
+                severity="high",
+                evidence_needed="No evidence collection can authorize an explicitly forbidden action.",
+            )
+        )
+
     for item in _find_text_contradictions(packet):
         objections.append(
             ReasoningObjection(
@@ -475,6 +519,19 @@ def _select_next_action(
     high_objection = any(item.severity == "high" for item in objections)
     tool_observation = observation_from_tool_result(packet.last_result)
     failure_description = f" Last result: {tool_observation}." if tool_observation else ""
+    if has_hard_policy_violation(packet):
+        return (
+            "blocked",
+            {
+                "action_type": "none",
+                "description": "Blocked by hard_policy_violation.",
+                "commands": [],
+                "writes_allowed": False,
+                "requires_human_confirmation": False,
+            },
+            0.2,
+            "hard_policy_violation",
+        )
 
     if task_mode == "empty":
         return (

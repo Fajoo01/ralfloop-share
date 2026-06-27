@@ -81,7 +81,9 @@ def test_no_write_constraint_selects_evidence_before_mutation():
 
     objections = [item.objection for item in packet.objections]
 
-    assert packet.selected_next_action["action_type"] == "collect_evidence"
+    assert packet.decision.status == "blocked"
+    assert packet.stop_reason == "hard_policy_violation"
+    assert packet.selected_next_action["action_type"] == "none"
     assert packet.selected_next_action["writes_allowed"] is False
     assert any("No-write" in item for item in objections)
 
@@ -154,6 +156,39 @@ def test_contradiction_detection_adds_actionable_objections():
     assert "No-write constraint conflicts with requested mutation." in objections
     assert "No-network constraint conflicts with requested network/external action." in objections
     assert "State mixes success and failure signals." in objections
+
+
+def test_hard_policy_violation_blocks_forbidden_goal():
+    packet = run_reasoning_cycle(
+        user_goal="Patch the runtime to add logging, then fetch the updated config from http://example.com/config.",
+        constraints=["no network", "baseline intoccabile", "read-only"],
+    )
+
+    payload = packet.to_dict()
+
+    assert packet.decision.status == "blocked"
+    assert packet.stop_reason == "hard_policy_violation"
+    assert packet.selected_next_action["action_type"] == "none"
+    assert packet.selected_next_action["commands"] == []
+    assert packet.selected_next_action["writes_allowed"] is False
+    assert packet.selected_next_action["requires_human_confirmation"] is False
+    assert packet.confidence <= 0.2
+    assert packet.objections
+    assert packet.evidence_needed
+    assert payload["decision"]["selected_next_action"]["action_type"] == "none"
+    assert json.dumps(payload, ensure_ascii=False)
+
+
+def test_ambiguous_readonly_goal_can_still_inspect():
+    packet = run_reasoning_cycle(
+        user_goal="Understand where logging is configured",
+        constraints=["read-only", "no network"],
+    )
+
+    assert packet.decision.status == "continue"
+    assert packet.selected_next_action["action_type"] == "orient_readonly"
+    assert packet.selected_next_action["writes_allowed"] is False
+    assert packet.selected_next_action["commands"]
 
 
 def test_cli_prints_parseable_json(capsys):
