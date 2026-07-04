@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 import logging
+import os
 
 from ralfloop_agent.integration.confirmation_store import execute_confirmed_action, request_confirmation
+from src import audit
 from src.confirmation import get_confirmation
+from src.google_client import GoogleClient
 
 logger = logging.getLogger(__name__)
 
@@ -17,10 +20,34 @@ class NeedsConfirmationError(RuntimeError):
 
 
 class MCPClient:
+    def __init__(self, google_client: Any | None = None) -> None:
+        enabled_flag = os.getenv("RALF_MCP_GOOGLE_ENABLED")
+        self._google_explicitly_disabled = enabled_flag is not None and enabled_flag != "1"
+        self.google_enabled = enabled_flag == "1" or google_client is not None
+        if google_client is not None:
+            self.google = google_client
+        elif self.google_enabled:
+            self.google = GoogleClient(
+                client_secrets_path=os.getenv("RALF_GOOGLE_CLIENT_SECRETS"),
+                token_path=os.getenv("RALF_GOOGLE_TOKEN"),
+                draft_only=os.getenv("RALF_GOOGLE_DRAFT_ONLY", "1") == "1",
+            )
+        else:
+            self.google = None
+
     def send_email(self, to: str, subject: str, body: str) -> str:
+        if self._google_explicitly_disabled:
+            raise NotImplementedError("Google Email MCP is disabled")
+        if self.google_enabled and (self.google is None or not self.google.is_configured()):
+            raise NotImplementedError("Google Email MCP is not configured")
         confirmation_id = request_confirmation(
             "send_email",
-            {"to": to, "subject": subject, "body_preview": body[:100]},
+            {
+                "to": to,
+                "subject": subject,
+                "body_preview": body[:100],
+                "draft_only": getattr(self.google, "draft_only", True),
+            },
             action_fn=self._send_email_now,
             action_args={"to": to, "subject": subject, "body": body},
         )
@@ -62,13 +89,45 @@ class MCPClient:
         return str(execute_confirmed_action(confirmation_id))
 
     def _send_email_now(self, to: str, subject: str, body: str) -> dict[str, Any]:
+        draft_only = getattr(self.google, "draft_only", True)
         try:
-            from arclio_mcp_gsuite import GSuiteClient  # type: ignore
-        except Exception:
-            return {"status": "not_configured", "connector": "arclio_mcp_gsuite", "action": "send_email", "to": to}
-        client = GSuiteClient()
-        result = client.send_email(to=to, subject=subject, body=body)
-        return {"status": "sent", "connector": "arclio_mcp_gsuite", "result": result}
+            if self.google is not None and self.google.is_configured():
+                if draft_only:
+                    result = self.google.create_draft(to, subject, body)
+                else:
+                    result = self.google.send_email(to, subject, body)
+            else:
+                try:
+                    from arclio_mcp_gsuite import GSuiteClient  # type: ignore
+                except Exception:
+                    result = {
+                        "status": "not_configured",
+                        "connector": "google_email",
+                        "action": "send_email",
+                        "to": to,
+                    }
+                else:
+                    client = GSuiteClient()
+                    raw_result = client.send_email(to=to, subject=subject, body=body)
+                    result = {"status": "sent", "connector": "arclio_mcp_gsuite", "result": raw_result}
+            audit.log_operation(
+                "mcp_send_email_executed",
+                {
+                    "action": "send_email",
+                    "to": to,
+                    "subject": subject,
+                    "draft_only": draft_only,
+                    "result_status": result.get("status"),
+                    "message_id": result.get("id"),
+                },
+            )
+            return result
+        except Exception as exc:
+            audit.log_operation(
+                "mcp_send_email_failed",
+                {"action": "send_email", "to": to, "subject": subject, "draft_only": draft_only, "error": str(exc)},
+            )
+            raise
 
     def _send_telegram_now(self, message: str) -> dict[str, Any]:
         return {"status": "not_configured", "connector": "telegram_mcp", "action": "send_telegram", "size": len(message)}

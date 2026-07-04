@@ -1,11 +1,14 @@
 import pytest
 
 from src.confirmation import get_confirmation
+from src.google_client_fake import GoogleClientFake
 from src.mcp_client import MCPClient, NeedsConfirmationError
 
 
-def test_send_email_requires_confirmation():
-    client = MCPClient()
+def test_send_email_requires_confirmation(monkeypatch, tmp_path):
+    monkeypatch.setenv("RALF_CONFIRMATION_DB_PATH", str(tmp_path / "confirmations.sqlite"))
+    monkeypatch.setenv("RALF_MCP_GOOGLE_ENABLED", "1")
+    client = MCPClient(google_client=GoogleClientFake())
 
     with pytest.raises(NeedsConfirmationError) as exc:
         client.send_email("user@example.invalid", "Subject", "Body")

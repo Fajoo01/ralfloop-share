@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from uuid import uuid4
 
 from ralfloop_agent.integration.capability_adapter import route_task
 from ralfloop_agent.models.result_envelope import ResultEnvelope
@@ -13,9 +14,12 @@ from src.models import PatchEvidence
 
 def run_capability_reasoning_cycle(user_goal: str, context: dict | None = None) -> ResultEnvelope:
     context = dict(context or {})
+    task_id = str(context.get("task_id") or uuid4())
     route = route_task(user_goal, context.get("mode"))
-    executor = ShellExecutor()
+    executor = ShellExecutor(task_id=task_id)
     mcp = MCPClient()
+    meta = {"timestamp": datetime.now().isoformat(), "source": "capability_reasoning_cycle", "task_id": task_id}
+    audit.log_operation("sandbox_initialized", {"task_id": task_id, "sandbox_path": str(executor.base_dir)})
 
     if route.mode == "check_only":
         evidence = executor.run_in_sandbox(["ls", "-la"], cwd=".")
@@ -23,7 +27,7 @@ def run_capability_reasoning_cycle(user_goal: str, context: dict | None = None) 
             route=route,
             evidence=evidence,
             answer="check_only evidence collected",
-            meta={"timestamp": datetime.now().isoformat(), "source": "capability_reasoning_cycle"},
+            meta=meta,
         )
         audit.log_operation("reasoning_cycle_check_only", envelope.model_dump(mode="json"))
         return envelope
@@ -43,7 +47,7 @@ def run_capability_reasoning_cycle(user_goal: str, context: dict | None = None) 
             route=route,
             evidence=patch,
             answer="patch_allowed requires repro, diff and tests",
-            meta={"timestamp": datetime.now().isoformat(), "source": "capability_reasoning_cycle"},
+            meta=meta,
         )
         audit.log_operation("reasoning_cycle_patch_allowed", envelope.model_dump(mode="json"))
         return envelope
@@ -62,18 +66,25 @@ def run_capability_reasoning_cycle(user_goal: str, context: dict | None = None) 
             confirmation=confirmation,
             answer="human_confirmation_required",
             meta={
-                "timestamp": datetime.now().isoformat(),
-                "source": "capability_reasoning_cycle",
+                **meta,
                 "confirmation_id": exc.confirmation_id,
             },
         )
         audit.log_operation("reasoning_cycle_confirmation_required", envelope.model_dump(mode="json"))
         return envelope
+    except Exception as exc:
+        envelope = ResultEnvelope(
+            route=route,
+            answer="external_action_failed",
+            meta={**meta, "error": str(exc)},
+        )
+        audit.log_operation("reasoning_cycle_external_failed", envelope.model_dump(mode="json"))
+        return envelope
 
     envelope = ResultEnvelope(
         route=route,
         answer="external action completed",
-        meta={"timestamp": datetime.now().isoformat(), "source": "capability_reasoning_cycle"},
+        meta=meta,
     )
     audit.log_operation("reasoning_cycle_external_completed", envelope.model_dump(mode="json"))
     return envelope

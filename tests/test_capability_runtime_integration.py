@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from openshell_backend.app import app
 from ralfloop_agent.integration.capability_adapter import route_task, route_to_legacy_dict
 from ralfloop_agent.models.result_envelope import ResultEnvelope
+from ralfloop_agent.nodes.reasoning import run_capability_reasoning_cycle
 from src.models import Evidence
 
 
@@ -58,7 +59,8 @@ def test_openshell_route_only_uses_integration_adapter():
     assert payload["result_envelope"]["route"]["mode"] == "check_only"
 
 
-def test_openshell_external_action_requires_confirmation_before_runtime():
+def test_openshell_external_action_requires_confirmation_before_runtime(monkeypatch, tmp_path):
+    monkeypatch.setenv("RALF_CONFIRMATION_DB_PATH", str(tmp_path / "confirmations.sqlite"))
     response = client.post(
         "/tasks/run",
         json={"user_goal": "usa bandi e invia email alla Regione Lombardia"},
@@ -77,3 +79,26 @@ def test_openshell_external_action_requires_confirmation_before_runtime():
     approval = client.post(f"/confirmations/{payload['pending_confirmation_id']}/approve")
     assert approval.status_code == 200
     assert approval.json()["executed"] is True
+
+
+def test_reasoning_cycle_uses_task_id_sandbox(tmp_path, monkeypatch):
+    monkeypatch.setenv("RALF_SANDBOX_PATH", str(tmp_path))
+    monkeypatch.setenv("RALF_AUDIT_PATH", str(tmp_path / "audit.jsonl"))
+
+    envelope = run_capability_reasoning_cycle("controlla log", {"task_id": "task-abc"})
+
+    assert envelope.meta["task_id"] == "task-abc"
+    assert envelope.evidence is not None
+    assert envelope.evidence.path == str((tmp_path / "task-abc").resolve())
+    assert envelope.model_dump(mode="json")["route"]["mode"] == "check_only"
+    assert "sandbox_initialized" in (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+
+
+def test_reasoning_cycle_mcp_error_goes_to_envelope(tmp_path, monkeypatch):
+    monkeypatch.setenv("RALF_AUDIT_PATH", str(tmp_path / "audit.jsonl"))
+    monkeypatch.setenv("RALF_MCP_GOOGLE_ENABLED", "0")
+
+    envelope = run_capability_reasoning_cycle("invia email finale", {"task_id": "task-error"})
+
+    assert envelope.answer == "external_action_failed"
+    assert "Google Email MCP is disabled" in envelope.meta["error"]
