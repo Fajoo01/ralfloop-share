@@ -1,29 +1,35 @@
 from __future__ import annotations
 
 from pathlib import Path
+from collections.abc import Sequence
 import logging
 import shlex
 import subprocess
-import tempfile
 
 from src.models import Evidence
 
 logger = logging.getLogger(__name__)
+SANDBOX_PATH = Path("/tmp/ralf_sandbox")
 
 
 class ShellExecutor:
-    def __init__(self, base_dir: str | Path | None = None, timeout_sec: int = 20) -> None:
-        self.base_dir = Path(base_dir or tempfile.mkdtemp(prefix="ralf_capability_")).resolve()
+    def __init__(self, base_dir: str | Path | None = None, timeout_sec: int = 30) -> None:
+        self.base_dir = Path(base_dir or SANDBOX_PATH).resolve()
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.timeout_sec = timeout_sec
 
-    def run(self, command: str, cwd: str | None = None) -> Evidence:
+    def run(self, command: str | Sequence[str], cwd: str | None = None) -> Evidence:
+        argv = self._command_to_argv(command)
+        return self.run_in_sandbox(argv, cwd=cwd)
+
+    def run_in_sandbox(self, command: Sequence[str], cwd: str | None = None) -> Evidence:
         safe_cwd = self._safe_cwd(cwd)
-        logger.info("shell_run command=%r cwd=%s", command, safe_cwd)
+        argv = [str(part) for part in command]
+        command_text = shlex.join(argv)
+        logger.info("shell_run command=%r cwd=%s", command_text, safe_cwd)
         try:
-            argv = shlex.split(command)
             if not argv:
-                return Evidence(command=command, path=str(safe_cwd), exit_code=2, stderr="empty command")
+                return Evidence(command="", path=str(safe_cwd), exit_code=2, stderr="empty command")
             completed = subprocess.run(
                 argv,
                 cwd=safe_cwd,
@@ -34,7 +40,7 @@ class ShellExecutor:
                 check=False,
             )
             return Evidence(
-                command=command,
+                command=command_text,
                 path=str(safe_cwd),
                 exit_code=completed.returncode,
                 stdout=completed.stdout,
@@ -42,22 +48,29 @@ class ShellExecutor:
             )
         except subprocess.TimeoutExpired as exc:
             return Evidence(
-                command=command,
+                command=command_text,
                 path=str(safe_cwd),
-                exit_code=124,
+                exit_code=-1,
                 stdout=exc.stdout if isinstance(exc.stdout, str) else None,
-                stderr=f"timeout after {self.timeout_sec}s",
+                stderr=f"Timeout after {self.timeout_sec}s: {exc.stderr or ''}",
             )
         except Exception as exc:
-            return Evidence(command=command, path=str(safe_cwd), exit_code=1, stderr=str(exc))
+            return Evidence(command=command_text, path=str(safe_cwd), exit_code=1, stderr=str(exc))
 
     def _safe_cwd(self, cwd: str | None) -> Path:
         if cwd is None:
             return self.base_dir
-        candidate = (self.base_dir / cwd).resolve() if not Path(cwd).is_absolute() else Path(cwd).resolve()
+        raw = Path(cwd)
+        candidate = (self.base_dir / raw).resolve() if not raw.is_absolute() else raw.resolve()
         try:
             candidate.relative_to(self.base_dir)
         except ValueError as exc:
             raise ValueError(f"cwd escapes sandbox: {cwd}") from exc
         candidate.mkdir(parents=True, exist_ok=True)
         return candidate
+
+    @staticmethod
+    def _command_to_argv(command: str | Sequence[str]) -> list[str]:
+        if isinstance(command, str):
+            return shlex.split(command)
+        return [str(part) for part in command]

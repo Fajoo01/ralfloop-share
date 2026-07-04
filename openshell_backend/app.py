@@ -1003,9 +1003,63 @@ def _probe_mediaset_with_fallback(channel_id: str, source_page: str) -> dict:
 def run_task(req: TaskRunRequest):
     import json as _json
     import re as _re
+    from ralfloop_agent.integration.capability_adapter import route_task, route_to_legacy_dict
+    from ralfloop_agent.models.result_envelope import ResultEnvelope
 
     low_goal = (req.user_goal or "").lower()
     low_skill = (req.skill_context or "").lower()
+    route_model = route_task(req.user_goal, req.mode)
+    capability_route = route_to_legacy_dict(route_model)
+
+    if req.mode == "route_only" or (req.extra_context or {}).get("route_only") is True:
+        envelope = ResultEnvelope(
+            route=route_model,
+            answer="route_only",
+            meta={"source": "capability_adapter", "mode": req.mode},
+        )
+        return {
+            "ok": True,
+            "mode": req.mode,
+            "current_role": "capability_router",
+            "role_history": ["capability_router"],
+            "stop_reason": "route_only",
+            "capability_route": capability_route,
+            "result_envelope": envelope.model_dump(mode="json"),
+            "final_answer": _json.dumps(capability_route, ensure_ascii=False, indent=2),
+            "artifacts": [],
+            "audit_summary": ["capability_router::route_only"],
+        }
+
+    if route_model.requires_confirmation and not (req.extra_context or {}).get("human_confirmed"):
+        from ralfloop_agent.integration.confirmation_store import get_confirmation, request_confirmation
+        from src.models import Evidence
+
+        confirmation_id = request_confirmation(
+            "external_action",
+            {"user_goal": req.user_goal, "route": route_model.model_dump()},
+        )
+        confirmation = get_confirmation(confirmation_id)
+        evidence = Evidence(command="mcp:external_action", path="external", exit_code=0)
+        envelope = ResultEnvelope(
+            route=route_model,
+            evidence=evidence,
+            confirmation=confirmation,
+            answer="human_confirmation_required",
+            meta={"source": "capability_adapter", "mode": req.mode},
+        )
+        return {
+            "ok": False,
+            "mode": req.mode,
+            "current_role": "capability_router",
+            "role_history": ["capability_router"],
+            "stop_reason": "human_confirmation_required",
+            "capability_route": capability_route,
+            "result_envelope": envelope.model_dump(mode="json"),
+            "pending_confirmation_id": confirmation_id,
+            "final_answer": _json.dumps(envelope.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            "artifacts": [],
+            "audit_summary": ["capability_router::human_confirmation_required"],
+        }
 
     if (
         "stream probe" in low_goal
@@ -1333,12 +1387,16 @@ def run_task(req: TaskRunRequest):
         logger=logger,
     )
 
+    extra_context = dict(req.extra_context or {})
+    extra_context.setdefault("capability_route", capability_route)
+
     state = agent.run(
         user_goal=req.user_goal,
         constraints=[],
         context={
             "skill_context": req.skill_context or "",
-            "extra_context": req.extra_context or {},
+            "extra_context": extra_context,
+            "capability_route": capability_route,
             "planner_model_profile": req.planner_model_profile,
             "coder_model_profile": req.coder_model_profile,
             "judge_model_profile": req.judge_model_profile,
@@ -1369,6 +1427,12 @@ def run_task(req: TaskRunRequest):
     state.coder_rag_collection = req.coder_rag_collection
     state.judge_rag_collection = req.judge_rag_collection
 
+    envelope = ResultEnvelope(
+        route=route_model,
+        answer=state.final_answer,
+        meta={"source": "ralfloop_agent", "stop_reason": state.stop_reason},
+    )
+
     return {
         "ok": state.status == "completed",
         "mode": req.mode,
@@ -1390,7 +1454,40 @@ def run_task(req: TaskRunRequest):
         "current_role": state.current_role,
         "role_history": state.role_history,
         "stop_reason": state.stop_reason,
+        "capability_route": capability_route,
+        "result_envelope": envelope.model_dump(mode="json"),
         "final_answer": state.final_answer,
         "artifacts": state.artifacts,
         "audit_summary": state.audit_summary,
+    }
+
+
+@app.post("/confirmations/{confirmation_id}/approve")
+def approve_confirmation(confirmation_id: str):
+    from ralfloop_agent.integration.confirmation_store import confirm_action, get_confirmation
+    from ralfloop_agent.integration.capability_adapter import mcp_client
+
+    ok = confirm_action(confirmation_id)
+    if not ok:
+        return {"ok": False, "confirmation_id": confirmation_id, "executed": False}
+    confirmation = get_confirmation(confirmation_id)
+    return {
+        "ok": True,
+        "confirmation_id": confirmation_id,
+        "executed": True,
+        "confirmation": confirmation.__dict__ if confirmation else None,
+        "message": mcp_client.execute_confirmed(confirmation_id),
+    }
+
+
+@app.post("/confirmations/{confirmation_id}/reject")
+def reject_confirmation(confirmation_id: str):
+    from ralfloop_agent.integration.confirmation_store import reject_action, get_confirmation
+
+    ok = reject_action(confirmation_id)
+    confirmation = get_confirmation(confirmation_id)
+    return {
+        "ok": ok,
+        "confirmation_id": confirmation_id,
+        "confirmation": confirmation.__dict__ if confirmation else None,
     }
