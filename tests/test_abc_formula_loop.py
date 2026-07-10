@@ -574,3 +574,62 @@ Investimento familiare e logistica affettiva gia genericamente etichettati.
     assert sum(1 for item in result["evidence"] if item["id"] == "autoinvito_familiare") == 1
     boundary = next(item for item in result["evidence"] if item["id"] == "boundary_limite_contatto_attivazione")
     assert boundary["weight"] < 0
+
+
+def test_llm_partial_extraction_cannot_remove_deterministic_atoms(tmp_path: Path, monkeypatch):
+    def partial_llm(_report_text, _weights):
+        return {
+            "event_id": "event_partial_llm",
+            "facts": ["LLM saw only AntonLuca."],
+            "interpretations": [],
+            "counter_evidence": [],
+            "evidence_atoms": [
+                {
+                    "id": "relazione_aperta_rifiutata_da_arianna",
+                    "kind": "observed_fact",
+                    "confidence": 0.9,
+                    "supporting_facts": ["Arianna non accetta la relazione aperta."],
+                    "cap_interactions": ["third_pressure_down"],
+                }
+            ],
+            "bounded_delta_suggestion": {"prudential_delta": 0.0, "reason": ""},
+            "warnings": ["partial_llm_test"],
+        }
+
+    monkeypatch.setattr(afl, "_extract_semantic_atoms_via_ollama", partial_llm)
+    result = _score(
+        """
+## formula_scoring_input
+
+### current_facts
+Fabio non e stato invitato nella scena sociale esterna. social_exclusion_cap resta attivo.
+Investimento familiare e logistica affettiva gia genericamente etichettati.
+
+### event_2026_07_08_sera
+- Chiamata dalla finestra.
+- Richiesta stampa.
+- Stampa + accompagnamento spedizione.
+- Autoinvito da tua madre.
+- Mangiare davvero e si convinto al mangiare.
+- Permanenza 20:14-21:16, circa 1h.
+- Scioltezza familiare.
+- Proposta mele in giardino.
+- Limite corporeo solo situazionale: quando arrabbiata/stressata dice non toccare e il contatto fisico peggiora.
+
+### event_2026_07_09_sera
+Arianna dice che AntonLuca vuole una relazione aperta. Arianna non accetta la relazione aperta.
+""",
+        tmp_path,
+    )
+    ids = {item["id"] for item in result["evidence"]}
+
+    assert {
+        "autoinvito_familiare",
+        "permanenza_familiare_reale",
+        "gancio_futuro_domestico",
+        "conversione_logistica_in_presenza",
+        "boundary_limite_contatto_attivazione",
+        "relazione_aperta_rifiutata_da_arianna",
+    } <= ids
+    assert "partial_llm_test" in result["llm_evidence_extraction"]["warnings"]
+    assert "llm_semantic_extractor_merged_non_destructive" in result["llm_evidence_extraction"]["warnings"]

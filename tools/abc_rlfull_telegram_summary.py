@@ -9,38 +9,37 @@ import subprocess
 from pathlib import Path
 
 
-ROOT = Path("/home/sibilla-cumana/ralfloop_agent_scaffold")
+ROOT = Path(os.environ.get("RALFLOOP_ROOT", Path(__file__).resolve().parents[1])).resolve()
+RUN_DIR = Path(os.environ.get("RALFLOOP_RUN_DIR", ROOT / ".ralf_run")).resolve()
+MEMORY_DIR = Path(os.environ.get("ABC_MEMORY_DIR", ROOT / "abc_memory")).resolve()
+
+
+def configure_extractor() -> None:
+    use_llm = os.environ.get("ABC_USE_LLM_EXTRACTOR", "").lower() in {"1", "true", "yes", "on"}
+    if not use_llm:
+        os.environ.setdefault("ABC_DISABLE_LLM_EXTRACTOR", "1")
 
 
 def main() -> int:
-    env = {**os.environ, "PYTHONPATH": str(ROOT)}
-    proc = subprocess.run(
-        [
-            str(ROOT / ".venv/bin/python"),
-            "-m",
-            "openshell_backend.skills.abc_formula_loop",
-            "score",
-        ],
-        cwd=str(ROOT),
-        text=True,
-        timeout=60,
-        capture_output=True,
-        env=env,
-    )
-
-    if proc.returncode != 0:
-        msg = "RSC/ABC errore ABC Formula Loop"
-        if proc.stderr:
-            msg += "\n\nSTDERR:\n" + proc.stderr.strip()[-2500:]
-        if proc.stdout:
-            msg += "\n\nSTDOUT:\n" + proc.stdout.strip()[-1200:]
-        print(msg[:3900])
-        return 0
-
     try:
-        data = json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:
-        print(("RSC/ABC JSON non valido: " + repr(exc) + "\n\n" + proc.stdout[-2500:])[:3900])
+        import sys
+
+        configure_extractor()
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from openshell_backend.skills import abc_formula_loop, abc_memory
+
+        context = abc_memory.build_current_context(MEMORY_DIR, RUN_DIR)
+        scoring_text = context.get("formula_scoring_input") or context.get("merged_current_context") or ""
+        data = abc_formula_loop.score_text(
+            scoring_text,
+            report_path=None,
+            memory_dir=MEMORY_DIR,
+            evidence_cache_path=RUN_DIR / "last_evidence.json",
+            force_extract=False,
+        )
+    except Exception as exc:
+        print(("RSC/ABC errore ABC Formula Loop: " + repr(exc))[:3900])
         return 0
 
     flags = data.get("bias_flags") or []
@@ -61,7 +60,33 @@ def main() -> int:
         reply += "\nFlag: " + ", ".join(map(str, flags)) + "\n"
 
     if trace:
-        top = trace[:3]
+        priority_ids = {
+            "micro_riparazione_privata",
+            "cena_1_1_domestica",
+            "auto_invito_implicito_cibo",
+            "logistica_convertita_in_convivialita",
+            "soglia_prolungata",
+            "comfort_silenzi_soglia",
+            "deflazione_frame_camper",
+            "mancato_aggancio_mare_vacanza",
+            "campo_bestia_agosto",
+            "contenuti_personali_1_1",
+            "contatto_tollerato",
+            "mancato_invito_sociale",
+            "autoinvito_familiare",
+            "permanenza_familiare_reale",
+            "gancio_futuro_domestico",
+            "conversione_logistica_in_presenza",
+            "boundary_limite_contatto_attivazione",
+            "relazione_aperta_rifiutata_da_arianna",
+            "rottura_narrativa_antonluca",
+            "svalutazione_terzo_esplicita",
+            "third_degradation",
+            "rebound_risk_high",
+        }
+        priority = [item for item in trace if item.get("id") in priority_ids]
+        rest = [item for item in trace if item.get("id") not in priority_ids]
+        top = (priority + rest)[:12]
         reply += "\nTrace:\n"
         for item in top:
             reply += (

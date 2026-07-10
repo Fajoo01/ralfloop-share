@@ -21,7 +21,7 @@ from typing import Any, Iterable, Sequence
 
 
 FORMULA_VERSION = "abc_formula_loop_v1"
-EXTRACTOR_VERSION = "abc_rule_extractor_v2_semantic_atoms"
+EXTRACTOR_VERSION = "abc_rule_extractor_v4_merged_semantic_cache"
 REPORT_SECTION = "## ABC Formula Loop"
 LEGACY_SUMMARY_SECTION = "## ABC / Relcalc deterministic summary"
 FORMULA_SCORING_INPUT_SECTION = "## formula_scoring_input"
@@ -39,6 +39,11 @@ SEMANTIC_ATOM_DEFAULT_WEIGHTS = {
     "observed_fact:gancio_futuro_domestico": 2.0,
     "observed_fact:conversione_logistica_in_presenza": 2.0,
     "boundary:boundary_limite_contatto_attivazione": -1.2,
+    "observed_fact:relazione_aperta_rifiutata_da_arianna": 2.8,
+    "inference:rottura_narrativa_antonluca": 2.0,
+    "observed_fact:svalutazione_terzo_esplicita": 1.4,
+    "inference:third_degradation": 1.7,
+    "boundary:rebound_risk_high": -1.2,
 }
 
 EVIDENCE_KINDS = {
@@ -48,6 +53,21 @@ EVIDENCE_KINDS = {
     "external_signal",
     "operational_constraint",
     "boundary",
+}
+
+SEMANTIC_ATOM_CANONICAL_KINDS = {
+    "autoinvito_familiare": "observed_fact",
+    "permanenza_familiare_reale": "observed_fact",
+    "gancio_futuro_domestico": "observed_fact",
+    "conversione_logistica_in_presenza": "observed_fact",
+    "boundary_limite_contatto_attivazione": "boundary",
+    "relazione_aperta_rifiutata_da_arianna": "observed_fact",
+    "rottura_narrativa_antonluca": "inference",
+    "svalutazione_terzo_esplicita": "observed_fact",
+    "third_degradation": "inference",
+    "rebound_risk_high": "boundary",
+    "social_exclusion_cap": "external_signal",
+    "opacita_terzo": "contradiction",
 }
 
 
@@ -353,7 +373,7 @@ EVIDENCE_RULES: tuple[EvidenceRule, ...] = (
         "contradiction",
         "contradiction:opacita_terzo",
         "Third-person opacity remains active.",
-        ("opacita terzo", "terzo opaco", "vincenzo", "antonluca"),
+        ("opacita terzo", "terzo opaco", "nodo opaco", "terzo resta opaco", "terzo non nominato", "terzo omesso"),
         "relation_manual_v1:Bowen triangulation",
         0.7,
     ),
@@ -716,6 +736,312 @@ def _add_semantic_atom(
     }
 
 
+
+def _llm_semantic_window(report_text: str, max_chars: int = 6000) -> str:
+    """Keep the LLM input focused without turning extraction into scoring."""
+    if len(report_text) <= max_chars:
+        return report_text
+
+    low = normalize_text(report_text)
+    anchors = (
+        "relazione aperta",
+        "antonluca",
+        "aggiornamento 2026-07-09 sera",
+        "rottura narrativa",
+        "rebound",
+    )
+    positions = [low.rfind(anchor) for anchor in anchors if low.rfind(anchor) >= 0]
+    if positions:
+        center = max(positions)
+        start = max(0, center - max_chars // 2)
+        end = min(len(report_text), start + max_chars)
+        return report_text[start:end]
+
+    return report_text[-max_chars:]
+
+
+def _semantic_atom_default_weight(kind: str, evidence_id: str, weights: dict[str, float]) -> float:
+    key = f"{kind}:{evidence_id}"
+    if key in weights:
+        return float(weights[key])
+    if key in SEMANTIC_ATOM_DEFAULT_WEIGHTS:
+        return float(SEMANTIC_ATOM_DEFAULT_WEIGHTS[key])
+    return 0.0
+
+
+def _extract_semantic_atoms_via_ollama(
+    report_text: str,
+    weights: dict[str, float],
+) -> dict[str, Any] | None:
+    """Local LLM semantic extractor only.
+
+    LLM extracts atoms/facts/counter-evidence.
+    Formula still owns score/range/action.
+    """
+    import os
+    import urllib.error
+    import urllib.request
+
+    use_llm = os.environ.get("ABC_USE_LLM_EXTRACTOR", "").lower() in {"1", "true", "yes", "on"}
+    if os.environ.get("ABC_DISABLE_LLM_EXTRACTOR") == "1" or not use_llm:
+        return None
+
+    model = os.environ.get("ABC_LLM_EXTRACTOR_MODEL", "qwen2.5:7b")
+    url = os.environ.get("ABC_OLLAMA_URL", "http://127.0.0.1:11434/api/generate")
+    timeout = float(os.environ.get("ABC_LLM_EXTRACTOR_TIMEOUT", "180"))
+    text = _llm_semantic_window(report_text, max_chars=3500)
+
+    allowed_atoms = {
+        "autoinvito_familiare",
+        "permanenza_familiare_reale",
+        "gancio_futuro_domestico",
+        "conversione_logistica_in_presenza",
+        "boundary_limite_contatto_attivazione",
+        "relazione_aperta_rifiutata_da_arianna",
+        "rottura_narrativa_antonluca",
+        "svalutazione_terzo_esplicita",
+        "third_degradation",
+        "rebound_risk_high",
+        "social_exclusion_cap",
+        "opacita_terzo",
+    }
+
+    prompt = f"""
+Sei un estrattore semantico. Devi valutare UNO PER UNO gli evidence atoms.
+Rispondi SOLO JSON valido. Non produrre score, range o azioni.
+
+Schema:
+{{"facts":[],"interpretations":[],"counter_evidence":[],"evidence_atoms":[],"warnings":[]}}
+
+Ogni evidence_atom presente:
+{{"id":"...","kind":"...","confidence":0.0,"supporting_facts":["frase testuale"],"cap_interactions":[]}}
+
+CHECKLIST OBBLIGATORIA:
+- relazione_aperta_rifiutata_da_arianna:
+  presente se nel testo c'è relazione aperta + Arianna non accetta/rifiuta/non ci sta.
+  Nota: "Fabio chiarisce che il dato va letto come certo" vale come dato certo del report.
+  kind observed_fact.
+
+- rottura_narrativa_antonluca:
+  presente se Arianna nomina AntonLuca a Fabio o verbalizza il nodo AntonLuca.
+  kind inference.
+
+- svalutazione_terzo_esplicita:
+  presente se Arianna svaluta AntonLuca o dice "voglio vedere che cessi trova".
+  kind observed_fact.
+
+- third_degradation:
+  presente se AntonLuca viene presentato come degradato, rifiutato, incompatibile o svalutato.
+  kind inference.
+
+- rebound_risk_high:
+  presente se il degrado/rottura del terzo è recente e quindi Fabio non deve spingere.
+  kind boundary.
+
+- social_exclusion_cap:
+  presente se manca inclusione sociale esterna/pubblica di Fabio.
+  kind external_signal.
+
+- opacita_terzo:
+  presente SOLO se il terzo resta nascosto/omesso/opaco.
+  NON presente se AntonLuca viene nominato e degradato.
+
+Regole:
+1. Ogni atom presente deve avere almeno una frase testuale in supporting_facts.
+2. "AntonLuca" da solo non significa opacità.
+3. Rottura del terzo non significa scelta automatica di Fabio.
+4. Se una frase supporta più atoms, puoi riusarla.
+
+TESTO:
+{text}
+"""
+
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+        "format": "json",
+        "options": {
+            "temperature": 0,
+            "num_ctx": 4096,
+            "num_predict": 600,
+        },
+    }
+
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = json.loads(resp.read().decode("utf-8"))
+        parsed = json.loads(raw.get("response") or "{}")
+    except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError):
+        return None
+
+    facts = parsed.get("facts", [])
+    interpretations = parsed.get("interpretations", [])
+    counter_evidence = parsed.get("counter_evidence", [])
+    warnings = parsed.get("warnings", [])
+    raw_atoms = parsed.get("evidence_atoms", [])
+
+    if not isinstance(facts, list):
+        facts = []
+    if not isinstance(interpretations, list):
+        interpretations = []
+    if not isinstance(counter_evidence, list):
+        counter_evidence = []
+    if not isinstance(warnings, list):
+        warnings = []
+    if not isinstance(raw_atoms, list):
+        raw_atoms = []
+
+    atoms: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for atom in raw_atoms:
+        if not isinstance(atom, dict):
+            continue
+
+        evidence_id = str(atom.get("id") or "").strip()
+        if evidence_id not in allowed_atoms or evidence_id in seen:
+            continue
+
+        supporting_facts = atom.get("supporting_facts", [])
+        if not isinstance(supporting_facts, list):
+            supporting_facts = []
+        supporting_facts = [str(x).strip() for x in supporting_facts if str(x).strip()]
+
+        # Guardrail: LLM atoms without textual support are discarded.
+        if not supporting_facts:
+            continue
+
+        kind = SEMANTIC_ATOM_CANONICAL_KINDS.get(
+            evidence_id,
+            str(atom.get("kind") or "inference"),
+        )
+        if kind not in EVIDENCE_KINDS:
+            kind = "inference"
+
+        try:
+            confidence = float(atom.get("confidence", 0.7))
+        except (TypeError, ValueError):
+            confidence = 0.7
+        confidence = max(0.0, min(1.0, confidence))
+
+        cap_interactions = atom.get("cap_interactions", [])
+        if not isinstance(cap_interactions, list):
+            cap_interactions = []
+
+        atoms.append({
+            "id": evidence_id,
+            "kind": kind,
+            "weight_suggestion": _semantic_atom_default_weight(kind, evidence_id, weights),
+            "confidence": confidence,
+            "supporting_facts": supporting_facts[:8],
+            "cap_interactions": [str(x) for x in cap_interactions[:8]],
+        })
+        seen.add(evidence_id)
+
+    atom_ids = {atom["id"] for atom in atoms}
+    if "third_degradation" in atom_ids and "rebound_risk_high" not in atom_ids:
+        third_support = []
+        for atom in atoms:
+            if atom["id"] == "third_degradation":
+                third_support = list(atom.get("supporting_facts", []))
+                break
+        atoms.append({
+            "id": "rebound_risk_high",
+            "kind": "boundary",
+            "weight_suggestion": _semantic_atom_default_weight(
+                "boundary",
+                "rebound_risk_high",
+                weights,
+            ),
+            "confidence": 0.78,
+            "supporting_facts": third_support or [
+                "Third node degradation detected by semantic extractor."
+            ],
+            "cap_interactions": [
+                "do_not_push",
+                "no_definition",
+                "no_physical_escalation",
+            ],
+        })
+
+    if not atoms:
+        return None
+
+    return {
+        "event_id": f"event_{sha256_text(report_text)[:12]}",
+        "facts": [str(x) for x in facts[:20]],
+        "interpretations": [str(x) for x in interpretations[:20]],
+        "counter_evidence": [str(x) for x in counter_evidence[:20]],
+        "evidence_atoms": atoms,
+        "bounded_delta_suggestion": {
+            "prudential_delta": 0.0,
+            "reason": "Local LLM proposes evidence atoms only; deterministic formula owns final score, range, and action.",
+        },
+        "warnings": [str(x) for x in warnings[:20]] + [f"llm_semantic_extractor_used:{model}"],
+    }
+
+
+def _merge_semantic_extractions(
+    base: dict[str, Any],
+    extra: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not extra:
+        return base
+
+    merged = dict(base)
+    for key in ("facts", "interpretations", "counter_evidence", "warnings"):
+        values: list[str] = []
+        for source in (base, extra):
+            for item in source.get(key, []) or []:
+                text = str(item)
+                if text not in values:
+                    values.append(text)
+        merged[key] = values
+
+    atoms_by_id: dict[str, dict[str, Any]] = {
+        str(atom.get("id")): dict(atom)
+        for atom in base.get("evidence_atoms", []) or []
+        if isinstance(atom, dict) and atom.get("id")
+    }
+    for atom in extra.get("evidence_atoms", []) or []:
+        if not isinstance(atom, dict) or not atom.get("id"):
+            continue
+        evidence_id = str(atom["id"])
+        current = atoms_by_id.get(evidence_id)
+        if current is None:
+            atoms_by_id[evidence_id] = dict(atom)
+            continue
+
+        try:
+            current["confidence"] = max(float(current.get("confidence", 0.0)), float(atom.get("confidence", 0.0)))
+        except (TypeError, ValueError):
+            pass
+        for key in ("supporting_facts", "cap_interactions"):
+            values = list(current.get(key, []) or [])
+            for item in atom.get(key, []) or []:
+                text = str(item)
+                if text not in values:
+                    values.append(text)
+            current[key] = values
+
+    merged["evidence_atoms"] = list(atoms_by_id.values())
+    merged["event_id"] = base.get("event_id") or extra.get("event_id")
+    merged["bounded_delta_suggestion"] = base.get("bounded_delta_suggestion") or extra.get("bounded_delta_suggestion")
+    if extra.get("evidence_atoms"):
+        warnings = list(merged.get("warnings", []) or [])
+        if "llm_semantic_extractor_merged_non_destructive" not in warnings:
+            warnings.append("llm_semantic_extractor_merged_non_destructive")
+        merged["warnings"] = warnings
+    return merged
+
+
 def extract_llm_evidence_pre_scoring(report_text: str, weights: dict[str, float] | None = None) -> dict[str, Any]:
     """Return a bounded semantic-auditor schema without producing scores.
 
@@ -723,6 +1049,7 @@ def extract_llm_evidence_pre_scoring(report_text: str, weights: dict[str, float]
     output shape is the contract expected from a future local LLM extractor.
     """
     weights = weights or load_weights()
+    llm_extraction = _extract_semantic_atoms_via_ollama(report_text, weights)
     low = normalize_text(report_text)
     event_id = f"event_{sha256_text(report_text)[:12]}"
     facts: list[str] = []
@@ -768,6 +1095,49 @@ def extract_llm_evidence_pre_scoring(report_text: str, weights: dict[str, float]
     )
     generic_domestic_label = _has_any(low, ("investimento familiare", "campo domestico", "logistica affettiva", "routine familiare"))
 
+    third_name_antonluca = "antonluca" in low
+    open_relation_proposed = _has_any(
+        low,
+        (
+            "relazione aperta",
+            "vuole una relazione aperta",
+            "ha detto che vuole una relazione aperta",
+        ),
+    )
+    open_relation_rejected = open_relation_proposed and _has_any(
+        low,
+        (
+            "non accetta la relazione aperta",
+            "arianna non accetta",
+            "la rifiuta",
+            "rifiuta",
+            "non trattare la relazione aperta come ipotesi neutra",
+        ),
+    )
+    third_svalutazione = _has_any(
+        low,
+        (
+            "voglio vedere che cessi trova",
+            "cessi trova",
+            "svalutazione",
+            "svaluta",
+            "disprezzo",
+        ),
+    )
+    third_spontaneous_narration = third_name_antonluca and _has_any(
+        low,
+        (
+            "nomina antonluca",
+            "verbalizza a fabio",
+            "senza che fabio chieda",
+            "spontaneamente",
+            "senza connessione apparente",
+        ),
+    )
+    third_break = third_name_antonluca and open_relation_proposed and (
+        open_relation_rejected or third_svalutazione
+    )
+
     if window_call:
         facts.append("Call from the window observed.")
     if print_bridge:
@@ -788,6 +1158,16 @@ def extract_llm_evidence_pre_scoring(report_text: str, weights: dict[str, float]
         facts.append("Physical-contact boundary under anger or stress observed.")
     if social_cap:
         counter_evidence.append("No external social inclusion observed; social_exclusion_cap remains active.")
+    if open_relation_proposed:
+        facts.append("AntonLuca open-relationship proposal observed.")
+    if open_relation_rejected:
+        facts.append("Arianna rejection of open-relationship frame observed.")
+    if third_svalutazione:
+        facts.append("Explicit devaluation of third node observed.")
+    if third_spontaneous_narration:
+        facts.append("Spontaneous narration of AntonLuca node to Fabio observed.")
+    if third_break:
+        facts.append("Third node narrative break/degradation observed.")
 
     domestic_cap_interactions = ["social_exclusion_cap"] if social_cap else []
     if autoinvite and mother:
@@ -846,16 +1226,102 @@ def extract_llm_evidence_pre_scoring(report_text: str, weights: dict[str, float]
         )
         counter_evidence.append("Body boundary reduces physical push; it does not erase domestic-family positives.")
 
+    if open_relation_rejected:
+        _add_semantic_atom(
+            atoms_by_id,
+            evidence_id="relazione_aperta_rifiutata_da_arianna",
+            kind="observed_fact",
+            weight_suggestion=weights.get(
+                "observed_fact:relazione_aperta_rifiutata_da_arianna", 2.8
+            ),
+            confidence=0.9,
+            supporting_facts=[fact for fact in facts if "open-relationship" in fact],
+            cap_interactions=["third_pressure_down", "not_choice_fabio"],
+        )
+    if third_spontaneous_narration or third_break:
+        _add_semantic_atom(
+            atoms_by_id,
+            evidence_id="rottura_narrativa_antonluca",
+            kind="inference",
+            weight_suggestion=weights.get(
+                "inference:rottura_narrativa_antonluca", 2.0
+            ),
+            confidence=0.82,
+            supporting_facts=[
+                fact for fact in facts
+                if "AntonLuca" in fact or "narration" in fact or "break" in fact
+            ],
+            cap_interactions=[
+                "third_pressure_down",
+                "trust_narrativo_up",
+                "not_choice_fabio",
+            ],
+        )
+    if third_svalutazione:
+        _add_semantic_atom(
+            atoms_by_id,
+            evidence_id="svalutazione_terzo_esplicita",
+            kind="observed_fact",
+            weight_suggestion=weights.get(
+                "observed_fact:svalutazione_terzo_esplicita", 1.4
+            ),
+            confidence=0.86,
+            supporting_facts=[fact for fact in facts if "devaluation" in fact],
+            cap_interactions=["third_pressure_down"],
+        )
+    if third_break:
+        _add_semantic_atom(
+            atoms_by_id,
+            evidence_id="third_degradation",
+            kind="inference",
+            weight_suggestion=weights.get("inference:third_degradation", 1.7),
+            confidence=0.82,
+            supporting_facts=[
+                fact for fact in facts
+                if "Third node" in fact or "open-relationship" in fact
+            ],
+            cap_interactions=["third_pressure_down", "not_choice_fabio"],
+        )
+        _add_semantic_atom(
+            atoms_by_id,
+            evidence_id="rebound_risk_high",
+            kind="boundary",
+            weight_suggestion=weights.get("boundary:rebound_risk_high", -1.2),
+            confidence=0.78,
+            supporting_facts=[
+                fact for fact in facts
+                if "Third node" in fact or "open-relationship" in fact
+            ],
+            cap_interactions=[
+                "do_not_push",
+                "no_definition",
+                "no_physical_escalation",
+            ],
+        )
+        counter_evidence.append(
+            "Third-node degradation raises rebound risk; it must not be "
+            "converted into choice-Fabio certainty."
+        )
+
     if atoms_by_id and social_cap:
         interpretations.append("Domestic-family positives are scored under social_exclusion_cap, not as external social inclusion.")
     if contact_boundary:
         interpretations.append("Contact limit is situational and should constrain physical escalation.")
+    if third_break:
+        interpretations.append(
+            "AntonLuca node is degraded by rejected open-relationship frame, "
+            "but this is not automatic choice of Fabio."
+        )
+        interpretations.append(
+            "Rebound risk is high: keep do_nothing_active and avoid "
+            "definition/escalation."
+        )
     if generic_domestic_label and len(atoms_by_id) >= 2:
         warnings.append("event_underweighted_generic_domestic_label")
     if atoms_by_id and not any(atom["supporting_facts"] for atom in atoms_by_id.values()):
         warnings.append("semantic_atoms_need_fact_support")
 
-    return {
+    deterministic_extraction = {
         "event_id": event_id,
         "facts": facts,
         "interpretations": interpretations,
@@ -867,6 +1333,7 @@ def extract_llm_evidence_pre_scoring(report_text: str, weights: dict[str, float]
         },
         "warnings": warnings,
     }
+    return _merge_semantic_extractions(deterministic_extraction, llm_extraction)
 
 
 def _semantic_extraction_to_evidence(
@@ -883,14 +1350,34 @@ def _semantic_extraction_to_evidence(
         if evidence_id in seen:
             continue
         rule = rules.get(evidence_id)
-        if rule is None:
-            continue
-        item = _evidence_from_rule(rule, weights)
         try:
-            atom_confidence = float(atom.get("confidence", rule.confidence))
+            atom_confidence = float(
+                atom.get("confidence", rule.confidence if rule else 0.7)
+            )
         except (TypeError, ValueError):
-            atom_confidence = rule.confidence
-        item["confidence"] = min(rule.confidence, atom_confidence)
+            atom_confidence = rule.confidence if rule else 0.7
+        if rule is None:
+            kind = str(atom.get("kind") or "inference")
+            if kind not in EVIDENCE_KINDS:
+                kind = "inference"
+            try:
+                atom_weight = float(atom.get("weight_suggestion", 0.0))
+            except (TypeError, ValueError):
+                atom_weight = 0.0
+            item = {
+                "id": evidence_id,
+                "kind": kind,
+                "text": evidence_id.replace("_", " "),
+                "weight_key": f"semantic_atom:{evidence_id}",
+                "weight": atom_weight,
+                "confidence": atom_confidence,
+                "manual_ref": "semantic_extractor_v3:bounded_pre_scoring_atom",
+                "matched_terms": [],
+                "tags": list(atom.get("cap_interactions", [])),
+            }
+        else:
+            item = _evidence_from_rule(rule, weights)
+            item["confidence"] = min(rule.confidence, atom_confidence)
         item["matched_terms"] = [str(fact) for fact in atom.get("supporting_facts", [])]
         item["llm_evidence_atom"] = {
             "id": evidence_id,
@@ -905,7 +1392,12 @@ def _semantic_extraction_to_evidence(
     return evidence
 
 
-def extract_evidence_rule_based(report_text: str, weights: dict[str, float] | None = None) -> list[dict[str, Any]]:
+def extract_evidence_rule_based(
+    report_text: str,
+    weights: dict[str, float] | None = None,
+    *,
+    semantic_extraction: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     weights = weights or load_weights()
     normalized = normalize_text(report_text)
     evidence: list[dict[str, Any]] = []
@@ -934,7 +1426,8 @@ def extract_evidence_rule_based(report_text: str, weights: dict[str, float] | No
         seen.add(evidence_id)
         evidence.append(item)
 
-    semantic_extraction = extract_llm_evidence_pre_scoring(report_text, weights)
+    if semantic_extraction is None:
+        semantic_extraction = extract_llm_evidence_pre_scoring(report_text, weights)
     for item in _semantic_extraction_to_evidence(semantic_extraction, weights):
         evidence_id = str(item.get("id") or "")
         if evidence_id in seen:
@@ -947,6 +1440,13 @@ def extract_evidence_rule_based(report_text: str, weights: dict[str, float] | No
     # classified as pure logistics. This preserves the anti-bias distinction:
     # logistics accepted passively != logistics converted by Arianna into conviviality.
     ids = {item.get("id") for item in evidence}
+    if {
+        "relazione_aperta_rifiutata_da_arianna",
+        "rottura_narrativa_antonluca",
+    }.issubset(ids) and "opacita_terzo" in ids:
+        evidence = [item for item in evidence if item.get("id") != "opacita_terzo"]
+        ids = {item.get("id") for item in evidence}
+
     if {
         "auto_invito_implicito_cibo",
         "logistica_convertita_in_convivialita",
@@ -989,6 +1489,7 @@ def read_cached_or_extract_evidence(
     cache_path: Path | None = DEFAULT_EVIDENCE_CACHE,
     force_extract: bool = False,
     weights: dict[str, float] | None = None,
+    semantic_extraction: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     report_hash = sha256_text(report_text)
     weights = weights or load_weights()
@@ -1010,15 +1511,24 @@ def read_cached_or_extract_evidence(
                 "report_sha256": report_hash,
                 "cache_path": str(cache_path),
                 "cache_hit": True,
+                "semantic_extraction": cached.get("semantic_extraction") or {},
             }
 
-    evidence = extract_evidence_rule_based(report_text, weights)
+    if semantic_extraction is None:
+        semantic_extraction = extract_llm_evidence_pre_scoring(report_text, weights)
+
+    evidence = extract_evidence_rule_based(
+        report_text,
+        weights,
+        semantic_extraction=semantic_extraction,
+    )
     cache_payload = {
         "formula_version": FORMULA_VERSION,
         "extractor_version": EXTRACTOR_VERSION,
         "weights_sha256": weights_hash,
         "report_sha256": report_hash,
         "evidence": evidence,
+        "semantic_extraction": semantic_extraction or {},
     }
     cache_write_error = None
     if cache_path:
@@ -1036,6 +1546,7 @@ def read_cached_or_extract_evidence(
         "cache_path": str(cache_path) if cache_path else None,
         "cache_hit": False,
         "cache_write_error": cache_write_error,
+        "semantic_extraction": semantic_extraction or {},
     }
 
 
@@ -1471,13 +1982,25 @@ def score_text(
 ) -> dict[str, Any]:
     weights = load_weights()
     scoring_text = select_scoring_text(report_text)
-    llm_evidence_extraction = extract_llm_evidence_pre_scoring(scoring_text, weights)
     evidence, cache_meta = read_cached_or_extract_evidence(
         scoring_text,
         cache_path=evidence_cache_path,
         force_extract=force_extract,
         weights=weights,
+        semantic_extraction=None,
     )
+    llm_evidence_extraction = cache_meta.get("semantic_extraction") or {
+        "event_id": f"event_{sha256_text(scoring_text)[:12]}",
+        "facts": [],
+        "interpretations": [],
+        "counter_evidence": [],
+        "evidence_atoms": [],
+        "bounded_delta_suggestion": {
+            "prudential_delta": 0.0,
+            "reason": "Evidence cache hit without semantic extraction payload.",
+        },
+        "warnings": ["semantic_extraction_unavailable_from_cache"],
+    }
     base_scores = calculate_scores(evidence)
     third_delta_assessment = assess_third_delta(scoring_text)
     scores = apply_bounded_delta_adjustment(base_scores, third_delta_assessment)
