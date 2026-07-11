@@ -9,6 +9,7 @@ from src.executor import ShellExecutor
 from src.mcp_client import MCPClient, NeedsConfirmationError
 from src.models import Evidence, PatchEvidence, TaskRequest, TaskResponse
 from src.router import CapabilityRouter
+from src.text_mas_proxy import build_text_mas_trace, summarize_text_mas_trace
 from src.skills import SkillsRegistry
 
 logging.basicConfig(level=logging.INFO)
@@ -24,19 +25,24 @@ mcp = MCPClient()
 @app.post("/tasks/run", response_model=TaskResponse)
 def run_task(request: TaskRequest) -> TaskResponse:
     route = router.route(request.user_goal)
+    collaboration_trace = build_text_mas_trace(request.user_goal, route)
     logger.info("task_route mode=%s goal=%r", route.mode, request.user_goal)
 
     if request.mode == "route_only":
-        return TaskResponse(route=route, evidence=None, message="route_only")
+        return _response(route=route, evidence=None, message="route_only", collaboration_trace=collaboration_trace)
 
     skill_messages = [skills_registry.run(skill, request.user_goal) for skill in route.skills_used]
+    collaboration_message = summarize_text_mas_trace(collaboration_trace)
+    if collaboration_message:
+        skill_messages.append(collaboration_message)
 
     if route.mode == "check_only":
         evidence = executor.run("ls -la")
-        return TaskResponse(
+        return _response(
             route=route,
             evidence=evidence,
             message=_join_messages("check_only evidence collected", skill_messages),
+            collaboration_trace=collaboration_trace,
         )
 
     if route.mode == "patch_allowed":
@@ -50,26 +56,30 @@ def run_task(request: TaskRequest) -> TaskResponse:
             diff="mock diff: no repository files changed",
             tests=["mock test: py_compile", "mock test: pytest targeted"],
         )
-        return TaskResponse(
+        return _response(
             route=route,
             evidence=patch_evidence,
             message=_join_messages("patch plan requires repro, minimal diff, targeted tests", skill_messages),
+            collaboration_trace=collaboration_trace,
         )
 
     evidence = Evidence(command="mcp:external_action", path="external", exit_code=0)
     try:
         message = _execute_external_action(request.user_goal)
-        return TaskResponse(
+        return _response(
             route=route,
             evidence=evidence,
             message=_join_messages(message, skill_messages),
+            collaboration_trace=collaboration_trace,
         )
     except NeedsConfirmationError as exc:
-        return TaskResponse(
+        return _response(
             route=route,
             evidence=evidence,
             message=_join_messages(f"pending confirmation for {exc.action_type}", skill_messages),
             pending_confirmation_id=exc.confirmation_id,
+            collaboration_trace=collaboration_trace,
+            human_confirmation={"pending_confirmation_id": exc.confirmation_id, "required": True},
         )
 
 
@@ -106,3 +116,26 @@ def _join_messages(primary: str, skill_messages: list[str]) -> str:
     if not skill_messages:
         return primary
     return primary + " | " + " | ".join(skill_messages)
+
+
+def _response(
+    *,
+    route,
+    evidence,
+    message: str,
+    collaboration_trace: dict | None,
+    pending_confirmation_id: str | None = None,
+    human_confirmation: dict | None = None,
+) -> TaskResponse:
+    return TaskResponse(
+        route=route,
+        evidence=evidence,
+        message=message,
+        pending_confirmation_id=pending_confirmation_id,
+        jury_policy=route.jury_policy,
+        collaboration_backend=route.collaboration_backend,
+        verification_policy=route.verification_policy,
+        collaboration_trace=collaboration_trace,
+        human_confirmation=human_confirmation,
+        jury_trace=collaboration_trace,
+    )

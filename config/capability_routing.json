@@ -1,0 +1,126 @@
+{
+  "skills_dir": "/home/sibilla-cumana/ralfloop_data/skills",
+  "legacy_skill_aliases": [
+    {
+      "name": "bandi",
+      "description": "applico vincoli progetto/bandi locali",
+      "triggers": ["bandi", "bando", "regione", "progetto", "intesa", "sanpaolo", "san paolo"]
+    },
+    {
+      "name": "abc_memory",
+      "description": "analizzo memoria relazionale/RSC",
+      "triggers": ["rl:abc", "rsc", "abc_memory", "relazionale", "rlfull"]
+    },
+    {
+      "name": "abc_relcalc",
+      "description": "uso calcolatrice strategica relazionale",
+      "triggers": ["abc_relcalc", "rlcalc", "calcolatrice relazionale", "calcolatrice strategica"]
+    },
+    {
+      "name": "jellyfin",
+      "description": "analizzo log media/download",
+      "triggers": ["jellyfin", "film", "download", "media", "audio", "novita jellyfin"]
+    },
+    {
+      "name": "garden_detector",
+      "description": "analizzo detector giardino/log/codice",
+      "triggers": ["giardino", "garden", "detector", "go2rtc", "yolo", "gemma"]
+    },
+    {
+      "name": "trade_republic",
+      "description": "analizzo portfolio e regole rebound",
+      "triggers": ["trade republic", "portfolio", "rebound", "borsa"]
+    }
+  ],
+  "low_signal_triggers": [
+    "browser",
+    "email",
+    "fix",
+    "giuria",
+    "log",
+    "login",
+    "mail",
+    "manda",
+    "scrivi",
+    "telegram"
+  ],
+  "mode_keywords": {
+    "check_only": ["leggi", "controlla", "log", "audit", "mostra", "review", "diagnosi"],
+    "patch_allowed": ["correggi", "fix", "patch", "risolvi bug", "bugfix", "ripara"],
+    "external_action": ["invia", "manda", "scrivi su drive", "posta", "telegram", "browser", "email", "gmail", "drive"],
+    "external_action_verbs": ["invia", "manda", "scrivi su drive", "posta", "pubblica", "apri", "attiva"]
+  },
+  "mcp_keywords": [
+    {"name": "google_workspace.gmail", "triggers": ["email", "gmail", "mail", "invia", "manda"]},
+    {"name": "telegram", "triggers": ["telegram"]},
+    {"name": "google_workspace.drive", "triggers": ["drive", "docs", "scrivi su drive"]},
+    {"name": "browser", "triggers": ["browser", "pagina", "url"]}
+  ],
+  "jury": {
+    "mode_file": "/home/sibilla-cumana/gatto/cat/_ralfloop_hold/modes/jury.json",
+    "fallback_roles": ["planner", "coder", "critic", "judge", "reviewer"],
+    "explicit_triggers": ["giuria", "jury", "telepatia", "telepatico", "multiagent", "multi-agent", "planner_coder_judge"],
+    "complexity_triggers": ["architettura", "tradeoff", "rischio", "critico", "irreversibile", "decidi", "scegli", "strategia"],
+    "required_for": ["explicit_jury", "external_side_effect"],
+    "advisory_for": ["patch_task", "multi_skill", "complexity_keyword"],
+    "min_skills_for_multi_skill": 2,
+    "style_selection_source": "ralfloop_local_policy",
+    "style_by_trigger": {
+      "explicit_jury": "sequential",
+      "external_side_effect": "deliberation",
+      "patch_task": "sequential",
+      "multi_skill": "mixture",
+      "complexity_keyword": "sequential"
+    }
+  },
+  "collaboration_backends": {
+    "single": {
+      "backend_name": "single",
+      "implementation_level": "routing_only",
+      "native_latent": false,
+      "intermediate_decode_policy": "none"
+    },
+    "text_proxy": {
+      "backend_name": "text_mas_proxy",
+      "implementation_level": "text_proxy",
+      "native_latent": false,
+      "recursion_rounds": 3,
+      "intermediate_decode_policy": "compact_text_state",
+      "availability_reason": "Ollama/text pipeline exposes text only, not hidden-state RecursiveLink."
+    },
+    "recursive_mas_native": {
+      "backend_name": "RecursiveMAS",
+      "implementation_level": "native_latent",
+      "native_latent": true,
+      "paper_url": "https://arxiv.org/abs/2604.25917",
+      "project_url": "https://recursivemas.github.io/",
+      "repository_url": "https://github.com/RecursiveMAS/RecursiveMAS",
+      "recursion_rounds": 3,
+      "intermediate_decode_policy": "no_text_decode_until_final_round",
+      "availability_reason": "Requires PyTorch/Transformers, input embeddings, hidden states, inner and outer RecursiveLink checkpoints."
+    }
+  },
+  "verification": {
+    "default": {
+      "enabled": true,
+      "verifier_type": "deterministic",
+      "criteria": ["route_policy", "exit_code"],
+      "blocking": true,
+      "judge_provider": null
+    },
+    "patch_allowed": {
+      "enabled": true,
+      "verifier_type": "combined",
+      "criteria": ["repro", "diff", "targeted_tests", "exit_code"],
+      "blocking": true,
+      "judge_provider": null
+    },
+    "external_action": {
+      "enabled": true,
+      "verifier_type": "combined",
+      "criteria": ["policy", "human_confirmation", "side_effect_result", "final_review"],
+      "blocking": true,
+      "judge_provider": null
+    }
+  }
+}

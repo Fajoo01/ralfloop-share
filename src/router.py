@@ -1,25 +1,30 @@
 from __future__ import annotations
 
-import re
-
-from src.models import CapabilityRoute
+from ralfloop_agent.integration.collaboration_backend import select_collaboration_backend
+from src.models import CapabilityRoute, JuryPolicy, VerificationPolicy
+from src.routing_config import (
+    any_trigger_matches,
+    configured_jury_roles,
+    load_routing_config,
+    local_jury_style,
+    local_jury_style_source,
+    mcp_keywords,
+    verification_config,
+)
 from src.skills import SkillsRegistry
 
 
-CHECK_ONLY_RE = re.compile(r"\b(leggi|controlla|log|audit|mostra|review|diagnosi)\b", re.I)
-PATCH_RE = re.compile(r"\b(correggi|fix|patch|risolvi bug|bugfix|ripara)\b", re.I)
-EXTERNAL_RE = re.compile(r"\b(invia|manda|scrivi su drive|posta|telegram|browser|email|gmail|drive)\b", re.I)
-
-MCP_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("google_workspace.gmail", ("email", "gmail", "mail", "invia", "manda")),
-    ("telegram", ("telegram",)),
-    ("google_workspace.drive", ("drive", "docs", "scrivi su drive")),
-    ("browser", ("browser", "pagina", "url")),
-)
+ROUTING_CONFIG = load_routing_config()
+MCP_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = mcp_keywords(ROUTING_CONFIG)
 
 
 class CapabilityRouter:
     def __init__(self, skills_registry: SkillsRegistry | None = None) -> None:
+        self.config = load_routing_config()
+        self.mode_keywords = dict(self.config.get("mode_keywords") or {})
+        self.jury_config = dict(self.config.get("jury") or {})
+        self.mcp_keywords = mcp_keywords(self.config)
+        self.jury_roles = configured_jury_roles(self.config)
         self.skills = skills_registry or SkillsRegistry()
 
     def route(self, user_goal: str) -> CapabilityRoute:
@@ -29,10 +34,21 @@ class CapabilityRouter:
         requires_confirmation = mode == "external_action" and any(connector != "browser" for connector in mcp_used)
         if mode == "external_action" and not mcp_used:
             requires_confirmation = True
+        jury_policy = self._jury_policy(user_goal, mode, skills_used, requires_confirmation)
+        style = local_jury_style(self.config, jury_policy.triggers[0] if jury_policy.triggers else None)
+        collaboration_backend = select_collaboration_backend(
+            jury_policy,
+            style=style,
+            style_selection_source=local_jury_style_source(self.config),
+            route_only=True,
+        )
+        verification_policy = self._verification_policy(mode)
 
         reasoning = (
             f"{reason}; skills={skills_used or ['none']}; "
-            f"mcp={mcp_used or ['none']}; confirmation={requires_confirmation}"
+            f"mcp={mcp_used or ['none']}; confirmation={requires_confirmation}; "
+            f"jury={jury_policy.mode}; backend={collaboration_backend.selected_backend}; "
+            f"verification={verification_policy.verifier_type}"
         )
         return CapabilityRoute(
             mode=mode,
@@ -40,24 +56,90 @@ class CapabilityRouter:
             skills_used=skills_used,
             mcp_used=mcp_used,
             requires_confirmation=requires_confirmation,
+            jury_policy=jury_policy,
+            collaboration_backend=collaboration_backend,
+            verification_policy=verification_policy,
+            jury=jury_policy,
         )
 
     def _classify_mode(self, user_goal: str) -> tuple[str, str]:
-        if PATCH_RE.search(user_goal):
+        goal = user_goal.lower()
+        patch_hit = any_trigger_matches(self.mode_keywords.get("patch_allowed", []), goal)
+        check_hit = any_trigger_matches(self.mode_keywords.get("check_only", []), goal)
+        external_hit = any_trigger_matches(self.mode_keywords.get("external_action", []), goal)
+        side_effect_hit = any_trigger_matches(self.mode_keywords.get("external_action_verbs", []), goal)
+        if patch_hit:
             return "patch_allowed", "matched patch/fix keywords"
-        if EXTERNAL_RE.search(user_goal):
+        if check_hit and not side_effect_hit:
+            return "check_only", "matched read/audit/check keywords"
+        if external_hit:
             return "external_action", "matched external connector/action keywords"
-        if CHECK_ONLY_RE.search(user_goal):
+        if check_hit:
             return "check_only", "matched read/audit/check keywords"
         return "check_only", "defaulted to check_only for safety"
 
     def _match_mcp(self, user_goal: str) -> list[str]:
         goal = user_goal.lower()
         matched = []
-        for connector, words in MCP_KEYWORDS:
-            if any(word in goal for word in words):
+        for connector, words in self.mcp_keywords:
+            if any_trigger_matches(words, goal):
                 matched.append(connector)
         return matched
+
+    def _jury_policy(
+        self,
+        user_goal: str,
+        mode: str,
+        skills_used: list[str],
+        requires_confirmation: bool,
+    ) -> JuryPolicy:
+        goal = user_goal.lower()
+        triggers = []
+        if any_trigger_matches(self.jury_config.get("explicit_triggers", []), goal):
+            triggers.append("explicit_jury")
+            return self._jury_result("required", "explicit_jury_or_telepathy_request", triggers, requires_confirmation)
+        if requires_confirmation:
+            triggers.append("external_side_effect")
+            return self._jury_result("required", "external_action_needs_pre_execution_review", triggers, requires_confirmation)
+        if mode == "patch_allowed":
+            triggers.append("patch_task")
+        min_skills = int(self.jury_config.get("min_skills_for_multi_skill", 2))
+        if len(skills_used) >= min_skills:
+            triggers.append("multi_skill")
+        if any_trigger_matches(self.jury_config.get("complexity_triggers", []), goal):
+            triggers.append("complexity_keyword")
+        if triggers:
+            return self._jury_result("advisory", "expanded_jury_for_risk_or_complexity", triggers, requires_confirmation)
+        return JuryPolicy(requires_human_confirmation=requires_confirmation)
+
+    def _jury_result(self, mode: str, reason: str, triggers: list[str], requires_confirmation: bool) -> JuryPolicy:
+        return JuryPolicy(
+            enabled=True,
+            mode=mode,
+            reason=reason,
+            roles=self.jury_roles,
+            triggers=triggers,
+            requires_final_review=mode == "required",
+            requires_human_confirmation=requires_confirmation,
+        )
+
+    def _verification_policy(self, mode: str) -> VerificationPolicy:
+        cfg = verification_config(self.config, mode)
+        return VerificationPolicy(**cfg)
+
+
+def jury_policy_manifest() -> dict:
+    config = load_routing_config()
+    jury = dict(config.get("jury") or {})
+    return {
+        "modes": ["off", "advisory", "required"],
+        "required_for": list(jury.get("required_for", [])),
+        "advisory_for": list(jury.get("advisory_for", [])),
+        "roles": configured_jury_roles(config),
+        "style_selection_source": local_jury_style_source(config),
+        "style_by_trigger": dict(jury.get("style_by_trigger") or {}),
+        "final_score_owner": "deterministic_formula_or_route_policy",
+    }
 
 
 def route_task(user_goal: str) -> CapabilityRoute:
