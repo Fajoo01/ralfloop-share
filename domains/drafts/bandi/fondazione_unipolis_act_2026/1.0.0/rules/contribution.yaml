@@ -1,0 +1,113 @@
+rules:
+- rule_id: contribution_min_amount
+  bando_id: fondazione_unipolis_act_2026
+  version: 1.0.0
+  category: contribution
+  description: Requested contribution must be at least 75,000 EUR.
+  structured_condition:
+    requested_contribution_eur: '>=75000'
+  structured_effect:
+    field: contribution_min_amount
+    value: 75000
+  exceptions: []
+  source_refs:
+  - act_regolamento_2026
+  source_sections:
+  - 7 Supporto
+  source_pages:
+  - 8
+  priority: 200
+  effective_from: '2026-02-09'
+  effective_to: null
+  confidence: 1.0
+  interpretation_required: false
+  blocking: false
+  enabled: true
+  field: contribution_min_amount
+  value: 75000
+  source_ref: act_regolamento_2026
+  document_type: official_call_text
+- rule_id: contribution_max_amount
+  bando_id: fondazione_unipolis_act_2026
+  version: 1.0.0
+  category: contribution
+  description: Requested contribution must be at most 150,000 EUR.
+  structured_condition:
+    requested_contribution_eur: <=150000
+  structured_effect:
+    field: contribution_max_amount
+    value: 150000
+  exceptions: []
+  source_refs:
+  - act_regolamento_2026
+  source_sections:
+  - 7 Supporto
+  source_pages:
+  - 8
+  priority: 200
+  effective_from: '2026-02-09'
+  effective_to: null
+  confidence: 1.0
+  interpretation_required: false
+  blocking: false
+  enabled: true
+  field: contribution_max_amount
+  value: 150000
+  source_ref: act_regolamento_2026
+  document_type: official_call_text
+- rule_id: contribution_min_rate
+  bando_id: fondazione_unipolis_act_2026
+  version: 1.0.0
+  category: contribution
+  description: Requested contribution must be at least 20% of total costs.
+  structured_condition:
+    requested_contribution_rate: '>=0.20'
+  structured_effect:
+    field: contribution_min_rate
+    value: 0.2
+  exceptions: []
+  source_refs:
+  - act_regolamento_2026
+  source_sections:
+  - 7 Supporto
+  source_pages:
+  - 8
+  priority: 200
+  effective_from: '2026-02-09'
+  effective_to: null
+  confidence: 1.0
+  interpretation_required: false
+  blocking: false
+  enabled: true
+  field: contribution_min_rate
+  value: 0.2
+  source_ref: act_regolamento_2026
+  document_type: official_call_text
+- rule_id: contribution_max_rate
+  bando_id: fondazione_unipolis_act_2026
+  version: 1.0.0
+  category: contribution
+  description: Requested contribution must be at most 75% of total costs.
+  structured_condition:
+    requested_contribution_rate: <=0.75
+  structured_effect:
+    field: contribution_max_rate
+    value: 0.75
+  exceptions: []
+  source_refs:
+  - act_regolamento_2026
+  source_sections:
+  - 7 Supporto
+  source_pages:
+  - 8
+  priority: 200
+  effective_from: '2026-02-09'
+  effective_to: null
+  confidence: 1.0
+  interpretation_required: false
+  blocking: false
+  enabled: true
+  field: contribution_max_rate
+  value: 0.75
+  source_ref: act_regolamento_2026
+  document_type: official_call_text

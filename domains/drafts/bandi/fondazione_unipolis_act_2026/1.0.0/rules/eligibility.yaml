@@ -1,0 +1,91 @@
+rules:
+- rule_id: eligible_lead_nonprofit_types
+  bando_id: fondazione_unipolis_act_2026
+  version: 1.0.0
+  category: eligibility
+  description: Eligible lead applicants are listed nonprofit entities.
+  structured_condition:
+    applicant_role: lead
+  structured_effect:
+    field: eligibility_applicant_types
+    value: &id001
+    - associazioni di volontariato
+    - associazioni di promozione sociale
+    - associazioni sportive dilettantistiche
+    - altri enti del terzo settore
+    - cooperative sociali e loro consorzi
+    - imprese sociali
+  exceptions: []
+  source_refs:
+  - act_regolamento_2026
+  source_sections:
+  - 3 Soggetti Ammissibili
+  source_pages:
+  - 5
+  priority: 100
+  effective_from: '2026-02-09'
+  effective_to: null
+  confidence: 1.0
+  interpretation_required: false
+  blocking: false
+  enabled: true
+  field: eligibility_applicant_types
+  value: *id001
+  source_ref: act_regolamento_2026
+  document_type: official_call_text
+- rule_id: lead_legal_seat_italy
+  bando_id: fondazione_unipolis_act_2026
+  version: 1.0.0
+  category: eligibility
+  description: Lead applicant must have legal seat in Italy.
+  structured_condition:
+    applicant_role: lead
+  structured_effect:
+    field: eligibility_lead_legal_seat
+    value: Italy
+  exceptions: []
+  source_refs:
+  - act_regolamento_2026
+  source_sections:
+  - 3 Soggetti Ammissibili
+  source_pages:
+  - 5
+  priority: 100
+  effective_from: '2026-02-09'
+  effective_to: null
+  confidence: 1.0
+  interpretation_required: false
+  blocking: false
+  enabled: true
+  field: eligibility_lead_legal_seat
+  value: Italy
+  source_ref: act_regolamento_2026
+  document_type: official_call_text
+- rule_id: previous_2025_winner_not_lead
+  bando_id: fondazione_unipolis_act_2026
+  version: 1.0.0
+  category: eligibility
+  description: Organizations funded as lead in ACT 2025 cannot lead ACT 2026.
+  structured_condition:
+    previous_act_2025_lead_winner: true
+  structured_effect:
+    field: eligibility_exclusion
+    value: previous_act_2025_lead_winner
+  exceptions: []
+  source_refs:
+  - act_regolamento_2026
+  source_sections:
+  - 3 Soggetti Ammissibili
+  source_pages:
+  - 6
+  priority: 100
+  effective_from: '2026-02-09'
+  effective_to: null
+  confidence: 1.0
+  interpretation_required: false
+  blocking: false
+  enabled: true
+  field: eligibility_exclusion
+  value: previous_act_2025_lead_winner
+  source_ref: act_regolamento_2026
+  document_type: official_call_text

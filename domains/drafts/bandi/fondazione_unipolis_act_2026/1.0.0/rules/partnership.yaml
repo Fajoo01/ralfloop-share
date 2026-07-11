@@ -1,0 +1,88 @@
+rules:
+- rule_id: partners_must_be_organizations
+  bando_id: fondazione_unipolis_act_2026
+  version: 1.0.0
+  category: partnership
+  description: Partners must be constituted organizations, not natural persons or
+    informal groups.
+  structured_condition:
+    partner_type: constituted_organization
+  structured_effect:
+    field: partnership_partner_type
+    value: constituted_organization
+  exceptions: []
+  source_refs:
+  - act_regolamento_2026
+  source_sections:
+  - 3 Soggetti Ammissibili
+  source_pages:
+  - 5
+  priority: 100
+  effective_from: '2026-02-09'
+  effective_to: null
+  confidence: 1.0
+  interpretation_required: false
+  blocking: false
+  enabled: true
+  field: partnership_partner_type
+  value: constituted_organization
+  source_ref: act_regolamento_2026
+  document_type: official_call_text
+- rule_id: partnership_agreement_required
+  bando_id: fondazione_unipolis_act_2026
+  version: 1.0.0
+  category: partnership
+  description: A single partnership agreement signed by all legal representatives
+    is required for partnership projects.
+  structured_condition:
+    has_partnership: true
+  structured_effect:
+    field: partnership_agreement
+    value: required_if_partnership
+  exceptions: []
+  source_refs:
+  - act_regolamento_2026
+  source_sections:
+  - 3 Soggetti Ammissibili
+  source_pages:
+  - 5
+  priority: 100
+  effective_from: '2026-02-09'
+  effective_to: null
+  confidence: 1.0
+  interpretation_required: false
+  blocking: false
+  enabled: true
+  field: partnership_agreement
+  value: required_if_partnership
+  source_ref: act_regolamento_2026
+  document_type: official_call_text
+- rule_id: one_application_per_organization
+  bando_id: fondazione_unipolis_act_2026
+  version: 1.0.0
+  category: partnership
+  description: Same organization cannot participate in more than one application except
+    public entities as partners.
+  structured_condition:
+    organization_role: lead_or_partner
+  structured_effect:
+    field: partnership_limit
+    value: one_application_per_organization
+  exceptions: []
+  source_refs:
+  - act_regolamento_2026
+  source_sections:
+  - 3 Soggetti Ammissibili
+  source_pages:
+  - 6
+  priority: 100
+  effective_from: '2026-02-09'
+  effective_to: null
+  confidence: 1.0
+  interpretation_required: false
+  blocking: false
+  enabled: true
+  field: partnership_limit
+  value: one_application_per_organization
+  source_ref: act_regolamento_2026
+  document_type: official_call_text

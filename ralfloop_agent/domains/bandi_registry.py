@@ -198,7 +198,9 @@ class BandoRegistry:
         text = query.lower()
         out = []
         for version in self._load_versions():
-            if version.identity.bando_id.lower() in text or version.identity.title.lower() in text:
+            title_tokens = [token for token in version.identity.title.lower().replace("-", " ").split() if len(token) > 2]
+            score = sum(1 for token in title_tokens if token in text)
+            if version.identity.bando_id.lower() in text or version.identity.title.lower() in text or score >= 2:
                 out.append({"bando_id": version.identity.bando_id, "version": version.version, "title": version.identity.title, "status": version.status})
         return out
 
@@ -255,13 +257,13 @@ class BandoRegistry:
         if not v:
             return []
         conflicts = list(v.conflicts)
-        by_field: dict[str, list[BandoRule]] = {}
+        by_rule_id: dict[str, list[BandoRule]] = {}
         for rule in v.rules:
-            by_field.setdefault(rule.field, []).append(rule)
-        for field, rules in by_field.items():
+            by_rule_id.setdefault(rule.rule_id, []).append(rule)
+        for rule_id, rules in by_rule_id.items():
             values = {jsonable(rule.value) for rule in rules}
             if len(values) > 1 and len({_precedence_index(rule.document_type) for rule in rules}) == 1:
-                conflicts.append(BandoConflict(f"conflict:{field}", field, [rule.source_ref for rule in rules], "Unresolved same-precedence rule conflict"))
+                conflicts.append(BandoConflict(f"conflict:{rule_id}", rule_id, [rule.source_ref for rule in rules], "Unresolved same-precedence rule conflict"))
         return conflicts
 
     def list_amendments(self, bando_id: str, version: str | None = None) -> list[dict[str, Any]]:
@@ -291,13 +293,23 @@ class BandoRegistry:
                 source_refs=[ref for conflict in conflicts for ref in conflict.source_refs],
                 human_decision_required=True,
             )
-        field = str(request.get("field") or "").lower()
+        field = str(request.get("field") or _field_from_goal(str(request.get("goal") or ""))).lower()
         rules = self.get_effective_rules(version.identity.bando_id, version.version).rules
-        matched = [rule for rule in rules if field and (field == rule.field or field == rule.rule_id)]
+        requested_value = str(request.get("value") or "").lower()
+        if field == "expenses" and requested_value:
+            matched = [
+                rule
+                for rule in rules
+                if rule.field.startswith("expenses_") and requested_value in str(rule.value).lower()
+            ]
+        else:
+            matched = [rule for rule in rules if field and (field == rule.field or field == rule.rule_id or rule.field.startswith(field + "_"))]
         if not matched:
             return BandoEvaluation("uncovered_case", version.identity.bando_id, version.version, deterministic=False, jury_required=True, jury_reason_codes=["incomplete_rules"])
-        rule = matched[-1]
-        return BandoEvaluation("completed", version.identity.bando_id, version.version, True, {"field": rule.field, "value": rule.value, "rule_id": rule.rule_id}, False, [], [rule.source_ref])
+        result = {"rules": [{"field": rule.field, "value": rule.value, "rule_id": rule.rule_id} for rule in matched]}
+        if len(matched) == 1:
+            result = {"field": matched[0].field, "value": matched[0].value, "rule_id": matched[0].rule_id}
+        return BandoEvaluation("completed", version.identity.bando_id, version.version, True, result, False, [], [rule.source_ref for rule in matched])
 
     def _load_versions(self) -> list[BandoVersion]:
         out: list[BandoVersion] = []
@@ -332,11 +344,20 @@ def _version_from_path(path: Path, manifest: dict[str, Any]) -> BandoVersion:
 
 
 def _doc_from_raw(raw: dict[str, Any]) -> BandoDocument:
-    return BandoDocument(str(raw.get("document_id") or raw.get("source_id") or ""), str(raw.get("title") or ""), str(raw.get("document_type") or raw.get("source_type") or ""), str(raw.get("uri_or_path") or ""), raw.get("published_at"), str(raw.get("checksum") or ""), bool(raw.get("official", True)), list(raw.get("sections_used") or []))
+    return BandoDocument(str(raw.get("document_id") or raw.get("source_id") or ""), str(raw.get("title") or ""), str(raw.get("document_type") or raw.get("source_type") or ""), str(raw.get("uri_or_path") or raw.get("path") or ""), raw.get("published_at"), str(raw.get("checksum") or ""), bool(raw.get("official", True)), list(raw.get("sections_used") or []))
 
 
 def _rule_from_raw(raw: dict[str, Any]) -> BandoRule:
-    return BandoRule(str(raw.get("rule_id")), str(raw.get("field")), raw.get("value"), str(raw.get("source_ref") or ""), str(raw.get("document_type") or "official_call_text"), int(raw.get("priority", 100)), raw.get("effective_from"), bool(raw.get("enabled", True)))
+    return BandoRule(
+        str(raw.get("rule_id")),
+        str(raw.get("field") or raw.get("category") or ""),
+        raw.get("value") if "value" in raw else raw.get("structured_effect"),
+        str(raw.get("source_ref") or (raw.get("source_refs") or [""])[0]),
+        str(raw.get("document_type") or "official_call_text"),
+        int(raw.get("priority", 100)),
+        raw.get("effective_from"),
+        bool(raw.get("enabled", True)),
+    )
 
 
 def _conflict_from_raw(raw: dict[str, Any]) -> BandoConflict:
@@ -374,3 +395,30 @@ def jsonable(value: Any) -> str:
     import json
 
     return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
+
+
+def _field_from_goal(goal: str) -> str:
+    low = goal.lower()
+    if any(token in low for token in ("scadenza", "deadline", "termine")):
+        return "deadline"
+    if any(token in low for token in ("contributo", "massimale", "percentuale")):
+        return "contribution"
+    if any(token in low for token in ("spesa", "expense", "catering")):
+        if any(token in low for token in ("dipendent", "collaborator", "consult", "lavoro retribuito")):
+            return "expenses_cofinance_allowed"
+        if any(token in low for token in ("volontari", "gratuit")):
+            return "expenses_cofinance_excluded"
+        return "expenses_uncovered"
+    if any(token in low for token in ("ammesso", "ammissibile", "beneficiari", "soggetto")):
+        return "eligibility"
+    if any(token in low for token in ("territorio", "italia", "lombardia")):
+        return "territory"
+    if any(token in low for token in ("document", "allegat", "statuto", "budget", "quadro")):
+        return "documents"
+    if any(token in low for token in ("cofinanzi", "in kind", "volontari")):
+        return "cofinancing"
+    if any(token in low for token in ("durata", "mesi", "settembre")):
+        return "duration"
+    if any(token in low for token in ("partner", "partenariat", "ats")):
+        return "partnership"
+    return ""

@@ -1,0 +1,5 @@
+{"expected": {"jury_required": true, "no_official_rule_invented": true}, "input": {"field": "expenses", "value": "nuova voce non citata"}, "kind": "ambiguous", "source_refs": ["act_regolamento_2026"], "test_id": "spesa_non_classificata"}
+{"expected": {"jury_required": true, "no_number_invented": true}, "input": {"goal": "calcola contributo senza indicare costo totale"}, "kind": "ambiguous", "source_refs": ["act_regolamento_2026"], "test_id": "base_calcolo_ambigua"}
+{"expected": {"jury_required": true, "jury_status": "disabled"}, "input": {"source": "faq"}, "kind": "ambiguous", "source_refs": [], "test_id": "faq_missing"}
+{"expected": {"jury_required": false, "status": "insufficient_input"}, "input": {"goal": "20% di"}, "kind": "ambiguous", "source_refs": ["act_regolamento_2026"], "test_id": "dato_numerico_mancante"}
+{"expected": {"status": "missing_context"}, "input": {"goal": "calcola contributo del bando"}, "kind": "ambiguous", "source_refs": [], "test_id": "versione_non_indicata"}

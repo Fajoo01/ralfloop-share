@@ -1,0 +1,74 @@
+domain_id: bandi/fondazione_unipolis_act_2026
+bando_id: fondazione_unipolis_act_2026
+title: Bando ACT 2026 - Aspirare. Coinvolgere. Trasformare.
+display_name: Fondazione Unipolis ACT 2026
+issuer: Fondazione Unipolis
+edition: '2026'
+version: 1.0.0
+status: draft
+state: draft
+publication_date: '2026-02-09'
+deadline: '2026-04-09T13:00:00+02:00'
+territory: Italy
+beneficiaries:
+- people in fragility or at risk of fragility
+- children, adolescents and young people for educational inequality projects
+- women
+- migrants
+- mobility-vulnerable road users
+- welfare service users
+official_url: null
+official_sources:
+- source_id: act_regolamento_2026
+  title: Regolamento 2026 - Bando ACT
+  source_type: primary_official_document
+  issuer: Fondazione Unipolis
+  path: /home/bandi/Scaricati/Regolamento_BandoACT_2026.pdf
+  version: '2026'
+  published_at: '2026-02-09'
+  retrieved_at: '2026-07-11T19:17:11Z'
+  checksum: 9beecf719be8a9f59508c54cde391af3ae3c8d4f7078353299b7da6eb720a7d0
+  reliability: 1.0
+  binding_level: binding_official
+  sections_used:
+  - Pubblicazione e scadenza
+  - 2 Progetti ammissibili
+  - 3 Soggetti ammissibili
+  - 4 Come partecipare
+  - 6 Criteri di valutazione
+  - 7 Supporto
+  notes: Primary binding source for rules.
+faq: []
+amendments: []
+rule_set_hash: 0d32c803207ce8cd724f911b3ebce3707ff0ecad813e768a04dcc293f869cf62
+schema_version: '1.0'
+created_at: '2026-07-11T19:17:11Z'
+updated_at: '2026-07-11T19:17:11Z'
+scope:
+- Bando ACT 2026 rules only
+- eligibility
+- deadline
+- documents
+- contribution limits
+- duration
+- partnership
+- cofinancing
+out_of_scope:
+- other Unipolis editions
+- project-specific scoring not in official documents
+- FAQ not locally available
+- amendments not locally available
+- runtime activation
+deterministic_capabilities:
+- bando_deadline_check
+- bando_contribution_calculation
+- bando_document_checklist
+- bando_eligibility_check
+- bando_expense_check
+jury_capabilities:
+- source_interpretation
+- scenario_analysis
+- conflicting_sources
+minimum_source_count: 1
+minimum_test_pass_rate: 1.0
+content_hash: 1ec4a343409fd1430860231acaeeeae72a383177ae9b2ecde820076ebe7cfad7

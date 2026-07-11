@@ -17,6 +17,12 @@
       "path": "domains/drafts/calculation_reasoning/1.0.0",
       "state": "draft",
       "version": "1.0.0"
+    },
+    {
+      "domain_id": "bandi/fondazione_unipolis_act_2026",
+      "version": "1.0.0",
+      "state": "draft",
+      "path": "/home/sibilla-cumana/ralfloop_agent_scaffold/domains/drafts/bandi/fondazione_unipolis_act_2026/1.0.0"
     }
   ]
 }

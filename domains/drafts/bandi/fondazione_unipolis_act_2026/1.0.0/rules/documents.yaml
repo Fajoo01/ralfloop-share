@@ -1,0 +1,34 @@
+rules:
+- rule_id: mandatory_documents
+  bando_id: fondazione_unipolis_act_2026
+  version: 1.0.0
+  category: documents
+  description: 'Mandatory attachments: project budget Excel, logical framework Excel,
+    lead statute PDF, partnership agreement if applicable.'
+  structured_condition:
+    submission: online_form
+  structured_effect:
+    field: documents
+    value: &id001
+    - budget_excel
+    - logical_framework_excel
+    - lead_statute_pdf
+    - partnership_agreement_if_applicable
+  exceptions: []
+  source_refs:
+  - act_regolamento_2026
+  source_sections:
+  - 4 Come Partecipare
+  source_pages:
+  - 6
+  priority: 200
+  effective_from: '2026-02-09'
+  effective_to: null
+  confidence: 1.0
+  interpretation_required: false
+  blocking: false
+  enabled: true
+  field: documents
+  value: *id001
+  source_ref: act_regolamento_2026
+  document_type: official_call_text

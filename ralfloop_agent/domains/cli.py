@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ralfloop_agent.integration.recursive_mas_runtime import RecursiveMASRuntimeController
+from .bandi_registry import BandoRegistry
 from .builder import DomainBuilder
 from .calculation_orchestrator import CalculationOrchestrator
 from .capability_registry import CanonicalCapabilityRegistry
@@ -192,6 +193,36 @@ def _capabilities_command(args: argparse.Namespace) -> dict[str, Any]:
     return {"status": "input_invalid", "error": "unknown_capabilities_command"}
 
 
+def _bandi_command(args: argparse.Namespace) -> dict[str, Any]:
+    registry = BandoRegistry()
+    if args.bandi_cmd == "list":
+        return {"status": "ok", "bandi": [item.to_dict() for item in registry._load_versions()]}
+    if args.bandi_cmd == "show":
+        version = registry.get_version(args.bando, args.version)
+        return {"status": "ok", "bando": version.to_dict()} if version else {"status": "missing_context", "bando_id": args.bando}
+    if args.bandi_cmd == "validate":
+        version = registry.get_version(args.bando, args.version)
+        if not version:
+            return {"status": "missing_context", "bando_id": args.bando}
+        source_report = registry.verify_sources(args.bando, args.version)
+        conflicts = registry.detect_conflicts(args.bando, args.version)
+        return {
+            "status": "validation_required" if conflicts or not source_report["ok"] else "draft_validatable",
+            "bando_id": args.bando,
+            "version": version.version,
+            "source_results": source_report,
+            "conflicts": [item.to_dict() for item in conflicts],
+            "state": "draft",
+        }
+    if args.bandi_cmd == "evaluate":
+        out = registry.evaluate({"bando_id": args.bando, "version": args.version, "goal": args.goal}).to_dict()
+        out["deterministic_complete"] = out.get("status") == "completed" and bool(out.get("deterministic"))
+        if out.get("jury_required") and os.getenv("RALFLOOP_ENABLE_DOMAIN_JURY") != "1":
+            out["jury_status"] = "disabled"
+        return out
+    return {"status": "input_invalid", "error": "unknown_bandi_command"}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = JsonArgumentParser()
     sub = parser.add_subparsers(dest="cmd", required=True, parser_class=JsonArgumentParser)
@@ -212,6 +243,12 @@ def main(argv: list[str] | None = None) -> int:
     cp = caps_sub.add_parser("parity"); cp.add_argument("--capability", required=True)
     ci = caps_sub.add_parser("import-draft"); ci.add_argument("--capability", required=True)
     cd = caps_sub.add_parser("import-domain"); cd.add_argument("--domain", required=True)
+    bandi = sub.add_parser("bandi")
+    bandi_sub = bandi.add_subparsers(dest="bandi_cmd", required=True, parser_class=JsonArgumentParser)
+    bandi_sub.add_parser("list")
+    bs = bandi_sub.add_parser("show"); bs.add_argument("--bando", required=True); bs.add_argument("--version")
+    bv = bandi_sub.add_parser("validate"); bv.add_argument("--bando", required=True); bv.add_argument("--version")
+    be = bandi_sub.add_parser("evaluate"); be.add_argument("--bando", required=True); be.add_argument("--version"); be.add_argument("--goal", required=True)
     try:
         args = parser.parse_args(argv)
         registry = DomainRegistry()
@@ -226,6 +263,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "deprecate": out = {"ok": registry.deprecate(args.domain, args.version)}
         elif args.cmd == "calculate": out = CalculationOrchestrator().calculate({"expression": args.expression, "goal": args.goal})
         elif args.cmd == "capabilities": out = _capabilities_command(args)
+        elif args.cmd == "bandi": out = _bandi_command(args)
         else: raise AssertionError(args.cmd)
         _emit_json(out)
         return _exit_code_for(out)
