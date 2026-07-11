@@ -5,6 +5,12 @@ import logging
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from ralfloop_agent.domains.builder import DomainBuilder
+from ralfloop_agent.domains.cli import answer_goal
+from ralfloop_agent.domains.promotion import DomainPromotionService
+from ralfloop_agent.domains.registry import DomainRegistry
+from ralfloop_agent.domains.resolver import DomainResolver
+from ralfloop_agent.domains.validator import DomainValidator
 from ralfloop_agent.integration.recursive_mas_runtime import RecursiveMASRuntimeController
 from src.confirmation import confirm_action, reject_action
 from src.executor import ShellExecutor
@@ -56,6 +62,88 @@ def recursive_mas_lab_run(request: LabRecursiveMASRunRequest) -> dict:
     if status in {"disabled", "circuit_open", "backend_unavailable"}:
         raise HTTPException(status_code=503, detail=result)
     raise HTTPException(status_code=500, detail=result)
+
+
+
+
+class DomainGoalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    goal: str
+    domain: str | None = None
+
+
+class DomainDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    goal: str
+    sources: list[str] = Field(default_factory=list)
+
+
+class DomainPromoteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    approved_by: str
+    approval_token: str
+    approval_reason: str = ""
+
+
+@app.get("/lab/domains")
+def lab_domains() -> dict:
+    return {"domains": DomainRegistry().list_domains()}
+
+
+@app.get("/lab/domains/{domain_id}")
+def lab_domain_status(domain_id: str) -> dict:
+    domain = DomainRegistry().get_domain(domain_id)
+    if not domain:
+        raise HTTPException(status_code=422, detail={"status": "missing"})
+    return domain
+
+
+@app.post("/lab/domains/resolve")
+def lab_domain_resolve(request: DomainGoalRequest) -> dict:
+    result = DomainResolver().resolve(request.goal, {"domain_id": request.domain} if request.domain else None).to_dict()
+    if result["status"] == "ambiguous":
+        raise HTTPException(status_code=409, detail=result)
+    return result
+
+
+@app.post("/lab/domains/answer")
+def lab_domain_answer(request: DomainGoalRequest) -> dict:
+    result = answer_goal(request.goal, request.domain)
+    if result.get("status") == "domain_creation_required":
+        raise HTTPException(status_code=202, detail=result)
+    if result.get("status") == "ambiguous":
+        raise HTTPException(status_code=409, detail=result)
+    if result.get("status") == "human_confirmation_required":
+        raise HTTPException(status_code=423, detail=result)
+    if result.get("status") == "jury_required" and result.get("jury_status") == "disabled":
+        raise HTTPException(status_code=503, detail=result)
+    return result
+
+
+@app.post("/lab/domains/drafts")
+def lab_domain_draft(request: DomainDraftRequest) -> dict:
+    result = DomainBuilder().create_draft(request.goal, request.sources, {}).to_dict()
+    if result.get("status") == "invalid":
+        raise HTTPException(status_code=422, detail=result)
+    return result
+
+
+@app.post("/lab/domains/{domain_id}/{version}/validate")
+def lab_domain_validate(domain_id: str, version: str) -> dict:
+    domain = DomainRegistry().get_domain(domain_id, version)
+    if not domain:
+        raise HTTPException(status_code=422, detail={"valid": False, "blocking_issues": ["domain_missing"]})
+    return DomainValidator().validate(domain).to_dict()
+
+
+@app.post("/lab/domains/{domain_id}/{version}/promote")
+def lab_domain_promote(domain_id: str, version: str, request: DomainPromoteRequest) -> dict:
+    result = DomainPromotionService().promote(domain_id, version, approved_by=request.approved_by, approval_token=request.approval_token, approval_reason=request.approval_reason).to_dict()
+    if result.get("status") == "approval_required":
+        raise HTTPException(status_code=423, detail=result)
+    if not result.get("ok"):
+        raise HTTPException(status_code=409, detail=result)
+    return result
 
 
 @app.post("/tasks/run", response_model=TaskResponse)
