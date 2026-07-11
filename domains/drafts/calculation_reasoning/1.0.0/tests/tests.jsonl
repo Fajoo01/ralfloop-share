@@ -1,0 +1,1 @@
+{"test_id":"percent_basic","input":"20% di 10000","expected":"2000","rule_refs":["external_executor:calculation_orchestrator"]}

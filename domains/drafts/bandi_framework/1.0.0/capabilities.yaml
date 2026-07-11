@@ -1,0 +1,66 @@
+capabilities:
+- adapter: rulebook_lookup
+  canonical_executor: /home/sibilla-cumana/ralfloop_data/bandi/rulebooks/regione_act_dimensioning.md
+  canonical_sources:
+  - /home/sibilla-cumana/ralfloop_data/bandi/rulebooks/regione_act_dimensioning.md
+  - src/skills.py
+  - config/capability_routing.json
+  capability_id: regione_act_dimensioning
+  capability_scope: cross_bando
+  deterministic_core: rulebook_lookup
+  deterministic_level: deterministic_with_structured_input
+  display_name: Regione ACT Dimensioning Rulebook
+  domain_family: bandi
+  domain_id: bandi_framework
+  enabled: true
+  interpretation_layer: bando_specific_context
+  jury_allowed: true
+  jury_forbidden_actions:
+  - invent_official_rule
+  - override_explicit_rule
+  - alter_official_percentage
+  - invent_missing_input
+  - present_interpretation_as_official
+  jury_policy: unresolved_only
+  jury_reason_codes:
+  - incomplete_rules
+  - conflicting_sources
+  - source_interpretation
+  mapping_version: '1'
+  missing_input_policy: insufficient_input
+  optional_inputs:
+  - simulate_conflict
+  - bando_context
+  - lookup_only
+  output_schema:
+    fields:
+    - matched_sections
+    - answer
+    - rulebook_path
+    - source_checksums
+    - applicability
+  provenance:
+    source_checksums:
+      /home/sibilla-cumana/ralfloop_data/bandi/rulebooks/regione_act_dimensioning.md: 69a8f8dad00949bb1fac0855cdbda4b5252c79aebea63eb997f7269b5940d357
+    source_type: internal_rulebook
+  pure: true
+  required_domain_context:
+  - bando_id
+  - official_rule_scope
+  required_inputs:
+  - query
+  scenario_support: true
+  side_effects: false
+  source_precedence_policy:
+  - official_correction_later
+  - official_call_text
+  - specific_annex
+  - official_faq_later
+  - referenced_regulation
+  - official_operational_manual
+  - local_policy
+  - jury_interpretation
+  test_references:
+  - .ralf_run/deterministic_skills_inventory_20260711_195533/dimensioning-deep-check.txt
+  uncovered_case_policy: uncovered_case
+schema_version: 1

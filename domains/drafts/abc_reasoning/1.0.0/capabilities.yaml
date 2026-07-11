@@ -1,0 +1,112 @@
+capabilities:
+- adapter: abc_relcalc
+  canonical_executor: openshell_backend/skills/abc_relcalc.py
+  canonical_sources:
+  - openshell_backend/skills/abc_relcalc.py
+  capability_id: abc_relcalc
+  deterministic_level: deterministic_with_structured_input
+  display_name: ABC Relational Calculator
+  domain_id: abc_reasoning
+  enabled: true
+  jury_policy: never
+  mapping_version: '1'
+  missing_input_policy: insufficient_input
+  optional_inputs:
+  - base_score
+  output_schema:
+    fields:
+    - score
+    - confidence
+    - range
+    - bias_flags
+    - next_safe_action
+    - evidence_count
+    - summary
+  provenance:
+    source_checksums:
+      openshell_backend/skills/abc_relcalc.py: e8bf3863ae6daf803097f219dfed5d1dda1461eb179a77bed86d444b0e3e36bf
+    source_type: canonical_python_executor
+  pure: true
+  required_inputs:
+  - evidence
+  side_effects: false
+  test_references:
+  - tests/test_abc_relcalc.py
+  uncovered_case_policy: unresolved_only
+- adapter: abc_formula_loop
+  canonical_executor: openshell_backend/skills/abc_formula_loop.py
+  canonical_sources:
+  - openshell_backend/skills/abc_formula_loop.py
+  - openshell_backend/skills/abc_rulebooks/evidence_weights_v1.json
+  - openshell_backend/skills/abc_rulebooks/anti_bias_manual_v1.md
+  - openshell_backend/skills/abc_rulebooks/relation_manual_v1.md
+  capability_id: abc_formula_loop
+  deterministic_level: mixed
+  display_name: ABC Formula Loop / RLFULL
+  domain_id: abc_reasoning
+  enabled: true
+  jury_policy: unresolved_only
+  mapping_version: '1'
+  missing_input_policy: insufficient_input
+  optional_inputs:
+  - memory_dir
+  - evidence_cache_path
+  - force_extract
+  output_schema:
+    fields:
+    - formula_version
+    - rlfull_current
+    - prudential_score
+    - relcalc_score
+    - confidence
+    - operative_range
+    - action
+    - bias_flags
+    - evidence_count
+  provenance:
+    source_checksums:
+      openshell_backend/skills/abc_formula_loop.py: 45d8853444409c4552f4d1300ad6fd8422fbd046db75b0277eb43b9dd8c3a585
+      openshell_backend/skills/abc_rulebooks/anti_bias_manual_v1.md: cc08c5bf704f24c1378d0413b0451c7a14f28709bf13a74fcc65b3847327d972
+      openshell_backend/skills/abc_rulebooks/evidence_weights_v1.json: 71b31d1909dfadecfea85397b05b312f87920d768cad05aa0126c9cfaa86fbf2
+      openshell_backend/skills/abc_rulebooks/relation_manual_v1.md: 01ce7dba05cfd85876165b45fd9fb934cd0adeb0c13f2bb01a768a8d19074cba
+    source_type: canonical_python_executor_with_internal_rulebooks
+  pure: true
+  required_inputs:
+  - text
+  side_effects: false
+  test_references:
+  - tests/test_abc_formula_loop.py
+  uncovered_case_policy: unresolved_only
+- adapter: source_only
+  canonical_executor: null
+  canonical_sources:
+  - openshell_backend/skills/abc_rulebooks/evidence_weights_v1.json
+  - openshell_backend/skills/abc_rulebooks/anti_bias_manual_v1.md
+  - openshell_backend/skills/abc_rulebooks/relation_manual_v1.md
+  capability_id: abc_rulebooks
+  deterministic_level: source_only
+  display_name: ABC Internal Rulebooks
+  domain_id: abc_reasoning
+  enabled: true
+  jury_policy: advisory
+  mapping_version: '1'
+  missing_input_policy: source_summary
+  optional_inputs:
+  - section
+  output_schema:
+    fields:
+    - sources
+    - checksums
+  provenance:
+    source_checksums:
+      openshell_backend/skills/abc_rulebooks/anti_bias_manual_v1.md: cc08c5bf704f24c1378d0413b0451c7a14f28709bf13a74fcc65b3847327d972
+      openshell_backend/skills/abc_rulebooks/evidence_weights_v1.json: 71b31d1909dfadecfea85397b05b312f87920d768cad05aa0126c9cfaa86fbf2
+      openshell_backend/skills/abc_rulebooks/relation_manual_v1.md: 01ce7dba05cfd85876165b45fd9fb934cd0adeb0c13f2bb01a768a8d19074cba
+    source_type: internal_rulebook
+  pure: true
+  required_inputs: []
+  side_effects: false
+  test_references:
+  - tests/test_abc_formula_loop.py
+  uncovered_case_policy: unresolved_only
+schema_version: 1

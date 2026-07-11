@@ -11,7 +11,10 @@ from typing import Any
 
 from ralfloop_agent.integration.recursive_mas_runtime import RecursiveMASRuntimeController
 from .builder import DomainBuilder
+from .calculation_orchestrator import CalculationOrchestrator
+from .capability_registry import CanonicalCapabilityRegistry
 from .deterministic_engine import DeterministicEngine
+from .existing_capability_importer import ExistingCapabilityImporter
 from .jury_router import DomainJuryRouter
 from .promotion import DomainPromotionService
 from .registry import DomainRegistry
@@ -144,9 +147,49 @@ def _exit_code_for(out: dict[str, Any]) -> int:
         return 4
     if status == "approval_required":
         return 5
+    if status == "capability_missing":
+        return 3
+    if status == "parity_failed":
+        return 4
+    if status == "mapping_conflict":
+        return 5
+    if status == "source_invalid":
+        return 6
     if status == "validation_failed" or out.get("valid") is False or out.get("ok") is False:
         return 1
     return 0
+
+
+def _capabilities_command(args: argparse.Namespace) -> dict[str, Any]:
+    registry = CanonicalCapabilityRegistry.from_mapping()
+    importer = ExistingCapabilityImporter(capability_registry=registry)
+    try:
+        if args.capability_cmd == "list":
+            return {"status": "ok", "capabilities": registry.list_capabilities()}
+        if args.capability_cmd == "show":
+            return {"status": "ok", "capability": registry.get(args.capability).to_dict()}
+        if args.capability_cmd == "audit":
+            mapping = registry.validate_mapping()
+            sources = registry.verify_sources()
+            status = "ok"
+            if not mapping["ok"]:
+                status = "mapping_conflict"
+            elif not sources["ok"]:
+                status = "source_invalid"
+            return {"status": status, "mapping": mapping, "sources": sources}
+        if args.capability_cmd == "parity":
+            result = registry.parity(args.capability)
+            if not result.get("ok"):
+                result["status"] = "parity_failed"
+            return result
+        if args.capability_cmd == "import-draft":
+            cap = registry.get(args.capability)
+            return importer.create_domain_draft(cap.domain_id)
+        if args.capability_cmd == "import-domain":
+            return importer.create_domain_draft(args.domain)
+    except KeyError as exc:
+        return {"status": "capability_missing", "error": str(exc)}
+    return {"status": "input_invalid", "error": "unknown_capabilities_command"}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -160,6 +203,15 @@ def main(argv: list[str] | None = None) -> int:
     va = sub.add_parser("validate"); va.add_argument("--domain", required=True); va.add_argument("--version", required=True)
     pr = sub.add_parser("promote"); pr.add_argument("--domain", required=True); pr.add_argument("--version", required=True); pr.add_argument("--approved-by", required=True); pr.add_argument("--approval-token-env", required=True); pr.add_argument("--approval-reason", default="")
     de = sub.add_parser("deprecate"); de.add_argument("--domain", required=True); de.add_argument("--version", required=True)
+    calc = sub.add_parser("calculate"); calc.add_argument("--expression"); calc.add_argument("--goal")
+    caps = sub.add_parser("capabilities")
+    caps_sub = caps.add_subparsers(dest="capability_cmd", required=True, parser_class=JsonArgumentParser)
+    caps_sub.add_parser("list")
+    cs = caps_sub.add_parser("show"); cs.add_argument("--capability", required=True)
+    caps_sub.add_parser("audit")
+    cp = caps_sub.add_parser("parity"); cp.add_argument("--capability", required=True)
+    ci = caps_sub.add_parser("import-draft"); ci.add_argument("--capability", required=True)
+    cd = caps_sub.add_parser("import-domain"); cd.add_argument("--domain", required=True)
     try:
         args = parser.parse_args(argv)
         registry = DomainRegistry()
@@ -172,6 +224,8 @@ def main(argv: list[str] | None = None) -> int:
             dom = registry.get_domain(args.domain, args.version); out = DomainValidator().validate(dom).to_dict() if dom else {"valid": False, "blocking_issues": ["domain_missing"]}
         elif args.cmd == "promote": out = DomainPromotionService(registry).promote(args.domain, args.version, approved_by=args.approved_by, approval_token=os.getenv(args.approval_token_env), approval_reason=args.approval_reason).to_dict()
         elif args.cmd == "deprecate": out = {"ok": registry.deprecate(args.domain, args.version)}
+        elif args.cmd == "calculate": out = CalculationOrchestrator().calculate({"expression": args.expression, "goal": args.goal})
+        elif args.cmd == "capabilities": out = _capabilities_command(args)
         else: raise AssertionError(args.cmd)
         _emit_json(out)
         return _exit_code_for(out)

@@ -1,0 +1,231 @@
+schema_version: 1
+capabilities:
+  - capability_id: abc_relcalc
+    domain_id: abc_reasoning
+    display_name: ABC Relational Calculator
+    canonical_executor: openshell_backend/skills/abc_relcalc.py
+    canonical_sources:
+      - openshell_backend/skills/abc_relcalc.py
+    adapter: abc_relcalc
+    deterministic_level: deterministic_with_structured_input
+    required_inputs:
+      - evidence
+    optional_inputs:
+      - base_score
+    output_schema:
+      fields:
+        - score
+        - confidence
+        - range
+        - bias_flags
+        - next_safe_action
+        - evidence_count
+        - summary
+    side_effects: false
+    pure: true
+    jury_policy: never
+    missing_input_policy: insufficient_input
+    uncovered_case_policy: unresolved_only
+    test_references:
+      - tests/test_abc_relcalc.py
+    provenance:
+      source_type: canonical_python_executor
+      source_checksums:
+        openshell_backend/skills/abc_relcalc.py: e8bf3863ae6daf803097f219dfed5d1dda1461eb179a77bed86d444b0e3e36bf
+    enabled: true
+
+  - capability_id: abc_formula_loop
+    domain_id: abc_reasoning
+    display_name: ABC Formula Loop / RLFULL
+    canonical_executor: openshell_backend/skills/abc_formula_loop.py
+    canonical_sources:
+      - openshell_backend/skills/abc_formula_loop.py
+      - openshell_backend/skills/abc_rulebooks/evidence_weights_v1.json
+      - openshell_backend/skills/abc_rulebooks/anti_bias_manual_v1.md
+      - openshell_backend/skills/abc_rulebooks/relation_manual_v1.md
+    adapter: abc_formula_loop
+    deterministic_level: mixed
+    required_inputs:
+      - text
+    optional_inputs:
+      - memory_dir
+      - evidence_cache_path
+      - force_extract
+    output_schema:
+      fields:
+        - formula_version
+        - rlfull_current
+        - prudential_score
+        - relcalc_score
+        - confidence
+        - operative_range
+        - action
+        - bias_flags
+        - evidence_count
+    side_effects: false
+    pure: true
+    jury_policy: unresolved_only
+    missing_input_policy: insufficient_input
+    uncovered_case_policy: unresolved_only
+    phases:
+      fact_extraction:
+        deterministic_level: mixed
+        jury_policy: unresolved_only
+        note: Fact extraction may be semantic; it never owns final score, range, caps, or action.
+      formula_scoring:
+        deterministic_level: deterministic
+        jury_policy: never
+        note: Formula scoring must call the canonical executor and cannot be altered by jury output.
+    test_references:
+      - tests/test_abc_formula_loop.py
+    provenance:
+      source_type: canonical_python_executor_with_internal_rulebooks
+      source_checksums:
+        openshell_backend/skills/abc_formula_loop.py: 45d8853444409c4552f4d1300ad6fd8422fbd046db75b0277eb43b9dd8c3a585
+        openshell_backend/skills/abc_rulebooks/evidence_weights_v1.json: 71b31d1909dfadecfea85397b05b312f87920d768cad05aa0126c9cfaa86fbf2
+        openshell_backend/skills/abc_rulebooks/anti_bias_manual_v1.md: cc08c5bf704f24c1378d0413b0451c7a14f28709bf13a74fcc65b3847327d972
+        openshell_backend/skills/abc_rulebooks/relation_manual_v1.md: 01ce7dba05cfd85876165b45fd9fb934cd0adeb0c13f2bb01a768a8d19074cba
+    enabled: true
+
+  - capability_id: abc_rulebooks
+    domain_id: abc_reasoning
+    display_name: ABC Internal Rulebooks
+    canonical_executor: null
+    canonical_sources:
+      - openshell_backend/skills/abc_rulebooks/evidence_weights_v1.json
+      - openshell_backend/skills/abc_rulebooks/anti_bias_manual_v1.md
+      - openshell_backend/skills/abc_rulebooks/relation_manual_v1.md
+    adapter: source_only
+    deterministic_level: source_only
+    required_inputs: []
+    optional_inputs:
+      - section
+    output_schema:
+      fields:
+        - sources
+        - checksums
+    side_effects: false
+    pure: true
+    jury_policy: advisory
+    missing_input_policy: source_summary
+    uncovered_case_policy: unresolved_only
+    test_references:
+      - tests/test_abc_formula_loop.py
+    provenance:
+      source_type: internal_rulebook
+      source_checksums:
+        openshell_backend/skills/abc_rulebooks/evidence_weights_v1.json: 71b31d1909dfadecfea85397b05b312f87920d768cad05aa0126c9cfaa86fbf2
+        openshell_backend/skills/abc_rulebooks/anti_bias_manual_v1.md: cc08c5bf704f24c1378d0413b0451c7a14f28709bf13a74fcc65b3847327d972
+        openshell_backend/skills/abc_rulebooks/relation_manual_v1.md: 01ce7dba05cfd85876165b45fd9fb934cd0adeb0c13f2bb01a768a8d19074cba
+    enabled: true
+
+  - capability_id: regione_act_dimensioning
+    domain_id: bandi_framework
+    domain_family: bandi
+    capability_scope: cross_bando
+    display_name: Regione ACT Dimensioning Rulebook
+    canonical_executor: /home/sibilla-cumana/ralfloop_data/bandi/rulebooks/regione_act_dimensioning.md
+    canonical_sources:
+      - /home/sibilla-cumana/ralfloop_data/bandi/rulebooks/regione_act_dimensioning.md
+      - src/skills.py
+      - config/capability_routing.json
+    adapter: rulebook_lookup
+    deterministic_level: deterministic_with_structured_input
+    deterministic_core: rulebook_lookup
+    interpretation_layer: bando_specific_context
+    required_inputs:
+      - query
+    optional_inputs:
+      - simulate_conflict
+      - bando_context
+      - lookup_only
+    output_schema:
+      fields:
+        - matched_sections
+        - answer
+        - rulebook_path
+        - source_checksums
+        - applicability
+    side_effects: false
+    pure: true
+    jury_policy: unresolved_only
+    jury_allowed: true
+    jury_reason_codes:
+      - incomplete_rules
+      - conflicting_sources
+      - source_interpretation
+    jury_forbidden_actions:
+      - invent_official_rule
+      - override_explicit_rule
+      - alter_official_percentage
+      - invent_missing_input
+      - present_interpretation_as_official
+    required_domain_context:
+      - bando_id
+      - official_rule_scope
+    scenario_support: true
+    source_precedence_policy:
+      - official_correction_later
+      - official_call_text
+      - specific_annex
+      - official_faq_later
+      - referenced_regulation
+      - official_operational_manual
+      - local_policy
+      - jury_interpretation
+    missing_input_policy: insufficient_input
+    uncovered_case_policy: uncovered_case
+    test_references:
+      - .ralf_run/deterministic_skills_inventory_20260711_195533/dimensioning-deep-check.txt
+    provenance:
+      source_type: internal_rulebook
+      source_checksums:
+        /home/sibilla-cumana/ralfloop_data/bandi/rulebooks/regione_act_dimensioning.md: 69a8f8dad00949bb1fac0855cdbda4b5252c79aebea63eb997f7269b5940d357
+    enabled: true
+
+  - capability_id: grammar
+    domain_id: grammar_reference
+    domain_family: language
+    capability_scope: evidence_only
+    display_name: Italian Grammar Manual RAG
+    canonical_executor: null
+    canonical_sources:
+      - /home/sibilla-cumana/ralfloop_data/skills/grammar/skill.json
+      - /home/sibilla-cumana/ralfloop_data/skills/grammar/manuals/Guida_alla_grammatica_valenziale.txt
+    adapter: manual_rag
+    deterministic_level: non_deterministic
+    deterministic_core: none
+    interpretation_layer: manual_rag_evidence
+    required_inputs:
+      - query
+    optional_inputs: []
+    output_schema:
+      fields:
+        - evidence
+        - source_refs
+    side_effects: false
+    pure: true
+    jury_policy: advisory
+    jury_allowed: true
+    jury_reason_codes:
+      - evidence_synthesis
+    jury_forbidden_actions:
+      - treat_manual_rag_as_formula
+      - use_as_math_executor
+      - use_as_rule_engine
+    required_domain_context: []
+    scenario_support: false
+    source_precedence_policy:
+      - official_documentation
+      - local_policy
+      - jury_interpretation
+    missing_input_policy: insufficient_input
+    uncovered_case_policy: evidence_only
+    test_references:
+      - tests/test_domain_capability_mapping.py
+    provenance:
+      source_type: external_skill_manifest
+      source_checksums:
+        /home/sibilla-cumana/ralfloop_data/skills/grammar/skill.json: 968825065a342208b38552350a310a47dba7f6021f9762747efdd60b959c45ab
+        /home/sibilla-cumana/ralfloop_data/skills/grammar/manuals/Guida_alla_grammatica_valenziale.txt: 66c120dfeca143ec61894296bbdee1cf5b87fa176f012b6b866eff4d6a08c587
+    enabled: true

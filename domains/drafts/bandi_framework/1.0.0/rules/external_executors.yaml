@@ -1,0 +1,27 @@
+external_executors:
+- canonical_executor: /home/sibilla-cumana/ralfloop_data/bandi/rulebooks/regione_act_dimensioning.md
+  capability_id: regione_act_dimensioning
+  failure_policy:
+    jury_policy: unresolved_only
+    missing_input: insufficient_input
+    uncovered_case: uncovered_case
+  input_contract:
+    optional:
+    - simulate_conflict
+    - bando_context
+    - lookup_only
+    required:
+    - query
+  output_contract:
+    fields:
+    - matched_sections
+    - answer
+    - rulebook_path
+    - source_checksums
+    - applicability
+  rule_id: external_executor:regione_act_dimensioning
+  source_refs:
+  - /home/sibilla-cumana/ralfloop_data/bandi/rulebooks/regione_act_dimensioning.md
+  - src/skills.py
+  - config/capability_routing.json
+schema_version: 1
