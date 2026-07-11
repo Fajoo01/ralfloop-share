@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
 
+from ralfloop_agent.integration.recursive_mas_runtime import RecursiveMASRuntimeController
 from src.confirmation import confirm_action, reject_action
 from src.executor import ShellExecutor
 from src.mcp_client import MCPClient, NeedsConfirmationError
@@ -20,6 +22,40 @@ skills_registry = SkillsRegistry()
 router = CapabilityRouter(skills_registry)
 executor = ShellExecutor()
 mcp = MCPClient()
+
+
+class LabRecursiveMASRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    goal: str
+    rounds: int | None = Field(default=None, ge=1, le=3)
+    profile: str = "deterministic_diagnostic"
+
+
+@app.get("/lab/recursive-mas/status")
+def recursive_mas_lab_status() -> dict:
+    return RecursiveMASRuntimeController.from_env().status().to_dict()
+
+
+@app.get("/lab/recursive-mas/health")
+def recursive_mas_lab_health() -> dict:
+    return RecursiveMASRuntimeController.from_env().health()
+
+
+@app.post("/lab/recursive-mas/run")
+def recursive_mas_lab_run(request: LabRecursiveMASRunRequest) -> dict:
+    payload = request.model_dump(exclude_none=True)
+    result = RecursiveMASRuntimeController.from_env().execute(payload)
+    status = result.get("status")
+    if result.get("ok"):
+        return result
+    if status == "busy":
+        raise HTTPException(status_code=409, detail=result)
+    if status == "timeout":
+        raise HTTPException(status_code=504, detail=result)
+    if status in {"disabled", "circuit_open", "backend_unavailable"}:
+        raise HTTPException(status_code=503, detail=result)
+    raise HTTPException(status_code=500, detail=result)
 
 
 @app.post("/tasks/run", response_model=TaskResponse)

@@ -33,9 +33,27 @@ def select_collaboration_backend(
         )
 
     native_enabled = os.getenv("RALFLOOP_ENABLE_RECURSIVE_MAS_NATIVE", "0") == "1"
-    allow_fallback = os.getenv("RALFLOOP_ALLOW_TEXT_MAS_FALLBACK", "1") == "1"
+    allow_fallback = os.getenv("RALFLOOP_ALLOW_TEXT_MAS_FALLBACK", "0") == "1"
     requested = "recursive_mas_native" if native_enabled else "text_proxy"
     device = os.getenv("RALFLOOP_RECURSIVE_MAS_DEVICE", "cpu")
+
+    if not native_enabled:
+        text = collaboration_backend_config(config, "text_proxy")
+        return CollaborationBackend(
+            backend_name=text.get("backend_name", "text_mas_proxy"),
+            implementation_level="text_proxy",
+            style=style,
+            recursion_rounds=int(text.get("recursion_rounds", 3)),
+            available=True,
+            availability_reason=text.get("availability_reason", "text proxy available"),
+            native_latent=False,
+            intermediate_decode_policy=text.get("intermediate_decode_policy", "compact_text_state"),
+            style_selection_source=style_selection_source,
+            source="ralfloop_text_proxy",
+            requested_backend=requested,
+            selected_backend="text_proxy",
+            fallback_used=False,
+        )
 
     if native_enabled and not route_only:
         adapter = RecursiveMASNativeAdapter()

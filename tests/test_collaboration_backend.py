@@ -20,6 +20,7 @@ def test_native_disabled_by_default_selects_text_proxy(monkeypatch):
 
 def test_route_only_does_not_probe_or_load_native(monkeypatch):
     monkeypatch.setenv("RALFLOOP_ENABLE_RECURSIVE_MAS_NATIVE", "1")
+    monkeypatch.setenv("RALFLOOP_ALLOW_TEXT_MAS_FALLBACK", "1")
     policy = JuryPolicy(enabled=True, mode="required", triggers=["explicit_jury"])
 
     backend = select_collaboration_backend(policy, style="sequential", route_only=True)
@@ -31,6 +32,7 @@ def test_route_only_does_not_probe_or_load_native(monkeypatch):
 
 def test_fallback_text_proxy_is_explicit_when_native_unavailable(monkeypatch, tmp_path):
     monkeypatch.setenv("RALFLOOP_ENABLE_RECURSIVE_MAS_NATIVE", "1")
+    monkeypatch.setenv("RALFLOOP_ALLOW_TEXT_MAS_FALLBACK", "1")
     monkeypatch.setenv("RALFLOOP_RECURSIVE_MAS_ROOT", str(tmp_path / "missing"))
     policy = JuryPolicy(enabled=True, mode="required", triggers=["explicit_jury"])
 
