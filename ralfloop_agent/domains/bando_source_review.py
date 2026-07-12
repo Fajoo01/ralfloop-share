@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .bando_source_jury_scheduler import SourceJuryBatchScheduler, SourceJuryVramPolicy
 from .source_authority import SourceCandidate, assess_authority, infer_official_domains
 from .source_jury import SourceJury
 
@@ -101,8 +102,61 @@ def assess_jury_sample(
     candidates: list[dict[str, Any]],
     recursive_mas: bool = False,
     max_candidates: int = 8,
+    vram_aware: bool = False,
+    batch_size: int | str = "auto",
+    oom_backoff: bool = True,
+    audit_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     candidates = candidates[:max_candidates]
+    if recursive_mas and vram_aware:
+        policy = SourceJuryVramPolicy.from_env()
+        policy.max_candidates = max_candidates
+        policy.batch_size = 0 if batch_size == "auto" else int(batch_size)
+        policy.oom_backoff = oom_backoff
+        scheduler = SourceJuryBatchScheduler(policy)
+
+        def _runner(batch: list[dict[str, Any]], _batch_id: str) -> dict[str, Any]:
+            return assess_jury_sample(
+                bando_id=bando_id,
+                version=version,
+                issuer=issuer,
+                candidates=batch,
+                recursive_mas=True,
+                max_candidates=len(batch),
+                vram_aware=False,
+            )
+
+        aggregate = scheduler.run(candidates, runner=_runner, audit_dir=audit_dir).to_dict()
+        deterministic = [
+            {
+                "candidate_id": item["candidate_id"],
+                "deterministic_assessment": item["deterministic_assessment"],
+                "jury_assessment": item["jury_assessment"],
+                "final_assessment": item["final_assessment"],
+                "human_review_required": item["human_review_required"],
+            }
+            for item in aggregate["candidates"]
+        ]
+        return {
+            "status": "jury_sources_completed" if not aggregate["partial"] else "jury_sources_partial",
+            "bando_id": bando_id,
+            "version": version,
+            "candidate_count": aggregate["candidate_count"],
+            "completed_count": aggregate["completed_count"],
+            "failed_count": aggregate["failed_count"],
+            "jury_backend": "recursive_mas_native",
+            "recursive_mas_requested": True,
+            "vram_aware": True,
+            "native_latent_verified": aggregate["native_latent_verified"],
+            "native_latent_verified_all_batches": aggregate["native_latent_verified_all_batches"],
+            "fallback": aggregate["fallback"],
+            "rounds": aggregate["rounds"],
+            "deterministic_results": deterministic,
+            "native_result": aggregate,
+            "batch_plan": aggregate["batch_plan"],
+            "batches": aggregate["batches"],
+            "hard_gate_overridden": False,
+        }
     deterministic = []
     official_domains = infer_official_domains(issuer)
     jury = SourceJury()

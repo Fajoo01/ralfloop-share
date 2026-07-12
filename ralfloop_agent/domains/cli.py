@@ -292,6 +292,10 @@ def _bandi_command(args: argparse.Namespace) -> dict[str, Any]:
             candidates=candidates,
             recursive_mas=args.recursive_mas,
             max_candidates=args.max_candidates,
+            vram_aware=args.vram_aware,
+            batch_size=args.batch_size,
+            oom_backoff=args.oom_backoff,
+            audit_dir=args.audit_dir,
         )
     if args.bandi_cmd == "evaluate":
         out = registry.evaluate({"bando_id": args.bando, "version": args.version, "goal": args.goal}).to_dict()
@@ -381,6 +385,11 @@ def main(argv: list[str] | None = None) -> int:
     bjs.add_argument("--candidates", required=True)
     bjs.add_argument("--max-candidates", type=int, default=8)
     bjs.add_argument("--recursive-mas", action="store_true")
+    bjs.add_argument("--vram-aware", action="store_true")
+    bjs.add_argument("--batch-size", default="auto")
+    bjs.add_argument("--oom-backoff", dest="oom_backoff", action="store_true", default=True)
+    bjs.add_argument("--no-oom-backoff", dest="oom_backoff", action="store_false")
+    bjs.add_argument("--audit-dir")
     be = bandi_sub.add_parser("evaluate"); be.add_argument("--bando", required=True); be.add_argument("--version"); be.add_argument("--goal", required=True)
     try:
         args = parser.parse_args(argv)
