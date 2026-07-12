@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import Any
 
 from ralfloop_agent.integration.recursive_mas_runtime import RecursiveMASRuntimeController
+from .bando_domain_builder import BandoBuildRequest, BandoDomainBuilder
+from .bando_source_review import assess_jury_sample, build_jury_sample, build_source_review
+from .bando_web_research import BandoWebResearcher, WebResearchRequest
 from .bandi_registry import BandoRegistry
 from .builder import DomainBuilder
 from .calculation_orchestrator import CalculationOrchestrator
@@ -214,6 +217,82 @@ def _bandi_command(args: argparse.Namespace) -> dict[str, Any]:
             "conflicts": [item.to_dict() for item in conflicts],
             "state": "draft",
         }
+    if args.bandi_cmd == "review":
+        return registry.review(args.bando, args.version)
+    if args.bandi_cmd == "inspect-sources":
+        builder = BandoDomainBuilder()
+        request = BandoBuildRequest(
+            primary_document=args.source[0] if args.source else None,
+            supporting_documents=args.source[1:],
+        )
+        return {"status": "ok", "sources": [item.to_dict() for item in builder.inspect_sources(request)]}
+    if args.bandi_cmd == "build":
+        builder = BandoDomainBuilder(args.output_root)
+        return builder.build_draft(
+            BandoBuildRequest(
+                primary_document=args.primary_document,
+                attachments=args.attachment,
+                faq_documents=args.faq,
+                amendments=args.amendment,
+                referenced_regulations=args.referenced_regulation,
+                operational_manuals=args.operational_manual,
+                supporting_documents=args.supporting_document,
+                output_root=args.output_root,
+            )
+        ).to_dict()
+    if args.bandi_cmd == "compare-versions":
+        return BandoDomainBuilder().compare_versions(args.bando, args.from_version, args.to_version)
+    if args.bandi_cmd == "research":
+        return BandoDomainBuilder().research_web(args.bando, args.version, allow_web=args.allow_web, offline=args.offline)
+    if args.bandi_cmd == "research-source":
+        request = WebResearchRequest.from_env(
+            issuer=args.issuer,
+            queries=[args.query],
+            allow_web=args.allow_web,
+            offline=args.offline,
+        )
+        return BandoWebResearcher().research(request).to_dict()
+    if args.bandi_cmd == "complete-domain":
+        builder = BandoDomainBuilder(args.output_root)
+        local = builder.build_draft(BandoBuildRequest(primary_document=args.primary_document, output_root=args.output_root)).to_dict()
+        if not local.get("bando_id"):
+            return local
+        research = builder.research_web(local["bando_id"], local["version"], allow_web=args.allow_web, offline=args.offline)
+        return {"status": "domain_completion_review", "local_build": local, "research": research, "active_modified": False}
+    if args.bandi_cmd == "check-updates":
+        out = BandoDomainBuilder().research_web(args.bando, args.version, allow_web=args.allow_web, offline=args.offline)
+        if out.get("accepted_sources"):
+            out["status"] = "validation_required"
+        return out
+    if args.bandi_cmd == "source-review":
+        research = json.loads(Path(args.research_result).read_text(encoding="utf-8"))
+        return build_source_review(
+            bando_id=args.bando,
+            version=args.version,
+            research_result=research,
+            output_dir=args.output_dir,
+        ).to_dict()
+    if args.bandi_cmd == "jury-sources":
+        raw = json.loads(Path(args.candidates).read_text(encoding="utf-8"))
+        if isinstance(raw, dict) and "accepted_sources" in raw:
+            candidates = build_jury_sample(raw, max_candidates=args.max_candidates)
+            issuer = raw.get("issuer") or _issuer_for_bando(args.bando)
+        elif isinstance(raw, dict) and "sources" in raw:
+            candidates = raw["sources"]
+            issuer = raw.get("issuer") or _issuer_for_bando(args.bando)
+        elif isinstance(raw, list):
+            candidates = raw
+            issuer = _issuer_for_bando(args.bando)
+        else:
+            return {"status": "input_invalid", "error": "unsupported_candidates_file"}
+        return assess_jury_sample(
+            bando_id=args.bando,
+            version=args.version,
+            issuer=issuer,
+            candidates=candidates,
+            recursive_mas=args.recursive_mas,
+            max_candidates=args.max_candidates,
+        )
     if args.bandi_cmd == "evaluate":
         out = registry.evaluate({"bando_id": args.bando, "version": args.version, "goal": args.goal}).to_dict()
         out["deterministic_complete"] = out.get("status") == "completed" and bool(out.get("deterministic"))
@@ -221,6 +300,14 @@ def _bandi_command(args: argparse.Namespace) -> dict[str, Any]:
             out["jury_status"] = "disabled"
         return out
     return {"status": "input_invalid", "error": "unknown_bandi_command"}
+
+
+def _issuer_for_bando(bando_id: str) -> str:
+    if "unipolis" in bando_id:
+        return "Fondazione Unipolis"
+    if "cariplo" in bando_id:
+        return "Fondazione Cariplo"
+    return ""
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -248,6 +335,52 @@ def main(argv: list[str] | None = None) -> int:
     bandi_sub.add_parser("list")
     bs = bandi_sub.add_parser("show"); bs.add_argument("--bando", required=True); bs.add_argument("--version")
     bv = bandi_sub.add_parser("validate"); bv.add_argument("--bando", required=True); bv.add_argument("--version")
+    br = bandi_sub.add_parser("review"); br.add_argument("--bando", required=True); br.add_argument("--version")
+    bi = bandi_sub.add_parser("inspect-sources"); bi.add_argument("--source", action="append", required=True)
+    bb = bandi_sub.add_parser("build")
+    bb.add_argument("--primary-document", required=True)
+    bb.add_argument("--attachment", action="append", default=[])
+    bb.add_argument("--faq", action="append", default=[])
+    bb.add_argument("--amendment", action="append", default=[])
+    bb.add_argument("--referenced-regulation", action="append", default=[])
+    bb.add_argument("--operational-manual", action="append", default=[])
+    bb.add_argument("--supporting-document", action="append", default=[])
+    bb.add_argument("--output-root", default="domains")
+    bc = bandi_sub.add_parser("compare-versions")
+    bc.add_argument("--bando", required=True)
+    bc.add_argument("--from", dest="from_version", required=True)
+    bc.add_argument("--to", dest="to_version", required=True)
+    bre = bandi_sub.add_parser("research")
+    bre.add_argument("--bando", required=True)
+    bre.add_argument("--version", required=True)
+    bre.add_argument("--allow-web", action="store_true")
+    bre.add_argument("--offline", action="store_true")
+    brs = bandi_sub.add_parser("research-source")
+    brs.add_argument("--query", required=True)
+    brs.add_argument("--issuer", default="")
+    brs.add_argument("--allow-web", action="store_true")
+    brs.add_argument("--offline", action="store_true")
+    bcd = bandi_sub.add_parser("complete-domain")
+    bcd.add_argument("--primary-document", required=True)
+    bcd.add_argument("--output-root", default="domains")
+    bcd.add_argument("--allow-web", action="store_true")
+    bcd.add_argument("--offline", action="store_true")
+    bcu = bandi_sub.add_parser("check-updates")
+    bcu.add_argument("--bando", required=True)
+    bcu.add_argument("--version", required=True)
+    bcu.add_argument("--allow-web", action="store_true")
+    bcu.add_argument("--offline", action="store_true")
+    bsr = bandi_sub.add_parser("source-review")
+    bsr.add_argument("--bando", required=True)
+    bsr.add_argument("--version", required=True)
+    bsr.add_argument("--research-result", required=True)
+    bsr.add_argument("--output-dir")
+    bjs = bandi_sub.add_parser("jury-sources")
+    bjs.add_argument("--bando", required=True)
+    bjs.add_argument("--version", required=True)
+    bjs.add_argument("--candidates", required=True)
+    bjs.add_argument("--max-candidates", type=int, default=8)
+    bjs.add_argument("--recursive-mas", action="store_true")
     be = bandi_sub.add_parser("evaluate"); be.add_argument("--bando", required=True); be.add_argument("--version"); be.add_argument("--goal", required=True)
     try:
         args = parser.parse_args(argv)
