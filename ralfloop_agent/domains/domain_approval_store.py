@@ -276,7 +276,17 @@ class DomainApprovalStore:
             if effective == "expired":
                 conn.commit()
                 result = expired_execution_response(req)
-                self.audit("execution_blocked_expired", request_id=request_id, action=req["action"], old_status=req["status"], new_status="expired", result="expired")
+                self.audit(
+                    "execution_blocked_expired",
+                    request_id=request_id,
+                    action=req["action"],
+                    bando_id=req["bando_id"],
+                    version=req["domain_version"],
+                    scope_digest=req["scope_digest"],
+                    old_status=req["status"],
+                    new_status="expired",
+                    result="expired",
+                )
                 return result
             if effective != "approved":
                 conn.commit()

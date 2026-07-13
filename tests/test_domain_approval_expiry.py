@@ -1,3 +1,5 @@
+import json
+
 from ralfloop_agent.domains.domain_approval import DomainApprovalDecision, approval_status_response, effective_approval_status, now_ts
 from ralfloop_agent.domains.domain_approval_executor import execute_approved, request_domain_approval
 from ralfloop_agent.domains.domain_approval_store import DomainApprovalStore
@@ -95,8 +97,22 @@ def test_expired_approved_dry_run_does_not_execute_or_consume(monkeypatch, appro
     assert called is False
     assert _row(req["request_id"])["consumed_at"] is None
     with DomainApprovalStore().connect() as conn:
-        events = [item[0] for item in conn.execute("select event_json from approval_audit_events").fetchall()]
-    assert any("execution_blocked_expired" in item for item in events)
+        events = [json.loads(item[0]) for item in conn.execute("select event_json from approval_audit_events").fetchall()]
+    blocked = [item for item in events if item["event"] == "execution_blocked_expired"]
+    assert blocked
+    event = blocked[-1]
+    assert event["bando_id"] == "fondazione_unipolis_act_2026"
+    assert event["version"] == "1.0.0"
+    assert event["scope_digest"]
+    assert event["action"] == "run_domain_canary"
+    assert event["request_id"] == req["request_id"]
+    assert event["old_status"] == "approved"
+    assert event["new_status"] == "expired"
+    assert event["result"] == "expired"
+    rendered = json.dumps(event, sort_keys=True)
+    assert "secret" not in rendered.lower()
+    assert "nonce" not in rendered.lower()
+    assert "telegram_message" not in rendered
 
 
 def test_expired_approved_real_execution_does_not_call_canary(monkeypatch, approval_env):

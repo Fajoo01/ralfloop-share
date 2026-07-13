@@ -105,7 +105,17 @@ def execute_approved(request_id: str, *, dry_run: bool = False, store: DomainApp
         return {"status": "already_consumed", "request_id": request_id}
     if effective == "expired":
         result = expired_execution_response(row)
-        store.audit("execution_blocked_expired", request_id=request_id, action=row["action"], old_status=row["status"], new_status="expired", result="expired")
+        store.audit(
+            "execution_blocked_expired",
+            request_id=request_id,
+            action=row["action"],
+            bando_id=row["bando_id"],
+            version=row["domain_version"],
+            scope_digest=row["scope_digest"],
+            old_status=row["status"],
+            new_status="expired",
+            result="expired",
+        )
         return result
     if effective != "approved":
         return {"status": "approval_required", "request_id": request_id, "current_status": effective, "stored_status": row["status"], "effective_status": effective, "execution_allowed": False}
