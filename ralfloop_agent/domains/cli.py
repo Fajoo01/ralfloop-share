@@ -17,6 +17,7 @@ from .bandi_registry import BandoRegistry
 from .builder import DomainBuilder
 from .calculation_orchestrator import CalculationOrchestrator
 from .capability_registry import CanonicalCapabilityRegistry
+from .domain_approval_executor import approval_status, cancel_approval, execute_approved, request_domain_approval
 from .deterministic_engine import DeterministicEngine
 from .existing_capability_importer import ExistingCapabilityImporter
 from .jury_router import DomainJuryRouter
@@ -297,6 +298,21 @@ def _bandi_command(args: argparse.Namespace) -> dict[str, Any]:
             oom_backoff=args.oom_backoff,
             audit_dir=args.audit_dir,
         )
+    if args.bandi_cmd == "request-approval":
+        canary = json.loads(Path(args.canary_plan).read_text(encoding="utf-8")) if args.canary_plan else None
+        return request_domain_approval(
+            action=args.action,
+            bando_id=args.bando,
+            version=args.version,
+            canary_plan=canary,
+            send_telegram=args.send_telegram,
+        )
+    if args.bandi_cmd == "approval-status":
+        return approval_status(args.request_id)
+    if args.bandi_cmd == "execute-approved":
+        return execute_approved(args.request_id, dry_run=args.dry_run)
+    if args.bandi_cmd == "cancel-approval":
+        return cancel_approval(args.request_id)
     if args.bandi_cmd == "evaluate":
         out = registry.evaluate({"bando_id": args.bando, "version": args.version, "goal": args.goal}).to_dict()
         out["deterministic_complete"] = out.get("status") == "completed" and bool(out.get("deterministic"))
@@ -390,6 +406,19 @@ def main(argv: list[str] | None = None) -> int:
     bjs.add_argument("--oom-backoff", dest="oom_backoff", action="store_true", default=True)
     bjs.add_argument("--no-oom-backoff", dest="oom_backoff", action="store_false")
     bjs.add_argument("--audit-dir")
+    bra = bandi_sub.add_parser("request-approval")
+    bra.add_argument("--action", required=True, choices=["promote_domain", "run_domain_canary", "apply_domain_source_update"])
+    bra.add_argument("--bando", required=True)
+    bra.add_argument("--version", required=True)
+    bra.add_argument("--canary-plan")
+    bra.add_argument("--send-telegram", action="store_true")
+    bas = bandi_sub.add_parser("approval-status")
+    bas.add_argument("--request-id", required=True)
+    bea = bandi_sub.add_parser("execute-approved")
+    bea.add_argument("--request-id", required=True)
+    bea.add_argument("--dry-run", action="store_true")
+    bca = bandi_sub.add_parser("cancel-approval")
+    bca.add_argument("--request-id", required=True)
     be = bandi_sub.add_parser("evaluate"); be.add_argument("--bando", required=True); be.add_argument("--version"); be.add_argument("--goal", required=True)
     try:
         args = parser.parse_args(argv)

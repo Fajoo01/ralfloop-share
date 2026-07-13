@@ -39,6 +39,14 @@ def audit(event: str, **fields) -> None:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+try:
+    from ralfloop_agent.domains.telegram_approval_api import register_domain_approval_routes
+
+    register_domain_approval_routes(app)
+except Exception as exc:
+    audit("domain_approval_routes_load_failed", error=repr(exc))
+
+
 def sandbox_root(sid: str) -> Path:
     return BASE_DIR / sid / "workspace"
 
