@@ -7,6 +7,7 @@ from typing import Any
 
 from ralfloop_agent.core.state import AgentState, MemoryEntry, PlanStep
 from ralfloop_agent.logging.audit import AuditLogger
+from ralfloop_agent.tools.contracts import ToolResult
 
 
 
@@ -227,7 +228,10 @@ class RalfloopAgent:
                 if result.ok:
                     state.consecutive_failures = 0
                     state.memory.append(MemoryEntry(kind="result", content=f"{decision.tool_name}: ok"))
-                if decision.tool_name == "sandbox_read_file":
+                else:
+                    state.consecutive_failures += 1
+                    state.audit_summary.append(f"{decision.tool_name}: failed:{result.error_type or result.stderr[:80]}")
+                if result.ok and decision.tool_name == "sandbox_read_file":
                     raw_path = decision.tool_input.get("path")
                     if raw_path is None:
                         raw_path = decision.tool_input.get("filename")
@@ -310,14 +314,24 @@ class RalfloopAgent:
                     "command": "python3 - <<'PY'\n" + code + "\nPY",
                     "timeout_sec": int(tool_input.get("timeout_sec", 20)),
                 }
+            if "command" not in tool_input:
+                return ToolResult(tool_name="sandbox_exec", ok=False, exit_code=2, stderr="missing_command", error_type="input_invalid")
             return self.adapter.exec(sandbox, **tool_input)
         if tool_name == "sandbox_write_file":
+            if "path" not in tool_input or "content" not in tool_input:
+                return ToolResult(tool_name="sandbox_write_file", ok=False, exit_code=2, stderr="missing_path_or_content", error_type="input_invalid")
             return self.adapter.write_file(sandbox, **tool_input)
         if tool_name == "sandbox_read_file":
+            if "path" not in tool_input:
+                return ToolResult(tool_name="sandbox_read_file", ok=False, exit_code=2, stderr="missing_path", error_type="input_invalid")
             return self.adapter.read_file(sandbox, **tool_input)
         if tool_name == "sandbox_list_dir":
+            if "path" not in tool_input:
+                tool_input["path"] = "."
             return self.adapter.list_dir(sandbox, **tool_input)
         if tool_name == "sandbox_http_fetch":
+            if "url" not in tool_input:
+                return ToolResult(tool_name="sandbox_http_fetch", ok=False, exit_code=2, stderr="missing_url", error_type="input_invalid")
             return self.adapter.http_fetch(sandbox, **tool_input)
         raise ValueError(f"Unsupported tool: {tool_name}")
 
