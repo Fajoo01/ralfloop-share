@@ -1,0 +1,24 @@
+[Unit]
+Description=Ralf VPN-only Qwen draft service
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ollama
+Group=ollama
+EnvironmentFile=/etc/ralf-draftd/ralf-draftd.env
+Environment=PYTHONPATH=/opt/ralf-draftd
+ExecStart=/usr/bin/python3 -m ralfloop_agent.inference_lab.draft_service_entry
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictAddressFamilies=AF_INET AF_INET6
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target
