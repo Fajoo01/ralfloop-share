@@ -1014,8 +1014,7 @@ def _probe_mediaset_with_fallback(channel_id: str, source_page: str) -> dict:
     return fallback
 
 
-@app.post("/tasks/run")
-def run_task(req: TaskRunRequest):
+def _run_task_impl(req: TaskRunRequest):
     import json as _json
     import re as _re
     from ralfloop_agent.integration.capability_adapter import route_task, route_to_legacy_dict
@@ -1475,6 +1474,21 @@ def run_task(req: TaskRunRequest):
         "artifacts": state.artifacts,
         "audit_summary": state.audit_summary,
     }
+
+
+@app.post("/tasks/run")
+def run_task(req: TaskRunRequest):
+    from ralfloop_agent.providers.agent_gpu_handoff import AgentGpuCoordinator, AgentGpuHandoffError
+
+    task_id = uuid.uuid4().hex
+    models = (req.planner_model_name, req.coder_model_name, req.judge_model_name)
+    coordinator = AgentGpuCoordinator(audit_fn=audit)
+    try:
+        with coordinator.agent_session(models=models, task_id=task_id):
+            return _run_task_impl(req)
+    except AgentGpuHandoffError as exc:
+        audit("gpu_handoff_blocked", task_id=task_id, error=exc.code)
+        raise HTTPException(status_code=503, detail=exc.code) from exc
 
 
 @app.post("/confirmations/{confirmation_id}/approve")

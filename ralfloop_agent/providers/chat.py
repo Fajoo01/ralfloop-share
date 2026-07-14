@@ -452,7 +452,17 @@ class FallbackChatProvider:
     def chat(self, messages: Sequence[Mapping[str, str]], *, model: str | None = None) -> ChatResult:
         try:
             result = self.primary.chat(messages, model=model)
-            return ChatResult(result.text, result.model, self.name, {**result.metadata, "fallback_used": False})
+            return ChatResult(
+                result.text,
+                result.model,
+                self.name,
+                {
+                    **result.metadata,
+                    "provider_requested": self.name,
+                    "provider_effective": self.name,
+                    "fallback_used": False,
+                },
+            )
         except ChatProviderError as exc:
             if not self.should_fallback(exc):
                 raise
@@ -460,6 +470,8 @@ class FallbackChatProvider:
             metadata = {
                 **fallback.metadata,
                 "fallback_used": True,
+                "provider_requested": self.name,
+                "provider_effective": fallback.provider,
                 "fallback_from": self.name,
                 "fallback_provider": fallback.provider,
                 "fallback_reason": str(exc),
@@ -476,7 +488,12 @@ class FallbackChatProvider:
                         text=chunk.text,
                         done=True,
                         model=chunk.model,
-                        metadata={**chunk.metadata, "fallback_used": False},
+                        metadata={
+                            **chunk.metadata,
+                            "provider_requested": self.name,
+                            "provider_effective": self.name,
+                            "fallback_used": False,
+                        },
                     )
                 else:
                     yield chunk
@@ -493,6 +510,8 @@ class FallbackChatProvider:
                         metadata={
                             **chunk.metadata,
                             "fallback_used": True,
+                            "provider_requested": self.name,
+                            "provider_effective": self.fallback.name,
                             "fallback_from": self.name,
                             "fallback_provider": self.fallback.name,
                             "fallback_reason": str(exc),

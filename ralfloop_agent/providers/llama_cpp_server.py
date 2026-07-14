@@ -9,12 +9,15 @@ import json
 import os
 from pathlib import Path
 import signal
+import socket
 import subprocess
 import time
 from typing import Any, Callable, Iterator
 from urllib.parse import urlparse
 
 import requests
+
+from ralfloop_agent.providers.gpu_arbiter import GpuArbiterBusy, InferenceGpuArbiter
 
 
 DEFAULT_MODEL_PATH = Path(
@@ -83,7 +86,9 @@ class LlamaCppServerConfig:
     threads: int = 6
     slots: int = 1
     cache_prompt: bool = True
-    autostart: bool = False
+    cache_ram_mib: int = 1024
+    ngram: bool = False
+    autostart: bool = True
     fallback: str = "ollama"
     state_dir: Path = Path.home() / ".local" / "state" / "ralf"
     ollama_base_url: str = "http://127.0.0.1:11434"
@@ -107,6 +112,8 @@ class LlamaCppServerConfig:
             raise ValueError("invalid_llama_cpp_model_hash")
         if self.fallback not in {"ollama", "none"}:
             raise ValueError("invalid_llama_cpp_fallback")
+        if self.ngram:
+            raise ValueError("llama_cpp_ngram_disabled")
 
     @property
     def port(self) -> int:
@@ -136,7 +143,10 @@ class LlamaCppServerConfig:
             base_url=os.getenv("RALF_LLAMA_CPP_BASE_URL", "http://127.0.0.1:19091").rstrip("/"),
             model=os.getenv("RALF_LLAMA_CPP_MODEL", "qwen2.5:7b").strip() or "qwen2.5:7b",
             model_path=Path(os.getenv("RALF_LLAMA_CPP_MODEL_PATH", str(DEFAULT_MODEL_PATH))).expanduser(),
-            model_hash=os.getenv("RALF_LLAMA_CPP_MODEL_HASH", DEFAULT_MODEL_HASH).strip().lower(),
+            model_hash=os.getenv(
+                "RALF_LLAMA_CPP_MODEL_SHA256",
+                os.getenv("RALF_LLAMA_CPP_MODEL_HASH", DEFAULT_MODEL_HASH),
+            ).strip().lower(),
             server_bin=Path(os.getenv("RALF_LLAMA_CPP_SERVER_BIN", str(DEFAULT_SERVER_BIN))).expanduser(),
             request_timeout_sec=_env_float("RALF_LLAMA_CPP_TIMEOUT", 180.0),
             idle_timeout_sec=_env_float("RALF_LLAMA_CPP_IDLE_TIMEOUT", 60.0),
@@ -146,7 +156,9 @@ class LlamaCppServerConfig:
             threads=_env_int("RALF_LLAMA_CPP_THREADS", 6),
             slots=_env_int("RALF_LLAMA_CPP_SLOTS", 1),
             cache_prompt=_env_bool("RALF_LLAMA_CPP_CACHE_PROMPT", True),
-            autostart=_env_bool("RALF_LLAMA_CPP_AUTOSTART", False),
+            cache_ram_mib=_env_int("RALF_LLAMA_CPP_CACHE_RAM_MIB", 1024),
+            ngram=_env_bool("RALF_LLAMA_CPP_NGRAM", False),
+            autostart=_env_bool("RALF_LLAMA_CPP_AUTOSTART", True),
             fallback=os.getenv("RALF_LLAMA_CPP_FALLBACK", "ollama").strip().lower() or "ollama",
             state_dir=Path(
                 os.getenv("RALF_LLAMA_CPP_STATE_DIR", str(Path.home() / ".local" / "state" / "ralf"))
@@ -203,6 +215,7 @@ class LlamaCppServerManager:
         kill_fn: Callable[[int, int], None] = os.kill,
         sleep_fn: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
+        arbiter: InferenceGpuArbiter | None = None,
     ) -> None:
         self.config = config or LlamaCppServerConfig.from_env()
         self.session = session or requests.Session()
@@ -211,6 +224,7 @@ class LlamaCppServerManager:
         self.kill_fn = kill_fn
         self.sleep_fn = sleep_fn
         self.monotonic = monotonic
+        self.arbiter = arbiter or InferenceGpuArbiter(self.config.gpu_lock_path)
 
     def command(self) -> list[str]:
         cfg = self.config
@@ -235,7 +249,7 @@ class LlamaCppServerManager:
             "--parallel",
             str(cfg.slots),
             "--cache-ram",
-            "1024",
+            str(cfg.cache_ram_mib),
             "--cache-idle-slots",
             "--metrics",
             "--timeout",
@@ -272,7 +286,9 @@ class LlamaCppServerManager:
 
     def ensure_available(self) -> dict[str, Any]:
         if self.health():
-            return {"server_started": False, "server_startup_ms": None}
+            if not self._managed_running():
+                raise LlamaCppServerOwnershipError("llama_cpp_unmanaged_process_on_port")
+            return {"server_started": False, "server_reused": True, "server_startup_ms": None}
         if not self.config.autostart:
             raise LlamaCppServerUnavailable("llama_cpp_server_unavailable_autostart_disabled")
         return self.start()
@@ -308,13 +324,35 @@ class LlamaCppServerManager:
                 "command": command,
             }
         if self.health():
-            return {"provider": "llama_cpp", "status": "already_healthy", "managed": self._managed_running()}
+            if not self._managed_running():
+                raise LlamaCppServerOwnershipError("llama_cpp_unmanaged_process_on_port")
+            return {
+                "provider": "llama_cpp",
+                "status": "already_healthy",
+                "managed": True,
+                "server_started": False,
+                "server_reused": True,
+            }
         self._ensure_state_dirs()
         with self._exclusive_lock(self.config.engine_lock_path):
             if self.health():
-                return {"provider": "llama_cpp", "status": "already_healthy", "managed": self._managed_running()}
+                if not self._managed_running():
+                    raise LlamaCppServerOwnershipError("llama_cpp_unmanaged_process_on_port")
+                return {
+                    "provider": "llama_cpp",
+                    "status": "already_healthy",
+                    "managed": True,
+                    "server_started": False,
+                    "server_reused": True,
+                }
             if self._managed_running():
                 raise LlamaCppServerUnavailable("llama_cpp_managed_process_unhealthy")
+            if self._port_in_use():
+                raise LlamaCppServerOwnershipError("llama_cpp_unmanaged_process_on_port")
+            lock = self.arbiter.status(clean_stale=True)
+            if lock.held:
+                code = "agent_task_active" if lock.metadata.get("mode") == "agent" else "llama_cpp_gpu_lock_busy"
+                raise LlamaCppServerBusy(code)
             if not self.config.server_bin.is_file() or not os.access(self.config.server_bin, os.X_OK):
                 raise LlamaCppServerUnavailable("llama_cpp_server_binary_unavailable")
             verify_model_hash(self.config.model_path, self.config.model_hash)
@@ -340,10 +378,12 @@ class LlamaCppServerManager:
                 metadata = {
                     "pid": process.pid,
                     "provider": "llama_cpp",
+                    "mode": "chat",
                     "timestamp": int(time.time()),
                     "model_hash": self.config.model_hash,
+                    "process_start_ticks": identity.start_ticks,
                 }
-                self._write_fd_json(gpu_fd, metadata)
+                self.arbiter.write_metadata(gpu_fd, metadata)
                 self._atomic_json(
                     self.config.pid_path,
                     {
@@ -367,6 +407,7 @@ class LlamaCppServerManager:
                             "managed": True,
                             "pid": process.pid,
                             "server_started": True,
+                            "server_reused": False,
                             "server_startup_ms": startup_ms,
                         }
                     self.sleep_fn(0.2)
@@ -380,10 +421,12 @@ class LlamaCppServerManager:
                         process.kill()
                         process.wait(timeout=5)
                 self.config.pid_path.unlink(missing_ok=True)
-                self.config.gpu_lock_path.unlink(missing_ok=True)
+                self.arbiter.release_fd(gpu_fd)
+                gpu_fd = -1
                 raise
             finally:
-                os.close(gpu_fd)
+                if gpu_fd >= 0:
+                    os.close(gpu_fd)
 
     def stop(self, *, timeout_sec: float = 15.0) -> dict[str, Any]:
         self._ensure_state_dirs()
@@ -434,7 +477,9 @@ class LlamaCppServerManager:
             "gpu_layers": self.config.gpu_layers,
             "slots": self.config.slots,
             "prompt_cache": self.config.cache_prompt,
-            "gpu_lock_held": self._lock_is_held(self.config.gpu_lock_path),
+            "cache_ram_mib": self.config.cache_ram_mib,
+            "ngram": self.config.ngram,
+            "gpu_lock_held": self.arbiter.status(clean_stale=True).held,
         }
 
     def _ensure_state_dirs(self) -> None:
@@ -458,14 +503,14 @@ class LlamaCppServerManager:
             os.close(fd)
 
     def _acquire_gpu_lock(self) -> int:
-        fd = os.open(self.config.gpu_lock_path, os.O_RDWR | os.O_CREAT, 0o600)
-        os.fchmod(fd, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            os.close(fd)
+            return self.arbiter.acquire_fd(
+                provider="llama_cpp",
+                mode="chat",
+                model_hash=self.config.model_hash,
+            )
+        except GpuArbiterBusy as exc:
             raise LlamaCppServerBusy() from exc
-        return fd
 
     def _wait_identity(self, pid: int, *, timeout_sec: float) -> ProcessIdentity | None:
         deadline = self.monotonic() + timeout_sec
@@ -543,20 +588,12 @@ class LlamaCppServerManager:
         return value if isinstance(value, dict) else None
 
     def _cleanup_gpu_lock(self, pid: int) -> None:
-        try:
-            fd = os.open(self.config.gpu_lock_path, os.O_RDWR)
-        except OSError:
-            return
-        try:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                return
-            metadata = self._read_json(self.config.gpu_lock_path)
-            if metadata is None or int(metadata.get("pid") or 0) == pid:
-                self.config.gpu_lock_path.unlink(missing_ok=True)
-        finally:
-            os.close(fd)
+        self.arbiter.cleanup_owned(pid)
+
+    def _port_in_use(self) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.2)
+            return sock.connect_ex(("127.0.0.1", self.config.port)) == 0
 
     @staticmethod
     def _lock_is_held(path: Path) -> bool:

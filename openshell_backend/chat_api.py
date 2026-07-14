@@ -116,7 +116,7 @@ class ChatResponse(BaseModel):
 @lru_cache(maxsize=1)
 def get_chat_provider() -> ChatProvider | ChatProviderError:
     try:
-        selected = (os.getenv("RALF_CHAT_PROVIDER") or "ollama").strip().lower()
+        selected = (os.getenv("RALF_CHAT_PROVIDER") or "llama_cpp").strip().lower()
         return build_chat_provider() if selected == "ollama" else build_experimental_provider(selected)
     except ChatProviderError as exc:
         return exc

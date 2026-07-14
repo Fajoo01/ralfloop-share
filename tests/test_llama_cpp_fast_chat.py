@@ -127,16 +127,18 @@ def _stream_response(*events: dict | str) -> FakeResponse:
     return FakeResponse(lines=lines)
 
 
-def test_defaults_are_ollama_opt_in_and_autostart_disabled(monkeypatch):
+def test_defaults_are_llama_cpp_with_autostart_enabled(monkeypatch):
     for name in ("RALF_CHAT_PROVIDER", "RALF_LLAMA_CPP_AUTOSTART"):
         monkeypatch.delenv(name, raising=False)
-    assert cli.ChatConfig.from_env().provider == "ollama"
+    assert cli.ChatConfig.from_env().provider == "llama_cpp"
     config = LlamaCppServerConfig.from_env()
-    assert config.autostart is False
+    assert config.autostart is True
     assert config.base_url == "http://127.0.0.1:19091"
     assert config.gpu_layers == 24
     assert config.slots == 1
     assert config.cache_prompt is True
+    assert config.cache_ram_mib == 1024
+    assert config.ngram is False
     assert config.model_path.name == f"sha256-{DEFAULT_MODEL_HASH}"
     assert config.model_hash == DEFAULT_MODEL_HASH
 

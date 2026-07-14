@@ -110,7 +110,7 @@ class FakeHTTPSession:
         return self.post(url, **kwargs)
 
 
-def test_default_provider_and_experimental_flags_are_disabled(monkeypatch):
+def test_default_chat_provider_and_experimental_flags(monkeypatch):
     for name in (
         "RALF_CHAT_PROVIDER",
         "RALF_REMOTE_MINI_ENABLED",
@@ -118,7 +118,7 @@ def test_default_provider_and_experimental_flags_are_disabled(monkeypatch):
     ):
         monkeypatch.delenv(name, raising=False)
     config = InferenceLabConfig.from_env()
-    assert config.provider == "ollama"
+    assert config.provider == "llama_cpp"
     assert config.remote_mini_enabled is False
     assert config.speculative_enabled is False
 

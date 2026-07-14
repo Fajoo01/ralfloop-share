@@ -38,6 +38,13 @@ def _connect_timeout() -> float:
 def _fallback_allowed(exc: ChatProviderError) -> bool:
     if isinstance(exc, ChatInactivityTimeout):
         return False
+    if str(exc) in {
+        "agent_gpu_lock_busy",
+        "agent_task_active",
+        "engine_busy",
+        "llama_cpp_gpu_lock_busy",
+    }:
+        return False
     if isinstance(exc, (ChatProviderUnavailable, ChatConnectTimeout, ChatInvalidResponse)):
         return True
     if isinstance(exc, ChatProviderHTTPError):

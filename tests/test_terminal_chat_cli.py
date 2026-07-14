@@ -227,7 +227,8 @@ def test_stream_error_strips_terminal_control_sequences(tmp_path, monkeypatch):
     rc = cli.run_ask(_args("ask", "hello"), client=client, store=_store(tmp_path), out=io.StringIO(), err=err)
 
     assert rc == 1
-    assert err.getvalue().strip() == "failure"
+    assert err.getvalue().splitlines()[-1] == "failure"
+    assert "\x1b" not in err.getvalue()
 
 
 def test_stream_approval_only_is_displayed_without_fake_history(tmp_path, monkeypatch):

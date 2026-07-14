@@ -89,10 +89,10 @@ def test_api_explicit_provider_is_opt_in(monkeypatch):
     assert result.provider == "llama_cpp"
 
 
-def test_cli_default_ollama_and_explicit_provider_payload(tmp_path, monkeypatch):
+def test_cli_default_llama_cpp_and_explicit_provider_payload(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("RALF_CHAT_PROVIDER", raising=False)
-    assert cli.config_from_args(_args("ask", "q")).provider == "ollama"
+    assert cli.config_from_args(_args("ask", "q")).provider == "llama_cpp"
     client = FakeClient()
     err = io.StringIO()
     rc = cli.run_ask(
@@ -104,7 +104,7 @@ def test_cli_default_ollama_and_explicit_provider_payload(tmp_path, monkeypatch)
     )
     assert rc == 0
     assert client.calls[0][1]["provider"] == "llama_cpp"
-    assert "EXPERIMENTAL PROVIDER" in err.getvalue()
+    assert "EXPERIMENTAL PROVIDER" not in err.getvalue()
     assert all(kind != "task" for kind, _ in client.calls)
 
 

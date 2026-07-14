@@ -38,7 +38,7 @@ def _positive_int(name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class InferenceLabConfig:
-    provider: str = "ollama"
+    provider: str = "llama_cpp"
     llama_cpp_base_url: str = "http://127.0.0.1:19091"
     llama_cpp_model: str = "qwen2.5:7b"
     remote_mini_enabled: bool = False
@@ -70,7 +70,7 @@ class InferenceLabConfig:
 
     @classmethod
     def from_env(cls, provider: str | None = None) -> "InferenceLabConfig":
-        selected = (provider or os.getenv("RALF_CHAT_PROVIDER") or "ollama").strip().lower()
+        selected = (provider or os.getenv("RALF_CHAT_PROVIDER") or "llama_cpp").strip().lower()
         allowed_hosts = tuple(
             part.strip().lower()
             for part in os.getenv("RALF_REMOTE_MINI_ALLOWED_HOSTS", "").split(",")

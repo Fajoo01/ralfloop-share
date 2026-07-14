@@ -13,6 +13,7 @@ import requests
 
 from ralfloop_agent.cli.repo_context import RepoContextError, collect_repo_context, resolve_cwd
 from ralfloop_agent.cli.session_store import SessionStore, SessionStoreError
+from ralfloop_agent.providers.agent_gpu_handoff import AgentGpuCoordinator, AgentGpuHandoffError
 from ralfloop_agent.providers.llama_cpp_server import (
     LlamaCppServerError,
     LlamaCppServerManager,
@@ -25,7 +26,7 @@ DEFAULT_INACTIVITY_TIMEOUT = 60.0
 DEFAULT_HISTORY_LIMIT = 12
 DEFAULT_HISTORY_CHARS = 24_000
 CHAT_PROVIDERS = ("ollama", "llama_cpp", "remote_tool", "speculative_local", "speculative_remote")
-EXPERIMENTAL_PROVIDERS = set(CHAT_PROVIDERS) - {"ollama"}
+EXPERIMENTAL_PROVIDERS = set(CHAT_PROVIDERS) - {"ollama", "llama_cpp"}
 
 CHAT_ENDPOINT = "/chat"
 CHAT_STREAM_ENDPOINT = "/chat/stream"
@@ -79,7 +80,7 @@ class ChatConfig:
     session_id: str | None = None
     cwd: str | None = None
     model: str | None = None
-    provider: str = "ollama"
+    provider: str = "llama_cpp"
     timings: bool = False
     last_timings: dict[str, Any] = field(default_factory=dict)
 
@@ -92,7 +93,7 @@ class ChatConfig:
             inactivity_timeout=_env_float("RALF_CHAT_INACTIVITY_TIMEOUT", DEFAULT_INACTIVITY_TIMEOUT),
             history_limit=max(1, _env_int("RALF_CHAT_HISTORY_LIMIT", DEFAULT_HISTORY_LIMIT)),
             stream=_env_bool("RALF_CHAT_STREAM", True),
-            provider=(os.getenv("RALF_CHAT_PROVIDER", "ollama").strip().lower() or "ollama"),
+            provider=(os.getenv("RALF_CHAT_PROVIDER", "llama_cpp").strip().lower() or "llama_cpp"),
             timings=_env_bool("RALF_CHAT_TIMINGS", False),
         )
 
@@ -877,8 +878,9 @@ def run_chat(
             continue
         if command == "/engine":
             action = argument.strip().lower() or "status"
-            if action not in {"status", "start", "stop", "health"}:
-                print("uso: /engine [status|start|stop|health]", file=err)
+            action = action.replace("-", "_").replace(" ", "_")
+            if action not in {"status", "start", "stop", "health", "switch_chat", "switch_agent", "handoff_status"}:
+                print("uso: /engine [status|start|stop|health|switch chat|switch agent|handoff-status]", file=err)
                 continue
             run_engine_action(action, out=out, err=err)
             continue
@@ -977,9 +979,12 @@ def _timings_text(info: dict[str, Any]) -> str:
     metadata = info.get("metadata") if isinstance(info.get("metadata"), dict) else {}
     fields = {
         "provider": info.get("provider") or metadata.get("provider"),
+        "provider_requested": metadata.get("provider_requested"),
+        "provider_effective": metadata.get("provider_effective"),
         "model": info.get("model") or metadata.get("model"),
         "endpoint": metadata.get("endpoint") or info.get("endpoint"),
         "server_startup_ms": metadata.get("server_startup_ms"),
+        "server_reused": metadata.get("server_reused"),
         "ttft_ms": metadata.get("ttft_ms"),
         "wall_ms": metadata.get("wall_ms"),
         "prompt_count": metadata.get("prompt_tokens"),
@@ -1004,6 +1009,7 @@ def run_engine_action(
     action: str,
     *,
     manager: LlamaCppServerManager | None = None,
+    coordinator: AgentGpuCoordinator | None = None,
     dry_run: bool = False,
     out: TextIO = sys.stdout,
     err: TextIO = sys.stderr,
@@ -1018,11 +1024,17 @@ def run_engine_action(
             result = selected.status()
         elif action == "status":
             result = selected.status()
+        elif action == "switch_chat":
+            result = (coordinator or AgentGpuCoordinator(server_manager=selected)).switch_chat()
+        elif action == "switch_agent":
+            result = (coordinator or AgentGpuCoordinator(server_manager=selected)).switch_agent()
+        elif action == "handoff_status":
+            result = (coordinator or AgentGpuCoordinator(server_manager=selected)).handoff_status()
         else:
             print("unknown_engine_action", file=err)
             return 2
-    except (LlamaCppServerError, OSError, ValueError) as exc:
-        code = exc.code if isinstance(exc, LlamaCppServerError) else "llama_cpp_engine_configuration_error"
+    except (LlamaCppServerError, AgentGpuHandoffError, OSError, ValueError) as exc:
+        code = exc.code if isinstance(exc, (LlamaCppServerError, AgentGpuHandoffError)) else "llama_cpp_engine_configuration_error"
         print(sanitize_terminal_text(code), file=err)
         return 1
     print(json.dumps(sanitize_json(result), ensure_ascii=False, indent=2, sort_keys=True), file=out)
@@ -1036,11 +1048,14 @@ def run_engine(
     out: TextIO = sys.stdout,
     err: TextIO = sys.stderr,
 ) -> int:
+    action = args.engine_action.replace("-", "_")
+    if action == "switch":
+        action = f"switch_{args.mode}"
     if getattr(args, "engine", "llama_cpp") != "llama_cpp":
         print("unsupported_engine", file=err)
         return 2
     return run_engine_action(
-        args.engine_action,
+        action,
         manager=manager,
         dry_run=bool(getattr(args, "dry_run", False)),
         out=out,
@@ -1089,7 +1104,7 @@ def _help_text() -> str:
             "/status",
             "/model [MODEL|default]",
             "/provider [ollama|llama_cpp|remote_tool|speculative_local|speculative_remote]",
-            "/engine [status|start|stop|health]",
+            "/engine [status|start|stop|health|switch chat|switch agent|handoff-status]",
             "/timings",
             "/cwd [PERCORSO]",
             "/session",
@@ -1274,6 +1289,9 @@ def build_parser() -> argparse.ArgumentParser:
         action_parser.add_argument("engine", nargs="?", default="llama_cpp", choices=("llama_cpp",))
         if action == "start":
             action_parser.add_argument("--dry-run", action="store_true")
+    switch = engine_sub.add_parser("switch", help="switch the shared GPU to chat or agent mode")
+    switch.add_argument("mode", choices=("chat", "agent"))
+    engine_sub.add_parser("handoff-status", help="show shared GPU handoff state")
 
     sessions = sub.add_parser("sessions", help="list persistent sessions")
     session_sub = sessions.add_subparsers(dest="sessions_command")
