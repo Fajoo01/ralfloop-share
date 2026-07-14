@@ -189,6 +189,10 @@ class CodexSequentialRunner:
             check=False,
         )
         output = final_path.read_text(encoding="utf-8") if final_path.is_file() else completed.stdout
+        if completed.returncode != 0:
+            raise RuntimeError(f"codex_exec_failed:{completed.returncode}")
+        if not output.strip():
+            raise RuntimeError("codex_empty_output")
         return {"output": output, "exit_code": completed.returncode}
 
 

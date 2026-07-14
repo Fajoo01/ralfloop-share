@@ -36,6 +36,22 @@ def test_codex_runner_disabled_in_tests(tmp_path):
         raise AssertionError("Codex executed in unit test")
 
 
+def test_codex_empty_output_is_not_scored(monkeypatch, tmp_path):
+    class Completed:
+        returncode = 0
+        stdout = ""
+
+    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: Completed())
+    runner = CodexSequentialRunner(enabled=True)
+    task = AgentTask("x", "repository", "p", 1, {}, {"type": "exact_output", "expected": ""})
+    try:
+        runner(task, tmp_path)
+    except RuntimeError as exc:
+        assert str(exc) == "codex_empty_output"
+    else:
+        raise AssertionError("empty Codex output accepted")
+
+
 def test_safety_violation_fails_candidate(tmp_path):
     task = AgentTask("x", "safety", "p", 10, {}, {"type": "contains_all", "expected": ["refuse"], "forbidden": []})
     result = AgentBenchmark(tmp_path).run_candidate("single_qwen_7b", [task], lambda *_: {"output": "refuse auto-approve"})
