@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 import requests
 
@@ -111,6 +111,43 @@ def _safe_metadata(payload: Mapping[str, Any], keys: Sequence[str]) -> dict[str,
         if isinstance(value, (str, int, float, bool)) or value is None:
             metadata[key] = value
     return metadata
+
+
+def _numeric_object(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    result: dict[str, Any] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            continue
+        if isinstance(item, (int, float)) and not isinstance(item, bool):
+            result[key] = item
+        elif isinstance(item, Mapping):
+            nested = _numeric_object(item)
+            if nested:
+                result[key] = nested
+    return result
+
+
+def _openai_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    usage = _numeric_object(payload.get("usage"))
+    timings = _numeric_object(payload.get("timings"))
+    if usage:
+        metadata["usage"] = usage
+        metadata["prompt_tokens"] = usage.get("prompt_tokens")
+        metadata["generated_tokens"] = usage.get("completion_tokens")
+        details = usage.get("prompt_tokens_details")
+        if isinstance(details, Mapping) and isinstance(details.get("cached_tokens"), (int, float)):
+            metadata["cache_hit_tokens"] = details["cached_tokens"]
+    if timings:
+        metadata["timings"] = timings
+        metadata["prompt_eval_ms"] = timings.get("prompt_ms")
+        metadata["prompt_tokens_per_second"] = timings.get("prompt_per_second")
+        metadata["decode_tokens_per_second"] = timings.get("predicted_per_second")
+        if metadata.get("cache_hit_tokens") is None:
+            metadata["cache_hit_tokens"] = timings.get("cache_n")
+    return {key: value for key, value in metadata.items() if value is not None}
 
 
 def _translate_transport_error(exc: requests.RequestException) -> ChatProviderError:
@@ -276,12 +313,14 @@ class OpenAICompatibleChatProvider:
         provider_name: str = "openai_compat",
         settings: ChatProviderSettings | None = None,
         session: requests.Session | None = None,
+        request_options: Mapping[str, Any] | None = None,
     ) -> None:
         self.name = provider_name
         self.base_url = base_url.rstrip("/")
         self.default_model = model
         self.settings = settings or ChatProviderSettings()
         self.session = session or requests.Session()
+        self.request_options = dict(request_options or {})
 
     def chat(
         self,
@@ -293,7 +332,7 @@ class OpenAICompatibleChatProvider:
         try:
             response = self.session.post(
                 f"{self.base_url}/v1/chat/completions",
-                json={"model": selected_model, "messages": list(messages), "stream": False},
+                json={**self.request_options, "model": selected_model, "messages": list(messages), "stream": False},
                 headers={"Accept": "application/json"},
                 timeout=self.settings.requests_timeout,
             )
@@ -318,14 +357,7 @@ class OpenAICompatibleChatProvider:
         if not isinstance(text, str):
             raise ChatInvalidResponse("openai_compat_response_content_not_text")
         actual_model = str(payload.get("model") or selected_model)
-        metadata: dict[str, Any] = {}
-        usage = payload.get("usage")
-        if isinstance(usage, dict):
-            metadata["usage"] = {
-                key: value
-                for key, value in usage.items()
-                if isinstance(key, str) and isinstance(value, (int, float))
-            }
+        metadata = _openai_metadata(payload)
         return ChatResult(text=text, model=actual_model, provider=self.name, metadata=metadata)
 
     def stream_chat(
@@ -338,11 +370,12 @@ class OpenAICompatibleChatProvider:
         response: requests.Response | None = None
         actual_model = selected_model
         finish_reason: str | None = None
+        final_metadata: dict[str, Any] = {}
         try:
             try:
                 response = self.session.post(
                     f"{self.base_url}/v1/chat/completions",
-                    json={"model": selected_model, "messages": list(messages), "stream": True},
+                    json={**self.request_options, "model": selected_model, "messages": list(messages), "stream": True},
                     headers={"Accept": "text/event-stream"},
                     stream=True,
                     timeout=self.settings.requests_timeout,
@@ -361,10 +394,13 @@ class OpenAICompatibleChatProvider:
                         continue
                     data = raw_line[5:].strip()
                     if data == "[DONE]":
+                        metadata = dict(final_metadata)
+                        if finish_reason:
+                            metadata["finish_reason"] = finish_reason
                         yield ChatChunk(
                             done=True,
                             model=actual_model,
-                            metadata={"finish_reason": finish_reason} if finish_reason else {},
+                            metadata=metadata,
                         )
                         saw_done = True
                         break
@@ -372,8 +408,12 @@ class OpenAICompatibleChatProvider:
                     if payload.get("error"):
                         raise ChatProviderError("openai_compat_provider_error")
                     actual_model = str(payload.get("model") or actual_model)
+                    final_metadata.update(_openai_metadata(payload))
+                    choices = payload.get("choices")
+                    if isinstance(choices, list) and not choices:
+                        continue
                     try:
-                        choice = payload["choices"][0]
+                        choice = choices[0]
                         delta = choice.get("delta") or {}
                     except (KeyError, IndexError, TypeError) as exc:
                         raise ChatInvalidResponse("openai_compat_stream_missing_choice") from exc
@@ -392,6 +432,74 @@ class OpenAICompatibleChatProvider:
         finally:
             if response is not None:
                 response.close()
+
+
+class FallbackChatProvider:
+    def __init__(
+        self,
+        *,
+        name: str,
+        primary: ChatProvider,
+        fallback: ChatProvider,
+        should_fallback: Callable[[ChatProviderError], bool] | None = None,
+    ) -> None:
+        self.name = name
+        self.primary = primary
+        self.fallback = fallback
+        self.default_model = primary.default_model
+        self.should_fallback = should_fallback or (lambda exc: True)
+
+    def chat(self, messages: Sequence[Mapping[str, str]], *, model: str | None = None) -> ChatResult:
+        try:
+            result = self.primary.chat(messages, model=model)
+            return ChatResult(result.text, result.model, self.name, {**result.metadata, "fallback_used": False})
+        except ChatProviderError as exc:
+            if not self.should_fallback(exc):
+                raise
+            fallback = self.fallback.chat(messages, model=None)
+            metadata = {
+                **fallback.metadata,
+                "fallback_used": True,
+                "fallback_from": self.name,
+                "fallback_provider": fallback.provider,
+                "fallback_reason": str(exc),
+            }
+            return ChatResult(fallback.text, fallback.model, fallback.provider, metadata)
+
+    def stream_chat(self, messages: Sequence[Mapping[str, str]], *, model: str | None = None) -> Iterator[ChatChunk]:
+        emitted = False
+        try:
+            for chunk in self.primary.stream_chat(messages, model=model):
+                emitted = emitted or bool(chunk.text)
+                if chunk.done:
+                    yield ChatChunk(
+                        text=chunk.text,
+                        done=True,
+                        model=chunk.model,
+                        metadata={**chunk.metadata, "fallback_used": False},
+                    )
+                else:
+                    yield chunk
+            return
+        except ChatProviderError as exc:
+            if emitted or not self.should_fallback(exc):
+                raise
+            for chunk in self.fallback.stream_chat(messages, model=None):
+                if chunk.done:
+                    yield ChatChunk(
+                        text=chunk.text,
+                        done=True,
+                        model=chunk.model,
+                        metadata={
+                            **chunk.metadata,
+                            "fallback_used": True,
+                            "fallback_from": self.name,
+                            "fallback_provider": self.fallback.name,
+                            "fallback_reason": str(exc),
+                        },
+                    )
+                else:
+                    yield chunk
 
 
 def _selected_model(requested: str | None, default: str) -> str:
@@ -509,6 +617,7 @@ __all__ = [
     "ChatProviderSettings",
     "ChatProviderUnavailable",
     "ChatResult",
+    "FallbackChatProvider",
     "OllamaChatProvider",
     "OpenAICompatibleChatProvider",
     "build_chat_provider",

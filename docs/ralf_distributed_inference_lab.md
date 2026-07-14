@@ -76,12 +76,15 @@ Opt-in locale:
 
 ```sh
 RALF_CHAT_PROVIDER=llama_cpp
-RALF_LLAMA_CPP_BASE_URL=http://127.0.0.1:8080
-RALF_LLAMA_CPP_MODEL=local-gguf
+RALF_LLAMA_CPP_BASE_URL=http://127.0.0.1:19091
+RALF_LLAMA_CPP_MODEL=qwen2.5:7b
+RALF_LLAMA_CPP_AUTOSTART=0
 ```
 
 `llama_cpp` usa API OpenAI-compatible, streaming reale e fallback Ollama se il
-motore fallisce prima del primo token. L'endpoint deve essere loopback.
+motore fallisce prima del primo token. L'endpoint deve essere loopback. Il
+manager user-space, il lock GPU e i comandi operativi sono documentati in
+`docs/ralf_llama_cpp_fast_chat.md`.
 
 Un server esterno può dichiarare speculative decoding locale attivo solo quando
 entrambi sono espliciti:
@@ -91,14 +94,15 @@ RALF_SPECULATIVE_ENABLED=1
 RALF_LLAMA_CPP_SPECULATIVE_CONFIRMED=1
 ```
 
-Questo flag attesta che `llama-server` è stato avviato fuori dal processo con
-draft verificato dall'engine. Il lab non avvia processi né scarica modelli.
+Questo flag attesta un draft verificato dall'engine. Il manager fast-chat non
+configura draft, `ngram-simple` o speculative decoding e non scarica modelli.
 
 CLI:
 
 ```sh
 ralf ask --provider llama_cpp "..."
 ralf chat --provider remote_tool
+ralf engine status
 ```
 
 Comando interattivo: `/provider [NAME]`. Ogni provider non Ollama mostra

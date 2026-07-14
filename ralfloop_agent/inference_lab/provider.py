@@ -10,52 +10,14 @@ import requests
 from ralfloop_agent.providers.chat import (
     ChatChunk,
     ChatProvider,
-    ChatProviderError,
-    ChatProviderSettings,
     ChatResult,
-    OpenAICompatibleChatProvider,
+    FallbackChatProvider,
     build_chat_provider,
 )
+from ralfloop_agent.providers.llama_cpp import build_llama_cpp_chat_provider
 
 from .config import InferenceLabConfig
 from .remote_mini_client import RemoteMiniClient, RemoteMiniError
-from .security import validate_local_endpoint
-
-
-class FallbackChatProvider:
-    def __init__(self, *, name: str, primary: ChatProvider, fallback: ChatProvider) -> None:
-        self.name = name
-        self.primary = primary
-        self.fallback = fallback
-        self.default_model = primary.default_model
-
-    def chat(self, messages: Sequence[Mapping[str, str]], *, model: str | None = None) -> ChatResult:
-        try:
-            result = self.primary.chat(messages, model=model)
-            return replace(result, provider=self.name)
-        except ChatProviderError as exc:
-            fallback = self.fallback.chat(messages, model=None)
-            metadata = {**fallback.metadata, "fallback_from": self.name, "fallback_reason": exc.code}
-            return replace(fallback, metadata=metadata)
-
-    def stream_chat(self, messages: Sequence[Mapping[str, str]], *, model: str | None = None) -> Iterator[ChatChunk]:
-        emitted = False
-        try:
-            for chunk in self.primary.stream_chat(messages, model=model):
-                emitted = emitted or bool(chunk.text)
-                yield chunk
-            return
-        except ChatProviderError as exc:
-            if emitted:
-                raise
-            for chunk in self.fallback.stream_chat(messages, model=None):
-                if chunk.done:
-                    yield replace(
-                        chunk,
-                        metadata={**chunk.metadata, "fallback_from": self.name, "fallback_reason": exc.code},
-                    )
-                else:
-                    yield chunk
 
 
 class RemoteToolChatProvider:
@@ -172,19 +134,7 @@ def build_experimental_provider(
             active=False,
             mode="remote",
         )
-    settings = ChatProviderSettings()
-    llama_cpp = OpenAICompatibleChatProvider(
-        base_url=validate_local_endpoint(config.llama_cpp_base_url),
-        model=config.llama_cpp_model,
-        provider_name="llama_cpp",
-        settings=settings,
-        session=session,
-    )
-    llama_with_fallback: ChatProvider = FallbackChatProvider(
-        name="llama_cpp",
-        primary=llama_cpp,
-        fallback=baseline,
-    )
+    llama_with_fallback = build_llama_cpp_chat_provider(fallback=baseline, session=session)
     if config.provider == "llama_cpp":
         return llama_with_fallback
     if config.provider == "speculative_local":

@@ -39,8 +39,8 @@ def _positive_int(name: str, default: int) -> int:
 @dataclass(frozen=True)
 class InferenceLabConfig:
     provider: str = "ollama"
-    llama_cpp_base_url: str = "http://127.0.0.1:8080"
-    llama_cpp_model: str = "local-gguf"
+    llama_cpp_base_url: str = "http://127.0.0.1:19091"
+    llama_cpp_model: str = "qwen2.5:7b"
     remote_mini_enabled: bool = False
     remote_mini_base_url: str = ""
     remote_mini_timeout_sec: float = 10.0
@@ -78,8 +78,8 @@ class InferenceLabConfig:
         )
         return cls(
             provider=selected,
-            llama_cpp_base_url=os.getenv("RALF_LLAMA_CPP_BASE_URL", "http://127.0.0.1:8080").rstrip("/"),
-            llama_cpp_model=os.getenv("RALF_LLAMA_CPP_MODEL", "local-gguf").strip() or "local-gguf",
+            llama_cpp_base_url=os.getenv("RALF_LLAMA_CPP_BASE_URL", "http://127.0.0.1:19091").rstrip("/"),
+            llama_cpp_model=os.getenv("RALF_LLAMA_CPP_MODEL", "qwen2.5:7b").strip() or "qwen2.5:7b",
             remote_mini_enabled=_env_bool("RALF_REMOTE_MINI_ENABLED"),
             remote_mini_base_url=os.getenv("RALF_REMOTE_MINI_BASE_URL", "").rstrip("/"),
             remote_mini_timeout_sec=_positive_float("RALF_REMOTE_MINI_TIMEOUT", 10.0),

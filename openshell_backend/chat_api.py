@@ -273,6 +273,7 @@ def _stream_events(
 
     stream: Iterator[ChatChunk] | None = None
     actual_model = selected_model
+    actual_provider = provider.name
     done_metadata: dict[str, Any] = {}
     try:
         stream = provider.stream_chat(
@@ -287,6 +288,9 @@ def _stream_events(
                 yield _event({"type": "token", "text": chunk.text})
             if chunk.done:
                 done_metadata = chunk.metadata
+                fallback_provider = done_metadata.get("fallback_provider")
+                if done_metadata.get("fallback_used") is True and isinstance(fallback_provider, str):
+                    actual_provider = fallback_provider
                 saw_done = True
                 break
         if not saw_done:
@@ -297,7 +301,7 @@ def _stream_events(
             {
                 "type": "done",
                 "ok": False,
-                "provider": provider.name,
+                "provider": actual_provider,
                 "model": actual_model,
                 "session_id": session_id,
                 "duration_ms": int((time.monotonic() - started) * 1000),
@@ -327,7 +331,7 @@ def _stream_events(
         {
             "type": "done",
             "ok": True,
-            "provider": provider.name,
+            "provider": actual_provider,
             "model": actual_model,
             "session_id": session_id,
             "duration_ms": int((time.monotonic() - started) * 1000),

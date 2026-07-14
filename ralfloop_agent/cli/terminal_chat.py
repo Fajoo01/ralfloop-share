@@ -13,6 +13,10 @@ import requests
 
 from ralfloop_agent.cli.repo_context import RepoContextError, collect_repo_context, resolve_cwd
 from ralfloop_agent.cli.session_store import SessionStore, SessionStoreError
+from ralfloop_agent.providers.llama_cpp_server import (
+    LlamaCppServerError,
+    LlamaCppServerManager,
+)
 
 DEFAULT_BASE_URL = "http://127.0.0.1:19090"
 DEFAULT_AGENT_TIMEOUT = 600.0
@@ -76,6 +80,8 @@ class ChatConfig:
     cwd: str | None = None
     model: str | None = None
     provider: str = "ollama"
+    timings: bool = False
+    last_timings: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_env(cls) -> "ChatConfig":
@@ -87,6 +93,7 @@ class ChatConfig:
             history_limit=max(1, _env_int("RALF_CHAT_HISTORY_LIMIT", DEFAULT_HISTORY_LIMIT)),
             stream=_env_bool("RALF_CHAT_STREAM", True),
             provider=(os.getenv("RALF_CHAT_PROVIDER", "ollama").strip().lower() or "ollama"),
+            timings=_env_bool("RALF_CHAT_TIMINGS", False),
         )
 
 
@@ -555,6 +562,8 @@ def _stream_chat(
                 saw_done = True
                 done_ok = bool(event.get("ok", True))
                 info.update({key: event.get(key) for key in ("provider", "model", "session_id") if event.get(key)})
+                if isinstance(event.get("metadata"), dict):
+                    info["metadata"] = event["metadata"]
             else:
                 raise RalfTerminalError("unknown_stream_event")
             if raw:
@@ -599,6 +608,7 @@ def _non_stream_chat(
         "provider": response.get("provider"),
         "model": response.get("model"),
         "session_id": response.get("session_id"),
+        "metadata": response.get("metadata") if isinstance(response.get("metadata"), dict) else {},
     }
 
 
@@ -650,6 +660,9 @@ def _perform_chat_turn(
         return 1
     if rc != 0:
         return rc
+    config.last_timings = info
+    if config.timings:
+        print(_timings_text(info), file=err)
     session.model = sanitize_terminal_text(str(info["model"])) if info.get("model") else session.model
     session.provider = sanitize_terminal_text(str(info["provider"])) if info.get("provider") else session.provider
     if answer:
@@ -676,6 +689,8 @@ def run_ask(
         return 2
     if config.provider in EXPERIMENTAL_PROVIDERS:
         print(f"EXPERIMENTAL PROVIDER: {config.provider}", file=err)
+    if config.provider == "llama_cpp":
+        print(_llama_cpp_details(), file=err)
     try:
         session = _session_for_config(config, store)
         repo_context = _context_for_session(session)
@@ -745,9 +760,11 @@ def run_agent(
     err: TextIO = sys.stderr,
 ) -> int:
     config = config_from_args(args)
-    if config.provider != "ollama":
+    requested_provider = getattr(args, "provider", None)
+    if requested_provider and requested_provider != "ollama":
         print("experimental_provider_not_allowed_for_agent", file=err)
         return 2
+    config.provider = "ollama"
     goal = sanitize_terminal_text(" ".join(args.message).strip())
     if not goal:
         print("missing_goal", file=err)
@@ -855,6 +872,18 @@ def run_chat(
             print(f"provider={config.provider}", file=out)
             if config.provider in EXPERIMENTAL_PROVIDERS:
                 print(f"EXPERIMENTAL PROVIDER: {config.provider}", file=out)
+            if config.provider == "llama_cpp":
+                print(_llama_cpp_details(), file=out)
+            continue
+        if command == "/engine":
+            action = argument.strip().lower() or "status"
+            if action not in {"status", "start", "stop", "health"}:
+                print("uso: /engine [status|start|stop|health]", file=err)
+                continue
+            run_engine_action(action, out=out, err=err)
+            continue
+        if command == "/timings":
+            print(_timings_text(config.last_timings) if config.last_timings else "(nessun timing)", file=out)
             continue
         if command == "/cwd":
             if argument.strip():
@@ -937,6 +966,88 @@ def run_chat(
             print(sanitize_terminal_text(str(exc)), file=err)
 
 
+def _llama_cpp_details(manager: LlamaCppServerManager | None = None) -> str:
+    selected = manager or LlamaCppServerManager()
+    return sanitize_terminal_text(
+        f"provider: llama_cpp\nmodel: {selected.config.model}\nendpoint: {selected.config.base_url}"
+    )
+
+
+def _timings_text(info: dict[str, Any]) -> str:
+    metadata = info.get("metadata") if isinstance(info.get("metadata"), dict) else {}
+    fields = {
+        "provider": info.get("provider") or metadata.get("provider"),
+        "model": info.get("model") or metadata.get("model"),
+        "endpoint": metadata.get("endpoint") or info.get("endpoint"),
+        "server_startup_ms": metadata.get("server_startup_ms"),
+        "ttft_ms": metadata.get("ttft_ms"),
+        "wall_ms": metadata.get("wall_ms"),
+        "prompt_count": metadata.get("prompt_tokens"),
+        "generated_count": metadata.get("generated_tokens"),
+        "prompt_eval_ms": metadata.get("prompt_eval_ms"),
+        "prompt_rate": metadata.get("prompt_tokens_per_second"),
+        "decode_rate": metadata.get("decode_tokens_per_second"),
+        "cache_hit_count": metadata.get("cache_hit_tokens"),
+        "gpu_layers": metadata.get("gpu_layers"),
+        "fallback_used": metadata.get("fallback_used"),
+        "fallback_reason": metadata.get("fallback_reason"),
+    }
+    return json.dumps(
+        sanitize_json({key: value for key, value in fields.items() if value is not None}),
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    )
+
+
+def run_engine_action(
+    action: str,
+    *,
+    manager: LlamaCppServerManager | None = None,
+    dry_run: bool = False,
+    out: TextIO = sys.stdout,
+    err: TextIO = sys.stderr,
+) -> int:
+    selected = manager or LlamaCppServerManager()
+    try:
+        if action == "start":
+            result = selected.start(dry_run=dry_run)
+        elif action == "stop":
+            result = selected.stop()
+        elif action == "health":
+            result = selected.status()
+        elif action == "status":
+            result = selected.status()
+        else:
+            print("unknown_engine_action", file=err)
+            return 2
+    except (LlamaCppServerError, OSError, ValueError) as exc:
+        code = exc.code if isinstance(exc, LlamaCppServerError) else "llama_cpp_engine_configuration_error"
+        print(sanitize_terminal_text(code), file=err)
+        return 1
+    print(json.dumps(sanitize_json(result), ensure_ascii=False, indent=2, sort_keys=True), file=out)
+    return 0 if action != "health" or result.get("healthy") is True else 1
+
+
+def run_engine(
+    args: argparse.Namespace,
+    *,
+    manager: LlamaCppServerManager | None = None,
+    out: TextIO = sys.stdout,
+    err: TextIO = sys.stderr,
+) -> int:
+    if getattr(args, "engine", "llama_cpp") != "llama_cpp":
+        print("unsupported_engine", file=err)
+        return 2
+    return run_engine_action(
+        args.engine_action,
+        manager=manager,
+        dry_run=bool(getattr(args, "dry_run", False)),
+        out=out,
+        err=err,
+    )
+
+
 def run_sessions(
     args: argparse.Namespace,
     *,
@@ -978,6 +1089,8 @@ def _help_text() -> str:
             "/status",
             "/model [MODEL|default]",
             "/provider [ollama|llama_cpp|remote_tool|speculative_local|speculative_remote]",
+            "/engine [status|start|stop|health]",
+            "/timings",
             "/cwd [PERCORSO]",
             "/session",
             "/new",
@@ -1067,6 +1180,8 @@ def _print_banner(session: ChatSession, config: ChatConfig, out: TextIO) -> None
     print(sanitize_terminal_text(f"provider: {config.provider}"), file=out)
     if config.provider in EXPERIMENTAL_PROVIDERS:
         print(sanitize_terminal_text(f"EXPERIMENTAL PROVIDER: {config.provider}"), file=out)
+    if config.provider == "llama_cpp":
+        print(_llama_cpp_details(), file=out)
 
 
 def _isatty(stream: TextIO) -> bool:
@@ -1104,6 +1219,7 @@ def config_from_args(args: argparse.Namespace) -> ChatConfig:
     config.raw = bool(getattr(args, "raw", False))
     config.json_output = bool(getattr(args, "json", False))
     config.no_history = bool(getattr(args, "no_history", False))
+    config.timings = bool(getattr(args, "timings", config.timings))
     config.continue_session = bool(getattr(args, "continue_session", False))
     config.session_id = getattr(args, "session", None)
     config.cwd = getattr(args, "cwd", None)
@@ -1127,6 +1243,7 @@ def _add_common_options(parser: argparse.ArgumentParser, *, suppress_defaults: b
     parser.add_argument("--cwd", default=default, help="repository working directory")
     parser.add_argument("--model", default=default, help="local model override")
     parser.add_argument("--provider", choices=CHAT_PROVIDERS, default=default, help="chat provider; experimental providers are opt-in")
+    parser.add_argument("--timings", action="store_true", default=false_default, help="print provider timing metadata")
     stream = parser.add_mutually_exclusive_group()
     stream.add_argument("--stream", dest="stream", action="store_true", default=argparse.SUPPRESS)
     stream.add_argument("--no-stream", dest="stream", action="store_false", default=argparse.SUPPRESS)
@@ -1150,6 +1267,14 @@ def build_parser() -> argparse.ArgumentParser:
     agent.add_argument("--yes", action="store_true", help="confirm full workflow in non-interactive mode")
     agent.add_argument("message", nargs="+", help="agent objective")
 
+    engine = sub.add_parser("engine", help="manage the user-space inference engine")
+    engine_sub = engine.add_subparsers(dest="engine_action", required=True)
+    for action in ("status", "start", "stop", "health"):
+        action_parser = engine_sub.add_parser(action)
+        action_parser.add_argument("engine", nargs="?", default="llama_cpp", choices=("llama_cpp",))
+        if action == "start":
+            action_parser.add_argument("--dry-run", action="store_true")
+
     sessions = sub.add_parser("sessions", help="list persistent sessions")
     session_sub = sessions.add_subparsers(dest="sessions_command")
     show = session_sub.add_parser("show", help="show one session")
@@ -1170,6 +1295,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_ask(args)
         if args.command == "agent":
             return run_agent(args)
+        if args.command == "engine":
+            return run_engine(args)
         if args.command == "sessions":
             return run_sessions(args)
     except (RalfTerminalError, RepoContextError, SessionStoreError) as exc:
