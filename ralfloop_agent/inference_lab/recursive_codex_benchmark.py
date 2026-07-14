@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from typing import Any, Callable
@@ -88,7 +89,7 @@ def score_task(task: AgentTask, root: Path, result: dict[str, Any]) -> dict[str,
         details["json_valid"] = payload is not None
     elif kind == "pytest":
         completed = subprocess.run(
-            ["python3", "-m", "pytest", "-q"],
+            [sys.executable, "-m", "pytest", "-q"],
             cwd=root,
             text=True,
             capture_output=True,
@@ -169,15 +170,26 @@ class CodexSequentialRunner:
         if self.calls >= 12:
             raise RuntimeError("codex_run_limit_exceeded")
         self.calls += 1
+        final_path = root / ".codex-last-message.txt"
         completed = subprocess.run(
-            [self.executable, "exec", "--sandbox", "workspace-write", "--skip-git-repo-check", task.prompt],
+            [
+                self.executable,
+                "exec",
+                "--sandbox",
+                "workspace-write",
+                "--skip-git-repo-check",
+                "--output-last-message",
+                str(final_path),
+                task.prompt,
+            ],
             cwd=root,
             text=True,
             capture_output=True,
             timeout=task.timeout_sec,
             check=False,
         )
-        return {"output": completed.stdout, "exit_code": completed.returncode}
+        output = final_path.read_text(encoding="utf-8") if final_path.is_file() else completed.stdout
+        return {"output": output, "exit_code": completed.returncode}
 
 
 def anonymize_outputs(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
