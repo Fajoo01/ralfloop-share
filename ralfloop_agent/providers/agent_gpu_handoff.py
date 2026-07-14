@@ -83,9 +83,7 @@ class AgentGpuCoordinator:
     def switch_agent(self) -> dict[str, Any]:
         stopped = self._stop_managed_server()
         self._require_port_free()
-        lock = self.arbiter.status(clean_stale=True)
-        if lock.held:
-            raise AgentGpuBusy("agent_gpu_lock_busy")
+        self._require_lock_free()
         return {**self.handoff_status(), "mode": "agent_ready", "server_stopped": stopped}
 
     def switch_chat(self) -> dict[str, Any]:
@@ -107,6 +105,7 @@ class AgentGpuCoordinator:
         initial_models = self._ollama_models_or_none()
         stopped = self._stop_managed_server()
         self._require_port_free()
+        self._require_lock_free()
         try:
             fd = self.arbiter.acquire_fd(
                 provider="ollama",
@@ -151,6 +150,14 @@ class AgentGpuCoordinator:
                 return
             self.sleep_fn(0.1)
         raise AgentGpuHandoffError("llama_cpp_port_not_released")
+
+    def _require_lock_free(self) -> None:
+        deadline = self.monotonic() + 5.0
+        while self.monotonic() < deadline:
+            if not self.arbiter.status(clean_stale=True).held:
+                return
+            self.sleep_fn(0.1)
+        raise AgentGpuBusy("agent_gpu_lock_busy")
 
     def _ollama_models_or_none(self) -> set[str] | None:
         try:

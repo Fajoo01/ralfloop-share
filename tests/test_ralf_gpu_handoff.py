@@ -20,6 +20,12 @@ from ralfloop_agent.providers.chat import ChatProviderUnavailable
 from ralfloop_agent.providers.gpu_arbiter import GpuArbiterBusy, InferenceGpuArbiter
 from ralfloop_agent.providers.llama_cpp import _fallback_allowed
 from ralfloop_agent.providers.llama_cpp_server import LlamaCppServerConfig
+from ralfloop_agent.providers.llama_cpp_server import (
+    LlamaCppServerManager,
+    ProcessIdentity,
+    _local_child,
+    _remember_local_child,
+)
 
 
 class FakeResponse:
@@ -116,6 +122,53 @@ def test_agent_switch_stops_only_managed_server_and_frees_port(tmp_path):
     assert manager.stop_calls == 1
     assert result["llama_cpp_running"] is False
     assert result["port_19091_free"] is True
+
+
+def test_manager_reaps_child_started_in_same_backend_process(tmp_path):
+    server = tmp_path / "llama-server"
+    server.write_text("x", encoding="utf-8")
+    config = LlamaCppServerConfig(
+        state_dir=tmp_path / "state",
+        model_path=tmp_path / "model.gguf",
+        server_bin=server,
+        model_hash="0" * 64,
+    )
+    config.state_dir.mkdir()
+    pid = 424242
+    identity = ProcessIdentity(
+        pid=pid,
+        uid=os.getuid(),
+        start_ticks=7,
+        executable=str(server),
+        argv=(str(server), "--alias", config.model, "--port", "19091", "--model", str(config.model_path)),
+    )
+    config.pid_path.write_text(
+        json.dumps({"pid": pid, "owner_uid": os.getuid(), "start_ticks": 7}),
+        encoding="utf-8",
+    )
+
+    class Child:
+        def __init__(self):
+            self.pid = pid
+            self.waits = []
+
+        def wait(self, timeout):
+            self.waits.append(timeout)
+            return 0
+
+    child = Child()
+    _remember_local_child(child)
+    killed = []
+    manager = LlamaCppServerManager(
+        config,
+        identity_reader=lambda requested: identity if requested == pid else None,
+        kill_fn=lambda requested, sig: killed.append((requested, sig)),
+    )
+    result = manager.stop()
+    assert result["changed"] is True
+    assert child.waits == [15.0]
+    assert _local_child(pid) is None
+    assert killed and killed[0][0] == pid
 
 
 def test_agent_switch_does_not_stop_unmanaged_server(tmp_path):

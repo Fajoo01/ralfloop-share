@@ -11,6 +11,7 @@ from pathlib import Path
 import signal
 import socket
 import subprocess
+import threading
 import time
 from typing import Any, Callable, Iterator
 from urllib.parse import urlparse
@@ -26,6 +27,23 @@ DEFAULT_MODEL_PATH = Path(
 )
 DEFAULT_MODEL_HASH = "2bada8a7450677000f678be90653b85d364de7db25eb5ea54136ada5f3933730"
 DEFAULT_SERVER_BIN = Path("/home/sibilla-cumana/src/llama.cpp/build/bin/llama-server")
+_LOCAL_CHILDREN: dict[int, Any] = {}
+_LOCAL_CHILDREN_LOCK = threading.Lock()
+
+
+def _remember_local_child(process: Any) -> None:
+    with _LOCAL_CHILDREN_LOCK:
+        _LOCAL_CHILDREN[int(process.pid)] = process
+
+
+def _local_child(pid: int) -> Any | None:
+    with _LOCAL_CHILDREN_LOCK:
+        return _LOCAL_CHILDREN.get(pid)
+
+
+def _forget_local_child(pid: int) -> None:
+    with _LOCAL_CHILDREN_LOCK:
+        _LOCAL_CHILDREN.pop(pid, None)
 
 
 class LlamaCppServerError(RuntimeError):
@@ -372,6 +390,7 @@ class LlamaCppServerManager:
                     pass_fds=(gpu_fd,),
                     start_new_session=True,
                 )
+                _remember_local_child(process)
                 identity = self._wait_identity(process.pid, timeout_sec=2.0)
                 if identity is None:
                     raise LlamaCppServerUnavailable("llama_cpp_process_identity_unavailable")
@@ -420,6 +439,8 @@ class LlamaCppServerManager:
                     except subprocess.TimeoutExpired:
                         process.kill()
                         process.wait(timeout=5)
+                if process is not None:
+                    _forget_local_child(process.pid)
                 self.config.pid_path.unlink(missing_ok=True)
                 self.arbiter.release_fd(gpu_fd)
                 gpu_fd = -1
@@ -441,16 +462,29 @@ class LlamaCppServerManager:
                 return {"provider": "llama_cpp", "status": "stopped", "changed": False}
             pid = identity.pid
             self.kill_fn(pid, signal.SIGTERM)
-            deadline = self.monotonic() + timeout_sec
-            while self.monotonic() < deadline and self.identity_reader(pid) is not None:
-                self.sleep_fn(0.1)
-            if self.identity_reader(pid) is not None:
-                self.kill_fn(pid, signal.SIGKILL)
-                deadline = self.monotonic() + 5.0
+            local_process = _local_child(pid)
+            if local_process is not None:
+                try:
+                    local_process.wait(timeout=timeout_sec)
+                except subprocess.TimeoutExpired:
+                    self.kill_fn(pid, signal.SIGKILL)
+                    try:
+                        local_process.wait(timeout=5.0)
+                    except subprocess.TimeoutExpired as exc:
+                        raise LlamaCppServerError("llama_cpp_child_would_not_stop") from exc
+                finally:
+                    _forget_local_child(pid)
+            else:
+                deadline = self.monotonic() + timeout_sec
                 while self.monotonic() < deadline and self.identity_reader(pid) is not None:
                     self.sleep_fn(0.1)
-            if self.identity_reader(pid) is not None:
-                raise LlamaCppServerError("llama_cpp_child_would_not_stop")
+                if self.identity_reader(pid) is not None:
+                    self.kill_fn(pid, signal.SIGKILL)
+                    deadline = self.monotonic() + 5.0
+                    while self.monotonic() < deadline and self.identity_reader(pid) is not None:
+                        self.sleep_fn(0.1)
+                if self.identity_reader(pid) is not None:
+                    raise LlamaCppServerError("llama_cpp_child_would_not_stop")
             self.config.pid_path.unlink(missing_ok=True)
             self._cleanup_gpu_lock(pid)
             self._append_log("stopped", pid=pid)
