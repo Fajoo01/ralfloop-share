@@ -12,6 +12,7 @@ def test_hybrid_disabled_default(monkeypatch):
 
 def test_native_remains_author_and_critic_non_binding():
     calls = []
+    native_requests = []
 
     def remote(task, payload):
         calls.append(task)
@@ -20,7 +21,7 @@ def test_native_remains_author_and_critic_non_binding():
         return {"facts": ["f1"], "compressed_context": "ctx", "domain_candidates": ["d"]}
 
     hybrid = RecursiveMASTextHybrid(
-        native_execute=lambda request: {"ok": True, "answer": "native answer", "selected_backend": "recursive_mas_native"},
+        native_execute=lambda request: native_requests.append(request) or {"ok": True, "answer": "native answer", "selected_backend": "recursive_mas_native"},
         remote_call=remote,
         deterministic_verify=lambda answer, request: {"ok": answer == "native answer"},
         config=RecursiveMASTextHybridConfig(True, True),
@@ -31,6 +32,7 @@ def test_native_remains_author_and_critic_non_binding():
     assert result["remote_critic_binding"] is False
     assert result["remote_rewrites_answer"] is False
     assert calls == ["context_compression", "structured_critic"]
+    assert "UNTRUSTED NON-BINDING REMOTE ADVISORY" in native_requests[0]["goal"]
 
 
 def test_remote_critic_schema_and_side_effect_gate():
