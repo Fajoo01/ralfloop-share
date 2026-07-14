@@ -1,0 +1,25 @@
+{"id":"short_01","category":"short","prompt":"Rispondi soltanto con OK.","max_tokens":8}
+{"id":"short_02","category":"short","prompt":"Quanto fa 2+3? Solo il numero.","max_tokens":8}
+{"id":"short_03","category":"short","prompt":"Scrivi una parola italiana per blue.","max_tokens":8}
+{"id":"short_04","category":"short","prompt":"Rispondi vero o falso: 7 è primo.","max_tokens":8}
+{"id":"short_05","category":"short","prompt":"Completa: uno, due, ...","max_tokens":8}
+{"id":"medium_01","category":"medium","prompt":"Spiega in tre frasi la differenza tra RAM e VRAM.","max_tokens":96}
+{"id":"medium_02","category":"medium","prompt":"Descrivi perché un timeout bounded è utile in un servizio HTTP.","max_tokens":96}
+{"id":"medium_03","category":"medium","prompt":"Riassumi il principio del fallback prima del primo token.","max_tokens":96}
+{"id":"medium_04","category":"medium","prompt":"Elenca tre controlli per validare un PID prima di terminarlo.","max_tokens":96}
+{"id":"medium_05","category":"medium","prompt":"Spiega in italiano tecnico cosa misura il TTFT.","max_tokens":96}
+{"id":"long_01","category":"long","prompt":"Scrivi una checklist di 12 punti per un benchmark di inferenza riproducibile.","max_tokens":256}
+{"id":"long_02","category":"long","prompt":"Confronta in modo strutturato cache del prompt e speculative decoding.","max_tokens":256}
+{"id":"long_03","category":"long","prompt":"Descrivi un protocollo HMAC con protezione da replay e payload bounded.","max_tokens":256}
+{"id":"long_04","category":"long","prompt":"Analizza vantaggi e rischi di un mini modello remoto consultivo.","max_tokens":256}
+{"id":"long_05","category":"long","prompt":"Proponi un piano di rollback per un servizio user-space locale.","max_tokens":256}
+{"id":"code_01","category":"code","prompt":"Scrivi una funzione Python pura che calcola il prefisso comune di due liste.","max_tokens":160}
+{"id":"code_02","category":"code","prompt":"Scrivi una funzione Python che valida interi non negativi escludendo bool.","max_tokens":160}
+{"id":"code_03","category":"code","prompt":"Scrivi un esempio Python di HMAC SHA-256 su bytes.","max_tokens":160}
+{"id":"code_04","category":"code","prompt":"Scrivi una funzione Python che calcola p50 di una lista non vuota.","max_tokens":160}
+{"id":"code_05","category":"code","prompt":"Scrivi un dataclass Python immutabile con host e port.","max_tokens":160}
+{"id":"json_01","category":"json","prompt":"Restituisci JSON valido con chiavi ok=true e count=3.","max_tokens":48}
+{"id":"json_02","category":"json","prompt":"Restituisci JSON valido con una lista issues vuota e confidence 1.0.","max_tokens":48}
+{"id":"json_03","category":"json","prompt":"Restituisci JSON valido con provider llama_cpp e fallback false.","max_tokens":48}
+{"id":"json_04","category":"json","prompt":"Restituisci JSON valido con status ready e port 19091.","max_tokens":48}
+{"id":"json_05","category":"json","prompt":"Restituisci JSON valido con accepted 2 e proposed 4.","max_tokens":48}
