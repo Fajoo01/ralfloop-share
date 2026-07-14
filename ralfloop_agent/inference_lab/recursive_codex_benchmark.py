@@ -170,7 +170,7 @@ class CodexSequentialRunner:
             raise RuntimeError("codex_run_limit_exceeded")
         self.calls += 1
         completed = subprocess.run(
-            [self.executable, "exec", "--ephemeral", "--skip-git-repo-check", task.prompt],
+            [self.executable, "exec", "--sandbox", "workspace-write", "--skip-git-repo-check", task.prompt],
             cwd=root,
             text=True,
             capture_output=True,
