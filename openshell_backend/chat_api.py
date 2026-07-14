@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from functools import lru_cache
 import json
+import os
 from pathlib import Path
 import time
 from typing import Annotated, Any, Literal
@@ -24,6 +25,7 @@ from ralfloop_agent.providers.chat import (
     ChatProviderUnavailable,
     build_chat_provider,
 )
+from ralfloop_agent.inference_lab import build_experimental_provider
 
 
 MAX_HISTORY_MESSAGES = 48
@@ -62,6 +64,7 @@ class ChatRequest(BaseModel):
         pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$",
     )
     model: str | None = Field(default=None, min_length=1, max_length=256)
+    provider: Literal["ollama", "llama_cpp", "remote_tool", "speculative_local", "speculative_remote"] | None = None
     repo_context: str | dict[str, Any] | None = None
     stream: bool = False
 
@@ -113,13 +116,30 @@ class ChatResponse(BaseModel):
 @lru_cache(maxsize=1)
 def get_chat_provider() -> ChatProvider | ChatProviderError:
     try:
-        return build_chat_provider()
+        selected = (os.getenv("RALF_CHAT_PROVIDER") or "ollama").strip().lower()
+        return build_chat_provider() if selected == "ollama" else build_experimental_provider(selected)
     except ChatProviderError as exc:
         return exc
+    except (OSError, ValueError):
+        return ChatProviderConfigurationError("invalid_chat_provider")
 
 
 def _session_id(request: ChatRequest) -> str:
     return request.session_id or str(uuid4())
+
+
+def _request_provider(
+    request: ChatRequest,
+    configured: ChatProvider | ChatProviderError,
+) -> ChatProvider | ChatProviderError:
+    if not request.provider:
+        return configured
+    if not isinstance(configured, ChatProviderError) and request.provider == configured.name:
+        return configured
+    try:
+        return build_experimental_provider(request.provider)
+    except (ChatProviderError, OSError, ValueError):
+        return ChatProviderConfigurationError(f"experimental_provider_unavailable:{request.provider}")
 
 
 def _bounded_history(
@@ -208,10 +228,11 @@ def _event(payload: dict[str, Any]) -> str:
 @router.post("/chat", response_model=ChatResponse)
 def chat(
     request: ChatRequest,
-    provider: Annotated[ChatProvider | ChatProviderError, Depends(get_chat_provider)],
+    configured_provider: Annotated[ChatProvider | ChatProviderError, Depends(get_chat_provider)],
 ) -> ChatResponse:
     started = time.monotonic()
     session_id = _session_id(request)
+    provider = _request_provider(request, configured_provider)
     if isinstance(provider, ChatProviderError):
         raise HTTPException(status_code=_provider_status(provider), detail=provider.code)
     try:
@@ -318,9 +339,10 @@ def _stream_events(
 @router.post("/chat/stream")
 def chat_stream(
     request: ChatRequest,
-    provider: Annotated[ChatProvider | ChatProviderError, Depends(get_chat_provider)],
+    configured_provider: Annotated[ChatProvider | ChatProviderError, Depends(get_chat_provider)],
 ) -> StreamingResponse:
     session_id = _session_id(request)
+    provider = _request_provider(request, configured_provider)
     if isinstance(provider, ChatProviderError):
         events = iter(
             (

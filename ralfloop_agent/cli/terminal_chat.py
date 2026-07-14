@@ -20,6 +20,8 @@ DEFAULT_CONNECT_TIMEOUT = 2.0
 DEFAULT_INACTIVITY_TIMEOUT = 60.0
 DEFAULT_HISTORY_LIMIT = 12
 DEFAULT_HISTORY_CHARS = 24_000
+CHAT_PROVIDERS = ("ollama", "llama_cpp", "remote_tool", "speculative_local", "speculative_remote")
+EXPERIMENTAL_PROVIDERS = set(CHAT_PROVIDERS) - {"ollama"}
 
 CHAT_ENDPOINT = "/chat"
 CHAT_STREAM_ENDPOINT = "/chat/stream"
@@ -73,6 +75,7 @@ class ChatConfig:
     session_id: str | None = None
     cwd: str | None = None
     model: str | None = None
+    provider: str = "ollama"
 
     @classmethod
     def from_env(cls) -> "ChatConfig":
@@ -83,6 +86,7 @@ class ChatConfig:
             inactivity_timeout=_env_float("RALF_CHAT_INACTIVITY_TIMEOUT", DEFAULT_INACTIVITY_TIMEOUT),
             history_limit=max(1, _env_int("RALF_CHAT_HISTORY_LIMIT", DEFAULT_HISTORY_LIMIT)),
             stream=_env_bool("RALF_CHAT_STREAM", True),
+            provider=(os.getenv("RALF_CHAT_PROVIDER", "ollama").strip().lower() or "ollama"),
         )
 
 
@@ -417,8 +421,9 @@ def build_chat_payload(
     *,
     no_history: bool = False,
     stream: bool = True,
+    provider: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "message": message,
         "history": [] if no_history else session.messages(),
         "cwd": session.cwd,
@@ -427,6 +432,9 @@ def build_chat_payload(
         "repo_context": repo_context if session.context_enabled else None,
         "stream": stream,
     }
+    if provider:
+        payload["provider"] = provider
+    return payload
 
 
 def build_task_payload(message: str, session: ChatSession, *, no_history: bool = False) -> dict[str, Any]:
@@ -612,6 +620,7 @@ def _perform_chat_turn(
         repo_context,
         no_history=config.no_history,
         stream=config.stream,
+        provider=config.provider,
     )
     try:
         if config.stream and not config.json_output:
@@ -665,6 +674,8 @@ def run_ask(
     if not text:
         print("missing_message", file=err)
         return 2
+    if config.provider in EXPERIMENTAL_PROVIDERS:
+        print(f"EXPERIMENTAL PROVIDER: {config.provider}", file=err)
     try:
         session = _session_for_config(config, store)
         repo_context = _context_for_session(session)
@@ -734,6 +745,9 @@ def run_agent(
     err: TextIO = sys.stderr,
 ) -> int:
     config = config_from_args(args)
+    if config.provider != "ollama":
+        print("experimental_provider_not_allowed_for_agent", file=err)
+        return 2
     goal = sanitize_terminal_text(" ".join(args.message).strip())
     if not goal:
         print("missing_goal", file=err)
@@ -770,7 +784,7 @@ def run_chat(
         print(sanitize_terminal_text(str(exc)), file=err)
         return 2
     _enable_readline()
-    _print_banner(session, out)
+    _print_banner(session, config, out)
     while True:
         try:
             prompt = _styled("› ", "36", out) if sys.stdin.isatty() and _isatty(out) else ""
@@ -830,6 +844,17 @@ def run_chat(
                 session.model = None if argument.strip() == "default" else argument.strip()
                 _save_session(store, session)
             print(f"model={session.model or 'configured'} provider={session.provider or 'configured'}", file=out)
+            continue
+        if command == "/provider":
+            requested = argument.strip().lower()
+            if requested:
+                if requested not in CHAT_PROVIDERS:
+                    print(f"uso: /provider {'|'.join(CHAT_PROVIDERS)}", file=err)
+                    continue
+                config.provider = requested
+            print(f"provider={config.provider}", file=out)
+            if config.provider in EXPERIMENTAL_PROVIDERS:
+                print(f"EXPERIMENTAL PROVIDER: {config.provider}", file=out)
             continue
         if command == "/cwd":
             if argument.strip():
@@ -952,6 +977,7 @@ def _help_text() -> str:
             "/help",
             "/status",
             "/model [MODEL|default]",
+            "/provider [ollama|llama_cpp|remote_tool|speculative_local|speculative_remote]",
             "/cwd [PERCORSO]",
             "/session",
             "/new",
@@ -1033,11 +1059,14 @@ def _session_text(session: ChatSession) -> str:
     )
 
 
-def _print_banner(session: ChatSession, out: TextIO) -> None:
+def _print_banner(session: ChatSession, config: ChatConfig, out: TextIO) -> None:
     print(_styled("Ralf", "1;36", out), file=out)
     print(sanitize_terminal_text(f"cwd: {session.cwd}"), file=out)
     print(sanitize_terminal_text(f"model: {session.model or 'configured'}"), file=out)
     print(sanitize_terminal_text(f"session: {session.session_id}"), file=out)
+    print(sanitize_terminal_text(f"provider: {config.provider}"), file=out)
+    if config.provider in EXPERIMENTAL_PROVIDERS:
+        print(sanitize_terminal_text(f"EXPERIMENTAL PROVIDER: {config.provider}"), file=out)
 
 
 def _isatty(stream: TextIO) -> bool:
@@ -1079,6 +1108,8 @@ def config_from_args(args: argparse.Namespace) -> ChatConfig:
     config.session_id = getattr(args, "session", None)
     config.cwd = getattr(args, "cwd", None)
     config.model = getattr(args, "model", None)
+    if getattr(args, "provider", None):
+        config.provider = args.provider
     return config
 
 
@@ -1095,6 +1126,7 @@ def _add_common_options(parser: argparse.ArgumentParser, *, suppress_defaults: b
     parser.add_argument("--session", default=default, help="resume session ID")
     parser.add_argument("--cwd", default=default, help="repository working directory")
     parser.add_argument("--model", default=default, help="local model override")
+    parser.add_argument("--provider", choices=CHAT_PROVIDERS, default=default, help="chat provider; experimental providers are opt-in")
     stream = parser.add_mutually_exclusive_group()
     stream.add_argument("--stream", dest="stream", action="store_true", default=argparse.SUPPRESS)
     stream.add_argument("--no-stream", dest="stream", action="store_false", default=argparse.SUPPRESS)
