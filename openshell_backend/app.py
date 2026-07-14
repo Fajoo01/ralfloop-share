@@ -46,6 +46,13 @@ try:
 except Exception as exc:
     audit("domain_approval_routes_load_failed", error=repr(exc))
 
+try:
+    from openshell_backend.chat_api import router as chat_router
+
+    app.include_router(chat_router)
+except Exception as exc:
+    audit("chat_router_load_failed", error=repr(exc))
+
 
 def sandbox_root(sid: str) -> Path:
     return BASE_DIR / sid / "workspace"
