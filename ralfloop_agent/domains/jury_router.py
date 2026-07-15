@@ -3,40 +3,102 @@ from __future__ import annotations
 from typing import Any
 
 JURY_REASON_CODES = {
-    "domain_ambiguous", "qualitative_judgment", "conflicting_sources", "unresolved_exception",
-    "incomplete_rules", "mixed_request_unresolved", "recommendation_required", "strategic_assessment",
-    "evidence_synthesis", "domain_validation", "domain_creation_review",
+    "qualitative_judgment",
+    "strategic_assessment",
+    "recommendation_required",
+    "conflicting_sources",
+    "incomplete_rules",
+    "evidence_synthesis",
+    "domain_validation",
+    "domain_creation_review",
+    "unresolved_exception",
+    "mixed_request_unresolved",
 }
-NO_JURY = {"deterministic_complete", "exact_lookup", "formula_complete", "policy_denied", "out_of_scope", "human_confirmation_pending"}
+RECURSIVE_REASON_CODES = {
+    "qualitative_judgment",
+    "strategic_assessment",
+    "recommendation_required",
+    "conflicting_sources",
+    "incomplete_rules",
+    "evidence_synthesis",
+    "domain_validation",
+    "domain_creation_review",
+}
+NO_JURY = {
+    "deterministic_complete",
+    "lookup_complete",
+    "exact_lookup",
+    "formula_complete",
+    "arithmetic_basic",
+    "strict_transformation",
+    "code_fix_deterministic",
+    "policy_denied",
+    "out_of_scope",
+    "human_confirmation_pending",
+    "domain_creation_required",
+}
 
 
 class DomainJuryRouter:
-    def should_use_jury(self, *, domain_resolution: dict[str, Any], classification: str, deterministic_result: dict[str, Any] | None = None, human_confirmation_pending: bool = False) -> dict[str, Any]:
+    def should_use_jury(
+        self,
+        *,
+        domain_resolution: dict[str, Any],
+        classification: str,
+        deterministic_result: dict[str, Any] | None = None,
+        human_confirmation_pending: bool = False,
+        requested_reason_codes: list[str] | None = None,
+        domain_creation_review: bool = False,
+    ) -> dict[str, Any]:
         deterministic_result = deterministic_result or {}
-        if human_confirmation_pending:
+        classification = str(classification or "")
+        if human_confirmation_pending or classification == "external_action":
             return _off("human_confirmation_pending")
-        if classification == "out_of_scope":
-            return _off("out_of_scope")
+        if classification in {"out_of_scope", "policy_denied"}:
+            return _off(classification)
         if deterministic_result.get("complete"):
             return _off("deterministic_complete")
-        reasons = []
-        if domain_resolution.get("status") == "ambiguous":
-            reasons.append("domain_ambiguous")
+        if classification in {"deterministic", "lookup_complete", "exact_lookup", "arithmetic_basic", "strict_transformation", "code_fix_deterministic"}:
+            return _off("lookup_complete" if "lookup" in classification else classification)
+
+        resolution_status = str(domain_resolution.get("status") or "missing")
+        if resolution_status != "resolved" and not domain_creation_review:
+            return _off("domain_creation_required")
+
+        reasons = [str(reason) for reason in requested_reason_codes or []]
+        if classification in RECURSIVE_REASON_CODES:
+            reasons.append(classification)
         if deterministic_result.get("conflicts"):
             reasons.append("conflicting_sources")
-        unresolved = deterministic_result.get("unresolved_questions") or []
+        unresolved = [str(item) for item in deterministic_result.get("unresolved_questions") or []]
+        reasons.extend(reason for reason in unresolved if reason in RECURSIVE_REASON_CODES)
         if "recommendation_required" in unresolved or classification == "non_deterministic":
-            reasons.append("recommendation_required")
-            reasons.append("qualitative_judgment")
+            reasons.extend(("recommendation_required", "qualitative_judgment"))
         if classification == "mixed" and unresolved:
             reasons.append("mixed_request_unresolved")
         if not deterministic_result.get("matched_rules") and classification in {"mixed", "insufficient_evidence"}:
             reasons.append("incomplete_rules")
-        reasons = [r for r in dict.fromkeys(reasons) if r in JURY_REASON_CODES]
+        if domain_creation_review:
+            reasons.append("domain_creation_review")
+        reasons = [reason for reason in dict.fromkeys(reasons) if reason in JURY_REASON_CODES]
         if not reasons:
-            return _off("deterministic_complete" if deterministic_result.get("complete") else "incomplete_rules")
-        return {"use_jury": True, "reason_codes": reasons, "jury_mode": "required", "rounds": 1, "roles": ["domain_expert", "evidence_analyst", "rule_auditor", "adversarial_reviewer", "final_synthesizer"], "domain_context_required": True}
+            return _off("incomplete_rules")
+        return {
+            "use_jury": True,
+            "reason_codes": reasons,
+            "jury_mode": "required",
+            "rounds": 2,
+            "roles": ["planner", "critic", "solver"],
+            "domain_context_required": not domain_creation_review,
+        }
 
 
 def _off(reason: str) -> dict[str, Any]:
-    return {"use_jury": False, "reason_codes": [reason], "jury_mode": "off", "rounds": 0, "roles": [], "domain_context_required": False}
+    return {
+        "use_jury": False,
+        "reason_codes": [reason],
+        "jury_mode": "off",
+        "rounds": 0,
+        "roles": [],
+        "domain_context_required": False,
+    }

@@ -23,3 +23,19 @@ def test_human_confirmation_pending_disables_jury():
     out = DomainJuryRouter().should_use_jury(domain_resolution={"status": "resolved"}, classification="external_action", human_confirmation_pending=True)
     assert out["use_jury"] is False
     assert out["reason_codes"] == ["human_confirmation_pending"]
+
+
+def test_missing_domain_never_selects_jury():
+    out = DomainJuryRouter().should_use_jury(domain_resolution={"status": "missing"}, classification="strategic_assessment")
+    assert out["use_jury"] is False
+    assert out["reason_codes"] == ["domain_creation_required"]
+
+
+def test_domain_creation_review_is_explicit_exception():
+    out = DomainJuryRouter().should_use_jury(
+        domain_resolution={"status": "missing"},
+        classification="domain_creation_review",
+        domain_creation_review=True,
+    )
+    assert out["use_jury"] is True
+    assert "domain_creation_review" in out["reason_codes"]
