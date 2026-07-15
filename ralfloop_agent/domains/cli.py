@@ -76,13 +76,16 @@ def answer_goal(
         prefer_hybrid=prefer_hybrid,
     )
     if not route["use_recursive"]:
+        single_model_pending = route["selected_backend"] == "single_qwen_7b_with_domain"
         return {
-            "status": "domain_reasoning_required" if route["selected_backend"] == "single_qwen_7b_with_domain" else "incomplete",
+            "status": "domain_reasoning_required" if single_model_pending else "incomplete",
             "domain": domain["manifest"],
             "classification": classification,
             "deterministic_result": deterministic,
             "routing": route,
-            "jury_required": False,
+            "jury_required": single_model_pending,
+            "jury_status": "disabled" if single_model_pending else None,
+            "jury_reason_codes": route["reason_codes"] if single_model_pending else [],
             "external_action_executed": False,
         }
     controller = jury_controller or RecursiveMASRuntimeController.from_env()

@@ -115,7 +115,7 @@ def lab_domain_answer(request: DomainGoalRequest) -> dict:
         raise HTTPException(status_code=409, detail=result)
     if result.get("status") == "human_confirmation_required":
         raise HTTPException(status_code=423, detail=result)
-    if result.get("status") == "jury_required" and result.get("jury_status") == "disabled":
+    if result.get("status") in {"jury_required", "domain_reasoning_required"} and result.get("jury_status") == "disabled":
         raise HTTPException(status_code=503, detail=result)
     return result
 
