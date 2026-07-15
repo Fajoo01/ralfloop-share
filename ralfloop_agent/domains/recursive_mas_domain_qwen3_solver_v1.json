@@ -1,0 +1,11 @@
+{
+  "profile_id": "recursive_mas_domain_qwen3_solver_v1",
+  "enabled": false,
+  "planner_model": "Qwen2.5-3B-Instruct",
+  "critic_model": "Qwen2.5-1.5B-Instruct",
+  "solver_model": "Qwen/Qwen3-1.7B",
+  "solver_revision": "70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+  "thinking": false,
+  "input_contract": "domain_evidence_packet_v1",
+  "output_contract": "domain_opinion_v1"
+}

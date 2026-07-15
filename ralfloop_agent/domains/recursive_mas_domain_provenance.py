@@ -36,6 +36,8 @@ CANONICAL_ORDER = {
     "CONFIDENCE": 6,
     "HUMAN": 7,
 }
+CANONICAL_MARKERS = tuple(f"{name}:" for name in CANONICAL_ORDER) + ("END",)
+CANONICAL_REPEATABLE = {"SUPPORT", "COUNTER", "UNCERTAINTY", "ALTERNATIVE"}
 
 
 def _deduplicate(values: Iterable[str]) -> tuple[str, ...]:
@@ -302,6 +304,171 @@ def parse_provenance_solver_json(raw: str, packet: EvidencePacket) -> Provenance
     return record
 
 
+@dataclass(frozen=True)
+class CanonicalNormalization:
+    text: str
+    applied: bool
+    operations: tuple[str, ...]
+    content_unchanged: bool
+
+
+@dataclass(frozen=True)
+class CanonicalParseResult:
+    record: ProvenanceSolverRecord | None
+    strict_parse_valid: bool
+    normalized_parse_valid: bool
+    normalization_applied: bool
+    normalization_operations: tuple[str, ...]
+    content_unchanged: bool
+    strict_error: str | None
+    normalized_error: str | None
+
+
+def _marker_at(value: str, offset: int) -> str | None:
+    for marker in CANONICAL_MARKERS:
+        if value.startswith(marker, offset):
+            end = offset + len(marker)
+            if marker == "END" and end < len(value) and not value[end].isspace():
+                continue
+            return marker
+    return None
+
+
+def _line_initial_marker(value: str) -> str | None:
+    for marker in CANONICAL_MARKERS:
+        if value.startswith(marker):
+            return marker
+    return None
+
+
+def same_line_canonical_markers(raw: str) -> tuple[str, ...]:
+    collisions: list[str] = []
+    for physical_line in str(raw).replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = physical_line.strip()
+        initial = _line_initial_marker(line)
+        if initial is None or initial == "END":
+            continue
+        quote: str | None = None
+        escaped = False
+        index = len(initial)
+        while index < len(line):
+            char = line[index]
+            if escaped:
+                escaped = False
+                index += 1
+                continue
+            if quote and char == "\\":
+                escaped = True
+                index += 1
+                continue
+            if char in {'"', "'"}:
+                quote = None if quote == char else char if quote is None else quote
+                index += 1
+                continue
+            if quote is None and index > 0 and line[index - 1].isspace():
+                marker = _marker_at(line, index)
+                if marker is not None:
+                    collisions.append(marker.rstrip(":"))
+                    index += len(marker)
+                    continue
+            index += 1
+    return tuple(collisions)
+
+
+def lex_normalize_canonical_markers(raw: str) -> CanonicalNormalization:
+    """Insert only missing marker delimiters; never synthesize fields or END."""
+    source = str(raw).replace("\r\n", "\n").replace("\r", "\n").strip()
+    output: list[str] = []
+    operations: list[str] = []
+    for physical_line in source.split("\n"):
+        line = physical_line.strip()
+        if not line:
+            continue
+        initial = _line_initial_marker(line)
+        if initial is None or initial == "END":
+            output.append(line)
+            continue
+        accepted: list[int] = []
+        segment_start = 0
+        current_label = initial[:-1]
+        current_order = CANONICAL_ORDER[current_label]
+        quote: str | None = None
+        escaped = False
+        index = len(initial)
+        while index < len(line):
+            char = line[index]
+            if escaped:
+                escaped = False
+                index += 1
+                continue
+            if quote and char == "\\":
+                escaped = True
+                index += 1
+                continue
+            if char in {'"', "'"}:
+                quote = None if quote == char else char if quote is None else quote
+                index += 1
+                continue
+            if quote is not None or not char.isupper() or index == 0 or not line[index - 1].isspace():
+                index += 1
+                continue
+            token_end = index
+            while token_end < len(line) and (
+                line[token_end].isupper() or line[token_end].isdigit() or line[token_end] == "_"
+            ):
+                token_end += 1
+            marker_like = line[index:token_end]
+            if token_end < len(line) and line[token_end] == ":":
+                marker_like += ":"
+                if marker_like not in CANONICAL_MARKERS:
+                    raise DomainSerializationError(f"provenance_canonical_unknown_marker:{marker_like[:-1]}")
+            marker = _marker_at(line, index)
+            if marker is None:
+                index += 1
+                continue
+            marker_length = len(initial if segment_start == 0 else _marker_at(line, segment_start) or "")
+            previous = line[segment_start + marker_length : index].strip()
+            if not previous:
+                index += len(marker)
+                continue
+            if marker == "END":
+                if line[index + len(marker) :].strip():
+                    index += len(marker)
+                    continue
+                candidate_order = len(CANONICAL_ORDER)
+            else:
+                candidate_label = marker[:-1]
+                candidate_order = CANONICAL_ORDER[candidate_label]
+                if candidate_order < current_order or (
+                    candidate_order == current_order and candidate_label not in CANONICAL_REPEATABLE
+                ):
+                    index += len(marker)
+                    continue
+                current_label = candidate_label
+            accepted.append(index)
+            operations.append(f"insert_newline_before_{marker.rstrip(':')}")
+            segment_start = index
+            current_order = candidate_order
+            initial = marker
+            index += len(marker)
+        if not accepted:
+            output.append(line)
+            continue
+        start = 0
+        for boundary in accepted:
+            output.append(line[start:boundary].strip())
+            start = boundary
+        output.append(line[start:].strip())
+    normalized = "\n".join(output).strip()
+    compact = lambda value: "".join(str(value).split())
+    return CanonicalNormalization(
+        text=normalized,
+        applied=bool(operations) or source != str(raw).strip(),
+        operations=tuple(operations),
+        content_unchanged=compact(source) == compact(normalized),
+    )
+
+
 def parse_provenance_canonical_record(raw: str, packet: EvidencePacket) -> ProvenanceSolverRecord:
     lines = [line.strip() for line in str(raw).splitlines() if line.strip()]
     if not lines or lines[-1] != "END":
@@ -310,7 +477,6 @@ def parse_provenance_canonical_record(raw: str, packet: EvidencePacket) -> Prove
         raise DomainSerializationError("provenance_canonical_line_limit_exceeded")
     values: dict[str, list[str]] = {name: [] for name in CANONICAL_ORDER}
     last_order = -1
-    repeatable = {"SUPPORT", "COUNTER", "UNCERTAINTY", "ALTERNATIVE"}
     pending_label: str | None = None
     for line in lines[:-1]:
         if line.startswith("- "):
@@ -329,7 +495,7 @@ def parse_provenance_canonical_record(raw: str, packet: EvidencePacket) -> Prove
         if order < last_order:
             raise DomainSerializationError("provenance_canonical_order_invalid")
         last_order = order
-        if label not in repeatable and values[label]:
+        if label not in CANONICAL_REPEATABLE and values[label]:
             raise DomainSerializationError(f"provenance_canonical_duplicate:{label.lower()}")
         text = raw_value.strip()
         if not text and pending_label == label:
@@ -370,6 +536,47 @@ def parse_provenance_canonical_record(raw: str, packet: EvidencePacket) -> Prove
         if identifier not in allowed:
             raise DomainSerializationError(f"solver_id_not_allowed:{identifier}")
     return record
+
+
+def parse_provenance_canonical_record_bounded(raw: str, packet: EvidencePacket) -> CanonicalParseResult:
+    strict_record: ProvenanceSolverRecord | None = None
+    strict_error: str | None = None
+    try:
+        strict_record = parse_provenance_canonical_record(raw, packet)
+    except DomainSerializationError as exc:
+        strict_error = exc.code
+    try:
+        normalization = lex_normalize_canonical_markers(raw)
+    except DomainSerializationError as exc:
+        return CanonicalParseResult(
+            record=strict_record,
+            strict_parse_valid=strict_record is not None,
+            normalized_parse_valid=False,
+            normalization_applied=False,
+            normalization_operations=(),
+            content_unchanged=True,
+            strict_error=strict_error,
+            normalized_error=exc.code,
+        )
+    normalized_record: ProvenanceSolverRecord | None = strict_record
+    normalized_error: str | None = strict_error
+    if strict_record is None or normalization.applied:
+        try:
+            normalized_record = parse_provenance_canonical_record(normalization.text, packet)
+            normalized_error = None
+        except DomainSerializationError as exc:
+            normalized_record = None
+            normalized_error = exc.code
+    return CanonicalParseResult(
+        record=strict_record or normalized_record,
+        strict_parse_valid=strict_record is not None,
+        normalized_parse_valid=normalized_record is not None,
+        normalization_applied=normalization.applied,
+        normalization_operations=normalization.operations,
+        content_unchanged=normalization.content_unchanged,
+        strict_error=strict_error,
+        normalized_error=normalized_error,
+    )
 
 
 def detect_demo_contamination(raw: str) -> bool:
@@ -468,6 +675,7 @@ def build_provenance_solver_prompt(
     *,
     request_slots: bool,
     demo_mode: str = "none",
+    strict_newlines: bool = False,
 ) -> str:
     if demo_mode not in DEMO_MODES:
         raise ValueError("unknown_demo_mode")
@@ -527,6 +735,29 @@ def build_provenance_solver_prompt(
         )
     if request_slots:
         sections.append("OUTPUT: JSON only, no markdown or surrounding text: " + schema)
+    elif strict_newlines:
+        sections.append(
+            "CANONICAL DELIMITERS: Every marker MUST start on a new line. After every field value, emit a newline. "
+            "Never put two markers on the same line. Each non-END line MUST contain its marker, one space, and "
+            "a nonempty value on that same physical line; never put a value on the following line. "
+            "CONFIDENCE MUST be a decimal from 0 to 1. HUMAN MUST be exactly true or false. "
+            "END is mandatory and MUST be the final separate line."
+        )
+        sections.append(
+            "EMPTY STRUCTURE SKELETON; delimiter inventory only. Never copy an empty marker line:\n"
+            "POSITION:\n"
+            "SUPPORT:\n"
+            "COUNTER:\n"
+            "UNCERTAINTY:\n"
+            "ALTERNATIVE:\n"
+            "RECOMMENDATION:\n"
+            "CONFIDENCE:\n"
+            "HUMAN:\n"
+            "END"
+        )
+        sections.append(
+            "OUTPUT: Fixed record only in that exact label order. Repeat only SUPPORT, COUNTER, UNCERTAINTY, ALTERNATIVE."
+        )
     else:
         sections.append(
             "OUTPUT: Fixed record only; exact label order; repeat only SUPPORT, COUNTER, UNCERTAINTY, ALTERNATIVE; END mandatory:\n"

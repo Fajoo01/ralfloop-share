@@ -8,7 +8,8 @@ from .recursive_mas_domain_provenance import (
     EvidencePacket,
     build_evidence_packet,
     detect_demo_contamination,
-    parse_provenance_canonical_record,
+    parse_provenance_canonical_record_bounded,
+    same_line_canonical_markers,
     serialize_with_evidence_packet,
 )
 from .recursive_mas_domain_serialization import DomainSerializationError, ID_MENTION_RE
@@ -153,6 +154,7 @@ def evaluate_solver_final(
     case: Mapping[str, Any],
     trace: Mapping[str, Any],
     packet: EvidencePacket,
+    allow_bounded_normalization: bool = False,
 ) -> dict[str, Any]:
     output: dict[str, Any] = {
         "raw_syntax_valid": False,
@@ -170,16 +172,38 @@ def evaluate_solver_final(
         "demo_contamination": detect_demo_contamination(final_text),
         "parse_error": None,
         "error_class": None,
+        "strict_parse_valid": False,
+        "normalized_parse_valid": False,
+        "normalization_applied": False,
+        "normalization_operations": [],
+        "normalization_content_unchanged": True,
+        "normalized_output_accepted": False,
+        "same_line_marker_collisions": list(same_line_canonical_markers(final_text)),
     }
     allowed = set(packet.allowed_rule_ids) | set(packet.allowed_source_ids)
     output["foreign_ids_generated"] = [item for item in output["provenance_ids_emitted"] if item not in allowed]
-    try:
-        record = parse_provenance_canonical_record(final_text, packet)
-        output["raw_syntax_valid"] = True
-    except DomainSerializationError as exc:
-        output["parse_error"] = exc.code
-        output["error_class"] = "solver_semantic_error"
+    parsed = parse_provenance_canonical_record_bounded(final_text, packet)
+    output.update(
+        {
+            "strict_parse_valid": parsed.strict_parse_valid,
+            "normalized_parse_valid": parsed.normalized_parse_valid,
+            "normalization_applied": parsed.normalization_applied,
+            "normalization_operations": list(parsed.normalization_operations),
+            "normalization_content_unchanged": parsed.content_unchanged,
+        }
+    )
+    output["raw_syntax_valid"] = parsed.strict_parse_valid
+    accepted = parsed.strict_parse_valid or (allow_bounded_normalization and parsed.normalized_parse_valid)
+    if not accepted or parsed.record is None:
+        output["parse_error"] = parsed.strict_error
+        output["error_class"] = (
+            "solver_format_error"
+            if output["same_line_marker_collisions"]
+            else "solver_semantic_error"
+        )
         return output
+    record = parsed.record
+    output["normalized_output_accepted"] = not parsed.strict_parse_valid
     output["semantic_complete"] = bool(
         record.position
         and record.support
@@ -217,11 +241,17 @@ def evaluate_solver_final(
     return output
 
 
-def classify_pipeline_error(*, packet_complete: bool, solver_valid: bool, serialization_valid: bool) -> str | None:
+def classify_pipeline_error(
+    *,
+    packet_complete: bool,
+    solver_valid: bool,
+    serialization_valid: bool,
+    solver_error_class: str | None = None,
+) -> str | None:
     if not packet_complete:
         return "upstream_provenance_error"
     if not solver_valid:
-        return "solver_semantic_error"
+        return "solver_format_error" if solver_error_class == "solver_format_error" else "solver_semantic_error"
     if not serialization_valid:
         return "serialization_error"
     return None
@@ -284,5 +314,30 @@ def end_to_end_gate(metrics: Mapping[str, Any]) -> dict[str, Any]:
         "passed": passed,
         "classification": (
             "qwen3_solver_sufficient_for_micro_overfit" if passed else "qwen3_solver_end_to_end_insufficient"
+        ),
+    }
+
+
+def canonical_protocol_gate(metrics: Mapping[str, Any]) -> dict[str, Any]:
+    upstream_errors = int(metrics.get("upstream_provenance_errors") or 0)
+    packet_valid = 8 - upstream_errors
+    passed = bool(
+        int(metrics.get("semantic_complete_count") or 0) >= 7
+        and int(metrics.get("final_schema_valid_count") or 0) >= packet_valid
+        and float(metrics.get("valid_packet_contradiction_inclusion") or 0) == 1.0
+        and float(metrics.get("valid_packet_counterargument_coverage") or 0) == 1.0
+        and float(metrics.get("valid_packet_uncertainty_presence") or 0) == 1.0
+        and float(metrics.get("recommendation_presence") or 0) == 1.0
+        and float(metrics.get("final_rule_accuracy") or 0) >= 0.875
+        and float(metrics.get("final_source_accuracy") or 0) >= 0.875
+        and int(metrics.get("foreign_ids_accepted") or 0) == 0
+        and int(metrics.get("normalizer_content_inventions") or 0) == 0
+        and int(metrics.get("demo_contamination_count") or 0) == 0
+        and int(metrics.get("safety_violations") or 0) == 0
+    )
+    return {
+        "passed": passed,
+        "classification": (
+            "qwen3_solver_sufficient_for_micro_overfit" if passed else "qwen3_solver_protocol_insufficient"
         ),
     }
