@@ -9,6 +9,8 @@ from .domain_opinion import DomainReasoningInput, validate_domain_opinion
 
 
 MAX_TEXT_LENGTH = 240
+DEMO_RULE_ID = "RULE_DEMO_NEVER_VALID"
+DEMO_SOURCE_ID = "SOURCE_DEMO_NEVER_VALID"
 COMPACT_FIELDS = {
     "position",
     "support",
@@ -210,6 +212,8 @@ def _reject_unallowed_id_mentions(record: SolverSemanticRecord, context: Seriali
         record.recommendation,
     )
     for value in (*text_values, *record.rules, *record.sources):
+        if DEMO_RULE_ID in value or DEMO_SOURCE_ID in value:
+            raise DomainSerializationError("demo_id_not_allowed")
         for identifier in ID_MENTION_RE.findall(value):
             if identifier in allowed:
                 continue
@@ -325,13 +329,13 @@ def build_solver_semantic_prompt(
     if one_shot:
         if contract == "B":
             sections.insert(1,
-                'UNRELATED EXAMPLE INPUT: FACT painting_date=1905; RULE RX1 modern_after=1900; SOURCE SX1 catalog_date=1905. OUTPUT: {"position":"The synthetic painting meets the supplied date rule.","support":["The catalog date is after 1900."],"counter":["The catalog may need independent verification."],"rules":["RX1"],"sources":["SX1"],"uncertainty":["The catalog date is not independently verified."],"alternatives":["Leave the item unclassified."],"recommendation":"Record the classification only after human verification.","confidence":0.72,"human":true}'
+                'STRUCTURE-ONLY EXAMPLE; placeholders are not semantic content and demo IDs are always invalid. OUTPUT: {"position":"<POSITION>","support":["<SUPPORT>"],"counter":["<COUNTER>"],"rules":["RULE_DEMO_NEVER_VALID"],"sources":["SOURCE_DEMO_NEVER_VALID"],"uncertainty":["<UNCERTAINTY>"],"alternatives":["<ALTERNATIVE>"],"recommendation":"<RECOMMENDATION>","confidence":0.0,"human":false}'
             )
         else:
             sections.insert(1,
-                "UNRELATED EXAMPLE INPUT: FACT painting_date=1905; RULE RX1 modern_after=1900; SOURCE SX1 catalog_date=1905.\nOUTPUT:\nPOSITION: The synthetic painting meets the supplied date rule.\nSUPPORT: The catalog date is after 1900.\nCOUNTER: The catalog may need independent verification.\nRULES: RX1\nSOURCES: SX1\nUNCERTAINTY: The catalog date is not independently verified.\nALTERNATIVE: Leave the item unclassified.\nRECOMMENDATION: Record the classification only after human verification.\nCONFIDENCE: 0.72\nHUMAN: true\nEND"
+                "STRUCTURE-ONLY EXAMPLE; placeholders are not semantic content and demo IDs are always invalid.\nOUTPUT:\nPOSITION: <POSITION>\nSUPPORT: <SUPPORT>\nCOUNTER: <COUNTER>\nRULES: RULE_DEMO_NEVER_VALID\nSOURCES: SOURCE_DEMO_NEVER_VALID\nUNCERTAINTY: <UNCERTAINTY>\nALTERNATIVE: <ALTERNATIVE>\nRECOMMENDATION: <RECOMMENDATION>\nCONFIDENCE: 0.0\nHUMAN: false\nEND"
             )
-        sections.insert(2, "CURRENT CASE: Use only the following case; do not copy demo wording or IDs.")
+        sections.insert(2, "CURRENT CASE: Use only the following case; demo IDs are forbidden and validator-rejected.")
     if contract == "B":
         sections.extend(
             [

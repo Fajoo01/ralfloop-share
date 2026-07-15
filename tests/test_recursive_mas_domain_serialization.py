@@ -9,6 +9,8 @@ import pytest
 
 from ralfloop_agent.domains.domain_opinion import DomainReasoningInput, validate_domain_opinion
 from ralfloop_agent.domains.recursive_mas_domain_serialization import (
+    DEMO_RULE_ID,
+    DEMO_SOURCE_ID,
     DomainSerializationError,
     SerializationContext,
     SolverSemanticRecord,
@@ -181,11 +183,20 @@ def test_zero_shot_prompt_is_short_ordered_and_does_not_repeat_schema():
 def test_one_shot_example_is_synthetic_and_separate_from_case():
     case = {"question": "dataset question", "facts": [], "rules": [], "sources": []}
     prompt = build_solver_semantic_prompt(case, {}, contract="C", one_shot=True)
-    assert "synthetic painting" in prompt
+    assert "synthetic painting" not in prompt
+    assert "painting_date" not in prompt
+    assert DEMO_RULE_ID in prompt and DEMO_SOURCE_ID in prompt
     assert prompt.count("dataset question") == 1
-    assert prompt.index("UNRELATED EXAMPLE") < prompt.index("CURRENT CASE") < prompt.index("dataset question")
-    assert "do not copy demo wording or IDs" in prompt
+    assert prompt.index("STRUCTURE-ONLY EXAMPLE") < prompt.index("CURRENT CASE") < prompt.index("dataset question")
+    assert "validator-rejected" in prompt
     assert "mandatory and nonempty" in prompt
+
+
+def test_demo_ids_are_always_rejected_by_serializer():
+    for field, value in (("rules", [DEMO_RULE_ID]), ("sources", [DEMO_SOURCE_ID])):
+        record = parse_compact_json(json.dumps({**COMPACT, field: value}))
+        with pytest.raises(DomainSerializationError, match="demo_id_not_allowed"):
+            serialize_domain_opinion(record, _context())
 
 
 def test_feature_flag_math_profile_and_telegram_gate_remain_invariant():
