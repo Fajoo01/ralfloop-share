@@ -6,6 +6,7 @@ torch = pytest.importorskip("torch")
 
 from ralfloop_agent.domains.recursive_mas_domain_training import (
     DomainTrainingConfig,
+    _chat_ids,
     adapter_objective,
     load_component,
     save_component,
@@ -58,3 +59,11 @@ def test_invalid_training_budget_rejected():
     config = DomainTrainingConfig(pilot_steps_per_component=40)
     with pytest.raises(ValueError, match="pilot_step_limit_exceeded"):
         config.validate()
+
+
+def test_chat_ids_accepts_transformers_mapping_result():
+    class Tokenizer:
+        def apply_chat_template(self, *_args, **_kwargs):
+            return {"input_ids": [[1, 2, 3]]}
+
+    assert _chat_ids(Tokenizer(), "prompt", None) == [1, 2, 3]

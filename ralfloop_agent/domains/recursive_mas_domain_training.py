@@ -474,6 +474,8 @@ def _role_texts(role: str, case: dict[str, Any], trace: dict[str, Any]) -> tuple
 
 
 def _chat_ids(tokenizer: Any, prompt: str, assistant: str | None) -> list[int]:
+    from collections.abc import Mapping
+
     messages = [
         {"role": "system", "content": "You are a careful domain-reasoning assistant."},
         {"role": "user", "content": prompt},
@@ -491,6 +493,10 @@ def _chat_ids(tokenizer: Any, prompt: str, assistant: str | None) -> list[int]:
             raise
         merged = [{"role": "user", "content": messages[0]["content"] + "\n\n" + messages[1]["content"]}, *messages[2:]]
         value = tokenizer.apply_chat_template(merged, **kwargs)
+    if isinstance(value, Mapping):
+        if "input_ids" not in value:
+            raise ValueError("chat_template_mapping_missing_input_ids")
+        value = value["input_ids"]
     if hasattr(value, "tolist"):
         value = value.tolist()
     if value and isinstance(value[0], list):
