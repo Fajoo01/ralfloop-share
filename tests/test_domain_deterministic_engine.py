@@ -40,9 +40,26 @@ def test_jury_result_is_structured_with_mock_controller():
 
         def execute(self, request):
             assert "recommendation_required" in request["goal"]
-            return {"ok": True, "answer": "Mantieni una strategia prudente.", "selected_backend": "recursive_mas_native"}
+            return {
+                "ok": True,
+                "answer": {
+                    "domain_id": "incident_triage",
+                    "question": "servizio down molti utenti, strategia prudente",
+                    "position": "È prudente contenere prima di ottimizzare.",
+                    "supporting_arguments": [{"text": "La gravità suggerisce cautela.", "kind": "inference", "refs": ["local_incident_policy"]}],
+                    "counterarguments": [{"text": "La rapidità può ridurre il danno.", "kind": "inference", "refs": []}],
+                    "rule_application": [{"rule_id": "sev1_down", "inference": "Applicabile al fatto osservato."}],
+                    "evidence_used": [{"kind": "source", "id": "local_incident_policy"}],
+                    "uncertainties": ["Bilanciamento rapidità-sicurezza non risolto."],
+                    "alternative_interpretations": ["Intervento rapido ma reversibile."],
+                    "recommendation": "Contenere con passaggi reversibili e revisione umana.",
+                    "confidence": 0.7,
+                    "human_decision_required": True,
+                },
+                "selected_backend": "recursive_mas_native",
+            }
 
     result = answer_goal("servizio down molti utenti, strategia prudente", "incident_triage", jury_controller=Controller())
     assert result["resolution_type"] == "jury"
     assert result["external_action_executed"] is False
-    assert result["recommendations"] == ["Mantieni una strategia prudente."]
+    assert result["recommendations"] == ["Contenere con passaggi reversibili e revisione umana."]

@@ -18,6 +18,7 @@ from .builder import DomainBuilder
 from .calculation_orchestrator import CalculationOrchestrator
 from .capability_registry import CanonicalCapabilityRegistry
 from .domain_approval_executor import approval_status, cancel_approval, execute_approved, request_domain_approval
+from .domain_opinion import DomainReasoningInput, execute_domain_opinion
 from .deterministic_engine import DeterministicEngine
 from .existing_capability_importer import ExistingCapabilityImporter
 from .jury_router import DomainJuryRouter
@@ -63,9 +64,26 @@ def answer_goal(goal: str, domain_id: str | None = None, registry: DomainRegistr
     controller = jury_controller or RecursiveMASRuntimeController.from_env()
     if not controller.config.enabled:
         return {"status": "jury_required", "classification": classification, "jury_required": True, "jury_status": "disabled", "jury_reason_codes": jury["reason_codes"], "deterministic_result": deterministic, "answer": None, "external_action_executed": False}
-    prompt = _compact_context(goal, domain, deterministic, jury)
-    result = controller.execute({"goal": prompt, "rounds": jury["rounds"], "profile": "deterministic_diagnostic"})
-    answer = result.get("answer")
+    reasoning_input = DomainReasoningInput.from_domain(
+        domain,
+        goal,
+        facts=deterministic.get("facts", {}),
+        reason_codes=jury["reason_codes"],
+        constraints=["Preserve deterministic conclusions."],
+    )
+    result = execute_domain_opinion(reasoning_input, controller.execute)
+    if not result.get("ok"):
+        return {
+            "status": result.get("status") or "recursive_output_invalid",
+            "domain": {"domain_id": domain["manifest"]["domain_id"], "version": domain["manifest"]["version"]},
+            "classification": classification,
+            "resolution_type": "jury",
+            "deterministic_result": deterministic,
+            "jury_result": result,
+            "answer": None,
+            "external_action_executed": False,
+        }
+    answer = result["opinion"]
     return {
         "status": "completed" if result.get("ok") else "jury_failed",
         "domain": {"domain_id": domain["manifest"]["domain_id"], "version": domain["manifest"]["version"]},
@@ -76,11 +94,11 @@ def answer_goal(goal: str, domain_id: str | None = None, registry: DomainRegistr
         "answer": answer,
         "facts": deterministic.get("facts", {}),
         "deterministic_conclusions": deterministic.get("derived_values", {}),
-        "jury_interpretations": [answer] if result.get("ok") and answer else [],
+        "jury_interpretations": [answer["position"]],
         "hypotheses": [],
-        "recommendations": [answer] if "recommendation_required" in jury["reason_codes"] and answer else [],
-        "unknowns": deterministic.get("unresolved_questions", []),
-        "confidence": 0.7 if result.get("ok") else 0.0,
+        "recommendations": [answer["recommendation"]] if "recommendation_required" in jury["reason_codes"] else [],
+        "unknowns": answer["uncertainties"],
+        "confidence": answer["confidence"],
         "evidence_refs": deterministic.get("evidence_refs", []),
         "conflicts": deterministic.get("conflicts", []),
         "limitations": ["jury_interpretation_not_fact"],

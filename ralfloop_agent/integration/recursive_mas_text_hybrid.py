@@ -83,6 +83,14 @@ class RecursiveMASTextHybrid:
                 "selected_backend": "none",
                 "native_unchanged": True,
             }
+        if request.get("domain_reasoning") and not isinstance(request.get("domain_context"), dict):
+            return {
+                "ok": False,
+                "status": "domain_creation_required",
+                "requested_backend": "recursive_mas_text_hybrid",
+                "selected_backend": "none",
+                "native_unchanged": True,
+            }
         goal = str(request.get("goal") or request.get("question") or "")[: self.config.max_goal_chars]
         advisory: dict[str, Any] = {}
         remote_error: str | None = None
