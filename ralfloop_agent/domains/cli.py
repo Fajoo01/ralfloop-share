@@ -21,15 +21,24 @@ from .domain_approval_executor import approval_status, cancel_approval, execute_
 from .domain_opinion import DomainReasoningInput, execute_domain_opinion
 from .deterministic_engine import DeterministicEngine
 from .existing_capability_importer import ExistingCapabilityImporter
-from .jury_router import DomainJuryRouter
 from .promotion import DomainPromotionService
 from .registry import DomainRegistry
+from .reasoning_router import DomainReasoningRouter
 from .resolver import DomainResolver
 from .validator import DomainValidator
 from .storage import append_jsonl, now_iso
 
 
-def answer_goal(goal: str, domain_id: str | None = None, registry: DomainRegistry | None = None, jury_controller: Any | None = None) -> dict[str, Any]:
+def answer_goal(
+    goal: str,
+    domain_id: str | None = None,
+    registry: DomainRegistry | None = None,
+    jury_controller: Any | None = None,
+    *,
+    explicit_recursive: bool = False,
+    prefer_hybrid: bool = False,
+    requested_reason_codes: list[str] | None = None,
+) -> dict[str, Any]:
     registry = registry or DomainRegistry()
     resolver = DomainResolver(registry)
     resolution = resolver.resolve(goal, {"domain_id": domain_id} if domain_id else None).to_dict()
@@ -58,17 +67,32 @@ def answer_goal(goal: str, domain_id: str | None = None, registry: DomainRegistr
         }
     if deterministic.get("complete"):
         return {"status": "completed", "domain": {"domain_id": domain["manifest"]["domain_id"], "version": domain["manifest"]["version"]}, "classification": classification, "resolution_type": "deterministic", "answer": deterministic["result"], "deterministic_result": deterministic, "jury_invoked": False, "confidence": deterministic["confidence"], "evidence_refs": deterministic["evidence_refs"], "conflicts": [], "limitations": [], "external_action_executed": False}
-    jury = DomainJuryRouter().should_use_jury(domain_resolution=resolution, classification=classification, deterministic_result=deterministic)
-    if not jury["use_jury"]:
-        return {"status": "incomplete", "domain": domain["manifest"], "deterministic_result": deterministic, "jury_required": False, "external_action_executed": False}
+    route = DomainReasoningRouter().select(
+        domain_resolution=resolution,
+        classification=classification,
+        deterministic_result=deterministic,
+        requested_reason_codes=requested_reason_codes,
+        explicit_recursive=explicit_recursive,
+        prefer_hybrid=prefer_hybrid,
+    )
+    if not route["use_recursive"]:
+        return {
+            "status": "domain_reasoning_required" if route["selected_backend"] == "single_qwen_7b_with_domain" else "incomplete",
+            "domain": domain["manifest"],
+            "classification": classification,
+            "deterministic_result": deterministic,
+            "routing": route,
+            "jury_required": False,
+            "external_action_executed": False,
+        }
     controller = jury_controller or RecursiveMASRuntimeController.from_env()
     if not controller.config.enabled:
-        return {"status": "jury_required", "classification": classification, "jury_required": True, "jury_status": "disabled", "jury_reason_codes": jury["reason_codes"], "deterministic_result": deterministic, "answer": None, "external_action_executed": False}
+        return {"status": "jury_required", "classification": classification, "jury_required": True, "jury_status": "disabled", "jury_reason_codes": route["reason_codes"], "routing": route, "deterministic_result": deterministic, "answer": None, "external_action_executed": False}
     reasoning_input = DomainReasoningInput.from_domain(
         domain,
         goal,
         facts=deterministic.get("facts", {}),
-        reason_codes=jury["reason_codes"],
+        reason_codes=route["reason_codes"],
         constraints=["Preserve deterministic conclusions."],
     )
     result = execute_domain_opinion(reasoning_input, controller.execute)
@@ -96,7 +120,7 @@ def answer_goal(goal: str, domain_id: str | None = None, registry: DomainRegistr
         "deterministic_conclusions": deterministic.get("derived_values", {}),
         "jury_interpretations": [answer["position"]],
         "hypotheses": [],
-        "recommendations": [answer["recommendation"]] if "recommendation_required" in jury["reason_codes"] else [],
+        "recommendations": [answer["recommendation"]] if "recommendation_required" in route["reason_codes"] else [],
         "unknowns": answer["uncertainties"],
         "confidence": answer["confidence"],
         "evidence_refs": deterministic.get("evidence_refs", []),
@@ -109,8 +133,25 @@ def answer_goal(goal: str, domain_id: str | None = None, registry: DomainRegistr
 _answer_goal_impl = answer_goal
 
 
-def answer_goal(goal: str, domain_id: str | None = None, registry: DomainRegistry | None = None, jury_controller: Any | None = None) -> dict[str, Any]:
-    result = _answer_goal_impl(goal, domain_id, registry, jury_controller)
+def answer_goal(
+    goal: str,
+    domain_id: str | None = None,
+    registry: DomainRegistry | None = None,
+    jury_controller: Any | None = None,
+    *,
+    explicit_recursive: bool = False,
+    prefer_hybrid: bool = False,
+    requested_reason_codes: list[str] | None = None,
+) -> dict[str, Any]:
+    result = _answer_goal_impl(
+        goal,
+        domain_id,
+        registry,
+        jury_controller,
+        explicit_recursive=explicit_recursive,
+        prefer_hybrid=prefer_hybrid,
+        requested_reason_codes=requested_reason_codes,
+    )
     _audit_domain_answer(goal, result)
     return result
 

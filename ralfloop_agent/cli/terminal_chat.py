@@ -1063,6 +1063,39 @@ def run_engine(
     )
 
 
+def run_domain_reason(
+    args: argparse.Namespace,
+    *,
+    out: TextIO = sys.stdout,
+    err: TextIO = sys.stderr,
+) -> int:
+    from ralfloop_agent.domains.reasoning_cli import reason_domain
+
+    result = reason_domain(args.domain_id, " ".join(args.question), recursive=bool(args.recursive))
+    print(json.dumps(sanitize_json(result), ensure_ascii=False, indent=2, sort_keys=True), file=out)
+    status = str(result.get("status") or "")
+    return 3 if status == "domain_creation_required" else 4 if result.get("jury_status") == "disabled" else 0
+
+
+def run_recursive(
+    args: argparse.Namespace,
+    *,
+    out: TextIO = sys.stdout,
+    err: TextIO = sys.stderr,
+) -> int:
+    from ralfloop_agent.domains.reasoning_cli import explain_routing, latest_benchmark_summary
+
+    if args.recursive_action == "explain-routing":
+        result = explain_routing(args.domain_id, " ".join(args.question))
+    elif args.recursive_action == "benchmark-domain":
+        result = latest_benchmark_summary()
+    else:
+        print("unknown_recursive_action", file=err)
+        return 2
+    print(json.dumps(sanitize_json(result), ensure_ascii=False, indent=2, sort_keys=True), file=out)
+    return 0 if result.get("selected_backend") != "domain_creation_required" else 3
+
+
 def run_sessions(
     args: argparse.Namespace,
     *,
@@ -1293,6 +1326,20 @@ def build_parser() -> argparse.ArgumentParser:
     switch.add_argument("mode", choices=("chat", "agent"))
     engine_sub.add_parser("handoff-status", help="show shared GPU handoff state")
 
+    domain = sub.add_parser("domain", help="domain-aware operations")
+    domain_sub = domain.add_subparsers(dest="domain_action", required=True)
+    reason = domain_sub.add_parser("reason", help="reason inside one resolved domain")
+    reason.add_argument("--recursive", action="store_true", help="explicit RecursiveMAS request")
+    reason.add_argument("domain_id")
+    reason.add_argument("question", nargs="+")
+
+    recursive = sub.add_parser("recursive", help="RecursiveMAS routing and benchmark diagnostics")
+    recursive_sub = recursive.add_subparsers(dest="recursive_action", required=True)
+    explain = recursive_sub.add_parser("explain-routing", help="show routing decision without chain of thought")
+    explain.add_argument("domain_id")
+    explain.add_argument("question", nargs="+")
+    recursive_sub.add_parser("benchmark-domain", help="show latest domain-reasoning benchmark")
+
     sessions = sub.add_parser("sessions", help="list persistent sessions")
     session_sub = sessions.add_subparsers(dest="sessions_command")
     show = session_sub.add_parser("show", help="show one session")
@@ -1315,6 +1362,10 @@ def main(argv: list[str] | None = None) -> int:
             return run_agent(args)
         if args.command == "engine":
             return run_engine(args)
+        if args.command == "domain" and args.domain_action == "reason":
+            return run_domain_reason(args)
+        if args.command == "recursive":
+            return run_recursive(args)
         if args.command == "sessions":
             return run_sessions(args)
     except (RalfTerminalError, RepoContextError, SessionStoreError) as exc:

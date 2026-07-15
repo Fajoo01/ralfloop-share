@@ -59,7 +59,27 @@ def test_jury_result_is_structured_with_mock_controller():
                 "selected_backend": "recursive_mas_native",
             }
 
-    result = answer_goal("servizio down molti utenti, strategia prudente", "incident_triage", jury_controller=Controller())
+    result = answer_goal(
+        "servizio down molti utenti, strategia prudente",
+        "incident_triage",
+        jury_controller=Controller(),
+        explicit_recursive=True,
+    )
     assert result["resolution_type"] == "jury"
     assert result["external_action_executed"] is False
     assert result["recommendations"] == ["Contenere con passaggi reversibili e revisione umana."]
+
+
+def test_recursive_default_off_at_orchestrator_level():
+    class NeverCalled:
+        @property
+        def config(self):
+            raise AssertionError("recursive controller must not be inspected")
+
+    result = answer_goal(
+        "servizio down molti utenti, strategia prudente",
+        "incident_triage",
+        jury_controller=NeverCalled(),
+    )
+    assert result["status"] == "domain_reasoning_required"
+    assert result["routing"]["selected_backend"] == "single_qwen_7b_with_domain"
