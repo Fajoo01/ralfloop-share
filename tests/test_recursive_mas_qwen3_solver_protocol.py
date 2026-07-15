@@ -194,6 +194,15 @@ def test_experimental_profile_is_disabled_and_not_runtime_registered():
         "solver_model": "Qwen/Qwen3-1.7B",
         "solver_revision": "70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
         "thinking": False,
+        "inner_adapter_checkpoints": {
+            "planner_inner": ".ralf_run/recursive_domain_qwen3_micro_overfit/final/planner_inner.pt",
+            "critic_inner": ".ralf_run/recursive_domain_qwen3_micro_overfit/final/critic_inner.pt",
+            "solver_inner": ".ralf_run/recursive_domain_qwen3_micro_overfit/final/solver_inner.pt",
+        },
+        "cross_model_adapter_checkpoints": {
+            "outer12": ".ralf_run/recursive_domain_qwen3_micro_overfit/final/outer12.pt",
+            "outer23": ".ralf_run/recursive_domain_qwen3_micro_overfit/final/outer23.pt",
+        },
         "input_contract": "domain_evidence_packet_v1",
         "output_contract": "domain_opinion_v1",
     }

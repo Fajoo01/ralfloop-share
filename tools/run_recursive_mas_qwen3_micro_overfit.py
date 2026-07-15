@@ -5,6 +5,7 @@ from collections.abc import Mapping
 import gc
 import hashlib
 import json
+import math
 from pathlib import Path
 import resource
 import time
@@ -405,12 +406,19 @@ def prepare() -> dict[str, Any]:
     dump(ROOT / "manifest.json", manifest)
     graph = native_graph()
     for edge in graph:
+        adapter_name = edge.get("adapter")
+        if adapter_name in set(adapters):
+            runtime_dtype = "torch.float32; cast to frozen base dtype at inputs_embeds boundary"
+        elif adapter_name == "Qwen3_frozen_solver":
+            runtime_dtype = "torch.float16"
+        else:
+            runtime_dtype = None
         edge.update(
             {
-                "runtime_dtype": "torch.float16" if edge.get("adapter") not in {None} else None,
+                "runtime_dtype": runtime_dtype,
                 "runtime_device": "cuda:0 stagewise" if edge.get("used_by_final_decode") else "not_loaded",
                 "attention_mask": "ones for pooled latent; chat mask preserved",
-                "requires_grad": edge.get("adapter") in set(adapters),
+                "requires_grad": adapter_name in set(adapters),
             }
         )
     dump(
@@ -456,7 +464,8 @@ def load_cached(kind: str, case_id: str) -> torch.Tensor:
 
 
 def adapter_latent(adapters: nn.ModuleDict, critic_hidden: torch.Tensor, *, device: str) -> torch.Tensor:
-    value = critic_hidden.to(device=device, dtype=torch.float16)
+    dtype = next(adapters["critic_inner"].parameters()).dtype
+    value = critic_hidden.to(device=device, dtype=dtype)
     return adapters["solver_inner"](adapters["outer23"](adapters["critic_inner"](value)))
 
 
@@ -578,10 +587,10 @@ def score_outputs(
 
 def native_critic_hidden_fresh(adapters: nn.ModuleDict, ctx: Mapping[str, Any], *, label: str) -> dict[str, torch.Tensor]:
     planner_latents = {}
-    adapters = adapters.to("cuda:0", dtype=torch.float16).eval()
+    adapters = adapters.to("cuda:0", dtype=torch.float32).eval()
     with torch.inference_mode():
         for case_id in CANARY_CASE_IDS:
-            value = load_cached("planner_real", case_id).to("cuda:0", dtype=torch.float16)
+            value = load_cached("planner_real", case_id).to("cuda:0", dtype=torch.float32)
             planner_latents[case_id] = adapters["outer12"](adapters["planner_inner"](value)).cpu()
     adapters.to("cpu")
     torch.cuda.empty_cache()
@@ -764,7 +773,7 @@ def train_stage_a() -> tuple[nn.ModuleDict, dict[str, Any]]:
     ctx = context()
     manifest = json.loads((ROOT / "manifest.json").read_text())
     target_probe = manifest["target_sequence_probe"]
-    adapters = load_initial_adapters().to("cuda:0", dtype=torch.float16)
+    adapters = load_initial_adapters().to("cuda:0", dtype=torch.float32)
     for name, module in adapters.items():
         active = name in {"critic_inner", "outer23", "solver_inner"}
         for parameter in module.parameters():
@@ -787,7 +796,7 @@ def train_stage_a() -> tuple[nn.ModuleDict, dict[str, Any]]:
             for offset in range(config.gradient_accumulation):
                 case_id = CANARY_CASE_IDS[((step - 1) * config.gradient_accumulation + offset) % 8]
                 case = ctx["cases"][case_id]
-                hidden = load_cached("critic_gold", case_id).to("cuda:0", dtype=torch.float16)
+                hidden = load_cached("critic_gold", case_id).to("cuda:0", dtype=torch.float32)
                 critic_latent = adapters["critic_inner"](hidden)
                 solver_hidden = adapters["outer23"](critic_latent)
                 solver_latent = adapters["solver_inner"](solver_hidden)
@@ -799,26 +808,30 @@ def train_stage_a() -> tuple[nn.ModuleDict, dict[str, Any]]:
                     latent=solver_latent,
                 )
                 with torch.autocast(device_type="cuda", dtype=torch.float16):
-                    result = model(
+                    result = model.model(
                         inputs_embeds=full,
                         attention_mask=torch.ones(full.shape[:2], dtype=torch.long, device="cuda:0"),
                         use_cache=False,
                         return_dict=True,
                     )
-                    shift_logits = result.logits[:, :-1, :].contiguous().float()
                     shift_labels = labels[:, 1:].contiguous()
+                    response_positions = shift_labels != -100
+                    response_hidden = result.last_hidden_state[:, :-1, :][response_positions]
+                    response_targets = shift_labels[response_positions]
+                    shift_logits = model.lm_head(response_hidden).float()
                     ce = functional.cross_entropy(
-                        shift_logits.reshape(-1, shift_logits.shape[-1]),
-                        shift_labels.reshape(-1),
-                        ignore_index=-100,
+                        shift_logits,
+                        response_targets,
                     )
                     regularization = 0.5 * (critic_latent.float().square().mean() + solver_latent.float().square().mean())
                     total = config.final_token_ce_weight * ce + config.latent_regularization_weight * regularization
                 (total / config.gradient_accumulation).backward()
                 accumulated_ce += float(ce.detach().cpu())
                 accumulated_total += float(total.detach().cpu())
-                del result, shift_logits, shift_labels, full, labels
+                del result, shift_logits, shift_labels, response_positions, response_hidden, response_targets, full, labels
             gradients = adapter_gradient_report(adapters, detached_upstream=True)
+            if not all(math.isfinite(value) for value in gradients["norms"].values()):
+                raise RuntimeError("non_finite_adapter_gradient")
             torch.nn.utils.clip_grad_norm_(trainable, config.gradient_clip)
             optimizer.step()
             step_row = {
@@ -1000,7 +1013,7 @@ def train_all() -> dict[str, Any]:
         return output
     ctx = context()
     model, tokenizer, load = _load_model(QWEN3)
-    adapters = adapters.to("cuda:0", dtype=torch.float16)
+    adapters = adapters.to("cuda:0", dtype=torch.float32)
     try:
         stage_b_metrics = evaluate_with_adapters(
             model,
@@ -1027,7 +1040,7 @@ def train_all() -> dict[str, Any]:
     upstream = train_upstream_stagewise(adapters, ctx)
     native_hidden = native_critic_hidden_fresh(adapters, ctx, label="critic_native_trained")
     model, tokenizer, load_c = _load_model(QWEN3)
-    adapters = adapters.to("cuda:0", dtype=torch.float16)
+    adapters = adapters.to("cuda:0", dtype=torch.float32)
     try:
         stage_c_metrics = evaluate_with_adapters(
             model,
