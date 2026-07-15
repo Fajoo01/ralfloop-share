@@ -1,0 +1,15 @@
+{
+  "profile_id": "recursive_mas_domain_instruct_v1",
+  "profile_version": "v1",
+  "planner_model": "Qwen/Qwen2.5-3B-Instruct",
+  "critic_model": "Qwen/Qwen2.5-1.5B-Instruct",
+  "solver_model": "Qwen/Qwen2.5-3B-Instruct",
+  "planner_revision": "aa8e72537993ba99e69dfaafa59ed015b17504d1",
+  "critic_revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+  "solver_revision": "aa8e72537993ba99e69dfaafa59ed015b17504d1",
+  "inner_adapter_checkpoints": {},
+  "cross_model_adapter_checkpoints": {},
+  "input_contract": "domain_opinion_v1",
+  "output_contract": "domain_opinion_v1",
+  "enabled": false
+}
