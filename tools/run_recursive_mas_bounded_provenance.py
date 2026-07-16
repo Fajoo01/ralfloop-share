@@ -333,10 +333,16 @@ def _shared_order_raw(cases: Sequence[Mapping[str, Any]], order_mode: str) -> di
 
 def validation_order_and_freeze() -> None:
     validation=json.loads((ROOT/"selector_validation_summary.json").read_text()); raw=json.loads((ROOT/"selector_validation_raw.json").read_text()); cases=_cases("validation")
-    reverse_all=_shared_order_raw(cases,"reverse"); randomized_all=_shared_order_raw(cases,"random"); order_summary={}
+    cached=all((ROOT/"order_validation"/f"{selector}.json").exists() for selector in SELECTORS)
+    if not cached:
+        reverse_all=_shared_order_raw(cases,"reverse"); randomized_all=_shared_order_raw(cases,"random")
+    order_summary={}
     for selector in SELECTORS:
         rule_policy,source_policy=_config(selector,validation); original=raw[_model_for_selector(selector)]
-        reverse=reverse_all[_model_for_selector(selector)]; randomized=randomized_all[_model_for_selector(selector)]
+        if cached:
+            saved=json.loads((ROOT/"order_validation"/f"{selector}.json").read_text());reverse=saved["reverse"];randomized=saved["random"]
+        else:
+            reverse=reverse_all[_model_for_selector(selector)]; randomized=randomized_all[_model_for_selector(selector)]
         agreements=[];distances=[];mapping_ok=True
         for case in cases:
             _,one=_evaluate_record(selector,case,original[case["id"]],rule_policy,source_policy)
@@ -355,7 +361,7 @@ def validation_order_and_freeze() -> None:
         "parser_hash":sha256_file(source_file),"slot_mapper_hash":stable_sha256(inspect.getsource(SlotMapping)),
         "selected_configuration":selected,"policies":{name:validation[name]["chosen_policy"] for name in SELECTORS},
         "uncertain_policy":{"rule":_config(selected,validation)[0],"source":_config(selected,validation)[1]},
-        "model":MODEL_META[_model_for_selector(selected)],"decoding":{"enable_thinking":False,"temperature":0,"do_sample":False,"batch_max_new_tokens":128,"itemwise_mode":"bounded_response_loglikelihood","itemwise_candidates":["KEEP\\nEND","DROP\\nEND","UNCERTAIN\\nEND"]},
+        "model":{key:value for key,value in MODEL_META[_model_for_selector(selected)].items() if key!="snapshot"},"decoding":{"enable_thinking":False,"temperature":0,"do_sample":False,"batch_max_new_tokens":128,"itemwise_mode":"bounded_response_loglikelihood","itemwise_candidates":["KEEP\\nEND","DROP\\nEND","UNCERTAIN\\nEND"]},
         "validation_metrics":validation[selected]["chosen"]["metrics"],"validation_order":order_summary[selected],"all_order_metrics":order_summary,
         "source_sha256":sha256_file(source_file),"reserve_b_semantically_read":False,"reserve_b_executed":False,
     }
