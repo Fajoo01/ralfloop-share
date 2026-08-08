@@ -104,6 +104,14 @@ def test_26_unavailable_router_fallback(registry):
     assert result.error == "router_unavailable"
 
 
+def test_unavailable_router_protected_operation_still_asks_approval(registry):
+    class Client:
+        def health(self): return False
+    result = LocalRouter(registry, Client()).classify("pubblica il post")
+    assert result.route.a == "AP"
+    assert not RalfPolicy().evaluate(result.route, operation="social_publish").allowed
+
+
 def test_router_cache_requires_complete_binding(tmp_path):
     cache = VersionedCache(tmp_path)
     with pytest.raises(ValueError, match="incomplete"):

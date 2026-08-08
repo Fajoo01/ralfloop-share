@@ -1,6 +1,6 @@
 {
   "v": 1,
-  "local_model_present": false,
+  "local_model_present": true,
   "local_search_paths": [
     "/home/sibilla-cumana/Dati/ralfloop-models",
     "/home/sibilla-cumana/.cache/huggingface/hub"
@@ -11,12 +11,19 @@
   "size_reported_mib": 292,
   "license": "gemma_gated_acceptance_required",
   "download_performed": false,
-  "gguf_metadata_verified": false,
-  "tokenizer_verified": false,
-  "chat_template_verified": false,
+  "model_path": "/home/sibilla-cumana/Dati/ralfloop-models/functiongemma-270m/functiongemma-270m-it-q8_0.gguf",
+  "sha256": "83940d4dd9676710856f43523bed096164a595a96f6b34771610a03937de5270",
+  "gguf_metadata_verified": true,
+  "tokenizer_verified": true,
+  "chat_template_verified": true,
   "llama_cpp_version": "9542-6b80c74f2",
   "llama_cpp_jinja_supported": true,
   "llama_cpp_chat_template_file_supported": true,
-  "runtime_canary": "blocked_model_absent",
-  "fine_tuning": "not_started_without_real_baseline"
+  "runtime_canary": "pass",
+  "functiongemma_real": true,
+  "canary_evidence": ".ralf_run/local_arch_v1/functiongemma-real-canary.json",
+  "cpu_only": true,
+  "policy_bypass": 0,
+  "approval_miss": 0,
+  "fine_tuning": "not_required_for_dynamic_tool_catalog"
 }

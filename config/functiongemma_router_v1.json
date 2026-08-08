@@ -7,6 +7,6 @@
   "model_path": "/home/sibilla-cumana/Dati/ralfloop-models/functiongemma-270m/functiongemma-270m-it-q8_0.gguf",
   "runtime": {"host":"127.0.0.1","port":19104,"threads":4,"n_gpu_layers":0,"ctx_size":1536,"parallel":1,"temperature":0,"max_tokens":48},
   "native_chat_template_required": true,
-  "custom_template_status": "disabled_until_metadata_canary",
+  "custom_template_status": "disabled_gguf_metadata_template_verified",
   "trust_remote_code": false
 }

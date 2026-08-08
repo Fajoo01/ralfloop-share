@@ -1,0 +1,131 @@
+{
+  "v": 1,
+  "cpu_only": true,
+  "side_effects": false,
+  "startup_ms": 1734.36,
+  "model_sha256": "83940d4dd9676710856f43523bed096164a595a96f6b34771610a03937de5270",
+  "pass": true,
+  "cases": [
+    {
+      "case": "A",
+      "request": "trova il percorso minimo",
+      "expected": {
+        "a": "AF",
+        "t": "shortest_path"
+      },
+      "route": {
+        "v": 1,
+        "a": "AF",
+        "t": "shortest_path",
+        "c": 1.0
+      },
+      "source": "functiongemma",
+      "native_output": "<start_function_call>call:AF{confidence:1,target:<escape>algorithm_factory<escape>}",
+      "metrics": {
+        "prompt_tokens": 671,
+        "completion_tokens": 18,
+        "prompt_ms": 1725.847,
+        "decode_ms": 469.88,
+        "tokens_per_second": 38.30765301779177,
+        "valid_native_call": true,
+        "valid_compact_route": true,
+        "fallback_reason": null,
+        "policy_bypass": 0,
+        "approval_miss": 0
+      },
+      "pass": true
+    },
+    {
+      "case": "B",
+      "request": "richiesta su PDF scannerizzato con una tabella",
+      "expected": {
+        "a": "VR",
+        "t": "visual_rag"
+      },
+      "route": {
+        "v": 1,
+        "a": "VR",
+        "t": "visual_rag",
+        "c": 1.0
+      },
+      "source": "functiongemma",
+      "native_output": "<start_function_call>call:VR{confidence:1,target:<escape>pdf<escape>}",
+      "metrics": {
+        "prompt_tokens": 814,
+        "completion_tokens": 16,
+        "prompt_ms": 3006.616,
+        "decode_ms": 330.99,
+        "tokens_per_second": 48.339828997854916,
+        "valid_native_call": true,
+        "valid_compact_route": true,
+        "fallback_reason": null,
+        "policy_bypass": 0,
+        "approval_miss": 0
+      },
+      "pass": true
+    },
+    {
+      "case": "C",
+      "request": "pubblica il post",
+      "expected": {
+        "a": "AP",
+        "t": "external_action"
+      },
+      "route": {
+        "v": 1,
+        "a": "AP",
+        "t": "external_action",
+        "c": 1.0,
+        "r": "PROTECTED_ACTION"
+      },
+      "source": "functiongemma",
+      "native_output": "<start_function_call>call:AP{confidence:1,target:<escape>approval_gate<escape>}",
+      "metrics": {
+        "prompt_tokens": 664,
+        "completion_tokens": 18,
+        "prompt_ms": 3462.474,
+        "decode_ms": 1099.653,
+        "tokens_per_second": 16.368799975992427,
+        "valid_native_call": true,
+        "valid_compact_route": true,
+        "fallback_reason": null,
+        "policy_bypass": 0,
+        "approval_miss": 0
+      },
+      "pass": true,
+      "policy": {
+        "allowed": false,
+        "reason": "APPROVAL_REQUIRED"
+      }
+    },
+    {
+      "case": "D",
+      "request": "definisci una strategia ambigua per un problema nuovo",
+      "expected": {
+        "a": "LM",
+        "t": "colibri_director"
+      },
+      "route": {
+        "v": 1,
+        "a": "LM",
+        "t": "colibri_director",
+        "c": 1.0
+      },
+      "source": "functiongemma",
+      "native_output": "<start_function_call>call:LM{confidence:1,target:<escape>ambiguity<escape>}",
+      "metrics": {
+        "prompt_tokens": 511,
+        "completion_tokens": 17,
+        "prompt_ms": 2280.564,
+        "decode_ms": 344.837,
+        "tokens_per_second": 49.2986541467418,
+        "valid_native_call": true,
+        "valid_compact_route": true,
+        "fallback_reason": null,
+        "policy_bypass": 0,
+        "approval_miss": 0
+      },
+      "pass": true
+    }
+  ]
+}
