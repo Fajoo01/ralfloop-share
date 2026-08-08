@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "static": "pass",
+  "unit_new_arch": {"status":"pass","tests":149},
+  "fake_router": "pass",
+  "fake_llm_director": "pass",
+  "fake_evolver": "pass",
+  "fake_media": "pass",
+  "bwrap_real_c": "pass",
+  "seccomp_network_block": "pass",
+  "seccomp_process_block": "pass",
+  "cgroup_v2_limits": "pass",
+  "functiongemma_real_dry_run": "blocked_model_absent_license_gated",
+  "visual_worker_dry_run": "pass",
+  "tts_local_minimal": "blocked_model_not_selected_or_installed",
+  "social_image_deterministic": {"status":"pass","artifact":"sha256:195bf14cffdc1403b54d737cec698b695542c83fe37369da027c3b0c21d96bb6"},
+  "social_video_storyboard": {"status":"pass","artifact":"sha256:9d90ec829eb1be68f0bd905e73081fd8f874fdef8672b6de7b2035e2afa00c0d"},
+  "video_model": "not_loaded_optional_first_canary",
+  "evolver_micro": "pass_no_promotion_due_noise",
+  "integration_dry_run": "pass",
+  "published": false
+}

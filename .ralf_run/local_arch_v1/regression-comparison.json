@@ -1,0 +1,27 @@
+{
+  "baseline": {
+    "errors": 0,
+    "failures": 61,
+    "skipped": 13,
+    "tests": 1331
+  },
+  "candidate": {
+    "errors": 0,
+    "failures": 53,
+    "skipped": 13,
+    "tests": 1474
+  },
+  "new_failures": [],
+  "no_regression": true,
+  "resolved_failures": [
+    "tests.test_cheshire_plugin_hook::test_hook_deterministic_handles_once",
+    "tests.test_cheshire_plugin_hook::test_hook_missing_domain",
+    "tests.test_mcp_client_google::test_confirm_send_email",
+    "tests.test_mcp_client_google::test_confirm_send_email_when_draft_only_false",
+    "tests.test_recursive_mas_runtime::test_fallback_disabled_default_and_explicit_fallback",
+    "tests.test_recursive_mas_runtime::test_lock_concurrent_returns_busy_and_no_second_worker",
+    "tests.test_recursive_mas_runtime::test_popen_uses_shell_false",
+    "tests.test_routing_provenance_port::test_protected_components_are_not_modified"
+  ],
+  "v": 1
+}

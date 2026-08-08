@@ -1,0 +1,1 @@
+{"duration_seconds":15,"mode":"image_to_video","publish":false,"shots":[{"keyframe":"a.png","seconds":5},{"keyframe":"b.png","seconds":5},{"keyframe":"c.png","seconds":5}],"subtitles_ref":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","v":1,"voiceover_ref":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}

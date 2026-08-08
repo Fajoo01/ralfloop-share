@@ -1,0 +1,87 @@
+{
+  "limitations": [
+    "No model-quality inference in this benchmark",
+    "GPU use is zero by design"
+  ],
+  "measured": {
+    "peak_rss_mb": 22.33203125,
+    "route_latency_p50_ms": 0.044243,
+    "route_latency_p95_ms": 0.084241,
+    "wall_ms": 4.837388
+  },
+  "mode": "deterministic_control_plane_trace_replay",
+  "profiles": {
+    "A_glm_only": {
+      "approvals": null,
+      "approx_tokens": 69349,
+      "cache_hits": 0,
+      "cpu": "control-plane measured globally",
+      "failures": 0,
+      "functiongemma_calls": 0,
+      "glm_calls": 100,
+      "gpu": 0,
+      "invalid_routes": 0,
+      "qwen_calls": 0,
+      "ram": "control-plane measured globally",
+      "specialist_calls": 0
+    },
+    "B_rules_glm": {
+      "approvals": null,
+      "approx_tokens": 52012,
+      "cache_hits": 0,
+      "cpu": "control-plane measured globally",
+      "failures": 0,
+      "functiongemma_calls": 0,
+      "glm_calls": 12,
+      "gpu": 0,
+      "invalid_routes": 0,
+      "qwen_calls": 0,
+      "ram": "control-plane measured globally",
+      "specialist_calls": 0
+    },
+    "C_rules_functiongemma_glm": {
+      "approvals": null,
+      "approx_tokens": 31207,
+      "cache_hits": 0,
+      "cpu": "control-plane measured globally",
+      "failures": 0,
+      "functiongemma_calls": 12,
+      "glm_calls": 8,
+      "gpu": 0,
+      "invalid_routes": 0,
+      "qwen_calls": 0,
+      "ram": "control-plane measured globally",
+      "specialist_calls": 0
+    },
+    "D_specialists": {
+      "approvals": null,
+      "approx_tokens": 20805,
+      "cache_hits": 0,
+      "cpu": "control-plane measured globally",
+      "failures": 0,
+      "functiongemma_calls": 12,
+      "glm_calls": 8,
+      "gpu": 0,
+      "invalid_routes": 0,
+      "qwen_calls": 0,
+      "ram": "control-plane measured globally",
+      "specialist_calls": 48
+    },
+    "E_compact_delta": {
+      "approvals": null,
+      "approx_tokens": 811,
+      "cache_hits": 0,
+      "cpu": "control-plane measured globally",
+      "failures": 0,
+      "functiongemma_calls": 12,
+      "glm_calls": 8,
+      "gpu": 0,
+      "invalid_routes": 0,
+      "qwen_calls": 0,
+      "ram": "control-plane measured globally",
+      "specialist_calls": 48
+    }
+  },
+  "requests": 100,
+  "v": 1
+}

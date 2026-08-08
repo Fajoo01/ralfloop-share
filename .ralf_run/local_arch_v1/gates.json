@@ -1,0 +1,23 @@
+{
+  "v": 1,
+  "scoped_tests": true,
+  "scoped_test_count": 149,
+  "sandbox": true,
+  "no_host_candidate_execution": true,
+  "no_regression": true,
+  "baseline_suite": {"tests":1331,"failures":61,"skipped":13,"exit":"segfault_after_report"},
+  "candidate_suite": {"tests":1474,"failures":53,"skipped":13,"new_failures":0,"exit":"segfault_after_report"},
+  "full_suite_clean": false,
+  "benchmark_minimum": true,
+  "router_offline_accuracy": 0.9278846153846154,
+  "router_offline_macro_f1": 0.9271873987190747,
+  "approval_miss": 0,
+  "tool_policy_bypass": 0,
+  "manifest": "pending_release_build",
+  "functiongemma_real": false,
+  "enough_ram": true,
+  "enough_swap": false,
+  "port_19104_free": true,
+  "deploy_allowed": false,
+  "deploy_blockers": ["full_suite_not_clean_preexisting", "functiongemma_model_absent_gated", "swap_free_below_512_mib"]
+}

@@ -1,0 +1,40 @@
+{
+  "v": 1,
+  "captured_at": "2026-08-08T08:27:00+02:00",
+  "active_release": "/home/sibilla-cumana/ralfloop-production/releases/7dd71fd0ae762b4beca9aee9eefe5331c8dc54c5",
+  "active_commit": "7dd71fd0ae762b4beca9aee9eefe5331c8dc54c5",
+  "active_branch": "codex/grant-review-normalization-20260801",
+  "rollback_release": "/home/sibilla-cumana/ralfloop-production/releases/6130e743599c7246c12692ba9da005889c15b03e",
+  "repository": "/home/sibilla-cumana/ralfloop_share",
+  "repository_head": "aeff283bfa25128f972122807c7f957d3d88b4c5",
+  "source_status": "clean",
+  "worktree": "/home/sibilla-cumana/ralfloop_local_architecture_worktree",
+  "branch": "codex/local-evolution-architecture-20260808",
+  "active_manifest": "verified",
+  "systemd": {
+    "ralfloop-backend": "active",
+    "ralfloop-recursive-mas": "active",
+    "ollama": "active_idle",
+    "ralf-glm-worker": "inactive_idle_success",
+    "ralf-h24": "preexisting_auto_restart_203_EXEC"
+  },
+  "processes": {
+    "glm": "none",
+    "colibri": "none",
+    "llama_cpp": "AgentCPM-Explore:19093",
+    "ollama_models_loaded": 0,
+    "orphan": "python_defunct_pid_4075682_preexisting"
+  },
+  "hardware": {
+    "gpu": "NVIDIA GeForce RTX 2070 8192 MiB",
+    "vram_free_mib": 3521,
+    "ram_available_gib": 37,
+    "swap_total_gib": 8,
+    "swap_free_mib": 114,
+    "disk_free_gib": 684
+  },
+  "port_19104": "free",
+  "glm_worker": "idle",
+  "llama_lock": "present_for_existing_19093_runtime",
+  "task_running": "current_codex_session_only"
+}
