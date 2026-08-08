@@ -1,0 +1,34 @@
+{
+  "domains": [
+    {
+      "domain_id": "abc_reasoning",
+      "path": "domains/drafts/abc_reasoning/1.0.0",
+      "state": "draft",
+      "version": "1.0.0"
+    },
+    {
+      "domain_id": "bandi/fondazione_cariplo_nuovi_ponti_culturali_2026",
+      "path": "/home/sibilla-cumana/ralfloop_agent_scaffold/domains/drafts/bandi/fondazione_cariplo_nuovi_ponti_culturali_2026/1.0.0",
+      "state": "draft",
+      "version": "1.0.0"
+    },
+    {
+      "domain_id": "bandi/fondazione_unipolis_act_2026",
+      "path": "/home/sibilla-cumana/ralfloop_agent_scaffold/domains/drafts/bandi/fondazione_unipolis_act_2026/1.0.0",
+      "state": "draft",
+      "version": "1.0.0"
+    },
+    {
+      "domain_id": "bandi_framework",
+      "path": "domains/drafts/bandi_framework/1.0.0",
+      "state": "draft",
+      "version": "1.0.0"
+    },
+    {
+      "domain_id": "calculation_reasoning",
+      "path": "domains/drafts/calculation_reasoning/1.0.0",
+      "state": "draft",
+      "version": "1.0.0"
+    }
+  ]
+}

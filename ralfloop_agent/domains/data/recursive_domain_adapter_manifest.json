@@ -1,0 +1,24 @@
+{
+  "case_count": 240,
+  "category_counts": {
+    "conflicting_sources": 40,
+    "domain_validation": 40,
+    "evidence_synthesis": 40,
+    "incomplete_rules": 40,
+    "recommendation_required": 40,
+    "strategic_assessment": 40
+  },
+  "contains_free_chain_of_thought": false,
+  "dataset_sha256": "6ad9fb7fbdabcdfde288128f5f10f0cef1c40a84a600acb26ba56a7ae685a77b",
+  "domain_count": 8,
+  "duplicate_count": 0,
+  "format": "recursive-domain-adapter-v1",
+  "split_sizes": {
+    "test": 36,
+    "train": 168,
+    "validation": 36
+  },
+  "splits_sha256": "e8e37506f2e461710ce0fcb63d31abdcb34f8d6bc6dca1ee96b55da0702b0b5c",
+  "synthetic_only": true,
+  "traces_sha256": "a95ee19dab38c5041a58dada4f23cd39ec8fd5807d196c325eeee7274f031f88"
+}

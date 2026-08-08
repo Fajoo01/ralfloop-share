@@ -1,0 +1,5 @@
+{"report_id":"calib_due_chiacchiere","riassunto":"Due chiacchiere esplicite ma nessuna inclusione sociale stabile.","expected_range":[45,58],"note":"Segnale positivo leggero, non basta per light_open."}
+{"report_id":"calib_mancato_invito","riassunto":"Prossimita domestica ma mancato invito a evento sociale.","expected_range":[36,50],"note":"Controsegnale sociale, cap negativo massimo -5."}
+{"report_id":"calib_secure_base","riassunto":"Oggetto/pratica affidata prima di nodo lavorativo, poi contatto spontaneo.","expected_range":[55,70],"note":"Safe base moderata, ancora prudente."}
+{"report_id":"calib_triangolo_opaco","riassunto":"Terzo ancora opaco, promesse senza data, mind-reading nel testo.","expected_range":[25,42],"note":"Contraddizioni e inferenze tagliano confidence."}
+{"report_id":"calib_reconnection_high","riassunto":"Molti fatti osservati: alternativa negata, investimento familiare, tempo dedicato, contatto spontaneo.","expected_range":[70,80],"note":"Apre light_open solo con confidence alta."}

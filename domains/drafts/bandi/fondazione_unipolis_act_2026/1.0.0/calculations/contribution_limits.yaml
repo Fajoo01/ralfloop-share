@@ -1,0 +1,19 @@
+calculation_id: act_contribution_limits
+description: Check ACT requested contribution amount and rate.
+formula: requested_contribution = total_project_cost * contribution_rate
+required_inputs:
+- total_project_cost
+- requested_contribution
+units: EUR
+rounding_policy: none
+minimum: 75000
+maximum: 150000
+cap: 150000
+source_refs:
+- act_regolamento_2026
+source_sections:
+- 7 Supporto
+examples:
+- total_project_cost: 100000
+  contribution_rate: 0.75
+  result: 75000

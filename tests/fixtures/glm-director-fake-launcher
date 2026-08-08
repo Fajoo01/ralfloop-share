@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+prompt=$(cat)
+case "$prompt" in
+  *'"call_reason":"initial_strategy"'*)
+    printf '%s\n' '{"action":"assign","round":1,"strategy":"Run deterministic grant preflight","assignments":[{"task_id":"preflight","worker":"rules_engine","objective":"Validate normalized grant fields","input_refs":["input:normalized"],"allowed_tools":["grant_preflight"],"deliverable":"preflight","acceptance_tests":["ok"],"depends_on":[],"priority":100}],"review_trigger":"round_complete","stop_conditions":["preflight_complete"],"strategic_summary":"","human_question":""}'
+    ;;
+  *)
+    printf '%s\n' '{"action":"conclude","round":2,"strategy":"Deterministic canary complete","assignments":[],"review_trigger":"round_complete","stop_conditions":["preflight_complete"],"strategic_summary":"Preflight fields preserved","human_question":""}'
+    ;;
+esac

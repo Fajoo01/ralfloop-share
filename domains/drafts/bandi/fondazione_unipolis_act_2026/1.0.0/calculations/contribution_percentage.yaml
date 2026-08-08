@@ -1,0 +1,18 @@
+calculation_id: act_contribution_percentage
+description: Compute contribution percentage on total project cost.
+formula: requested_contribution / total_project_cost
+required_inputs:
+- total_project_cost
+- requested_contribution
+units: ratio
+rounding_policy: none
+minimum: 0.2
+maximum: 0.75
+source_refs:
+- act_regolamento_2026
+source_sections:
+- 7 Supporto
+examples:
+- total_project_cost: 100000
+  requested_contribution: 75000
+  result: 0.75

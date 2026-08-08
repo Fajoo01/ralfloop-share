@@ -1,0 +1,7 @@
+[Unit]
+Description=Bot-tazzi Garden retention cleanup
+
+[Service]
+Type=oneshot
+Environment=BOTTAZZI_GARDEN_RETENTION_DAYS=7
+ExecStart=/usr/local/sbin/bottazzi-garden-retention-cleanup

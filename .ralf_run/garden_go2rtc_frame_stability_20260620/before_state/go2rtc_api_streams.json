@@ -1,0 +1,59 @@
+{
+    "camera_giardino_anteriore": {
+        "producers": [
+            {
+                "url": "tuya://protect-eu.ismartlife.me?device_id=bf9891efa1544e4e2drjkw&email=fajoo01%40gmail.com&password=***
+            }
+        ],
+        "consumers": [
+            {
+                "id": 4605,
+                "format_name": "keyframe",
+                "protocol": "http",
+                "remote_addr": "127.0.0.1:37024",
+                "user_agent": "python-requests/2.34.2",
+                "medias": [
+                    "video, sendonly, JPEG, RAW, H264, H265"
+                ],
+                "senders": [
+                    {
+                        "id": 4609,
+                        "codec": {
+                            "codec_name": "h264",
+                            "codec_type": "video"
+                        },
+                        "parent": 4608
+                    }
+                ]
+            },
+            {
+                "id": 4611,
+                "format_name": "keyframe",
+                "protocol": "http",
+                "remote_addr": "127.0.0.1:37040",
+                "user_agent": "python-requests/2.34.2",
+                "medias": [
+                    "video, sendonly, JPEG, RAW, H264, H265"
+                ],
+                "senders": [
+                    {
+                        "id": 4612,
+                        "codec": {
+                            "codec_name": "h264",
+                            "codec_type": "video"
+                        },
+                        "parent": 4608
+                    }
+                ]
+            }
+        ]
+    },
+    "citofono_tuya": {
+        "producers": [
+            {
+                "url": "tuya://protect-eu.ismartlife.me?device_id=bff459519d43d171b7egj8&email=fajoo01%40gmail.com&password=***
+            }
+        ],
+        "consumers": []
+    }
+}

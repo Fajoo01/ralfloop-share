@@ -1,0 +1,41 @@
+    x, y, bw, bh = box
+    zx1, zy1, zx2, zy2 = zone
+    zx1, zy1, zx2, zy2 = zx1 * image_w, zy1 * image_h, zx2 * image_w, zy2 * image_h
+    ix1, iy1 = max(x, zx1), max(y, zy1)
+    ix2, iy2 = min(x + bw, zx2), min(y + bh, zy2)
+    if ix2 <= ix1 or iy2 <= iy1:
+        return 0.0
+    return ((ix2 - ix1) * (iy2 - iy1)) / float(max(bw * bh, 1))
+
+def grab_frame(dst: Path) -> bool:
+    last_error = None
+    for attempt in range(1, MAX_GRAB_ATTEMPTS + 1):
+        try:
+            r = requests.get(CAMERA_STREAM, timeout=FRAME_TIMEOUT_SECONDS)
+            r.raise_for_status()
+            dst.write_bytes(r.content)
+            if dst.exists() and dst.stat().st_size > 1000:
+                img = cv2.imread(str(dst))
+                if img is None:
+                    last_error = "decoded_empty_frame"
+                elif has_vertical_smear_artifact(img):
+                    last_error = "vertical_smear_artifact"
+                    log({"event": "grab_rejected_corrupt_frame", "attempt": attempt, "reason": last_error, "image": str(dst)})
+                else:
+                    return True
+            else:
+                last_error = "empty_frame"
+        except Exception as e:
+            last_error = repr(e)
+        log({"event": "grab_retry", "attempt": attempt, "error": last_error})
+        time.sleep(GRAB_RETRY_SLEEP_SECONDS)
+    log({"event": "grab_error", "error": last_error})
+    return False
+
+def get_yolo_model():
+    global yolo_model, yolo_load_error
+    if not YOLO_ENABLED:
+        return None
+    if yolo_model is not None:
+        return yolo_model
+    if YOLO is None:

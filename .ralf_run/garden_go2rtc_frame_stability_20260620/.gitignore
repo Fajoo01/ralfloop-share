@@ -1,0 +1,6 @@
+samples/
+__pycache__/
+pycache_live/
+*.jpg
+*.jpeg
+*.tmp

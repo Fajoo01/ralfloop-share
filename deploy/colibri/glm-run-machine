@@ -1,0 +1,10 @@
+#!/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python
+"""Stable machine-readable companion; the existing glm-run remains unchanged."""
+
+import sys
+
+sys.path.insert(0, "/home/sibilla-cumana/ralfloop-production/current")
+
+from ralfloop_agent.glm_review.machine import main
+
+raise SystemExit(main())

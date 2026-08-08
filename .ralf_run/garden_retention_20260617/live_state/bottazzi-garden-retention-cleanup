@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DAYS="${BOTTAZZI_GARDEN_RETENTION_DAYS:-7}"
+MAX_SNAPSHOTS="${BOTTAZZI_GARDEN_MAX_SNAPSHOTS:-30000}"
+
+SNAP="/opt/bottazzi-garden/snapshots"
+EVENTS="/opt/bottazzi-garden/events"
+
+echo "{\"event\":\"garden_retention_cleanup_start\",\"days\":$DAYS,\"max_snapshots\":$MAX_SNAPSHOTS,\"ts\":\"$(date -Is)\"}"
+
+if [ -d "$SNAP" ]; then
+  deleted_old="$(find "$SNAP" -xdev -type f -name '*.jpg' -mtime +"$DAYS" -print -delete | wc -l)"
+  total_after_old="$(find "$SNAP" -xdev -type f -name '*.jpg' 2>/dev/null | wc -l)"
+
+  deleted_over_cap=0
+
+  if [ "$total_after_old" -gt "$MAX_SNAPSHOTS" ]; then
+    delete_file="$(mktemp)"
+
+    find "$SNAP" -xdev -type f -name '*.jpg' -printf '%T@ %p\n' \
+      | sort -rn \
+      | awk -v max="$MAX_SNAPSHOTS" 'NR>max {sub(/^[^ ]+ /,""); print}' \
+      > "$delete_file"
+
+    deleted_over_cap="$(wc -l < "$delete_file")"
+
+    while IFS= read -r f; do
+      [ -n "$f" ] && rm -f -- "$f"
+    done < "$delete_file"
+
+    rm -f "$delete_file"
+  fi
+
+  total_final="$(find "$SNAP" -xdev -type f -name '*.jpg' 2>/dev/null | wc -l)"
+
+  echo "{\"event\":\"garden_retention_cleanup_snapshots\",\"deleted_old\":$deleted_old,\"deleted_over_cap\":$deleted_over_cap,\"total_final\":$total_final}"
+fi
+
+if [ -d "$EVENTS" ]; then
+  deleted_events="$(find "$EVENTS" -xdev -mindepth 1 -maxdepth 1 -type d -mtime +"$DAYS" -print -exec rm -rf -- {} + | wc -l)"
+  total_events="$(find "$EVENTS" -xdev -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)"
+
+  echo "{\"event\":\"garden_retention_cleanup_events\",\"deleted\":$deleted_events,\"total_final\":$total_events}"
+fi
+
+echo "{\"event\":\"garden_retention_cleanup_done\",\"ts\":\"$(date -Is)\"}"

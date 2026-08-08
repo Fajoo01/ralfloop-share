@@ -1,0 +1,83 @@
+--- opt/bottazzi-garden/garden_person_detector.py
++++ opt/bottazzi-garden/garden_person_detector.py
+@@ -20,6 +20,8 @@
+
+ CAMERA_STREAM = "http://127.0.0.1:1984/api/frame.jpeg?src=camera_giardino_anteriore"
+ CAMERA_RTSP_VIDEO = "rtsp://127.0.0.1:8555/camera_giardino_anteriore"
++FRAME_CACHE_FILE = os.environ.get("BOTTAZZI_GARDEN_FRAME_CACHE_FILE", "").strip()
++FRAME_CACHE_MAX_AGE_SECONDS = float(os.environ.get("BOTTAZZI_GARDEN_FRAME_CACHE_MAX_AGE_SECONDS", "15"))
+ MEOWGRAM_URL = "http://127.0.0.1:18127/send_photo"
+ MEOWGRAM_FILE_URL = "http://127.0.0.1:18127/send_file"
+ OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
+@@ -436,24 +438,51 @@
+         return 0.0
+     return ((ix2 - ix1) * (iy2 - iy1)) / float(max(bw * bh, 1))
+
++def validate_grabbed_frame(dst: Path, source: str, attempt=None):
++    if dst.exists() and dst.stat().st_size > 1000:
++        img = cv2.imread(str(dst))
++        if img is None:
++            return False, "decoded_empty_frame"
++        if has_vertical_smear_artifact(img):
++            reason = "vertical_smear_artifact"
++            log({"event": "grab_rejected_corrupt_frame", "attempt": attempt, "reason": reason, "source": source, "image": str(dst)})
++            return False, reason
++        return True, None
++    return False, "empty_frame"
++
++def try_grab_cached_frame(dst: Path):
++    if not FRAME_CACHE_FILE:
++        return False, "cache_disabled"
++    try:
++        cache_path = Path(FRAME_CACHE_FILE)
++        st = cache_path.stat()
++        age = time.time() - st.st_mtime
++        if age > FRAME_CACHE_MAX_AGE_SECONDS:
++            return False, f"cache_stale:{age:.1f}s"
++        if st.st_size <= 1000:
++            return False, "cache_empty_frame"
++        dst.write_bytes(cache_path.read_bytes())
++        ok, error = validate_grabbed_frame(dst, "cache", None)
++        return ok, error
++    except Exception as e:
++        return False, repr(e)
++
+ def grab_frame(dst: Path) -> bool:
++    cache_ok, cache_error = try_grab_cached_frame(dst)
++    if cache_ok:
++        return True
++    if FRAME_CACHE_FILE:
++        log({"event": "grab_cache_miss", "cache": FRAME_CACHE_FILE, "error": cache_error})
++
+     last_error = None
+     for attempt in range(1, MAX_GRAB_ATTEMPTS + 1):
+         try:
+             r = requests.get(CAMERA_STREAM, timeout=FRAME_TIMEOUT_SECONDS)
+             r.raise_for_status()
+             dst.write_bytes(r.content)
+-            if dst.exists() and dst.stat().st_size > 1000:
+-                img = cv2.imread(str(dst))
+-                if img is None:
+-                    last_error = "decoded_empty_frame"
+-                elif has_vertical_smear_artifact(img):
+-                    last_error = "vertical_smear_artifact"
+-                    log({"event": "grab_rejected_corrupt_frame", "attempt": attempt, "reason": last_error, "image": str(dst)})
+-                else:
+-                    return True
+-            else:
+-                last_error = "empty_frame"
++            ok, last_error = validate_grabbed_frame(dst, "http", attempt)
++            if ok:
++                return True
+         except Exception as e:
+             last_error = repr(e)
+         log({"event": "grab_retry", "attempt": attempt, "error": last_error})
+@@ -1797,6 +1826,8 @@
+     log({
+         "event": "garden_detector_started",
+         "camera_stream": CAMERA_STREAM,
++        "frame_cache_file": FRAME_CACHE_FILE,
++        "frame_cache_max_age_seconds": FRAME_CACHE_MAX_AGE_SECONDS,
+         "check_seconds": CHECK_SECONDS,
+         "frame_timeout_seconds": FRAME_TIMEOUT_SECONDS,
+         "max_grab_attempts": MAX_GRAB_ATTEMPTS,

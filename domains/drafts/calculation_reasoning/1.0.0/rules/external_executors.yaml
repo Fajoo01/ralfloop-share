@@ -1,0 +1,26 @@
+schema_version: 1
+external_executors:
+- rule_id: external_executor:calculation_orchestrator
+  capability_id: calculation_orchestrator
+  canonical_executor: ralfloop_agent/domains/calculation_orchestrator.py
+  input_contract:
+    required: []
+    optional:
+    - expression
+    - goal
+    - domain_context
+    - values
+    - formula
+    - scenarios
+  output_contract:
+    fields:
+    - status
+    - answer
+    - deterministic
+    - jury_required
+    - scenarios
+  source_refs:
+  - local_calculation_policy
+  failure_policy:
+    missing_input: insufficient_input
+    ambiguous_formula: jury_unresolved_only

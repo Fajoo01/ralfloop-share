@@ -58,3 +58,5 @@ class AgentState(BaseModel):
     consecutive_failures: int = 0
     stop_reason: str | None = None
     final_answer: str | None = None
+    artifacts: list[str] = Field(default_factory=list)
+    audit_summary: list[str] = Field(default_factory=list)

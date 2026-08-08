@@ -1,0 +1,44 @@
+aliases:
+- abc_reasoning
+approved_at: null
+approved_by: null
+content_hash: eda6991e197f40ff8093449f6afd002acde12a742e7f18d2f6fecebdb12a4926
+created_at: '2026-07-11T18:14:13Z'
+created_by: existing_capability_importer
+description: 'Draft wrapper for existing canonical capabilities: abc_relcalc, abc_formula_loop,
+  abc_rulebooks'
+deterministic_capabilities:
+- abc_relcalc
+- abc_formula_loop
+display_name: Abc Reasoning
+domain_id: abc_reasoning
+external_action_policy: deny
+jury_capabilities:
+- unresolved_only
+jury_review_completed: true
+languages:
+- it
+- en
+minimum_source_count: 1
+minimum_test_pass_rate: 1.0
+out_of_scope:
+- side effects
+- rules not covered by canonical sources
+- automatic promotion
+parent_version: null
+red_team_completed: true
+rule_precedence:
+- abc_relcalc
+- abc_formula_loop
+- abc_rulebooks
+schema_version: '1.0'
+scope:
+- ABC Relational Calculator
+- ABC Formula Loop / RLFULL
+- ABC Internal Rulebooks
+source_requirements:
+- internal_rulebook
+- canonical_python_executor
+state: draft
+updated_at: '2026-07-11T18:14:13Z'
+version: 1.0.0

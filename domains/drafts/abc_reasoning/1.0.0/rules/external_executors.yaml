@@ -1,0 +1,55 @@
+external_executors:
+- canonical_executor: openshell_backend/skills/abc_relcalc.py
+  capability_id: abc_relcalc
+  failure_policy:
+    jury_policy: never
+    missing_input: insufficient_input
+    uncovered_case: unresolved_only
+  input_contract:
+    optional:
+    - base_score
+    required:
+    - evidence
+  output_contract:
+    fields:
+    - score
+    - confidence
+    - range
+    - bias_flags
+    - next_safe_action
+    - evidence_count
+    - summary
+  rule_id: external_executor:abc_relcalc
+  source_refs:
+  - openshell_backend/skills/abc_relcalc.py
+- canonical_executor: openshell_backend/skills/abc_formula_loop.py
+  capability_id: abc_formula_loop
+  failure_policy:
+    jury_policy: unresolved_only
+    missing_input: insufficient_input
+    uncovered_case: unresolved_only
+  input_contract:
+    optional:
+    - memory_dir
+    - evidence_cache_path
+    - force_extract
+    required:
+    - text
+  output_contract:
+    fields:
+    - formula_version
+    - rlfull_current
+    - prudential_score
+    - relcalc_score
+    - confidence
+    - operative_range
+    - action
+    - bias_flags
+    - evidence_count
+  rule_id: external_executor:abc_formula_loop
+  source_refs:
+  - openshell_backend/skills/abc_formula_loop.py
+  - openshell_backend/skills/abc_rulebooks/evidence_weights_v1.json
+  - openshell_backend/skills/abc_rulebooks/anti_bias_manual_v1.md
+  - openshell_backend/skills/abc_rulebooks/relation_manual_v1.md
+schema_version: 1

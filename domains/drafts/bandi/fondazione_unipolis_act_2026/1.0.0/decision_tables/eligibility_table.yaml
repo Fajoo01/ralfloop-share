@@ -1,0 +1,8 @@
+table_id: eligibility_basic
+rows:
+- input: APS lead with Italian legal seat
+  expected: eligible_subject_type
+- input: natural person partner
+  expected: not_partner_eligible
+- input: ACT 2025 lead winner
+  expected: not_lead_eligible

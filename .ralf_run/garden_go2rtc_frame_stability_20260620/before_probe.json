@@ -1,0 +1,50 @@
+{
+  "label": "before",
+  "generated_at": "2026-06-26T10:55:44.007Z",
+  "attempts_per_candidate": 80,
+  "timeout_seconds": 8.0,
+  "interval_seconds": 0.2,
+  "optional_import_errors": {},
+  "sources": [
+    {
+      "name": "go2rtc_frame",
+      "kind": "http",
+      "target": "http://127.0.0.1:1984/api/frame.jpeg?src=camera_giardino_anteriore",
+      "attempts": 80,
+      "ok": 74,
+      "errors": 6,
+      "timeouts": 1,
+      "avg_time_s": 4.6321,
+      "p50_time_s": 4.6488,
+      "p95_time_s": 4.9632,
+      "max_time_s": 8.0065,
+      "size_avg_bytes": 39866.5,
+      "valid_jpeg": 74,
+      "smear_glitch": 9,
+      "smear_rate": 0.1125,
+      "file_age_avg_s": null,
+      "file_age_p95_s": null,
+      "file_age_max_s": null
+    },
+    {
+      "name": "warmer_cache_file",
+      "kind": "file",
+      "target": "/run/bottazzi-garden-warmer-frame.jpg",
+      "attempts": 80,
+      "ok": 80,
+      "errors": 0,
+      "timeouts": 0,
+      "avg_time_s": 0.0001,
+      "p50_time_s": 0.0001,
+      "p95_time_s": 0.0002,
+      "max_time_s": 0.0003,
+      "size_avg_bytes": 45578.4,
+      "valid_jpeg": 80,
+      "smear_glitch": 5,
+      "smear_rate": 0.0625,
+      "file_age_avg_s": 2.335,
+      "file_age_p95_s": 5.232,
+      "file_age_max_s": 9.906
+    }
+  ]
+}

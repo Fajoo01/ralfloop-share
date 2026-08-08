@@ -1,0 +1,20 @@
+[Unit]
+Description=Bandi Weekly Deep Research for Tiremm Innanz APS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/sibilla-cumana/ralfloop-production/current
+Environment=PYTHONPATH=/home/sibilla-cumana/ralfloop-production/current
+Environment=TZ=Europe/Rome
+Environment=RALFLOOP_BANDO_SEARCH_PROVIDER=searxng
+Environment=RALFLOOP_SEARXNG_URL=http://127.0.0.1:8889
+Environment=RALFLOOP_SEARXNG_ENGINES=bing,startpage,duckduckgo
+Environment=BANDI_WEEKLY_STATE_DIR=/home/sibilla-cumana/.local/state/ralfloop/bandi_weekly_deep_research
+Environment=BANDI_GLM_REVIEW_AUTO_ENQUEUE=1
+Environment=BANDI_GLM_REVIEW_MAX_JOBS=3
+Environment=RALFLOOP_GLM_STATE_DIR=/home/sibilla-cumana/.local/state/ralfloop/glm-review
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python -m ralfloop_agent.domains.bandi_weekly_research
+TimeoutStartSec=2700
+Nice=10

@@ -1,0 +1,10 @@
+{
+  "critic_inner_checkpoint": "/home/sibilla-cumana/ralfloop_agent_scaffold/.ralf_run/recursive_domain_tokenwise_real_v1/final/critic_inner_tokenwise_real_v1.pt",
+  "critic_inner_checkpoint_sha256": "7d48ad286a7b51138390e8845e2d41ddbf19dc6ae1d9daaae40f2cf579d42ad8",
+  "enabled": false,
+  "inner_mode": "trained_tokenwise",
+  "outer23": "new_training_required",
+  "profile_id": "recursive_mas_domain_tokenwise_real_v1",
+  "registered": false,
+  "solver_inner_bypassed": true
+}

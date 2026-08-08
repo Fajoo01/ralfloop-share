@@ -1,0 +1,14 @@
+api:
+  listen: ":1984"
+
+rtsp:
+  listen: ":8555"
+
+webrtc:
+  listen: ":8556"
+
+streams:
+  camera_giardino_anteriore:
+    - "tuya://protect-eu.ismartlife.me?device_id=bf9891efa1544e4e2drjkw&email=fajoo01%40gmail.com&password=***"
+  citofono_tuya:
+    - "tuya://protect-eu.ismartlife.me?device_id=bff459519d43d171b7egj8&email=fajoo01%40gmail.com&password=***"

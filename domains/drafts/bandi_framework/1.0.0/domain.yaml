@@ -1,0 +1,38 @@
+aliases:
+- bandi_framework
+approved_at: null
+approved_by: null
+content_hash: e95f7ae4b93c9f67a0b8031618905c26a3d2bf7a5b20e80c40721bdd8878ec5a
+created_at: '2026-07-11T18:31:51Z'
+created_by: existing_capability_importer
+description: 'Draft wrapper for existing canonical capabilities: regione_act_dimensioning'
+deterministic_capabilities:
+- regione_act_dimensioning
+display_name: Bandi Framework
+domain_id: bandi_framework
+external_action_policy: deny
+jury_capabilities:
+- unresolved_only
+jury_review_completed: true
+languages:
+- it
+- en
+minimum_source_count: 1
+minimum_test_pass_rate: 1.0
+out_of_scope:
+- side effects
+- rules not covered by canonical sources
+- automatic promotion
+parent_version: null
+red_team_completed: true
+rule_precedence:
+- regione_act_dimensioning
+schema_version: '1.0'
+scope:
+- Regione ACT Dimensioning Rulebook
+source_requirements:
+- internal_rulebook
+- canonical_python_executor
+state: draft
+updated_at: '2026-07-11T18:31:51Z'
+version: 1.0.0

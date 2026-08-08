@@ -1,0 +1,33 @@
+rules:
+- rule_id: project_duration_window
+  bando_id: fondazione_unipolis_act_2026
+  version: 1.0.0
+  category: duration
+  description: Activities start from September 2026, max duration 24 months, and project
+    ends no later than September 2028.
+  structured_condition:
+    project_duration_months: <=24
+  structured_effect:
+    field: duration
+    value: &id001
+      start_not_before: 2026-09
+      max_months: 24
+      end_not_after: 2028-09
+  exceptions: []
+  source_refs:
+  - act_regolamento_2026
+  source_sections:
+  - 2 Progetti Ammissibili e Aree Tematiche
+  source_pages:
+  - 3
+  priority: 200
+  effective_from: '2026-02-09'
+  effective_to: null
+  confidence: 1.0
+  interpretation_required: false
+  blocking: false
+  enabled: true
+  field: duration
+  value: *id001
+  source_ref: act_regolamento_2026
+  document_type: official_call_text

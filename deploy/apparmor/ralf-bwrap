@@ -1,0 +1,10 @@
+# Allows only /usr/bin/bwrap to create user namespaces. Bubblewrap then drops
+# capabilities, disables nested user namespaces, and applies seccomp.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile ralf-bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+
+  include if exists <local/ralf-bwrap>
+}

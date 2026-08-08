@@ -1,0 +1,2 @@
+{"example_id": "deadline", "expected": "2026-04-09T13:00:00+02:00", "input": "Qual è la scadenza del Bando ACT 2026?", "kind": "positive", "source_refs": ["act_regolamento_2026"]}
+{"example_id": "contribution", "expected": "75000", "input": "Contributo massimo su 100000 euro al 75%", "kind": "positive", "source_refs": ["act_regolamento_2026"]}

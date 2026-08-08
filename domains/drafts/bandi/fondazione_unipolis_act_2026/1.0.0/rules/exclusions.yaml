@@ -1,0 +1,57 @@
+rules:
+- rule_id: research_only_not_allowed
+  bando_id: fondazione_unipolis_act_2026
+  version: 1.0.0
+  category: exclusions
+  description: Mere research projects are not supported.
+  structured_condition:
+    project_type: mere_research
+  structured_effect:
+    field: exclusion
+    value: mere_research
+  exceptions: []
+  source_refs:
+  - act_regolamento_2026
+  source_sections:
+  - 2 Progetti Ammissibili e Aree Tematiche
+  source_pages:
+  - 3
+  priority: 100
+  effective_from: '2026-02-09'
+  effective_to: null
+  confidence: 1.0
+  interpretation_required: false
+  blocking: false
+  enabled: true
+  field: exclusion
+  value: mere_research
+  source_ref: act_regolamento_2026
+  document_type: official_call_text
+- rule_id: late_submission_invalid
+  bando_id: fondazione_unipolis_act_2026
+  version: 1.0.0
+  category: exclusions
+  description: Applications after the deadline or with different modalities are invalid.
+  structured_condition:
+    submission_after_deadline: true
+  structured_effect:
+    field: exclusion
+    value: late_or_wrong_modality_submission
+  exceptions: []
+  source_refs:
+  - act_regolamento_2026
+  source_sections:
+  - 4 Come Partecipare
+  source_pages:
+  - 6
+  priority: 100
+  effective_from: '2026-02-09'
+  effective_to: null
+  confidence: 1.0
+  interpretation_required: false
+  blocking: false
+  enabled: true
+  field: exclusion
+  value: late_or_wrong_modality_submission
+  source_ref: act_regolamento_2026
+  document_type: official_call_text

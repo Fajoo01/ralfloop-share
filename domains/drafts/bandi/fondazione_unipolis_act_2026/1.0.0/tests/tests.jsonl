@@ -1,0 +1,18 @@
+{"expected": {"bando_id": "fondazione_unipolis_act_2026"}, "input": {"goal": "Bando ACT 2026 Fondazione Unipolis"}, "kind": "deterministic", "source_refs": ["act_regolamento_2026"], "test_id": "identify_bando"}
+{"expected": {"version": "1.0.0"}, "input": {"bando_id": "fondazione_unipolis_act_2026"}, "kind": "deterministic", "source_refs": ["act_regolamento_2026"], "test_id": "version_correct"}
+{"expected": {"eligible": true}, "input": {"field": "eligibility_applicant_types", "value": "Associazioni di promozione sociale"}, "kind": "deterministic", "source_refs": ["act_regolamento_2026"], "test_id": "aps_admitted"}
+{"expected": {"eligible": false}, "input": {"field": "eligibility_exclusion", "value": "previous_act_2025_lead_winner"}, "kind": "deterministic", "source_refs": ["act_regolamento_2026"], "test_id": "previous_winner_excluded"}
+{"expected": {"value": "Italy"}, "input": {"field": "territory"}, "kind": "deterministic", "source_refs": ["act_regolamento_2026"], "test_id": "territory_italy"}
+{"expected": {"value": "2026-04-09T13:00:00+02:00"}, "input": {"field": "deadline"}, "kind": "deterministic", "source_refs": ["act_regolamento_2026"], "test_id": "deadline"}
+{"expected": {"value": "paid_project_work"}, "input": {"field": "expenses_cofinance_allowed"}, "kind": "deterministic", "source_refs": ["act_regolamento_2026"], "test_id": "expense_paid_work_allowed"}
+{"expected": {"value": "free_volunteer_work"}, "input": {"field": "expenses_cofinance_excluded"}, "kind": "deterministic", "source_refs": ["act_regolamento_2026"], "test_id": "expense_volunteer_excluded"}
+{"expected": {"value": 0.75}, "input": {"field": "contribution_max_rate"}, "kind": "deterministic", "source_refs": ["act_regolamento_2026"], "test_id": "contribution_max_rate"}
+{"expected": {"value": 150000}, "input": {"field": "contribution_max_amount"}, "kind": "deterministic", "source_refs": ["act_regolamento_2026"], "test_id": "contribution_max_amount"}
+{"expected": {"contains": ["budget_excel", "logical_framework_excel", "lead_statute_pdf"]}, "input": {"field": "documents"}, "kind": "deterministic", "source_refs": ["act_regolamento_2026"], "test_id": "mandatory_documents"}
+{"expected": {"value": "required_for_remaining_costs"}, "input": {"field": "cofinancing"}, "kind": "deterministic", "source_refs": ["act_regolamento_2026"], "test_id": "cofinancing"}
+{"expected": {"result": 75000}, "input": {"calculation_id": "act_contribution_limits", "contribution_rate": 0.75, "total_project_cost": 100000}, "kind": "deterministic", "source_refs": ["act_regolamento_2026"], "test_id": "calculation_example"}
+{"expected": {"jury_required": true, "no_official_rule_invented": true}, "input": {"field": "expenses", "value": "nuova voce non citata"}, "kind": "ambiguous", "source_refs": ["act_regolamento_2026"], "test_id": "spesa_non_classificata"}
+{"expected": {"jury_required": true, "no_number_invented": true}, "input": {"goal": "calcola contributo senza indicare costo totale"}, "kind": "ambiguous", "source_refs": ["act_regolamento_2026"], "test_id": "base_calcolo_ambigua"}
+{"expected": {"jury_required": true, "jury_status": "disabled"}, "input": {"source": "faq"}, "kind": "ambiguous", "source_refs": [], "test_id": "faq_missing"}
+{"expected": {"jury_required": false, "status": "insufficient_input"}, "input": {"goal": "20% di"}, "kind": "ambiguous", "source_refs": ["act_regolamento_2026"], "test_id": "dato_numerico_mancante"}
+{"expected": {"status": "missing_context"}, "input": {"goal": "calcola contributo del bando"}, "kind": "ambiguous", "source_refs": [], "test_id": "versione_non_indicata"}

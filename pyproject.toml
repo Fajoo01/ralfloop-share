@@ -18,6 +18,9 @@ dev = [
   "pytest>=8,<9",
 ]
 
+[project.scripts]
+ralf = "ralfloop_agent.cli.terminal_chat:main"
+
 [tool.setuptools]
 include-package-data = true
 

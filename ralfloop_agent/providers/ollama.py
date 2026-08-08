@@ -2,10 +2,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import os
+from pathlib import Path
 import re
 import shlex
 
-import requests
+from ralfloop_agent.providers.inference_runtime import (
+    GenerateRequest,
+    InferenceRuntime,
+    OllamaRuntime,
+    OpenAICompatRuntime,
+    load_runtime_config,
+    runtime_from_config,
+)
 
 
 @dataclass
@@ -69,6 +78,23 @@ class DeterministicPlanner:
         dir_path = self._extract_dir(user_goal)
         quoted_text = self._extract_quoted_text(user_goal)
         write_pairs = self._extract_write_pairs(user_goal)
+
+        if any(
+            marker in goal
+            for marker in (
+                "bando",
+                "bandi",
+                "candidatura",
+                "arianna",
+                "volontariato e territorio",
+                "rld12025048623",
+            )
+        ):
+            return PlannerDecision(
+                tool_name="sandbox_read_file",
+                tool_input={"path": "bandi_context.json"},
+                why="Leggo il contesto Bandi allowlisted e staged nel sandbox.",
+            )
 
         if len(write_pairs) >= 2 and ("leggili" in goal or "read them" in goal):
             if iteration < len(write_pairs):
@@ -199,11 +225,47 @@ class OllamaPlanner:
         model: str = "qwen2.5:7b",
         fallback: DeterministicPlanner | None = None,
         timeout_sec: int = 60,
+        runtime: InferenceRuntime | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.model = model
+        selected_provider = (os.environ.get("RALF_CHAT_PROVIDER") or "").strip().lower()
+        self.model = (
+            (os.environ.get("RALF_LLAMA_CPP_MODEL") or model).strip()
+            if selected_provider == "llama_cpp"
+            else model
+        )
         self.fallback = fallback or DeterministicPlanner()
         self.timeout_sec = timeout_sec
+        self.runtime = runtime or self._build_runtime()
+
+    def _build_runtime(self) -> InferenceRuntime:
+        selected_provider = (os.environ.get("RALF_CHAT_PROVIDER") or "").strip().lower()
+        if selected_provider == "llama_cpp":
+            return OpenAICompatRuntime(
+                base_url=(
+                    os.environ.get("RALF_LLAMA_CPP_BASE_URL")
+                    or "http://127.0.0.1:19091"
+                ),
+                model=self.model,
+                timeout_sec=self.timeout_sec,
+            )
+
+        config_path = Path("config/ralf/inference_runtime.json")
+        should_use_config = bool(os.environ.get("RALF_INFERENCE_RUNTIME")) or config_path.exists()
+        if not should_use_config:
+            return OllamaRuntime(
+                base_url=self.base_url,
+                model=self.model,
+                timeout_sec=self.timeout_sec,
+            )
+        try:
+            return runtime_from_config(
+                load_runtime_config(config_path),
+                role="planner",
+                timeout_sec=self.timeout_sec,
+            )
+        except Exception as exc:
+            raise RuntimeError("Configured inference runtime is invalid") from exc
 
     def _clean_raw(self, text: str) -> str:
         text = text.strip()
@@ -254,6 +316,23 @@ class OllamaPlanner:
         dir_path = self.fallback._extract_dir(user_goal)
         quoted_text = self.fallback._extract_quoted_text(user_goal)
         write_pairs = self.fallback._extract_write_pairs(user_goal)
+
+        if any(
+            marker in goal
+            for marker in (
+                "bando",
+                "bandi",
+                "candidatura",
+                "arianna",
+                "volontariato e territorio",
+                "rld12025048623",
+            )
+        ):
+            return PlannerDecision(
+                tool_name="sandbox_read_file",
+                tool_input={"path": "bandi_context.json"},
+                why="Leggo il contesto Bandi allowlisted e staged nel sandbox.",
+            )
 
         if len(write_pairs) >= 2 and ("leggili" in goal or "read them" in goal):
             if iteration < len(write_pairs):
@@ -379,20 +458,18 @@ user_goal: {user_goal}
 iteration: {iteration}
 """
         try:
-            r = requests.post(
-                f"{self.base_url}/api/generate",
-                json={
-                    "model": self.model,
-                    "prompt": prompt,
-                    "stream": False,
-                    "format": schema,
-                    "options": {"temperature": 0},
-                },
-                timeout=self.timeout_sec,
+            result = self.runtime.generate(
+                GenerateRequest(
+                    model=self.model,
+                    prompt=prompt,
+                    stream=False,
+                    format=schema,
+                    options={"temperature": 0},
+                    timeout_sec=self.timeout_sec,
+                    metadata={"role": "planner", "iteration": iteration},
+                )
             )
-            r.raise_for_status()
-            data = r.json()
-            raw = data.get("response", "")
+            raw = result.text
             parsed = self._extract_json_object(raw)
             return self._normalize_decision(parsed, user_goal, iteration)
         except Exception:

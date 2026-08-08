@@ -1,0 +1,30 @@
+rules:
+- rule_id: reporting_agreement_later
+  bando_id: fondazione_unipolis_act_2026
+  version: 1.0.0
+  category: reporting
+  description: Erogation and reporting modalities will be clarified in a specific
+    agreement after selection.
+  structured_condition:
+    selected: true
+  structured_effect:
+    field: reporting
+    value: specific_agreement_after_selection
+  exceptions: []
+  source_refs:
+  - act_regolamento_2026
+  source_sections:
+  - 7 Supporto
+  source_pages:
+  - 9
+  priority: 50
+  effective_from: '2026-02-09'
+  effective_to: null
+  confidence: 1.0
+  interpretation_required: true
+  blocking: false
+  enabled: true
+  field: reporting
+  value: specific_agreement_after_selection
+  source_ref: act_regolamento_2026
+  document_type: official_call_text

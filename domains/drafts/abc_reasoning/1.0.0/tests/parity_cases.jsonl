@@ -1,0 +1,3 @@
+{"canonical_executor": "openshell_backend/skills/abc_relcalc.py", "capability_id": "abc_relcalc", "test_references": ["tests/test_abc_relcalc.py"]}
+{"canonical_executor": "openshell_backend/skills/abc_formula_loop.py", "capability_id": "abc_formula_loop", "test_references": ["tests/test_abc_formula_loop.py"]}
+{"canonical_executor": null, "capability_id": "abc_rulebooks", "test_references": ["tests/test_abc_formula_loop.py"]}

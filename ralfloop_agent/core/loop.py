@@ -7,6 +7,7 @@ from typing import Any
 
 from ralfloop_agent.core.state import AgentState, MemoryEntry, PlanStep
 from ralfloop_agent.logging.audit import AuditLogger
+from ralfloop_agent.tools.contracts import ToolResult
 
 
 
@@ -41,6 +42,11 @@ def _rag_for_role(state) -> str:
     if state.current_role == "coder":
         return state.coder_rag_collection
     return state.judge_rag_collection
+
+
+def _is_telepathy_jury(state) -> bool:
+    extra_context = (state.context or {}).get("extra_context") or {}
+    return extra_context.get("requested_feature") == "telepathy_multiagent_jury"
 
 
 class RalfloopAgent:
@@ -83,6 +89,65 @@ class RalfloopAgent:
 
         self.logger.log(task_id=state.task_id, iteration=state.iteration, decision="sandbox_created", sandbox_id=state.sandbox.id)
 
+        seed_payload = {
+            "user_goal": state.user_goal,
+            "constraints": state.constraints,
+            "context": state.context,
+            "created_at": state.sandbox.created_at.isoformat() if state.sandbox.created_at else None,
+        }
+        seed_result = self.adapter.write_file(
+            {
+                "id": state.sandbox.id,
+                "root": state.sandbox.workspace_path,
+                "status": state.sandbox.status,
+            },
+            "task.md",
+            "# Ralfloop task\n\n```json\n"
+            + json.dumps(seed_payload, ensure_ascii=False, indent=2)
+            + "\n```\n",
+        )
+        self.logger.log(
+            task_id=state.task_id,
+            iteration=state.iteration,
+            decision="seed_task",
+            tool_name="sandbox_write_file",
+            tool_output=seed_result.model_dump(),
+        )
+        if seed_result.ok:
+            state.memory.append(MemoryEntry(kind="result", content="sandbox_write_file: task.md seeded"))
+        else:
+            state.audit_summary.append("sandbox_write_file: task.md seed_failed")
+
+        bandi_knowledge = (ctx.get("extra_context") or {}).get("bandi_knowledge")
+        if isinstance(bandi_knowledge, dict):
+            bandi_result = self.adapter.write_file(
+                {
+                    "id": state.sandbox.id,
+                    "root": state.sandbox.workspace_path,
+                    "status": state.sandbox.status,
+                },
+                "bandi_context.json",
+                json.dumps(bandi_knowledge, ensure_ascii=False, indent=2),
+            )
+            self.logger.log(
+                task_id=state.task_id,
+                iteration=state.iteration,
+                decision="seed_bandi_context",
+                tool_name="sandbox_write_file",
+                tool_output=bandi_result.model_dump(),
+            )
+            if bandi_result.ok:
+                state.memory.append(
+                    MemoryEntry(kind="result", content="sandbox_write_file: bandi_context.json seeded")
+                )
+            else:
+                state.audit_summary.append("sandbox_write_file: bandi_context.json seed_failed")
+
+        no_progress_key = None
+        no_progress_count = 0
+        force_read_task_md = False
+        task_md_read = False
+
         try:
             while state.iteration < state.max_iterations:
                 state.role_history.append(state.current_role)
@@ -100,6 +165,17 @@ class RalfloopAgent:
                         description=f"[{state.current_role}] {decision.why}"
                     )
                 )
+                if force_read_task_md and not task_md_read:
+                    from ralfloop_agent.providers.ollama import PlannerDecision
+
+                    decision = PlannerDecision(
+                        tool_name="sandbox_read_file",
+                        tool_input={"path": "task.md"},
+                        why="Read seeded task.md after sandbox listing for patch workflow.",
+                    )
+                    force_read_task_md = False
+                    task_md_read = True
+
                 state.last_action = {
                       "tool_name": decision.tool_name,
                       "tool_input": decision.tool_input,
@@ -133,10 +209,69 @@ class RalfloopAgent:
                     decision="evaluate",
                 )
 
+                if (
+                    _is_telepathy_jury(state)
+                    and result.ok
+                    and state.current_role == "judge"
+                    and {"planner", "coder", "judge"}.issubset(set(state.role_history))
+                ):
+                    state.stop_reason = "goal_completed"
+                    state.audit_summary.append("telepathy_multiagent_jury::completed")
+                    break
+
+                if (
+                    result.tool_name == "sandbox_list_dir"
+                    and result.ok
+                    and not task_md_read
+                    and "task.md" in result.stdout.splitlines()
+                    and (state.capability_route or {}).get("task_mode") == "patch_allowed"
+                ):
+                    force_read_task_md = True
+
+                if result.tool_name == "sandbox_list_dir" and result.ok:
+                    progress_key = (
+                        decision.tool_name,
+                        json.dumps(decision.tool_input, sort_keys=True),
+                        result.stdout,
+                    )
+                    no_progress_reason = "no_progress::repeated_identical_list_dir"
+                elif (
+                    result.tool_name == "sandbox_exec"
+                    and result.ok
+                    and not result.stdout.strip()
+                    and not result.stderr.strip()
+                    and not result.artifacts
+                ):
+                    progress_key = (
+                        decision.tool_name,
+                        "empty_output_no_artifacts",
+                    )
+                    no_progress_reason = "no_progress::repeated_empty_exec"
+                else:
+                    progress_key = None
+                    no_progress_reason = None
+
+                if progress_key is not None:
+                    if progress_key == no_progress_key:
+                        no_progress_count += 1
+                    else:
+                        no_progress_key = progress_key
+                        no_progress_count = 1
+                    if no_progress_count >= 3:
+                        state.stop_reason = "no_progress"
+                        state.audit_summary.append(no_progress_reason)
+                        break
+                else:
+                    no_progress_key = None
+                    no_progress_count = 0
+
                 if result.ok:
                     state.consecutive_failures = 0
                     state.memory.append(MemoryEntry(kind="result", content=f"{decision.tool_name}: ok"))
-                if decision.tool_name == "sandbox_read_file":
+                else:
+                    state.consecutive_failures += 1
+                    state.audit_summary.append(f"{decision.tool_name}: failed:{result.error_type or result.stderr[:80]}")
+                if result.ok and decision.tool_name == "sandbox_read_file":
                     raw_path = decision.tool_input.get("path")
                     if raw_path is None:
                         raw_path = decision.tool_input.get("filename")
@@ -153,7 +288,7 @@ class RalfloopAgent:
                             stderr="policy_denied",
                         )
                         state.consecutive_failures += 1
-                        state.last_action = decision.model_dump()
+                        state.last_action = {"tool_name": decision.tool_name, "tool_input": decision.tool_input, "role": state.current_role}
                         state.last_result = result
                         state.audit_summary.append(f"{decision.tool_name}: policy_denied")
                         state.plan.append(
@@ -171,10 +306,16 @@ class RalfloopAgent:
                         state.iteration += 1
                         continue
 
-                    state.current_role = _next_role(state.current_role)
-                    state.iteration += 1
+                if self._should_stop(state):
+                    break
 
-            if state.last_result and state.last_result.ok:
+                state.current_role = _next_role(state.current_role)
+                state.iteration += 1
+
+            if state.stop_reason in {"no_progress", "max_iterations_reached", "repeated_failure"}:
+                state.status = "failed"
+                state.final_answer = f"Task non completato: {state.stop_reason}."
+            elif state.last_result and state.last_result.ok:
                 state.status = "completed"
                 state.stop_reason = state.stop_reason or "goal_completed"
                 state.final_answer = self._build_final_answer(state)
@@ -207,14 +348,30 @@ class RalfloopAgent:
                 tool_input["path"] = tool_input.pop("filename")
 
         if tool_name == "sandbox_exec":
+            if "command" not in tool_input and "code" in tool_input:
+                code = str(tool_input.get("code", ""))
+                tool_input = {
+                    "command": "python3 - <<'PY'\n" + code + "\nPY",
+                    "timeout_sec": int(tool_input.get("timeout_sec", 20)),
+                }
+            if "command" not in tool_input:
+                return ToolResult(tool_name="sandbox_exec", ok=False, exit_code=2, stderr="missing_command", error_type="input_invalid")
             return self.adapter.exec(sandbox, **tool_input)
         if tool_name == "sandbox_write_file":
+            if "path" not in tool_input or "content" not in tool_input:
+                return ToolResult(tool_name="sandbox_write_file", ok=False, exit_code=2, stderr="missing_path_or_content", error_type="input_invalid")
             return self.adapter.write_file(sandbox, **tool_input)
         if tool_name == "sandbox_read_file":
+            if "path" not in tool_input:
+                return ToolResult(tool_name="sandbox_read_file", ok=False, exit_code=2, stderr="missing_path", error_type="input_invalid")
             return self.adapter.read_file(sandbox, **tool_input)
         if tool_name == "sandbox_list_dir":
+            if "path" not in tool_input:
+                tool_input["path"] = "."
             return self.adapter.list_dir(sandbox, **tool_input)
         if tool_name == "sandbox_http_fetch":
+            if "url" not in tool_input:
+                return ToolResult(tool_name="sandbox_http_fetch", ok=False, exit_code=2, stderr="missing_url", error_type="input_invalid")
             return self.adapter.http_fetch(sandbox, **tool_input)
         raise ValueError(f"Unsupported tool: {tool_name}")
 
@@ -264,9 +421,32 @@ class RalfloopAgent:
                 return True
 
             if tool_name == "sandbox_list_dir":
-                if is_three_step:
-                    return False
-                if not is_two_step:
+                list_intent = any(
+                    token in goal
+                    for token in (
+                        "mostrami",
+                        "show",
+                        "lista",
+                        "list",
+                        "elenca",
+                        "contenuto",
+                        "workspace",
+                    )
+                )
+                patch_intent = any(
+                    token in goal
+                    for token in (
+                        "implementa",
+                        "crea",
+                        "patch",
+                        "pytest",
+                        "modulo",
+                        "codice",
+                        "add ",
+                    )
+                )
+
+                if list_intent and not patch_intent and not (is_three_step or is_two_step):
                     state.stop_reason = "goal_completed"
                     return True
 
@@ -280,6 +460,21 @@ class RalfloopAgent:
         result = state.last_result
         if result is None:
             return "Nessun risultato disponibile."
+
+        if _is_telepathy_jury(state):
+            roles = ", ".join(state.role_history) or "n/d"
+            route = state.context.get("capability_route") or {}
+            route_mode = route.get("mode", "n/d") if isinstance(route, dict) else "n/d"
+            return (
+                "Telepatia Ralf multiagent verificata.\n"
+                f"- Giuria: {roles}\n"
+                f"- reasoning_cycle_node: attivo, route_mode={route_mode}\n"
+                "- state_handoff: planner -> coder -> judge eseguito\n"
+                "- internal_state_packet: task.md seedato in sandbox temporanea\n"
+                "- policy: read-only/check-only, nessun effetto esterno richiesto\n"
+                "- rischio: mind_reading_risk; usare solo evidenze osservabili\n"
+                "- prossima verifica: passare un evento concreto e chiedere facts/counter_evidence prima di interpretare\n"
+            )
 
         if result.tool_name == "sandbox_http_fetch":
             try:

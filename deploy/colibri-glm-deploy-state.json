@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "previous_commit": "6130e743599c7246c12692ba9da005889c15b03e",
+  "previous_release": "/home/sibilla-cumana/ralfloop-production/releases/6130e743599c7246c12692ba9da005889c15b03e",
+  "configuration_changes": [
+    "ralf-bandi-weekly-deep-research.service restored from selected rollback release"
+  ],
+  "database_migrations": [
+    "glm queue schema v1",
+    "approval_request_id schema v2",
+    "atomic claim and attempt ledger schema v3",
+    "Director blackboard, cache, assignment and metrics schema v4"
+  ],
+  "new_timers": [
+    "ralf-glm-worker.timer",
+    "ralf-glm-digest.timer"
+  ],
+  "updated_units": [
+    "ralf-bandi-weekly-deep-research.service"
+  ],
+  "artifacts_preserved_on_rollback": true,
+  "rollback": "vpnpc sudo sibilla -- /home/sibilla-cumana/ralfloop-production/bin/rollback-colibri-glm /home/sibilla-cumana/ralfloop-production/releases/6130e743599c7246c12692ba9da005889c15b03e"
+}

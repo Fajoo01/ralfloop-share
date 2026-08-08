@@ -1,0 +1,30 @@
+rules:
+- rule_id: cofinancing_remaining_costs
+  bando_id: fondazione_unipolis_act_2026
+  version: 1.0.0
+  category: cofinancing
+  description: Remaining project costs can be covered by public/private contributions,
+    lead/partner economic cofinancing, or in kind cofinancing.
+  structured_condition:
+    contribution_rate: <1.0
+  structured_effect:
+    field: cofinancing
+    value: required_for_remaining_costs
+  exceptions: []
+  source_refs:
+  - act_regolamento_2026
+  source_sections:
+  - 7 Supporto
+  source_pages:
+  - 8
+  priority: 100
+  effective_from: '2026-02-09'
+  effective_to: null
+  confidence: 1.0
+  interpretation_required: false
+  blocking: false
+  enabled: true
+  field: cofinancing
+  value: required_for_remaining_costs
+  source_ref: act_regolamento_2026
+  document_type: official_call_text

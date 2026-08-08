@@ -1,0 +1,20 @@
+[Unit]
+Description=Ralfloop RecursiveMAS host socket service
+After=network-online.target
+
+[Service]
+Type=simple
+User=sibilla-cumana
+Group=sibilla-cumana
+WorkingDirectory=/home/sibilla-cumana/ralfloop_agent_scaffold
+EnvironmentFile=/etc/ralfloop/ralfloop-recursive-mas.env
+RuntimeDirectory=ralfloop
+RuntimeDirectoryMode=0770
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python -m ralfloop_agent.integration.recursive_mas_host_service serve --socket /run/ralfloop/recursive-mas.sock
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

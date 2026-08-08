@@ -1,0 +1,58 @@
+rules:
+- rule_id: paid_project_work_as_cofinance_allowed
+  bando_id: fondazione_unipolis_act_2026
+  version: 1.0.0
+  category: expenses
+  description: Dedicated work by employees, collaborators or consultants may be recognized
+    as co-financing.
+  structured_condition:
+    cofinance_item: paid_project_work
+  structured_effect:
+    field: expenses_cofinance_allowed
+    value: paid_project_work
+  exceptions: []
+  source_refs:
+  - act_regolamento_2026
+  source_sections:
+  - 7 Supporto
+  source_pages:
+  - 8
+  priority: 100
+  effective_from: '2026-02-09'
+  effective_to: null
+  confidence: 1.0
+  interpretation_required: false
+  blocking: false
+  enabled: true
+  field: expenses_cofinance_allowed
+  value: paid_project_work
+  source_ref: act_regolamento_2026
+  document_type: official_call_text
+- rule_id: free_volunteer_work_not_cofinance
+  bando_id: fondazione_unipolis_act_2026
+  version: 1.0.0
+  category: expenses
+  description: Free volunteer work is not admitted as co-financing.
+  structured_condition:
+    cofinance_item: free_volunteer_work
+  structured_effect:
+    field: expenses_cofinance_excluded
+    value: free_volunteer_work
+  exceptions: []
+  source_refs:
+  - act_regolamento_2026
+  source_sections:
+  - 7 Supporto
+  source_pages:
+  - 8
+  priority: 100
+  effective_from: '2026-02-09'
+  effective_to: null
+  confidence: 1.0
+  interpretation_required: false
+  blocking: false
+  enabled: true
+  field: expenses_cofinance_excluded
+  value: free_volunteer_work
+  source_ref: act_regolamento_2026
+  document_type: official_call_text

@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-08-01T16:43:01+02:00",
+    "kind": "local_authorized",
+    "path": "historical-meet-and-code-input.json",
+    "sha256": "695b827c7a1fc00b2e52b7d5f50a77f6625c697abc2f8ff020108113014e470c"
+  },
+  "payload": {
+    "goal": "Revisionare la candidatura Meet and Code 2026 prima della compilazione.",
+    "constraints": [
+      "Nessuna azione esterna o invio.",
+      "Non inventare date, sede, contatti o partner mancanti."
+    ],
+    "draft": "# AI di quartiere: usare l'intelligenza artificiale senza farsi usare\n\n## Sintesi\nLaboratorio gratuito per 20 partecipanti dagli 11 ai 16 anni sull'uso critico e creativo dell'intelligenza artificiale generativa.\n\n## Obiettivi\nAvvicinare i giovani alle competenze digitali, sviluppare capacità pratiche su prompt, verifica delle fonti, privacy e bias, ridurre il divario digitale e produrre un output finale condivisibile.\n\n## Attività\nIl percorso prevede quattro incontri da 60 minuti con lo stesso gruppo. Gli incontri includono introduzione all'AI, prompt lab, fact-checking, privacy e bias, micro-progetto di gruppo e questionario finale. La partecipazione è gratuita.\n\n## Partecipanti e risultati\nSaranno coinvolti 20 partecipanti. Gli indicatori sono presenze ai quattro incontri, completamento del micro-progetto, questionario iniziale/finale e almeno un elaborato digitale per gruppo.\n\n## Budget\nFormatore 300 euro; materiali didattici e stampe 80 euro; comunicazione locale 70 euro; supporto tecnico e logistico 50 euro. Totale 500 euro.",
+    "requirements": [
+      "Organizzazione non profit validata nel proprio Paese.",
+      "Evento per giovani tra 8 e 24 anni con almeno 20 partecipanti.",
+      "Durata minima 240 minuti; se articolato in più sessioni deve partecipare lo stesso gruppo.",
+      "Partecipazione gratuita.",
+      "Eventi tra il 16 agosto 2026 e il 31 ottobre 2026.",
+      "Proposte entro il 24 luglio 2026 incluso."
+    ],
+    "evidence": [
+      {
+        "source_id": "meet-code-conditions-eligibility",
+        "location": "official:conditions#criteri",
+        "claim": "Criteri di ammissione",
+        "excerpt": "Gli eventi devono rivolgersi a giovani tra 8 e 24 anni, coinvolgere almeno 20 partecipanti, essere gratuiti e durare almeno 240 minuti; in più sessioni deve partecipare lo stesso gruppo.",
+        "classification": "fact"
+      },
+      {
+        "source_id": "meet-code-conditions-window",
+        "location": "official:conditions#periodo-eventi",
+        "claim": "Periodo degli eventi",
+        "excerpt": "Gli eventi finanziati devono svolgersi tra il 16 agosto 2026 e il 31 ottobre 2026.",
+        "classification": "fact"
+      },
+      {
+        "source_id": "meet-code-conditions-deadline",
+        "location": "official:conditions#periodo-proposte",
+        "claim": "Scadenza della call",
+        "excerpt": "Le proposte possono essere inviate dal 20 maggio 2026 al 24 luglio 2026 inclusi.",
+        "classification": "fact"
+      },
+      {
+        "source_id": "meet-code-conditions-grant",
+        "location": "official:conditions#contributo",
+        "claim": "Contributo per evento",
+        "excerpt": "Ogni evento approvato riceve 500 euro per formatori, materiali, comunicazione e supporto tecnico.",
+        "classification": "fact"
+      },
+      {
+        "source_id": "tiremm-profile",
+        "location": "local:organization-profile",
+        "claim": "Status del proponente",
+        "excerpt": "Tiremm Innanz APS è un'associazione di promozione sociale non profit.",
+        "classification": "fact"
+      }
+    ],
+    "budget_summary": {
+      "currency": "EUR",
+      "items": [
+        {"label": "Formatore/laboratorista", "amount": 300},
+        {"label": "Materiali didattici e stampe", "amount": 80},
+        {"label": "Comunicazione locale", "amount": 70},
+        {"label": "Supporto tecnico/logistico", "amount": 50}
+      ],
+      "total": 500
+    },
+    "known_gaps": [
+      "Date e orari precisi dei quattro incontri.",
+      "Sede definitiva.",
+      "Contatto responsabile definitivo.",
+      "Immagine evento.",
+      "Conferma del formatore o partner."
+    ],
+    "requested_review": [
+      "copertura dei requisiti",
+      "coerenza obiettivi-attività-indicatori",
+      "coerenza del budget",
+      "rischi e contraddizioni",
+      "evidenze mancanti non già dichiarate in known_gaps"
+    ]
+  }
+}

@@ -1,0 +1,1344 @@
+from __future__ import annotations
+
+import html
+import json
+import math
+import os
+import re
+import time
+import urllib.parse
+import urllib.request
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
+
+DATA_DIR = Path("/home/sibilla-cumana/ralfloop_data/atm_telegram")
+DESTINATIONS_PATH = DATA_DIR / "destinations.json"
+OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+OSM_COPYRIGHT = "Data © OpenStreetMap contributors"
+CDP_HOST = os.environ.get("RALFLOOP_ATM_CDP_HOST", "127.0.0.1")
+CDP_PORT = int(os.environ.get("RALFLOOP_ATM_CDP_PORT", "9237"))
+ATM_LIVE_BROWSER_ENABLED = os.environ.get("RALFLOOP_ATM_LIVE_BROWSER", "1").strip().lower() not in {"0", "false", "no"}
+ATM_BROWSER_HELPER_URL = os.environ.get("RALFLOOP_ATM_BROWSER_HELPER_URL", "http://127.0.0.1:19137").strip()
+ATM_BROWSER_CLOSE_AFTER = os.environ.get("RALFLOOP_ATM_BROWSER_CLOSE_AFTER", "1").strip().lower() not in {"0", "false", "no"}
+ATM_JSON_CDP_FALLBACK_ENABLED = os.environ.get("RALFLOOP_ATM_JSON_CDP_FALLBACK", "0").strip().lower() not in {"0", "false", "no"}
+
+router = APIRouter(prefix="/atm-telegram", tags=["atm-telegram"])
+
+DEFAULT_DESTINATIONS = [
+    {"name": "arci bellezza", "label": "ARCI Bellezza", "lat": 45.4487392, "lon": 9.1950134, "note": "Via Giovanni Bellezza 16/A, Milano"},
+    {"name": "piscina suzzani", "label": "Piscina Suzzani", "lat": 45.5194893, "lon": 9.2061705, "note": "Via Luigi Beccali, Milano"},
+]
+
+
+class DestinationIn(BaseModel):
+    name: str
+    label: str | None = None
+    aliases: list[str] | str | None = None
+    lat: float
+    lon: float
+    note: str | None = ""
+
+
+class PlanIn(BaseModel):
+    lat: float
+    lon: float
+    destination: str
+
+
+class PlanNamedIn(BaseModel):
+    origin: str
+    destination: str
+
+
+class TelegramWebhookIn(BaseModel):
+    update_id: int | None = None
+    message: dict[str, Any] | None = None
+
+
+class DestinationDeleteIn(BaseModel):
+    name: str
+
+
+class GeocodeIn(BaseModel):
+    q: str
+
+
+def _slug(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
+
+
+def _aliases(value: Any) -> list[str]:
+    if isinstance(value, str):
+        raw = re.split(r"[,;\n]+", value)
+    elif isinstance(value, list):
+        raw = value
+    else:
+        raw = []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        alias = _slug(str(item or ""))
+        if alias and alias not in seen:
+            out.append(alias)
+            seen.add(alias)
+    return out
+
+
+def _http_json(url: str, *, method: str = "GET", data: bytes | None = None, timeout: int = 14) -> Any:
+    req = urllib.request.Request(url, data=data, method=method, headers={"User-Agent": "ralfloop-atm-telegram/0.1"})
+    if data is not None:
+        req.add_header("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
+    with urllib.request.urlopen(req, timeout=timeout) as res:
+        return json.loads(res.read().decode("utf-8"))
+
+
+def _nominatim_search(query: str) -> list[dict[str, Any]]:
+    text = (query or "").strip()
+    if not text:
+        return []
+    if "milano" not in text.lower():
+        text = f"{text}, Milano"
+    url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode({
+        "format": "json",
+        "limit": 6,
+        "addressdetails": 1,
+        "q": text,
+    })
+    try:
+        rows = _http_json(url, timeout=10)
+    except Exception:
+        return []
+    out: list[dict[str, Any]] = []
+    for row in rows if isinstance(rows, list) else []:
+        try:
+            out.append({
+                "label": str(row.get("display_name") or ""),
+                "lat": float(row.get("lat")),
+                "lon": float(row.get("lon")),
+                "type": str(row.get("type") or row.get("class") or ""),
+            })
+        except Exception:
+            continue
+    return out
+
+
+def _save_destinations(rows: list[dict[str, Any]]) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    DESTINATIONS_PATH.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _load_destinations() -> list[dict[str, Any]]:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if not DESTINATIONS_PATH.exists():
+        _save_destinations(DEFAULT_DESTINATIONS)
+    try:
+        rows = json.loads(DESTINATIONS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        rows = DEFAULT_DESTINATIONS
+    by_name: dict[str, dict[str, Any]] = {}
+    source_rows = list(rows or []) if isinstance(rows, list) and rows else list(DEFAULT_DESTINATIONS)
+    for row in source_rows:
+        name = _slug(str(row.get("name") or row.get("label") or ""))
+        if name:
+            item = dict(row)
+            item["name"] = name
+            item["label"] = str(item.get("label") or name.title())
+            item["aliases"] = _aliases(item.get("aliases"))
+            by_name[name] = item
+    return sorted(by_name.values(), key=lambda r: str(r.get("label") or r.get("name")))
+
+
+def _find_destination(name: str) -> dict[str, Any] | None:
+    wanted = _slug(name)
+    for row in _load_destinations():
+        hay = _slug(str(row.get("name") or "") + " " + str(row.get("label") or ""))
+        aliases = set(_aliases(row.get("aliases")))
+        if wanted == _slug(str(row.get("name") or "")) or wanted == _slug(str(row.get("label") or "")):
+            return row
+        if wanted in aliases:
+            return row
+        if wanted and (wanted in hay or hay in wanted):
+            return row
+    return None
+
+
+def _geocode_destination(name: str) -> dict[str, Any] | None:
+    text = (name or "").strip()
+    if not text:
+        return None
+    rows = _nominatim_search(text)
+    if not rows:
+        return None
+    row = rows[0]
+    try:
+        lat = float(row["lat"])
+        lon = float(row["lon"])
+    except Exception:
+        return None
+    label = str(row.get("label") or text).strip() or text
+    return {
+        "name": _slug(text) or "indirizzo",
+        "label": label,
+        "aliases": [],
+        "lat": lat,
+        "lon": lon,
+        "note": "indirizzo geocodificato da OpenStreetMap/Nominatim",
+        "source": "nominatim",
+        "query": text,
+    }
+
+
+def _resolve_destination(name: str, *, allow_geocode: bool = True) -> dict[str, Any] | None:
+    dest = _find_destination(name)
+    if dest or not allow_geocode:
+        return dest
+    return _geocode_destination(name)
+
+
+def _distance_m(a_lat: float, a_lon: float, b_lat: float, b_lon: float) -> int:
+    radius = 6371000.0
+    p1, p2 = math.radians(a_lat), math.radians(b_lat)
+    dp = math.radians(b_lat - a_lat)
+    dl = math.radians(b_lon - a_lon)
+    x = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return int(round(radius * 2 * math.atan2(math.sqrt(x), math.sqrt(1 - x))))
+
+
+def _nearby_stops(lat: float, lon: float, radius_m: int = 650, limit: int = 8) -> list[dict[str, Any]]:
+    query = f"""
+[out:json][timeout:12];
+(
+  node(around:{radius_m},{lat},{lon})["public_transport"="platform"];
+  node(around:{radius_m},{lat},{lon})["highway"="bus_stop"];
+  node(around:{radius_m},{lat},{lon})["railway"="tram_stop"];
+  node(around:{radius_m},{lat},{lon})["railway"="station"];
+  way(around:{radius_m},{lat},{lon})["public_transport"="platform"];
+);
+out center tags;
+"""
+    try:
+        data = _http_json(OVERPASS_URL, method="POST", data=("data=" + urllib.parse.quote(query)).encode(), timeout=18)
+    except Exception:
+        return []
+    stops: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for el in data.get("elements", []):
+        tags = el.get("tags") or {}
+        slat = float(el.get("lat") or (el.get("center") or {}).get("lat") or 0)
+        slon = float(el.get("lon") or (el.get("center") or {}).get("lon") or 0)
+        if not slat or not slon:
+            continue
+        name = str(tags.get("name") or tags.get("ref") or "fermata").strip()
+        key = f"{name}:{round(slat, 5)}:{round(slon, 5)}"
+        if key in seen:
+            continue
+        seen.add(key)
+        raw_hint = str(tags.get("route_ref") or "").strip()
+        raw_ref = str(tags.get("ref") or "").strip()
+        hint_parts = re.split(r"[,;/\s]+", raw_hint)
+        line_hint = ", ".join(x for x in (_line_label(part) for part in hint_parts) if x)
+        atm_stop_code = raw_ref if re.fullmatch(r"\d{4,6}", raw_ref) else ""
+        modes = [k for k in ("bus", "tram", "subway", "train", "trolleybus") if str(tags.get(k) or "").lower() in {"yes", "true"}]
+        stops.append({
+            "name": name,
+            "lat": slat,
+            "lon": slon,
+            "distance_m": _distance_m(lat, lon, slat, slon),
+            "lines_hint": line_hint,
+            "atm_stop_code": atm_stop_code,
+            "modes": modes,
+            "osm_id": f"{el.get('type')}/{el.get('id')}",
+        })
+    stops.sort(key=lambda s: int(s["distance_m"]))
+    return stops[:limit]
+
+
+def _maps_link(a_lat: float, a_lon: float, b_lat: float, b_lon: float) -> str:
+    return "https://www.openstreetmap.org/directions?" + urllib.parse.urlencode({"engine": "fossgis_osrm_foot", "route": f"{a_lat},{a_lon};{b_lat},{b_lon}"})
+
+
+def _atm_link(lat: float, lon: float) -> str:
+    return "https://giromilano.atm.it/#/nearby/" + urllib.parse.quote(f"{lat},{lon}")
+
+
+def _line_label(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    text = re.sub(r"\s+", "", text)
+    if re.fullmatch(r"\d{1,3}", text):
+        return text
+    if re.fullmatch(r"M[1-5]", text):
+        return text
+    if re.fullmatch(r"[A-Z]{1,2}\d{1,2}", text):
+        return text
+    return ""
+
+
+def _line_labels(rows: list[dict[str, Any]], limit: int = 8) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        line = _line_label(row.get("line"))
+        if line and line not in seen:
+            out.append(line)
+            seen.add(line)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _cdp_json(url: str, timeout: float = 1.5) -> Any:
+    with urllib.request.urlopen(url, timeout=timeout) as res:
+        return json.loads(res.read().decode("utf-8"))
+
+
+def _atm_browser_helper(action: str, timeout_s: float = 8.0) -> bool:
+    if not ATM_BROWSER_HELPER_URL:
+        return False
+    try:
+        url = ATM_BROWSER_HELPER_URL.rstrip("/") + "/" + action.lstrip("/")
+        req = urllib.request.Request(url, data=b"{}", method="POST", headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout_s) as res:
+            payload = json.loads(res.read().decode("utf-8") or "{}")
+        return bool(payload.get("ok"))
+    except Exception:
+        return False
+
+
+def _cdp_call(ws: Any, seq: int, method: str, params: dict[str, Any] | None = None, timeout_s: float = 3.0) -> dict[str, Any]:
+    try:
+        ws.settimeout(timeout_s)
+    except Exception:
+        pass
+    ws.send(json.dumps({"id": seq, "method": method, "params": params or {}}))
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        msg = json.loads(ws.recv())
+        if msg.get("id") == seq:
+            return msg
+    return {}
+
+
+def _cdp_eval_text(ws: Any, seq: int) -> str:
+    expr = "document.body ? document.body.innerText : ''"
+    res = _cdp_call(ws, seq, "Runtime.evaluate", {"expression": expr, "returnByValue": True})
+    return str(res.get("result", {}).get("result", {}).get("value") or "")
+
+
+def _open_cdp_tab(url: str) -> dict[str, Any] | None:
+    endpoint = f"http://{CDP_HOST}:{CDP_PORT}/json/new?" + urllib.parse.quote(url, safe=":/?=&,#")
+    req = urllib.request.Request(endpoint, method="PUT")
+    try:
+        with urllib.request.urlopen(req, timeout=2) as res:
+            return json.loads(res.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def _close_cdp_tab(page: dict[str, Any] | None) -> None:
+    page_id = str((page or {}).get("id") or "").strip()
+    if not page_id:
+        return
+    try:
+        endpoint = f"http://{CDP_HOST}:{CDP_PORT}/json/close/" + urllib.parse.quote(page_id, safe="")
+        _cdp_json(endpoint)
+    except Exception:
+        pass
+
+
+def _browser_page_text(url: str, wait_s: float = 5.0) -> str:
+    if not ATM_LIVE_BROWSER_ENABLED:
+        return ""
+    try:
+        import websocket  # existing project dependency, used by /home/bandi/bin/bandi-chat-injector
+    except Exception:
+        return ""
+
+    page = _open_cdp_tab(url)
+    wsurl = (page or {}).get("webSocketDebuggerUrl")
+    if not wsurl:
+        try:
+            for item in _cdp_json(f"http://{CDP_HOST}:{CDP_PORT}/json/list"):
+                if str(item.get("url") or "").startswith("https://giromilano.atm.it/"):
+                    wsurl = item.get("webSocketDebuggerUrl")
+                    break
+        except Exception:
+            return ""
+    if not wsurl:
+        return ""
+
+    ws = None
+    try:
+        ws = websocket.create_connection(wsurl, timeout=3, suppress_origin=True)
+        _cdp_call(ws, 1, "Runtime.enable")
+        _cdp_call(ws, 2, "Page.enable")
+        text = ""
+        deadline = time.time() + wait_s
+        seq = 3
+        while time.time() < deadline:
+            text = _cdp_eval_text(ws, seq)
+            seq += 1
+            low = text.lower()
+            if any(token in low for token in (" min", "minuti", "arrivi", "prossimi", "fermata")):
+                break
+            time.sleep(0.5)
+        return text
+    except Exception:
+        return ""
+    finally:
+        if ws is not None:
+            try:
+                ws.close()
+            except Exception:
+                pass
+        _close_cdp_tab(page)
+
+
+def _tpportal_direct_timeout(path: str) -> float:
+    clean = path.lstrip("/")
+    if clean.startswith("tpl/trips?"):
+        return 24.0
+    if "/linesummary" in clean:
+        return 8.0
+    if clean.startswith("tpl/journeyPatterns/"):
+        return 6.0
+    return 10.0
+
+
+def _tpportal_fetch_json_direct(path: str, timeout: float | None = None) -> Any:
+    url = "https://giromilano.atm.it/proxy.tpportal/api/tpPortal/" + path.lstrip("/")
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 ralfloop-atm-telegram/0.1",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout or _tpportal_direct_timeout(path)) as res:
+            if int(getattr(res, "status", 0) or 0) >= 400:
+                return None
+            return json.loads(res.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def _browser_fetch_json(path: str) -> Any:
+    if not ATM_LIVE_BROWSER_ENABLED:
+        return None
+    direct = _tpportal_fetch_json_direct(path)
+    if direct is not None or not ATM_JSON_CDP_FALLBACK_ENABLED:
+        return direct
+    try:
+        import websocket
+    except Exception:
+        return None
+    opened_page = None
+    try:
+        pages = _cdp_json(f"http://{CDP_HOST}:{CDP_PORT}/json/list")
+        page = next((p for p in pages if "giromilano.atm.it" in str(p.get("url") or "") and p.get("webSocketDebuggerUrl")), None)
+        if not page:
+            opened_page = _open_cdp_tab("https://giromilano.atm.it/")
+            time.sleep(1.0)
+            if opened_page and opened_page.get("webSocketDebuggerUrl"):
+                page = opened_page
+            else:
+                pages = _cdp_json(f"http://{CDP_HOST}:{CDP_PORT}/json/list")
+                page = next((p for p in pages if "giromilano.atm.it" in str(p.get("url") or "") and p.get("webSocketDebuggerUrl")), None)
+        if not page:
+            return None
+        url = "https://giromilano.atm.it/proxy.tpportal/api/tpPortal/" + path.lstrip("/")
+        ws = websocket.create_connection(page["webSocketDebuggerUrl"], timeout=6, suppress_origin=True)
+        try:
+            _cdp_call(ws, 1, "Runtime.enable")
+            expr = """
+(async () => {
+  const url = %s;
+  const r = await fetch(url, {credentials: 'include'});
+  const text = await r.text();
+  return JSON.stringify({status: r.status, text});
+})()
+""" % json.dumps(url)
+            res = _cdp_call(ws, 2, "Runtime.evaluate", {"expression": expr, "awaitPromise": True, "returnByValue": True}, timeout_s=18.0)
+            raw = str(res.get("result", {}).get("result", {}).get("value") or "")
+        finally:
+            ws.close()
+        payload = json.loads(raw)
+        if int(payload.get("status") or 0) >= 400:
+            return None
+        return json.loads(str(payload.get("text") or "null"))
+    except Exception:
+        return None
+    finally:
+        if opened_page is not None:
+            _close_cdp_tab(opened_page)
+
+def _parse_live_minutes(page_text: str, line_labels: list[str]) -> dict[str, str]:
+    text = re.sub(r"\s+", " ", page_text or " ").strip()
+    if not text or not line_labels:
+        return {}
+    out: dict[str, str] = {}
+    for line in line_labels:
+        escaped = re.escape(line)
+        patterns = [
+            rf"(?<!\d){escaped}(?!\d).{{0,90}}?(\d{{1,2}})\s*(?:min|')",
+            rf"(\d{{1,2}})\s*(?:min|').{{0,90}}?(?<!\d){escaped}(?!\d)",
+        ]
+        for pat in patterns:
+            m = re.search(pat, text, flags=re.I)
+            if m:
+                out[line] = f"{int(m.group(1))} min"
+                break
+    return out
+
+
+
+_ATM_PATTERN_CACHE = {}
+
+def _atm_journey_pattern_stops(journey_pattern_id: str) -> list[dict[str, Any]]:
+    import time
+    jp = str(journey_pattern_id).strip()
+    if jp in _ATM_PATTERN_CACHE:
+        return _ATM_PATTERN_CACHE[jp]
+
+    for _ in range(3):
+        data = _browser_fetch_json(f"tpl/journeyPatterns/{urllib.parse.quote(jp, safe='|')}")
+        stops = (data or {}).get("Stops") or []
+        if isinstance(stops, list) and stops:
+            _ATM_PATTERN_CACHE[jp] = stops
+            return stops
+        time.sleep(0.15)
+
+    _ATM_PATTERN_CACHE[jp] = []
+    return []
+
+
+def _atm_stop_latlon(stop: dict[str, Any]) -> tuple[float, float] | None:
+    loc = stop.get("Location") or {}
+    try:
+        lat = float(loc.get("Y"))
+        lon = float(loc.get("X"))
+        if lat and lon:
+            return lat, lon
+    except Exception:
+        pass
+    return None
+
+
+def _nearest_atm_pattern_stop(
+    stops: list[dict[str, Any]],
+    lat: float,
+    lon: float,
+    max_distance_m: int = 280,
+) -> tuple[int, dict[str, Any], int] | None:
+    best = None
+    for i, st in enumerate(stops):
+        pos = _atm_stop_latlon(st)
+        if not pos:
+            continue
+        dist = _distance_m(lat, lon, pos[0], pos[1])
+        if best is None or dist < best[2]:
+            best = (i, st, dist)
+    if best is None or best[2] > max_distance_m:
+        return None
+    return best
+
+
+def _atm_direct_fallback_options(origin_lat: float, origin_lon: float, dest_lat: float, dest_lon: float, line_hints: list[str]) -> list[dict[str, Any]]:
+    import re
+    import time
+    import urllib.parse
+
+    if _distance_m(origin_lat, origin_lon, dest_lat, dest_lon) > 1800:
+        return []
+
+    deadline = time.monotonic() + 18.0
+
+    def expired() -> bool:
+        return time.monotonic() > deadline
+
+    def code_of(st: dict[str, Any]) -> str:
+        return str(st.get("Code") or "").strip()
+
+    def name_of(st: dict[str, Any]) -> str:
+        return str(st.get("Description") or st.get("Name") or "fermata").strip()
+
+    def pos_of(st: dict[str, Any]):
+        loc = st.get("Location") or {}
+        try:
+            return float(loc["Y"]), float(loc["X"])
+        except Exception:
+            return None
+
+    def nearest_idx(stops, lat, lon, max_m):
+        best = None
+        for i, st in enumerate(stops):
+            pos = pos_of(st)
+            if not pos:
+                continue
+            d = _distance_m(lat, lon, pos[0], pos[1])
+            if d <= max_m and (best is None or d < best[2]):
+                best = (i, st, d)
+        return best
+
+    def wait_rank(wait: str) -> int:
+        low = str(wait or "").lower()
+        if low == "in arrivo":
+            return 0
+        m = re.search(r"\d+", low)
+        return int(m.group(0)) if m else 999
+
+    def wait_from_stop(ocode: str, line: str, jp: str) -> str:
+        if expired():
+            return "n/d"
+        data = _browser_fetch_json(f"tpl/stops/{urllib.parse.quote(ocode)}/linesummary")
+        for row in (data or {}).get("Lines") or []:
+            line_obj = row.get("Line") or {}
+            row_line = _line_label(line_obj.get("LineCode") or line_obj.get("LineId"))
+            row_jp = str(row.get("JourneyPatternId") or "").strip()
+            if row_line == line and row_jp == jp:
+                return str(row.get("WaitMessage") or "").strip() or "n/d"
+        return "n/d"
+
+    hints = []
+    for x in line_hints or []:
+        line = _line_label(x)
+        if line and not line.startswith("Q") and line not in hints:
+            hints.append(line)
+
+    candidates = []
+    for line in hints:
+        for direction in ("0", "1"):
+            candidates.append((line, f"{line}|{direction}"))
+
+    options = []
+    seen_lines = set()
+
+    for line, jp in candidates:
+        if expired() or len(seen_lines) >= 3:
+            break
+        if line in seen_lines:
+            continue
+
+        stops = _atm_journey_pattern_stops(jp)
+        if not stops:
+            continue
+
+        oh = nearest_idx(stops, origin_lat, origin_lon, 850)
+        dh = nearest_idx(stops, dest_lat, dest_lon, 950)
+        if not oh or not dh:
+            continue
+
+        oi, os, od = oh
+        di, ds, dd = dh
+        if oi >= di:
+            continue
+
+        stops_count = di - oi
+        if stops_count > 6:
+            continue
+
+        ocode = code_of(os)
+        options.append({
+            "line": line,
+            "direction": jp.split("|", 1)[1] if "|" in jp else "",
+            "journey_pattern_id": jp,
+            "wait": wait_from_stop(ocode, line, jp),
+            "origin_stop_code": ocode,
+            "origin_stop_name": name_of(os),
+            "origin_distance_m": int(round(od)),
+            "dest_stop_code": code_of(ds),
+            "dest_stop_name": name_of(ds),
+            "dest_distance_m": int(round(dd)),
+            "origin_idx": oi,
+            "dest_idx": di,
+            "stops_count": stops_count,
+        })
+        seen_lines.add(line)
+
+    by_stop: dict[str, list[str]] = {}
+    for opt in options:
+        if str(opt.get("wait") or "").lower() not in ("", "n/d", "ricalcolo"):
+            continue
+        code = str(opt.get("origin_stop_code") or "")
+        line = str(opt.get("line") or "")
+        if code and line:
+            by_stop.setdefault(code, []).append(line)
+
+    for code, line_list in by_stop.items():
+        if expired():
+            break
+        live = _atm_live_minutes({"atm_stop_code": code}, sorted(set(line_list)))
+        arrivals = live.get("arrivals") or {}
+        for opt in options:
+            if opt.get("origin_stop_code") == code and opt.get("line") in arrivals:
+                opt["wait"] = arrivals[opt["line"]]
+
+    options.sort(key=lambda x: (
+        int(x.get("stops_count") or 999),
+        wait_rank(str(x.get("wait") or "")),
+        int(x.get("origin_distance_m") or 9999),
+        str(x.get("line") or ""),
+    ))
+    return options[:6]
+
+
+def _atm_live_minutes(stop: dict[str, Any], line_labels: list[str]) -> dict[str, Any]:
+    if not stop or not line_labels:
+        return {"status": "no_lines", "arrivals": {}}
+
+    import time
+
+    lat = stop.get("lat")
+    lon = stop.get("lon")
+    url = ""
+    if lat is not None and lon is not None:
+        url = _atm_link(float(lat), float(lon))
+
+    stop_code = str(stop.get("atm_stop_code") or "").strip()
+
+    if stop_code:
+        for attempt in range(3):
+            data = _browser_fetch_json(f"tpl/stops/{urllib.parse.quote(stop_code)}/linesummary")
+            arrivals: dict[str, str] = {}
+
+            if isinstance(data, dict):
+                for row in data.get("Lines") or []:
+                    line_obj = row.get("Line") or {}
+                    raw_line = line_obj.get("LineCode") or line_obj.get("LineId")
+                    line = _line_label(raw_line)
+                    wait = str(row.get("WaitMessage") or "").strip()
+
+                    if line and wait:
+                        arrivals[line] = wait
+                    if raw_line and str(raw_line).strip() and wait:
+                        arrivals[str(raw_line).strip()] = wait
+
+            filtered = {line: arrivals[line] for line in line_labels if line in arrivals}
+            if filtered:
+                return {
+                    "status": "ok",
+                    "arrivals": filtered,
+                    "url": url,
+                    "source": f"browser_cdp_tpportal_linesummary_attempt_{attempt + 1}",
+                }
+
+            time.sleep(0.35)
+
+    if lat is None or lon is None:
+        return {
+            "status": "not_available",
+            "arrivals": {},
+            "url": "",
+            "source": "no_stop_coordinates",
+        }
+
+    text = _browser_page_text(url)
+    arrivals = _parse_live_minutes(text, line_labels)
+    return {
+        "status": "ok" if arrivals else "not_available",
+        "arrivals": arrivals,
+        "url": url,
+        "source": "browser_page_text",
+    }
+
+
+def _nearby_route_lines(lat: float, lon: float, radius_m: int = 85, limit: int = 12) -> list[dict[str, Any]]:
+    query = f"""
+[out:json][timeout:12];
+(
+  node(around:{radius_m},{lat},{lon});
+  way(around:{radius_m},{lat},{lon});
+)->.near;
+(
+  relation(bn.near)["type"="route"]["route"~"^(bus|tram|subway|train|trolleybus)$"];
+  relation(bw.near)["type"="route"]["route"~"^(bus|tram|subway|train|trolleybus)$"];
+);
+out tags;
+"""
+    try:
+        data = _http_json(OVERPASS_URL, method="POST", data=("data=" + urllib.parse.quote(query)).encode(), timeout=18)
+    except Exception:
+        return []
+
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for el in data.get("elements", []):
+        tags = el.get("tags") or {}
+        ref = str(tags.get("ref") or "").strip()
+        name = str(tags.get("name") or "").strip()
+        route = str(tags.get("route") or "").strip()
+        operator = str(tags.get("operator") or "").strip()
+
+        label = _line_label(ref or name)
+        if not label:
+            continue
+
+        key = f"{route}:{label}".lower()
+        if key in seen:
+            continue
+        seen.add(key)
+
+        out.append({
+            "line": label,
+            "route": route,
+            "name": name,
+            "operator": operator,
+        })
+
+    def sort_key(x: dict[str, Any]) -> tuple[int, str]:
+        line = str(x.get("line") or "")
+        return (0 if line[:1].isdigit() else 1, line)
+
+    out.sort(key=sort_key)
+    return out[:limit]
+
+
+def _atm_trip_plan(lat: float, lon: float, dlat: float, dlon: float, dest_label: str) -> dict[str, Any] | None:
+    now = datetime.now()
+    seconds = now.hour * 3600 + now.minute * 60 + now.second
+    query = urllib.parse.urlencode({
+        "FromPoint.X": lon,
+        "FromPoint.Y": lat,
+        "ToPoint.X": dlon,
+        "ToPoint.Y": dlat,
+        "Date": now.strftime("%Y-%m-%d"),
+        "FromSeconds": seconds,
+        "TransportModes": "Metro,Bus,Tram,Rail",
+        "Lang": "it",
+        "FromDescription": "posizione attuale",
+        "ToDescription": dest_label,
+    })
+    data = _browser_fetch_json("tpl/trips?" + query)
+    if not isinstance(data, dict):
+        return None
+    trips = data.get("Trips") or data.get("TripSolutions") or data.get("Solutions") or []
+    if not isinstance(trips, list) or not trips:
+        return None
+
+    trip = trips[0]
+    actions = trip.get("Actions") or trip.get("TripActions") or trip.get("Segments") or []
+    steps: list[str] = []
+    lines: list[str] = []
+    walk_m = 0
+    board_stop_code = ""
+    board_stop_name = ""
+    first_transit_line = ""
+
+    for action in actions:
+        desc = str(action.get("ActionDescription") or action.get("Description") or "").strip()
+        place = action.get("Place") or {}
+        if isinstance(place, dict) and int(action.get("ActionType") or -1) == 4 and not board_stop_code:
+            board_stop_code = str(place.get("Code") or "").strip()
+            board_stop_name = str(place.get("Description") or "").strip()
+        leg = action.get("Leg") or {}
+        if isinstance(leg, dict):
+            try:
+                if int(leg.get("TravelMode", -1)) == 0:
+                    walk_m += int(float(leg.get("Length") or 0))
+            except Exception:
+                pass
+            journeys = leg.get("Journeys") or []
+            if isinstance(journeys, list):
+                for journey in journeys:
+                    jp = journey.get("JourneyPattern") or {}
+                    line = _line_label(jp.get("Code") or ((jp.get("Line") or {}).get("LineCode")))
+                    if line and line not in lines:
+                        lines.append(line)
+                    if line and not first_transit_line:
+                        first_transit_line = line
+        if desc:
+            desc = re.sub(r"\s+", " ", desc)
+            steps.append(desc)
+
+    duration = trip.get("Duration") or trip.get("TotalDuration") or trip.get("TravelTime")
+    if not duration:
+        for key in ("DurationMinutes", "TotalMinutes", "TravelTimeMinutes"):
+            if trip.get(key) is not None:
+                duration = f"{trip.get(key)} min"
+                break
+
+    live_wait = ""
+    if board_stop_code and first_transit_line:
+        live = _atm_live_minutes({"atm_stop_code": board_stop_code, "lat": lat, "lon": lon}, [first_transit_line])
+        live_wait = str((live.get("arrivals") or {}).get(first_transit_line) or "")
+
+    duration_min = _minutes_value(duration)
+    wait_min = _minutes_value(live_wait)
+    vehicle_eta = (now + timedelta(minutes=wait_min)).strftime("%H:%M") if wait_min is not None else ""
+    destination_eta = (now + timedelta(minutes=duration_min)).strftime("%H:%M") if duration_min is not None else ""
+
+    return {
+        "raw": trip,
+        "summary": {
+            "duration": str(duration or "").strip(),
+            "walk_m": walk_m,
+            "lines": lines,
+            "steps": steps[:8],
+            "first_line": first_transit_line,
+            "board_stop_code": board_stop_code,
+            "board_stop_name": board_stop_name,
+            "live_wait": live_wait,
+            "vehicle_eta": vehicle_eta,
+            "destination_eta": destination_eta,
+        },
+    }
+
+
+def _minutes_value(value: Any) -> int | None:
+    if value is None:
+        return None
+    m = re.search(r"\d+", str(value))
+    return int(m.group(0)) if m else None
+
+
+
+def _official_trip_has_transit(trip_plan: dict[str, Any] | None) -> bool:
+    """Scarta solo i percorsi ATM ufficiali composti davvero solo da cammino."""
+    if not isinstance(trip_plan, dict):
+        return False
+
+    summary = (trip_plan or {}).get("summary") or {}
+    if summary.get("lines") or summary.get("first_line") or summary.get("board_stop_code"):
+        return True
+
+    raw = (trip_plan or {}).get("raw") or {}
+    actions = raw.get("Actions") or raw.get("actions") or []
+    if not isinstance(actions, list):
+        return False
+
+    saw_leg = False
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        leg = action.get("Leg") or action.get("leg") or {}
+        if not isinstance(leg, dict):
+            continue
+
+        saw_leg = True
+
+        journeys = leg.get("Journeys") or leg.get("journeys") or []
+        if isinstance(journeys, list) and journeys:
+            return True
+
+        try:
+            mode = int(leg.get("TravelMode", leg.get("travelMode", -1)))
+        except Exception:
+            mode = -1
+
+        # In ATM/GiroMilano il modo 0 è il tratto a piedi.
+        # Qualunque altra Leg è trasporto, anche se non siamo riusciti a estrarre la linea.
+        if mode != 0 and mode != -1:
+            return True
+
+    return False if saw_leg else bool(summary.get("steps") and not summary.get("walk_m"))
+
+
+def _build_plan_impl(lat: float, lon: float, destination_name: str) -> dict[str, Any]:
+    dest = _resolve_destination(destination_name)
+    if not dest:
+        raise HTTPException(status_code=404, detail="destination_not_found")
+    dlat, dlon = float(dest["lat"]), float(dest["lon"])
+    short_destination = _distance_m(lat, lon, dlat, dlon) <= 1800
+    # FAST_PATH_AUMAI_ATM_DIRECT_START
+    dest_key = str((dest.get("name") or dest.get("label") or "")).lower().strip()
+    if dest_key == "aumai":
+        direct_atm_options = _atm_direct_fallback_options(lat, lon, dlat, dlon, ["51", "53", "44", "56"])
+        if direct_atm_options:
+            return {
+                "destination": dest,
+                "route_mode": "nearby_departures_fallback",
+                "origin_lat": lat,
+                "origin_lon": lon,
+                "direct_atm_options": direct_atm_options,
+                "official_route_url": _atm_link(lat, lon),
+            }
+    # FAST_PATH_AUMAI_ATM_DIRECT_END
+    official_label = str(dest.get("label") or dest.get("name") or destination_name)
+    trip_t0 = time.monotonic()
+    trip_plan = _atm_trip_plan(lat, lon, dlat, dlon, official_label)
+    if (
+        not short_destination
+        and (not trip_plan or not _official_trip_has_transit(trip_plan))
+        and (time.monotonic() - trip_t0) < 8.0
+    ):
+        time.sleep(0.3)
+        trip_plan = _atm_trip_plan(lat, lon, dlat, dlon, official_label)
+
+    if trip_plan and _official_trip_has_transit(trip_plan):
+        return {
+            "route_mode": "official_atm_trip",
+            "route_confidence": "high",
+            "needs_official_route_lookup": False,
+            "destination": dest,
+            "origin": {"lat": lat, "lon": lon},
+            "official_route": trip_plan,
+            "osm_route_url": _maps_link(lat, lon, dlat, dlon),
+            "atm_nearby_url": _atm_link(lat, lon),
+            "official_route_url": _atm_link(lat, lon),
+            "source": "GiroMilano ATM via browser CDP",
+            "generated_at": int(time.time()),
+        }
+    if not short_destination and dest.get("source") != "nominatim":
+        return {
+            "route_mode": "official_atm_lookup_failed",
+            "route_confidence": "low",
+            "needs_official_route_lookup": True,
+            "destination": dest,
+            "origin": {"lat": lat, "lon": lon},
+            "nearest_origin_stop": None,
+            "nearest_destination_stop": None,
+            "nearby_origin_stops": [],
+            "alternatives": [],
+            "osm_route_url": _maps_link(lat, lon, dlat, dlon),
+            "atm_nearby_url": _atm_link(lat, lon),
+            "official_route_url": _atm_link(lat, lon),
+            "live_arrivals": {},
+            "direct_atm_options": [],
+            "realtime_status": "not_available",
+            "source": OSM_COPYRIGHT,
+            "generated_at": int(time.time()),
+        }
+
+    origin_stops = _nearby_stops(lat, lon)
+    if not origin_stops:
+        origin_stops = _nearby_stops(lat, lon, radius_m=900)
+    dest_stops = _nearby_stops(dlat, dlon)
+    if not dest_stops:
+        dest_stops = _nearby_stops(dlat, dlon, radius_m=900)
+
+    for stop in origin_stops[:4]:
+        stop["lines"] = _nearby_route_lines(float(stop["lat"]), float(stop["lon"]))
+    for stop in dest_stops[:2]:
+        stop["lines"] = _nearby_route_lines(float(stop["lat"]), float(stop["lon"]))
+
+    live_lines = _line_labels((origin_stops[0] if origin_stops else {}).get("lines") or [])
+    direct_atm_options = _atm_direct_fallback_options(lat, lon, dlat, dlon, live_lines)
+    live = _atm_live_minutes(origin_stops[0], live_lines) if origin_stops else {"status": "no_origin_stop", "arrivals": {}}
+
+    nearby_origin_stops = [
+        {
+            "from_stop": s,
+            "walk_minutes_to_stop": max(1, round(int(s["distance_m"]) / 80)),
+            "lines": s.get("lines") or [],
+            "live_arrivals": live.get("arrivals") if i == 0 else {},
+            "atm_realtime_url": _atm_link(float(s["lat"]), float(s["lon"])),
+        }
+        for i, s in enumerate(origin_stops[:4])
+    ]
+    return {
+        "route_mode": "nearby_departures_fallback",
+        "route_confidence": "low",
+        "needs_official_route_lookup": True,
+        "destination": dest,
+        "origin": {"lat": lat, "lon": lon},
+        "nearest_origin_stop": origin_stops[0] if origin_stops else None,
+        "nearest_destination_stop": dest_stops[0] if dest_stops else None,
+        "nearby_origin_stops": nearby_origin_stops,
+        "alternatives": nearby_origin_stops,
+        "osm_route_url": _maps_link(lat, lon, dlat, dlon),
+        "atm_nearby_url": _atm_link(lat, lon),
+        "official_route_url": _atm_link(lat, lon),
+        "live_arrivals": live.get("arrivals") or {},
+        "direct_atm_options": direct_atm_options,
+        "realtime_status": live.get("status") or "not_available",
+        "source": OSM_COPYRIGHT,
+        "generated_at": int(time.time()),
+    }
+
+
+def build_plan(lat: float, lon: float, destination_name: str) -> dict[str, Any]:
+    helper_opened = _atm_browser_helper("open", timeout_s=10.0)
+    try:
+        return _build_plan_impl(lat, lon, destination_name)
+    finally:
+        if helper_opened and ATM_BROWSER_CLOSE_AFTER:
+            _atm_browser_helper("close", timeout_s=8.0)
+
+
+def build_named_plan(origin_name: str, destination_name: str) -> dict[str, Any]:
+    origin = _resolve_destination(origin_name)
+    if not origin:
+        raise HTTPException(status_code=404, detail="origin_not_found")
+    plan = build_plan(float(origin["lat"]), float(origin["lon"]), destination_name)
+    plan["origin_label"] = origin.get("label") or origin.get("name")
+    plan["origin_saved_name"] = origin.get("name")
+    return plan
+
+
+def _is_walking_only_alternative(text: str) -> bool:
+    low = str(text or "").strip().lower()
+    if not low:
+        return False
+    walking_only_patterns = (
+        r"^alternativa\s*:\s*a piedi\b",
+        r"^alternativa\s+a piedi\b",
+        r"^vai\s+a piedi\b",
+        r"^andare\s+a piedi\b",
+        r"^percorso\s+a piedi\b",
+        r"^tragitto\s+a piedi\b",
+    )
+    return any(re.search(pattern, low) for pattern in walking_only_patterns)
+
+
+def render_reply(plan: dict[str, Any]) -> str:
+    dest = plan["destination"]
+    if plan.get("route_mode") == "official_atm_trip" or _official_trip_has_transit(plan.get("official_route")):
+        summary = (plan.get("official_route") or {}).get("summary") or {}
+        route_lines = ", ".join(summary.get("lines") or [])
+        steps = list(summary.get("steps") or [])
+        out = [f"{dest.get('label') or dest.get('name')}"]
+        if route_lines:
+            out.append(f"Prendi: {route_lines}")
+        first_line = str(summary.get("first_line") or "").strip()
+        live_wait = str(summary.get("live_wait") or "").strip()
+        board_stop_code = str(summary.get("board_stop_code") or "").strip()
+
+        if first_line and board_stop_code and not live_wait:
+            live = _atm_live_minutes({"atm_stop_code": board_stop_code}, [first_line])
+            arrivals = live.get("arrivals") or {}
+            live_wait_from_stop = str(arrivals.get(first_line) or "").strip()
+            live_wait = live_wait_from_stop or live_wait
+
+        if first_line:
+            wait_low = live_wait.lower()
+            if wait_low == "in arrivo":
+                out.append(f"Bus alla fermata: {first_line} in arrivo")
+            elif wait_low == "ricalcolo":
+                out.append(f"Bus alla fermata: {first_line} ricalcolo")
+            elif live_wait:
+                out.append(f"Bus alla fermata: {first_line} tra {live_wait}")
+            else:
+                out.append(f"Bus alla fermata: {first_line} n/d")
+
+        if summary.get("vehicle_eta"):
+            out.append(f"Bus alla fermata alle: {summary.get('vehicle_eta')}")
+        if summary.get("duration"):
+            duration = str(summary.get("duration"))
+            out.append(f"Tempo stimato fino alla destinazione: {duration if 'min' in duration.lower() else duration + ' min'}")
+        if summary.get("destination_eta"):
+            out.append(f"Arrivo stimato a destinazione: {summary.get('destination_eta')}")
+        if summary.get("walk_m"):
+            out.append(f"A piedi: {summary.get('walk_m')} m")
+        filtered_steps = [step for step in steps if not _is_walking_only_alternative(str(step))]
+        out.extend(filtered_steps[:4])
+        out.append(f"ATM: {plan.get('official_route_url')}")
+        return "\n".join(out)
+    first = plan.get("nearest_origin_stop") or {}
+    to = plan.get("nearest_destination_stop") or {}
+    direct_atm_options = plan.get("direct_atm_options") or []
+
+    first_line_labels = _line_labels(first.get("lines") or [], limit=20) if first else []
+
+    lines = [f"Destinazione: {dest.get('label') or dest.get('name')}"]
+    if direct_atm_options:
+        with_real_wait = [x for x in list(direct_atm_options) if x.get("wait")]
+        shown = (with_real_wait or list(direct_atm_options))[:4]
+
+        lines.append("Linee dirette ATM nella direzione giusta: " + ", ".join(str(x.get("line")) for x in shown))
+        waits = ", ".join(f"{x.get('line')}: {x.get('wait') or 'n/d'}" for x in shown)
+        lines.append(f"Attese reali: {waits}")
+
+        best = shown[0]
+        stops_count = best.get("stops_count")
+        extra = f" ({stops_count} fermate)" if stops_count else ""
+        lines.append(f"Da {best.get('origin_stop_name')} a {best.get('dest_stop_name')}{extra}")
+        lines.append(f"ATM: {plan.get('official_route_url') or plan.get('atm_nearby_url')}")
+        return "\n".join(lines)
+    else:
+        lines.append("Non ho ancora calcolato il percorso completo; ti mostro le partenze vicine e la fermata più vicina alla destinazione.")
+
+    if first:
+        walk_min = max(1, round(int(first.get("distance_m") or 0) / 80))
+        line_labels = first_line_labels or _line_labels(first.get("lines") or [])
+        lines_found = ", ".join(line_labels)
+        arrivals = plan.get("live_arrivals") or {}
+        waits = ", ".join(f"{line}: {arrivals.get(line) or 'n/d'}" for line in line_labels) if line_labels else ""
+        lines.append(f"Da qui: {first.get('name')} ({first.get('distance_m')} m, {walk_min} min a piedi)")
+        lines.append(f"Partenze utili da qui: {lines_found or 'non trovate in OSM'}")
+        lines.append(f"Attese live da qui: {waits or 'non disponibili'}")
+    if to:
+        arr_lines = ", ".join(_line_labels(to.get("lines") or []))
+        suffix = f" - linee vicine: {arr_lines}" if arr_lines else ""
+        lines.append(f"Vicino alla destinazione: {to.get('name')} ({to.get('distance_m')} m){suffix}")
+    nearby = (plan.get("nearby_origin_stops") or plan.get("alternatives") or [])[1:4]
+    for alt in nearby:
+        s = alt["from_stop"]
+        alt_lines = ", ".join(_line_labels(alt.get("lines") or [], limit=6))
+        if alt_lines:
+            lines.append(f"Altre fermate vicine: {s.get('name')} - linee {alt_lines} - cammino {alt.get('walk_minutes_to_stop')} min")
+    lines.append(f"Link ATM per calcolare il percorso completo: {plan.get('official_route_url') or plan.get('atm_nearby_url')}")
+    return "\n".join(lines)
+
+
+def _telegram_destination(message: dict[str, Any]) -> str:
+    text = str(message.get("caption") or message.get("text") or "").strip()
+    text = re.sub(r"^(vai|andare|portami|destinazione|verso|a)\s+", "", text, flags=re.I).strip()
+    return text or "casa"
+
+
+def _telegram_named_route(message: dict[str, Any]) -> tuple[str, str] | None:
+    text = str(message.get("caption") or message.get("text") or "").strip()
+    m = re.search(r"\batm\s*:\s*([^-–—>]+)\s*[-–—>]\s*(.+)$", text, flags=re.I)
+    if not m:
+        return None
+    return m.group(1).strip(), m.group(2).strip()
+
+
+@router.get("", response_class=HTMLResponse)
+def atm_telegram_page() -> HTMLResponse:
+    return HTMLResponse(_page_html())
+
+
+@router.get("/api/destinations")
+def api_destinations() -> dict[str, Any]:
+    return {"destinations": _load_destinations(), "path": str(DESTINATIONS_PATH)}
+
+
+@router.post("/api/destinations")
+def api_save_destination(dest: DestinationIn) -> dict[str, Any]:
+    rows = [r for r in _load_destinations() if _slug(str(r.get("name") or "")) != _slug(dest.name)]
+    row = {"name": _slug(dest.name), "label": dest.label or dest.name, "aliases": _aliases(dest.aliases), "lat": dest.lat, "lon": dest.lon, "note": dest.note or ""}
+    rows.append(row)
+    _save_destinations(rows)
+    return {"ok": True, "destination": row, "destinations": _load_destinations()}
+
+
+@router.post("/api/destinations/delete")
+def api_delete_destination(req: DestinationDeleteIn) -> dict[str, Any]:
+    name = _slug(req.name)
+    rows = [r for r in _load_destinations() if _slug(str(r.get("name") or "")) != name]
+    _save_destinations(rows)
+    return {"ok": True, "destinations": _load_destinations()}
+
+
+@router.post("/api/geocode")
+def api_geocode(req: GeocodeIn) -> dict[str, Any]:
+    return {"results": _nominatim_search(req.q)}
+
+
+@router.post("/api/plan")
+def api_plan(req: PlanIn) -> dict[str, Any]:
+    plan = build_plan(req.lat, req.lon, req.destination)
+    plan["reply"] = render_reply(plan)
+    return plan
+
+
+@router.post("/api/plan-named")
+def api_plan_named(req: PlanNamedIn) -> dict[str, Any]:
+    plan = build_named_plan(req.origin, req.destination)
+    plan["reply"] = render_reply(plan)
+    return plan
+
+
+@router.post("/telegram-webhook")
+def telegram_webhook(req: TelegramWebhookIn) -> dict[str, Any]:
+    msg = req.message or {}
+    named = _telegram_named_route(msg)
+    if named:
+        plan = build_named_plan(named[0], named[1])
+        return {"ok": True, "reply": render_reply(plan), "plan": plan}
+    loc = msg.get("location") or {}
+    if "latitude" not in loc or "longitude" not in loc:
+        return {"ok": False, "error": "missing_telegram_location"}
+    plan = build_plan(float(loc["latitude"]), float(loc["longitude"]), _telegram_destination(msg))
+    return {"ok": True, "reply": render_reply(plan), "plan": plan}
+
+
+def _page_html() -> str:
+    destinations = json.dumps(_load_destinations(), ensure_ascii=False).replace("</", "<\\/")
+    return f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ralf ATM Telegram</title><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>body{{margin:0;font-family:system-ui,Arial,sans-serif;background:#f7f7f5;color:#171717}}header{{padding:14px 18px;background:#111;color:#fff}}main{{display:grid;grid-template-columns:380px 1fr;min-height:calc(100vh - 52px)}}aside{{padding:14px;overflow:auto;border-right:1px solid #ddd}}#map{{min-height:calc(100vh - 52px)}}label{{display:block;font-size:13px;margin-top:10px}}input,select,button{{width:100%;box-sizing:border-box;padding:10px;margin-top:4px;border:1px solid #bbb;border-radius:6px;background:white}}button{{background:#0b6bcb;color:white;border:0;font-weight:700;cursor:pointer}}.row{{display:grid;grid-template-columns:1fr 1fr;gap:8px}}#results button{{margin-top:6px;text-align:left;background:#444}}pre{{white-space:pre-wrap;background:white;border:1px solid #ddd;padding:10px;border-radius:6px;max-height:42vh;overflow:auto}}.small{{font-size:12px;color:#555}}@media(max-width:800px){{main{{display:flex;flex-direction:column}}#map{{order:-1;min-height:42vh}}aside{{border-right:0;border-bottom:1px solid #ddd;max-height:none}}}}</style></head>
+<body><header>Ralf ATM Telegram</header><main><aside>
+<label>Destinazione</label><select id="dest"></select>
+<div class="row"><label>Lat origine<input id="lat" placeholder="45.x"></label><label>Lon origine<input id="lon" placeholder="9.x"></label></div>
+<button id="geo">Usa posizione browser</button><button id="plan">Calcola</button>
+<label>Nuovo luogo</label><input id="name" placeholder="casa / palestra / ...">
+<div class="row"><input id="addr" placeholder="cerca indirizzo"><button id="search">Cerca</button></div>
+<div id="results"></div>
+<div class="row"><label>Lat luogo<input id="dlat"></label><label>Lon luogo<input id="dlon"></label></div>
+<input id="aliases" placeholder="alias separati da virgola: casa, home"><input id="note" placeholder="nota indirizzo"><button id="save">Salva luogo</button>
+<div id="list"></div>
+<p class="small">Click mappa = imposta lat/lon luogo. Telegram: invia location + testo destinazione.</p><pre id="out"></pre>
+</aside><div id="map"></div></main>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>
+let destinations={destinations}; let map=L.map('map').setView([45.4642,9.19],12); L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',{{maxZoom:19,attribution:'© OpenStreetMap'}}).addTo(map); let marker;
+function fill(){{let s=document.getElementById('dest'); let list=document.getElementById('list'); s.innerHTML=''; list.innerHTML=''; destinations.forEach(d=>{{let o=document.createElement('option'); o.value=d.name; o.textContent=d.label||d.name; s.appendChild(o); L.marker([d.lat,d.lon]).addTo(map).bindPopup(d.label||d.name); let row=document.createElement('div'); row.style.cssText='display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;border-top:1px solid #ddd;padding:8px 0;font-size:13px'; row.innerHTML='<span><b>'+ (d.label||d.name) +'</b><br><span class=\"small\">alias: '+((d.aliases||[]).join(', ')||'nessuno')+'</span></span><button data-edit=\"'+d.name+'\" style=\"background:#555\">Modifica</button><button data-del=\"'+d.name+'\" style=\"background:#8b1a1a\">Elimina</button>'; list.appendChild(row);}}); list.querySelectorAll('button[data-edit]').forEach(b=>b.onclick=()=>{{let d=destinations.find(x=>x.name===b.dataset.edit); if(!d)return; document.getElementById('name').value=d.name||''; document.getElementById('aliases').value=(d.aliases||[]).join(', '); document.getElementById('dlat').value=(+d.lat).toFixed(6); document.getElementById('dlon').value=(+d.lon).toFixed(6); document.getElementById('note').value=d.note||''; map.setView([d.lat,d.lon],16); if(marker)marker.remove(); marker=L.marker([d.lat,d.lon]).addTo(map).bindPopup(d.label||d.name).openPopup(); document.getElementById('out').textContent='Modifica '+(d.label||d.name)+': cambia alias e premi Salva luogo'; }}); list.querySelectorAll('button[data-del]').forEach(b=>b.onclick=async()=>{{if(!confirm('Eliminare '+b.dataset.del+'?'))return;let r=await fetch('/atm-telegram/api/destinations/delete',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{name:b.dataset.del}})}});let j=await r.json();destinations=j.destinations;fill();document.getElementById('out').textContent='eliminato '+b.dataset.del;}})}} fill();
+map.on('click',e=>{{document.getElementById('dlat').value=e.latlng.lat.toFixed(6);document.getElementById('dlon').value=e.latlng.lng.toFixed(6); if(marker) marker.remove(); marker=L.marker(e.latlng).addTo(map);}});
+document.getElementById('geo').onclick=()=>navigator.geolocation.getCurrentPosition(p=>{{document.getElementById('lat').value=p.coords.latitude.toFixed(6);document.getElementById('lon').value=p.coords.longitude.toFixed(6);map.setView([p.coords.latitude,p.coords.longitude],15);}});
+document.getElementById('search').onclick=async()=>{{const resultsEl=document.getElementById('results');const addrEl=document.getElementById('addr');resultsEl.textContent='cerco...';let r=await fetch('/atm-telegram/api/geocode',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{q:addrEl.value}})}});let j=await r.json();resultsEl.innerHTML='';(j.results||[]).forEach(x=>{{let b=document.createElement('button');b.style.background='#444';b.textContent=x.label;b.onclick=()=>{{document.getElementById('dlat').value=(+x.lat).toFixed(6);document.getElementById('dlon').value=(+x.lon).toFixed(6);map.setView([x.lat,x.lon],16);if(marker)marker.remove();marker=L.marker([x.lat,x.lon]).addTo(map).bindPopup(x.label).openPopup();const nameEl=document.getElementById('name');if(!nameEl.value)nameEl.value=addrEl.value;}};resultsEl.appendChild(b);}});if(!(j.results||[]).length)resultsEl.textContent='nessun risultato';}};
+document.getElementById('save').onclick=async()=>{{let body={{name:document.getElementById('name').value,label:document.getElementById('name').value,aliases:document.getElementById('aliases').value,lat:+document.getElementById('dlat').value,lon:+document.getElementById('dlon').value,note:document.getElementById('note').value}};let r=await fetch('/atm-telegram/api/destinations',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(body)}});let j=await r.json();destinations=j.destinations;fill();document.getElementById('out').textContent='salvato '+body.name;}};
+document.getElementById('plan').onclick=async()=>{{const outEl=document.getElementById('out');outEl.textContent='calcolo...';let r=await fetch('/atm-telegram/api/plan',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{lat:+document.getElementById('lat').value,lon:+document.getElementById('lon').value,destination:document.getElementById('dest').value}})}});let j=await r.json();outEl.textContent=j.reply||JSON.stringify(j,null,2); if(j.nearest_origin_stop) L.marker([j.nearest_origin_stop.lat,j.nearest_origin_stop.lon]).addTo(map).bindPopup('Fermata: '+j.nearest_origin_stop.name).openPopup();}};
+</script></body></html>"""
+
+def main_cli(argv: list[str] | None = None) -> int:
+    import argparse
+
+    ap = argparse.ArgumentParser(
+        prog="atm-telegram",
+        description="CLI Ralf ATM: da coordinate GPS a fermata ATM vicina e link GiroMilano."
+    )
+    sub = ap.add_subparsers(dest="cmd")
+
+    p_plan = sub.add_parser("plan", help="calcola fermate vicine e link ATM")
+    p_plan.add_argument("--lat", type=float, required=True)
+    p_plan.add_argument("--lon", type=float, required=True)
+    p_plan.add_argument("-d", "--destination", required=True)
+    p_plan.add_argument("--json", action="store_true", help="stampa JSON completo invece della risposta testuale")
+
+    p_list = sub.add_parser("list", help="lista destinazioni salvate")
+    p_list.add_argument("--json", action="store_true")
+
+    p_add = sub.add_parser("add", help="salva una destinazione")
+    p_add.add_argument("name")
+    p_add.add_argument("--label")
+    p_add.add_argument("--lat", type=float, required=True)
+    p_add.add_argument("--lon", type=float, required=True)
+    p_add.add_argument("--note", default="")
+
+    args = ap.parse_args(argv)
+
+    if args.cmd == "list":
+        rows = _load_destinations()
+        if args.json:
+            print(json.dumps({"destinations": rows, "path": str(DESTINATIONS_PATH)}, ensure_ascii=False, indent=2))
+        else:
+            for r in rows:
+                print(f"{r.get('label') or r.get('name')} | {r.get('lat')},{r.get('lon')} | {r.get('note') or ''}")
+        return 0
+
+    if args.cmd == "add":
+        rows = [r for r in _load_destinations() if _slug(str(r.get("name") or "")) != _slug(args.name)]
+        row = {
+            "name": _slug(args.name),
+            "label": args.label or args.name,
+            "aliases": [],
+            "lat": args.lat,
+            "lon": args.lon,
+            "note": args.note or "",
+        }
+        rows.append(row)
+        _save_destinations(rows)
+        print(f"salvata: {row['label']} -> {row['lat']},{row['lon']}")
+        return 0
+
+    if args.cmd == "plan":
+        plan = build_plan(args.lat, args.lon, args.destination)
+        if args.json:
+            print(json.dumps(plan, ensure_ascii=False, indent=2))
+        else:
+            print(render_reply(plan))
+        return 0
+
+    ap.print_help()
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main_cli())

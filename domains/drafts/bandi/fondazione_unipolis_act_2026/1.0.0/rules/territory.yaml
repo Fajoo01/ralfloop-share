@@ -1,0 +1,29 @@
+rules:
+- rule_id: activities_in_italy
+  bando_id: fondazione_unipolis_act_2026
+  version: 1.0.0
+  category: territory
+  description: Project activities must be realized in Italy.
+  structured_condition:
+    project_activity_location: Italy
+  structured_effect:
+    field: territory
+    value: Italy
+  exceptions: []
+  source_refs:
+  - act_regolamento_2026
+  source_sections:
+  - 2 Progetti Ammissibili e Aree Tematiche
+  source_pages:
+  - 3
+  priority: 100
+  effective_from: '2026-02-09'
+  effective_to: null
+  confidence: 1.0
+  interpretation_required: false
+  blocking: false
+  enabled: true
+  field: territory
+  value: Italy
+  source_ref: act_regolamento_2026
+  document_type: official_call_text

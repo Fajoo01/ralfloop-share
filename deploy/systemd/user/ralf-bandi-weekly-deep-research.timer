@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Bandi Weekly Deep Research every Saturday
+
+[Timer]
+OnCalendar=Sat *-*-* 09:00:00 Europe/Rome
+Persistent=true
+AccuracySec=1min
+RandomizedDelaySec=0
+Unit=ralf-bandi-weekly-deep-research.service
+
+[Install]
+WantedBy=timers.target

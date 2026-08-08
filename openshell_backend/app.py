@@ -26,6 +26,25 @@ DESTRUCTIVE_PATTERNS = [
 
 app = FastAPI(title="Ralfloop OpenShell Backend")
 
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.on_event("shutdown")
+def _shutdown_managed_llama_cpp_children() -> None:
+    from ralfloop_agent.providers.llama_cpp_server import _reap_children_at_exit
+
+    _reap_children_at_exit()
+
+try:
+    from openshell_backend.atm_telegram import router as atm_telegram_router
+
+    app.include_router(atm_telegram_router)
+except Exception as exc:
+    audit("atm_telegram_router_load_failed", error=repr(exc))
+
 BACKEND_VENV_BIN = os.path.expanduser("~/ralfloop_agent_scaffold/.venv/bin")
 
 
@@ -37,6 +56,28 @@ def audit(event: str, **fields) -> None:
     }
     with AUDIT_LOG.open("a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+try:
+    from ralfloop_agent.domains.telegram_approval_api import register_domain_approval_routes
+
+    register_domain_approval_routes(app)
+except Exception as exc:
+    audit("domain_approval_routes_load_failed", error=repr(exc))
+
+try:
+    from ralfloop_agent.glm_review.telegram_api import register_glm_review_routes
+
+    register_glm_review_routes(app)
+except Exception as exc:
+    audit("glm_review_routes_load_failed", error=repr(exc))
+
+try:
+    from openshell_backend.chat_api import router as chat_router
+
+    app.include_router(chat_router)
+except Exception as exc:
+    audit("chat_router_load_failed", error=repr(exc))
 
 
 def sandbox_root(sid: str) -> Path:
@@ -999,13 +1040,215 @@ def _probe_mediaset_with_fallback(channel_id: str, source_page: str) -> dict:
     return fallback
 
 
-@app.post("/tasks/run")
-def run_task(req: TaskRunRequest):
+def _run_read_only_system_inspection(req: TaskRunRequest, route_model, capability_route: dict):
+    from ralfloop_agent.integration.execution_provenance import provenance_from_results
+    from ralfloop_agent.models.result_envelope import ResultEnvelope
+    from ralfloop_agent.integration.system_inspection import (
+        ReadOnlySystemExecutor,
+        default_inspection_plan,
+        execute_inspection_plan,
+        format_inspection_answer,
+        resolve_inspection_root,
+    )
+
+    terminal = dict((req.extra_context or {}).get("terminal_client") or {})
+    provider = str(terminal.get("provider") or "") or None
+    endpoint = str(terminal.get("provider_endpoint") or "") or None
+    model_id = str(terminal.get("model_id") or "") or None
+    root = resolve_inspection_root(req.extra_context)
+    executor = ReadOnlySystemExecutor(root)
+    results = execute_inspection_plan(executor, default_inspection_plan(root))
+    for result in results:
+        evidence = result.evidence
+        audit(
+            "read_only_inspection_command",
+            result_id=result.result_id,
+            command=evidence.command,
+            path=evidence.path,
+            exit_code=evidence.exit_code,
+        )
+    provenance = provenance_from_results(
+        ((result.result_id, result.evidence) for result in results),
+        provider=provider,
+        endpoint=endpoint,
+        model_id=model_id,
+    )
+    answer = format_inspection_answer(results)
+    all_success = bool(results) and all(result.evidence.exit_code == 0 for result in results)
+    envelope = ResultEnvelope(
+        route=route_model,
+        evidence=results[0].evidence if results else None,
+        answer=answer,
+        meta={
+            "source": "deterministic_read_only_inspection",
+            "mode": req.mode,
+            "inspection_root": str(root),
+            "interaction_mode": "agent",
+            "capability": "read_only_system_inspection",
+            "provider": provider,
+            "endpoint": endpoint,
+            "model_id": model_id,
+        },
+        provenance=provenance,
+    )
+    return {
+        "ok": all_success,
+        "mode": req.mode,
+        "current_role": "read_only_system_inspection",
+        "role_history": ["capability_router", "read_only_system_inspection"],
+        "stop_reason": (
+            "read_only_inspection_completed"
+            if all_success
+            else "read_only_inspection_partial"
+        ),
+        "capability_route": capability_route,
+        "external_action": False,
+        "approval_required": False,
+        "interaction_mode": "agent",
+        "capability": "read_only_system_inspection",
+        "result_envelope": envelope.model_dump(mode="json"),
+        "final_answer": answer,
+        "artifacts": [],
+        "audit_summary": [
+            f"read_only_inspection::{result.result_id}::{result.evidence.exit_code}"
+            for result in results
+        ],
+    }
+
+def _run_task_impl(req: TaskRunRequest):
     import json as _json
     import re as _re
+    from ralfloop_agent.integration.capability_adapter import route_task, route_to_legacy_dict
+    from ralfloop_agent.models.result_envelope import ResultEnvelope
 
     low_goal = (req.user_goal or "").lower()
     low_skill = (req.skill_context or "").lower()
+    route_model = route_task(req.user_goal, req.mode)
+    capability_route = route_to_legacy_dict(route_model)
+
+    if req.mode == "route_only" or (req.extra_context or {}).get("route_only") is True:
+        envelope = ResultEnvelope(
+            route=route_model,
+            answer="route_only",
+            meta={"source": "capability_adapter", "mode": req.mode},
+        )
+        return {
+            "ok": True,
+            "mode": req.mode,
+            "current_role": "capability_router",
+            "role_history": ["capability_router"],
+            "stop_reason": "route_only",
+            "capability_route": capability_route,
+            "result_envelope": envelope.model_dump(mode="json"),
+            "final_answer": _json.dumps(capability_route, ensure_ascii=False, indent=2),
+            "artifacts": [],
+            "audit_summary": ["capability_router::route_only"],
+        }
+
+    if route_model.mode == "read_only_system_inspection":
+        return _run_read_only_system_inspection(
+            req, route_model, capability_route
+        )
+
+    if (
+        route_model.mode == "external_action"
+        and "browser" in route_model.mcp_used
+        and "bandi" in route_model.skills_used
+    ):
+        from ralfloop_agent.domains.bandi_runtime_context import load_bandi_runtime_context
+        from ralfloop_agent.integration.execution_provenance import empty_execution_provenance
+
+        bandi_context = load_bandi_runtime_context()
+        action = {
+            "action": "bandi_browser_fill",
+            "connector": "browser",
+            "status": "mcp_execution_required",
+            "user_goal": req.user_goal,
+            "call_id": (bandi_context.get("application_status") or {}).get("call_id"),
+            "portal_draft_id": (bandi_context.get("application_status") or {}).get("portal_draft_id"),
+            "application_status": (bandi_context.get("application_status") or {}).get("status"),
+            "blocking_requirements": (bandi_context.get("application_status") or {}).get("blocking_requirements", []),
+            "stop_rules": ["no_final_submission", "no_signature_fabrication", "no_unverified_declaration"],
+        }
+        terminal = dict((req.extra_context or {}).get("terminal_client") or {})
+        provenance = empty_execution_provenance(
+            provider=str(terminal.get("provider") or "") or None,
+            endpoint=str(terminal.get("provider_endpoint") or "") or None,
+            model_id=str(terminal.get("model_id") or "") or None,
+        )
+        envelope = ResultEnvelope(
+            route=route_model,
+            answer=_json.dumps(action, ensure_ascii=False, sort_keys=True),
+            meta={
+                "source": "ralfloop_agent",
+                "interaction_mode": "agent",
+                "capability": "bandi_browser_fill",
+                "browser_action": action,
+            },
+            provenance=provenance,
+        )
+        return {
+            "ok": True,
+            "mode": req.mode,
+            "current_role": "bandi_browser_orchestrator",
+            "role_history": ["capability_router", "bandi_browser_orchestrator"],
+            "stop_reason": "mcp_execution_required",
+            "interaction_mode": "agent",
+            "capability": "bandi_browser_fill",
+            "approval_required": False,
+            "capability_route": capability_route,
+            "result_envelope": envelope.model_dump(mode="json"),
+            "final_answer": envelope.answer,
+            "artifacts": [],
+            "audit_summary": ["bandi_browser_fill::mcp_execution_required"],
+        }
+
+    if route_model.requires_confirmation and not (req.extra_context or {}).get("human_confirmed"):
+        from ralfloop_agent.integration.execution_provenance import empty_execution_provenance
+        from ralfloop_agent.integration.confirmation_store import get_confirmation, request_confirmation
+        from src.models import Evidence
+
+        confirmation_id = request_confirmation(
+            "external_action",
+            {"user_goal": req.user_goal, "route": route_model.model_dump()},
+        )
+        confirmation = get_confirmation(confirmation_id)
+        evidence = Evidence(command="mcp:external_action", path="external", exit_code=0)
+        terminal = dict((req.extra_context or {}).get("terminal_client") or {})
+        provenance = empty_execution_provenance(
+            provider=str(terminal.get("provider") or "") or None,
+            endpoint=str(terminal.get("provider_endpoint") or "") or None,
+            model_id=str(terminal.get("model_id") or "") or None,
+        )
+        envelope = ResultEnvelope(
+            route=route_model,
+            evidence=evidence,
+            confirmation=confirmation,
+            answer="human_confirmation_required",
+            meta={
+                "source": "capability_adapter",
+                "mode": req.mode,
+                "interaction_mode": "agent",
+                "capability": "protected_external_action",
+            },
+            provenance=provenance,
+        )
+        return {
+            "ok": False,
+            "mode": req.mode,
+            "current_role": "capability_router",
+            "role_history": ["capability_router"],
+            "stop_reason": "human_confirmation_required",
+            "interaction_mode": "agent",
+            "capability": "protected_external_action",
+            "approval_required": True,
+            "capability_route": capability_route,
+            "result_envelope": envelope.model_dump(mode="json"),
+            "pending_confirmation_id": confirmation_id,
+            "final_answer": _json.dumps(envelope.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            "artifacts": [],
+            "audit_summary": ["capability_router::human_confirmation_required"],
+        }
 
     if (
         "stream probe" in low_goal
@@ -1333,12 +1576,32 @@ def run_task(req: TaskRunRequest):
         logger=logger,
     )
 
+    extra_context = dict(req.extra_context or {})
+    extra_context.setdefault("capability_route", capability_route)
+    if any(
+        marker in low_goal
+        for marker in (
+            "bando",
+            "bandi",
+            "candidatura",
+            "arianna",
+            "volontariato e territorio",
+            "rld12025048623",
+        )
+    ):
+        from ralfloop_agent.domains.bandi_runtime_context import (
+            load_bandi_runtime_context,
+        )
+
+        extra_context["bandi_knowledge"] = load_bandi_runtime_context()
+
     state = agent.run(
         user_goal=req.user_goal,
         constraints=[],
         context={
             "skill_context": req.skill_context or "",
-            "extra_context": req.extra_context or {},
+            "extra_context": extra_context,
+            "capability_route": capability_route,
             "planner_model_profile": req.planner_model_profile,
             "coder_model_profile": req.coder_model_profile,
             "judge_model_profile": req.judge_model_profile,
@@ -1369,6 +1632,12 @@ def run_task(req: TaskRunRequest):
     state.coder_rag_collection = req.coder_rag_collection
     state.judge_rag_collection = req.judge_rag_collection
 
+    envelope = ResultEnvelope(
+        route=route_model,
+        answer=state.final_answer,
+        meta={"source": "ralfloop_agent", "stop_reason": state.stop_reason},
+    )
+
     return {
         "ok": state.status == "completed",
         "mode": req.mode,
@@ -1390,7 +1659,60 @@ def run_task(req: TaskRunRequest):
         "current_role": state.current_role,
         "role_history": state.role_history,
         "stop_reason": state.stop_reason,
+        "capability_route": capability_route,
+        "result_envelope": envelope.model_dump(mode="json"),
         "final_answer": state.final_answer,
         "artifacts": state.artifacts,
         "audit_summary": state.audit_summary,
+    }
+
+
+@app.post("/tasks/run")
+def run_task(req: TaskRunRequest):
+    from src.router import route_task as classify_task
+
+    if classify_task(req.user_goal).mode == "read_only_system_inspection":
+        return _run_task_impl(req)
+
+    from ralfloop_agent.providers.agent_gpu_handoff import AgentGpuCoordinator, AgentGpuHandoffError
+
+    task_id = uuid.uuid4().hex
+    models = (req.planner_model_name, req.coder_model_name, req.judge_model_name)
+    coordinator = AgentGpuCoordinator(audit_fn=audit)
+    try:
+        with coordinator.agent_session(models=models, task_id=task_id):
+            return _run_task_impl(req)
+    except AgentGpuHandoffError as exc:
+        audit("gpu_handoff_blocked", task_id=task_id, error=exc.code)
+        raise HTTPException(status_code=503, detail=exc.code) from exc
+
+
+@app.post("/confirmations/{confirmation_id}/approve")
+def approve_confirmation(confirmation_id: str):
+    from ralfloop_agent.integration.confirmation_store import confirm_action, get_confirmation
+    from ralfloop_agent.integration.capability_adapter import mcp_client
+
+    ok = confirm_action(confirmation_id)
+    if not ok:
+        return {"ok": False, "confirmation_id": confirmation_id, "executed": False}
+    confirmation = get_confirmation(confirmation_id)
+    return {
+        "ok": True,
+        "confirmation_id": confirmation_id,
+        "executed": True,
+        "confirmation": confirmation.__dict__ if confirmation else None,
+        "message": mcp_client.execute_confirmed(confirmation_id),
+    }
+
+
+@app.post("/confirmations/{confirmation_id}/reject")
+def reject_confirmation(confirmation_id: str):
+    from ralfloop_agent.integration.confirmation_store import reject_action, get_confirmation
+
+    ok = reject_action(confirmation_id)
+    confirmation = get_confirmation(confirmation_id)
+    return {
+        "ok": ok,
+        "confirmation_id": confirmation_id,
+        "confirmation": confirmation.__dict__ if confirmation else None,
     }

@@ -1,0 +1,15 @@
+[Unit]
+Description=Build Ralf Colibri/GLM Telegram digest outbox record
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/sibilla-cumana/ralfloop-production/current
+Environment=PYTHONPATH=/home/sibilla-cumana/ralfloop-production/current
+Environment=RALFLOOP_GLM_STATE_DIR=/home/sibilla-cumana/.local/state/ralfloop/glm-review
+EnvironmentFile=-/etc/ralfloop/telegram-approval.env
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python -m ralfloop_agent.cli.terminal_chat glm digest --emit-outbox
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/sibilla-cumana/.local/state/ralfloop/glm-review /var/lib/ralfloop

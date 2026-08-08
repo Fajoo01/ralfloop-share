@@ -1,0 +1,38 @@
+rules:
+- rule_id: evaluation_criteria
+  bando_id: fondazione_unipolis_act_2026
+  version: 1.0.0
+  category: scoring
+  description: Evaluation criteria include coherence, economic plan, lead profile,
+    network quality, Unipolis visibility, social impact and innovation.
+  structured_condition:
+    evaluation: formal_and_merit
+  structured_effect:
+    field: scoring
+    value: &id001
+    - project_coherence
+    - activity_objective_coherence
+    - economic_plan_coherence
+    - lead_profile_coherence
+    - network_quality
+    - unipolis_visibility
+    - social_impact
+    - innovation
+  exceptions: []
+  source_refs:
+  - act_regolamento_2026
+  source_sections:
+  - 6 Criteri di Valutazione
+  source_pages:
+  - 7
+  priority: 100
+  effective_from: '2026-02-09'
+  effective_to: null
+  confidence: 1.0
+  interpretation_required: false
+  blocking: false
+  enabled: true
+  field: scoring
+  value: *id001
+  source_ref: act_regolamento_2026
+  document_type: official_call_text

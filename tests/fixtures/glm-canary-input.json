@@ -1,0 +1,25 @@
+{
+  "goal": "Check this synthetic technical note for one contradiction or missing fact.",
+  "constraints": [
+    "Consultative review only",
+    "No tools or external actions"
+  ],
+  "draft": "The service reads a local immutable artifact, validates it, and never executes model output.",
+  "requirements": [
+    "Model output remains consultative",
+    "External actions require deterministic approval"
+  ],
+  "evidence": [
+    {
+      "source_id": "CANARY-E1",
+      "location": "synthetic://canary/architecture",
+      "claim": "GLM is a reviewer only",
+      "excerpt": "The adapter passes context through stdin and parses a JSON review. It does not expose tools."
+    }
+  ],
+  "known_gaps": [],
+  "requested_review": [
+    "coherence",
+    "missing evidence"
+  ]
+}

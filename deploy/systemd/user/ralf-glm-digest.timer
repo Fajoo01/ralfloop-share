@@ -1,0 +1,10 @@
+[Unit]
+Description=Ralf Colibri/GLM digest at 08:00 Europe/Rome
+
+[Timer]
+OnCalendar=*-*-* 08:00:00 Europe/Rome
+Persistent=true
+Unit=ralf-glm-digest.service
+
+[Install]
+WantedBy=timers.target

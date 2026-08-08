@@ -1,0 +1,1 @@
+Jun 26 12:42:17 sibilla-cumana sudo[679344]:    bandi : a password is required ; PWD=*** ; USER=root ; COMMAND=/usr/bin/mkdir -p .ralf_run/garden_go2rtc_frame_stability_20260620/before_state .ralf_run/garden_go2rtc_frame_stability_20260620/samples
