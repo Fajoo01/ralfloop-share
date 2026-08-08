@@ -22,6 +22,7 @@ def build_release(
     commit: str = "HEAD",
     output_root: str | Path = DEFAULT_OUTPUT_ROOT,
     current_link: str | Path | None = None,
+    previous_release: str | Path | None = None,
 ) -> dict[str, Any]:
     repo_path = Path(repo).resolve()
     commit_sha = _git(repo_path, "rev-parse", commit).strip()
@@ -44,7 +45,7 @@ def build_release(
             "commit": commit_sha,
             "branch": branch,
             "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "previous_release": str(Path(current_link).resolve()) if current_link and Path(current_link).exists() else None,
+            "previous_release": str(Path(previous_release).resolve()) if previous_release else (str(Path(current_link).resolve()) if current_link and Path(current_link).exists() else None),
         }
         (temporary / "VERSION").write_text(commit_sha + "\n", encoding="utf-8")
         (temporary / "RELEASE.json").write_text(json.dumps(metadata, sort_keys=True, indent=2) + "\n", encoding="utf-8")
@@ -108,12 +109,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-root", default=str(DEFAULT_OUTPUT_ROOT))
     parser.add_argument("--current-link", default=str(DEFAULT_CURRENT_LINK))
     parser.add_argument("--publish", action="store_true")
+    parser.add_argument("--record-previous")
     args = parser.parse_args(argv)
     result = build_release(
         args.repo,
         args.commit,
         args.output_root,
         args.current_link if args.publish else None,
+        args.record_previous,
     )
     print(json.dumps(result, sort_keys=True, indent=2))
     return 0

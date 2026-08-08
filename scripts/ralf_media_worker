@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+test -n "${RALF_MEDIA_KIND:-}" || { echo "RALF_MEDIA_KIND_required" >&2; exit 78; }
+test -n "${RALF_MEDIA_SPEC:-}" || { echo "RALF_MEDIA_SPEC_required" >&2; exit 78; }
+export PYTHONPATH=/home/sibilla-cumana/ralfloop-production/current
+exec /usr/bin/python3 -m ralfloop_agent.cli.terminal_chat media "$RALF_MEDIA_KIND" "$RALF_MEDIA_SPEC"

@@ -1,0 +1,10 @@
+[Unit]
+Description=Ralf FunctionGemma router health check
+
+[Service]
+Type=oneshot
+ExecStart=/home/sibilla-cumana/ralfloop-production/current/scripts/ralf_functiongemma_health
+NoNewPrivileges=yes
+PrivateTmp=yes
+MemoryMax=64M
+TasksMax=8

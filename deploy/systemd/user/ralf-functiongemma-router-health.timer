@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic Ralf FunctionGemma health check
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=20s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

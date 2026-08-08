@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+test -n "${RALF_EVOLVER_EXPERIMENT:-}" || { echo "RALF_EVOLVER_EXPERIMENT_required" >&2; exit 78; }
+export PYTHONPATH=/home/sibilla-cumana/ralfloop-production/current
+exec /usr/bin/python3 -m ralfloop_agent.cli.terminal_chat evolve run "$RALF_EVOLVER_EXPERIMENT"

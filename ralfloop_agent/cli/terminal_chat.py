@@ -1671,9 +1671,11 @@ def build_parser() -> argparse.ArgumentParser:
     delete.add_argument("session_id")
 
     from ralfloop_agent.glm_review.cli import add_approval_parsers, add_glm_parser
+    from ralfloop_agent.local_arch.cli import add_local_arch_parsers
 
     add_glm_parser(sub)
     add_approval_parsers(sub)
+    add_local_arch_parsers(sub)
     return parser
 
 
@@ -1705,6 +1707,10 @@ def main(argv: list[str] | None = None) -> int:
             from ralfloop_agent.glm_review.cli import run as run_glm
 
             return run_glm(args)
+        if args.command in {"router", "evolve", "visual", "audiobook", "media"}:
+            from ralfloop_agent.local_arch.cli import run_local_arch
+
+            return run_local_arch(args)
     except (RalfTerminalError, RepoContextError, SessionStoreError) as exc:
         print(sanitize_terminal_text(str(exc)), file=sys.stderr)
         return 2

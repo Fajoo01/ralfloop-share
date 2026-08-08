@@ -1,0 +1,16 @@
+[Unit]
+Description=Ralf media on-demand worker
+ConditionEnvironment=RALF_MEDIA_SPEC
+
+[Service]
+Type=oneshot
+ExecStart=/home/sibilla-cumana/ralfloop-production/current/scripts/ralf_media_worker
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/state/ralf/local-arch
+RestrictAddressFamilies=AF_UNIX
+MemoryMax=12G
+TasksMax=128
+TimeoutStartSec=2h

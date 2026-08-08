@@ -1,0 +1,24 @@
+#!/bin/sh
+set -eu
+
+MODEL=${RALF_FUNCTIONGEMMA_MODEL:-/home/sibilla-cumana/Dati/ralfloop-models/functiongemma-270m/functiongemma-270m-it-q8_0.gguf}
+LLAMA_SERVER=${RALF_LLAMA_SERVER:-/home/sibilla-cumana/src/llama.cpp/build/bin/llama-server}
+
+test -x "$LLAMA_SERVER" || { echo "llama_server_unavailable" >&2; exit 78; }
+test -r "$MODEL" || { echo "functiongemma_model_unavailable_or_license_not_accepted" >&2; exit 78; }
+
+exec "$LLAMA_SERVER" \
+  --model "$MODEL" \
+  --alias functiongemma-router \
+  --host 127.0.0.1 \
+  --port 19104 \
+  --ctx-size 1536 \
+  --threads 4 \
+  --threads-batch 4 \
+  --parallel 1 \
+  --n-gpu-layers 0 \
+  --jinja \
+  --offline \
+  --no-webui \
+  --metrics \
+  --slots

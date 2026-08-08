@@ -1,0 +1,11 @@
+[Unit]
+Description=Optional Ralf evolver scheduler
+
+[Timer]
+OnCalendar=*:0/15
+RandomizedDelaySec=60s
+Persistent=false
+Unit=ralf-evolver-worker.service
+
+[Install]
+WantedBy=timers.target

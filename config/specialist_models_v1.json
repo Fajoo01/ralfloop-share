@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "production_trust_remote_code": false,
+  "models": [
+    {"category":"function_router","model_id":"ggml-org/functiongemma-270m-it-GGUF","revision":"431053ca8d1ee5a7150e27ddae4aea27b4a6c797","license":"gemma-gated","hash":null,"runtime":"llama.cpp","quantization":"Q8_0","ram_mb":768,"vram_mb":0,"device":"CPU","context":1536,"benchmark":null,"fallback":"deterministic_then_colibri","provenance":"HuggingFace primary repository","availability":"not_installed"},
+    {"category":"visual_language","model_id":"SmolVLM candidate","revision":null,"license":null,"hash":null,"runtime":"on_demand","quantization":null,"ram_mb":null,"vram_mb":null,"device":"GPU","context":null,"benchmark":null,"fallback":"region_text_only","provenance":"candidate_not_selected","availability":"benchmark_required"},
+    {"category":"visual_language","model_id":"Qwen2.5-VL-3B candidate","revision":null,"license":null,"hash":null,"runtime":"on_demand","quantization":null,"ram_mb":null,"vram_mb":null,"device":"GPU","context":null,"benchmark":null,"fallback":"region_text_only","provenance":"candidate_not_selected","availability":"benchmark_required"},
+    {"category":"TTS","model_id":"Kokoro-82M candidate","revision":null,"license":null,"hash":null,"runtime":"on_demand","quantization":null,"ram_mb":null,"vram_mb":0,"device":"CPU","context":null,"benchmark":null,"fallback":"plan_only","provenance":"candidate_not_selected","availability":"benchmark_required"},
+    {"category":"image_generation","model_id":"local-image-candidate","revision":null,"license":null,"hash":null,"runtime":"on_demand","quantization":null,"ram_mb":null,"vram_mb":null,"device":"GPU","context":null,"benchmark":null,"fallback":"deterministic_svg","provenance":"candidate_not_selected","availability":"benchmark_required"},
+    {"category":"video_generation","model_id":"local-i2v-candidate","revision":null,"license":null,"hash":null,"runtime":"on_demand","quantization":null,"ram_mb":null,"vram_mb":null,"device":"GPU","context":null,"benchmark":null,"fallback":"storyboard_only","provenance":"candidate_not_selected","availability":"benchmark_required"}
+  ]
+}

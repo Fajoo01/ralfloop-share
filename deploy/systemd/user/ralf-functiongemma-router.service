@@ -1,0 +1,23 @@
+[Unit]
+Description=Ralf FunctionGemma compact CPU router
+After=network.target
+ConditionPathExists=/home/sibilla-cumana/Dati/ralfloop-models/functiongemma-270m/functiongemma-270m-it-q8_0.gguf
+
+[Service]
+Type=simple
+ExecStart=/home/sibilla-cumana/ralfloop-production/current/scripts/ralf_functiongemma_router
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+MemoryMax=1G
+CPUQuota=200%
+TasksMax=32
+
+[Install]
+WantedBy=default.target

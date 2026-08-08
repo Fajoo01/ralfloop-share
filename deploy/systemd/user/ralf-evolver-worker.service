@@ -1,0 +1,20 @@
+[Unit]
+Description=Ralf local evolver on-demand worker
+ConditionEnvironment=RALF_EVOLVER_EXPERIMENT
+
+[Service]
+Type=oneshot
+ExecStart=/home/sibilla-cumana/ralfloop-production/current/scripts/ralf_evolver_worker
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/state/ralf/local-arch
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service @process
+SystemCallFilter=~@mount @network-io @privileged @resources
+MemoryMax=2G
+CPUQuota=400%
+TasksMax=64
+TimeoutStartSec=2h
