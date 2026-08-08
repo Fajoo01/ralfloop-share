@@ -50,7 +50,14 @@ def gate_marker(release: Path) -> bool:
     if not marker.is_file():
         return False
     data = json.loads(marker.read_text(encoding="utf-8"))
-    return data.get("scoped_tests") is True and data.get("no_regression") is True and data.get("sandbox") is True
+    return (
+        data.get("scoped_tests") is True
+        and data.get("no_regression") is True
+        and data.get("sandbox") is True
+        and data.get("no_host_candidate_execution") is True
+        and data.get("benchmark_minimum") is True
+        and data.get("full_suite_clean") is True
+    )
 
 
 def port_free(port: int) -> bool:
