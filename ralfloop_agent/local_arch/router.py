@@ -26,7 +26,7 @@ PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("AF", ("percorso minimo", "shortest path", "parser ultraveloce", "ottimizza query", "scheduling", "riduci ram", "strategia investimento")),
 )
 CATALOG_ALIASES: Mapping[str, tuple[str, ...]] = {
-    "ET": ("tool esistente", "strumento esistente"),
+    "ET": ("tool esistente", "strumento esistente", "gmail", "mail", "posta elettronica"),
     "AF": ("percorso minimo", "shortest path", "algoritmo", "ottimizza", "scheduling"),
     "SM": ("classifica", "estrai", "lingua", "embedding"),
     "VR": ("pdf scannerizzato", "pdf", "scansione", "screenshot", "tabella", "grafico"),
@@ -384,6 +384,10 @@ class LocalRouter:
             return CompactRoute(1, "AU", "missing_request", c=1.0, r="MISSING_INPUT")
         if any(term in text for term in INJECTION_WORDS):
             return CompactRoute(1, "RJ", "policy_bypass", c=1.0, r="PROMPT_INJECTION")
+        if any(term in text for term in ("gmail", "mail", "posta elettronica")) and any(
+            term in text for term in ("cerca", "trova", "leggi", "thread", "allegato", "risposta", "bozza")
+        ):
+            return CompactRoute(1, "ET", "google_workspace.gmail", c=1.0, r="MCP_GOOGLE_WORKSPACE")
         if self.client is None and self._is_protected_request(text):
             return CompactRoute(1, "AP", "external_action", c=1.0, r="PROTECTED_ACTION")
         if any(term in text for term in ("manca il file", "richiesta ambigua", "quale documento", "da chiarire")):

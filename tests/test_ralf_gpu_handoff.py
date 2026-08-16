@@ -140,12 +140,30 @@ def test_manager_reaps_child_started_in_same_backend_process(tmp_path):
         uid=os.getuid(),
         start_ticks=7,
         executable=str(server),
-        argv=(str(server), "--alias", config.model, "--port", "19091", "--model", str(config.model_path)),
+        argv=(
+            str(server), "--alias", config.model, "--host", "127.0.0.1",
+            "--port", "19091", "--model", str(config.model_path),
+        ),
     )
     config.pid_path.write_text(
-        json.dumps({"pid": pid, "owner_uid": os.getuid(), "start_ticks": 7}),
+        json.dumps(
+            {
+                "pid": pid,
+                "owner_pid": os.getpid(),
+                "owner_uid": os.getuid(),
+                "start_ticks": 7,
+                "process_start_ticks": 7,
+                "provider": "llama_cpp",
+                "mode": "chat",
+                "server_bin": str(config.server_bin.resolve()),
+                "model_path": str(config.model_path),
+                "model_hash": config.model_hash,
+                "port": config.port,
+            }
+        ),
         encoding="utf-8",
     )
+    config.pid_path.chmod(0o600)
 
     class Child:
         def __init__(self):
@@ -323,3 +341,20 @@ def test_no_chat_fallback_to_tasks_run_or_automatic_approval():
     assert "/tasks/run" not in chat_sources
     assert "auto-approve" not in chat_sources
     assert "auto-execute" not in chat_sources
+
+
+def test_magnolia_host_runner_loads_existing_safe_approval_configuration():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "tools/run_gpu_handoff_magnolia.py").read_text(encoding="utf-8")
+    workflow = (root / "tools/run_magnolia_workflow.py").read_text(encoding="utf-8")
+    assert 'load_env(Path("/etc/ralfloop/telegram-approval.env"))' in source
+    assert "if not policy.enabled or policy.auto_execute" in workflow
+    assert "approval gate must be enabled with auto-execute disabled" in workflow
+    assert "magnolia_main(host_diagnostics=True)" in source
+    for marker in (
+        '{label}_DRAFT_BEGIN', '{label}_VALIDATION_REASON=',
+        "FINAL_DRAFT_BEGIN", "FINAL_VALIDATION=",
+        "APPROVAL_ID=", "TELEGRAM_DELIVERED=", "TELEGRAM_MESSAGE_ID=", "EMAIL_SENT=false",
+        "REJECTED_DRAFT_BEGIN", "REJECTED_DRAFT_END",
+    ):
+        assert marker in workflow

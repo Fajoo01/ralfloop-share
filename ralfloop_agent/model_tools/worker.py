@@ -59,7 +59,11 @@ def _bge_m3_rank(spec: ModelToolSpec, snapshot: Path, payload: dict[str, Any]) -
     import torch.nn.functional as functional
     from transformers import AutoModel, AutoTokenizer
 
-    tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True, trust_remote_code=False)
+    tokenizer = AutoTokenizer.from_pretrained(
+        snapshot,
+        local_files_only=True,
+        trust_remote_code=False,
+    )
     model = AutoModel.from_pretrained(
         snapshot,
         local_files_only=True,
@@ -67,22 +71,54 @@ def _bge_m3_rank(spec: ModelToolSpec, snapshot: Path, payload: dict[str, Any]) -
         use_safetensors=None,
     ).to(_device(spec))
     model.eval()
-    documents = list(payload["documents"])
-    texts = [str(payload["query"])] + [str(item["text"]) for item in documents]
-    encoded = tokenizer(texts, padding=True, truncation=True, max_length=8192, return_tensors="pt")
-    encoded = {key: value.to(_device(spec)) for key, value in encoded.items()}
-    with torch.inference_mode():
-        hidden = model(**encoded).last_hidden_state
-        vectors = functional.normalize(hidden[:, 0], p=2, dim=1)
-    scores = torch.matmul(vectors[1:], vectors[0]).detach().cpu().tolist()
-    ranked = sorted(
-        ({"document_id": str(item["document_id"]), "score": float(score)} for item, score in zip(documents, scores)),
-        key=lambda row: row["score"],
-        reverse=True,
-    )
-    top_k = int(payload.get("top_k") or len(ranked))
-    return {"ranked": ranked[: max(0, top_k)]}
 
+    documents = list(payload["documents"])
+
+    # Bounded CPU inference. The old implementation padded every document
+    # in one giant batch, which could exceed tens of GiB of RAM.
+    batch_size = 4
+    max_length = 1024
+
+    def encode(texts: list[str]):
+        encoded = tokenizer(
+            texts,
+            padding=True,
+            truncation=True,
+            max_length=max_length,
+            return_tensors="pt",
+        )
+        encoded = {
+            key: value.to(_device(spec))
+            for key, value in encoded.items()
+        }
+        with torch.inference_mode():
+            hidden = model(**encoded).last_hidden_state
+            vectors = functional.normalize(hidden[:, 0], p=2, dim=1)
+        return vectors
+
+    query_vector = encode([str(payload["query"])])[0]
+
+    ranked: list[dict[str, Any]] = []
+
+    for offset in range(0, len(documents), batch_size):
+        batch = documents[offset:offset + batch_size]
+        vectors = encode([str(item["text"]) for item in batch])
+        scores = torch.matmul(vectors, query_vector).detach().cpu().tolist()
+
+        ranked.extend(
+            {
+                "document_id": str(item["document_id"]),
+                "score": float(score),
+            }
+            for item, score in zip(batch, scores)
+        )
+
+        del vectors
+
+    ranked.sort(key=lambda row: row["score"], reverse=True)
+
+    top_k = int(payload.get("top_k") or len(ranked))
+    return {"ranked": ranked[:max(0, top_k)]}
 
 def _extract_structured_data(
     spec: ModelToolSpec,

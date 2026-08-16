@@ -119,6 +119,22 @@ def _config(tmp_path: Path, **overrides) -> LlamaCppServerConfig:
     return LlamaCppServerConfig(**values)
 
 
+def _pid_record(config: LlamaCppServerConfig, pid: int, ticks: int, *, uid: int | None = None) -> dict:
+    return {
+        "pid": pid,
+        "owner_pid": None,
+        "owner_uid": os.getuid() if uid is None else uid,
+        "start_ticks": ticks,
+        "process_start_ticks": ticks,
+        "provider": "llama_cpp",
+        "mode": "chat",
+        "server_bin": str(config.server_bin.resolve()),
+        "model_path": str(config.model_path),
+        "model_hash": config.model_hash,
+        "port": config.port,
+    }
+
+
 def _stream_response(*events: dict | str) -> FakeResponse:
     lines = []
     for event in events:
@@ -135,6 +151,13 @@ def test_defaults_are_llama_cpp_with_autostart_enabled(monkeypatch):
     assert config.autostart is True
     assert config.base_url == "http://127.0.0.1:19091"
     assert config.gpu_layers == 24
+    assert config.batch_size == 64
+    assert config.ubatch_size == 64
+    assert config.kv_offload is False
+    assert config.op_offload is False
+    assert config.unified_memory is True
+    assert config.allow_healthy_reuse is False
+    assert config.required_gpu_memory_mib == 3600
     assert config.slots == 1
     assert config.cache_prompt is True
     assert config.cache_ram_mib == 1024
@@ -170,6 +193,11 @@ def test_server_command_is_local_cached_single_slot_without_speculation(tmp_path
     assert command[command.index("--host") + 1] == "127.0.0.1"
     assert command[command.index("--parallel") + 1] == "1"
     assert command[command.index("--n-gpu-layers") + 1] == "24"
+    assert command[command.index("--batch-size") + 1] == "64"
+    assert command[command.index("--ubatch-size") + 1] == "64"
+    assert command[command.index("--fit") + 1] == "off"
+    assert "--no-kv-offload" in command
+    assert "--no-op-offload" in command
     assert "--cache-prompt" in command
     assert "ngram" not in joined
     assert "speculative" not in joined
@@ -193,6 +221,20 @@ def test_health_rejects_wrong_model_alias(tmp_path):
         ]
     )
     assert LlamaCppServerManager(_config(tmp_path), session=session).health() is False
+
+
+def test_ensure_available_can_reuse_health_verified_cross_user_server(tmp_path):
+    config = _config(tmp_path, allow_healthy_reuse=True)
+    manager = LlamaCppServerManager(config)
+    manager.health = lambda: True
+    manager._managed_running = lambda: False
+
+    assert manager.ensure_available() == {
+        "server_started": False,
+        "server_reused": True,
+        "server_startup_ms": None,
+        "managed": False,
+    }
 
 
 def test_non_streaming_parses_usage_and_timings(tmp_path):
@@ -424,6 +466,7 @@ def test_ollama_gpu_state_blocks_start_before_process_creation(tmp_path):
         popen_factory=lambda *a, **k: calls.append(a),
         gpu_observer=lambda: {"free_mib": 7425, "processes": []},
     )
+    manager._port_in_use = lambda: False
     with pytest.raises(LlamaCppServerBusy, match="ollama_model_already_loaded"):
         manager.start()
     assert calls == []
@@ -454,7 +497,9 @@ def test_failed_start_cleans_pid_and_gpu_lock(tmp_path):
         config,
         session=session,
         popen_factory=lambda *args, **kwargs: (_ for _ in ()).throw(OSError("spawn failed")),
+        gpu_observer=lambda: {"free_mib": 7425, "processes": []},
     )
+    manager._port_in_use = lambda: False
     with pytest.raises(OSError, match="spawn failed"):
         manager.start()
     assert not config.pid_path.exists()
@@ -484,7 +529,10 @@ def test_stop_targets_only_validated_managed_pid(tmp_path):
         uid=os.getuid(),
         start_ticks=77,
         executable=str(server),
-        argv=(str(server), "--alias", config.model, "--port", "19091", "--model", str(config.model_path)),
+        argv=(
+            str(server), "--alias", config.model, "--host", "127.0.0.1",
+            "--port", "19091", "--model", str(config.model_path),
+        ),
     )
 
     def reader(requested):
@@ -497,9 +545,10 @@ def test_stop_targets_only_validated_managed_pid(tmp_path):
         alive["value"] = False
 
     config.pid_path.write_text(
-        json.dumps({"pid": pid, "owner_uid": os.getuid(), "start_ticks": 77}),
+        json.dumps(_pid_record(config, pid, 77)),
         encoding="utf-8",
     )
+    config.pid_path.chmod(0o600)
     manager = LlamaCppServerManager(config, identity_reader=reader, kill_fn=kill_fn)
     result = manager.stop()
     assert result["changed"] is True
@@ -513,9 +562,10 @@ def test_stop_refuses_foreign_or_mismatched_process(tmp_path):
     config.state_dir.mkdir()
     pid = 222
     config.pid_path.write_text(
-        json.dumps({"pid": pid, "owner_uid": os.getuid(), "start_ticks": 1}),
+        json.dumps(_pid_record(config, pid, 1)),
         encoding="utf-8",
     )
+    config.pid_path.chmod(0o600)
     foreign = ProcessIdentity(pid, os.getuid(), 1, str(server), (str(server), "--unrelated"))
     killed = []
     manager = LlamaCppServerManager(
@@ -537,8 +587,8 @@ def test_engine_cli_status_start_stop_health_are_wired(tmp_path):
             self.calls.append("status")
             return {"provider": "llama_cpp", "healthy": True}
 
-        def start(self, *, dry_run=False):
-            self.calls.append(("start", dry_run))
+        def start(self, *, dry_run=False, detach=False):
+            self.calls.append(("start", dry_run, detach))
             return {"provider": "llama_cpp", "dry_run": dry_run}
 
         def stop(self):
@@ -553,7 +603,7 @@ def test_engine_cli_status_start_stop_health_are_wired(tmp_path):
     out = io.StringIO()
     args = cli.build_parser().parse_args(["engine", "start", "llama_cpp", "--dry-run"])
     assert cli.run_engine(args, manager=manager, out=out, err=io.StringIO()) == 0
-    assert manager.calls == [("start", True)]
+    assert manager.calls == [("start", True, False)]
     assert '"provider": "llama_cpp"' in out.getvalue()
 
     manager.calls.clear()

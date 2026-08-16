@@ -1,0 +1,23 @@
+[Unit]
+Description=Ralf Google Workspace MCP broker (bandi credentials)
+After=local-fs.target
+
+[Service]
+Type=simple
+User=bandi
+Group=ralf-mcp
+UMask=0007
+RuntimeDirectory=ralf-google-workspace-mcp
+RuntimeDirectoryMode=0750
+ExecStart=/usr/bin/python3 /opt/ralfloop/scripts/ralf_google_workspace_mcp_broker.py --socket /run/ralf-google-workspace-mcp/mcp.sock --allow-uid 1000 --command /home/bandi/bin/google-workspace-mcp --idle-timeout 60
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/home/bandi/bin/google-workspace-mcp /home/bandi/.config/google-workspace-mcp /home/bandi/.local/share/google-workspace-mcp
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

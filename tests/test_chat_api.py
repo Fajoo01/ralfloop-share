@@ -22,10 +22,12 @@ from ralfloop_agent.providers.chat import (
     ChatProviderHTTPError,
     ChatProviderSettings,
     ChatResult,
+    FallbackChatProvider,
     OllamaChatProvider,
     OpenAICompatibleChatProvider,
     build_chat_provider,
 )
+from ralfloop_agent.providers.llama_cpp import LlamaCppChatProvider
 
 
 RUNTIME_TRUNCATED_DECISION = (
@@ -607,6 +609,60 @@ def test_provider_factory_uses_existing_runtime_config_and_planner_fallback(tmp_
     assert isinstance(provider, OllamaChatProvider)
     assert provider.base_url == "http://configured-ollama"
     assert provider.default_model == "configured-planner"
+
+
+def test_provider_factory_selects_llama_cpp_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RALF_CHAT_PROVIDER", "llama_cpp")
+    monkeypatch.setenv("RALF_LLAMA_CPP_MODEL", "qwen3.5:9b")
+    monkeypatch.setenv("RALF_LLAMA_CPP_BASE_URL", "http://127.0.0.1:19091")
+    monkeypatch.setenv("RALF_LLAMA_CPP_FALLBACK", "none")
+
+    provider = build_chat_provider(session=FakeSession())
+
+    assert provider.name == "llama_cpp"
+    assert provider.default_model == "qwen3.5:9b"
+    assert provider.config.base_url == "http://127.0.0.1:19091"
+    assert not isinstance(provider, OllamaChatProvider)
+
+
+def test_provider_factory_without_provider_env_keeps_json_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("RALF_CHAT_PROVIDER", raising=False)
+    config_path = tmp_path / "inference_runtime.json"
+    config_path.write_text(json.dumps({"default_runtime": "ollama", "runtimes": {"ollama": {
+        "type": "ollama", "base_url": "http://json-ollama", "models": {"chat": "json-model"}
+    }}}), encoding="utf-8")
+
+    provider = build_chat_provider(config_path=config_path, session=FakeSession())
+
+    assert isinstance(provider, OllamaChatProvider)
+    assert provider.base_url == "http://json-ollama"
+    assert provider.default_model == "json-model"
+
+
+def test_provider_factory_preserves_configured_llama_cpp_ollama_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RALF_CHAT_PROVIDER", "llama_cpp")
+    monkeypatch.setenv("RALF_LLAMA_CPP_MODEL", "qwen3.5:9b")
+    monkeypatch.setenv("RALF_LLAMA_CPP_BASE_URL", "http://127.0.0.1:19091")
+    monkeypatch.setenv("RALF_LLAMA_CPP_FALLBACK", "ollama")
+    config_path = tmp_path / "inference_runtime.json"
+    config_path.write_text(json.dumps({"default_runtime": "ollama", "runtimes": {"ollama": {
+        "type": "ollama", "base_url": "http://configured-fallback", "models": {"chat": "fallback-model"}
+    }}}), encoding="utf-8")
+
+    provider = build_chat_provider(config_path=config_path, session=FakeSession())
+
+    assert isinstance(provider, FallbackChatProvider)
+    assert provider.name == "llama_cpp"
+    assert provider.default_model == "qwen3.5:9b"
+    assert provider.configured_fallback == "ollama"
+    assert isinstance(provider.primary, LlamaCppChatProvider)
+    assert isinstance(provider.fallback, OllamaChatProvider)
+    assert provider.fallback.base_url == "http://configured-fallback"
+    assert provider.fallback.default_model == "fallback-model"
 
 
 def test_chat_backend_has_no_agent_or_approval_dispatch() -> None:

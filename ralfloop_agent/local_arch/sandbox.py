@@ -85,6 +85,7 @@ class BubblewrapSandbox:
         self.bwrap = bwrap
         self.compiler = compiler
         self.limits = limits or SandboxLimits()
+        self._user_systemd_available: bool | None = None
 
     @property
     def available(self) -> bool:
@@ -245,13 +246,14 @@ class BubblewrapSandbox:
         seccomp_fd = self._seccomp_filter(deny_processes=executable == "./candidate")
         sandbox_command = self.command(executable, *args, seccomp_fd=seccomp_fd)
         command = [str(workspace) if item == "WORKSPACE" else item for item in sandbox_command]
-        command = [
-            "/usr/bin/systemd-run", "--user", "--scope", "--quiet",
-            f"--property=MemoryMax={self.limits.memory_mb}M",
-            "--property=CPUQuota=100%",
-            f"--property=TasksMax={self.limits.tasks}",
-            "--", *command,
-        ]
+        if self._systemd_user_scope_available():
+            command = [
+                "/usr/bin/systemd-run", "--user", "--scope", "--quiet",
+                f"--property=MemoryMax={self.limits.memory_mb}M",
+                "--property=CPUQuota=100%",
+                f"--property=TasksMax={self.limits.tasks}",
+                "--", *command,
+            ]
         stdout_path = workspace / ".stdout"
         stderr_path = workspace / ".stderr"
         before = resource.getrusage(resource.RUSAGE_CHILDREN)
@@ -285,6 +287,29 @@ class BubblewrapSandbox:
         cpu_ms = ((after.ru_utime + after.ru_stime) - (before.ru_utime + before.ru_stime)) * 1000
         rss_mb = after.ru_maxrss / 1024
         return process.returncode, out, err, wall_ms, timed_out, cpu_ms, rss_mb
+
+    def _systemd_user_scope_available(self) -> bool:
+        """Use the optional cgroup envelope only when its user bus is usable.
+
+        Bubblewrap, seccomp and hard rlimits remain mandatory below.  Some
+        non-login runners expose a stale or unusable user bus socket; invoking
+        systemd-run there prevents bwrap from starting at all.
+        """
+        if self._user_systemd_available is None:
+            try:
+                probe = subprocess.run(
+                    ["/usr/bin/systemctl", "--user", "show-environment"],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=2,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                self._user_systemd_available = False
+            else:
+                self._user_systemd_available = probe.returncode == 0
+        return self._user_systemd_available
 
     def _limit_child(self) -> None:
         limits = self.limits

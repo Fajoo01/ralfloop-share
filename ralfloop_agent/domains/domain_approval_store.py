@@ -33,6 +33,9 @@ class DomainApprovalStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as conn:
             self.ensure_schema(conn)
+        # Scopes contain exact recipients and message bodies.  SQLite's default
+        # creation mode follows umask and was commonly 0644 on the host.
+        os.chmod(self.db_path, 0o600)
 
     def connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
@@ -259,9 +262,31 @@ class DomainApprovalStore:
     def mark_stale(self, request_id: str, reasons: list[str]) -> dict[str, Any]:
         with self.connect() as conn:
             conn.execute("begin immediate")
-            self._set_status(conn, request_id, "stale")
+            row = conn.execute(
+                "select status from approval_requests where request_id = ?", (request_id,)
+            ).fetchone()
+            if not row:
+                conn.commit()
+                return {"status": "not_found", "request_id": request_id}
+            old_status = str(row["status"])
+            if old_status not in {"pending", "approved"}:
+                conn.commit()
+                return {
+                    "status": f"already_{old_status}", "request_id": request_id,
+                    "execution_allowed": False,
+                }
+            changed = conn.execute(
+                "update approval_requests set status = 'stale' "
+                "where request_id = ? and status in ('pending', 'approved')",
+                (request_id,),
+            ).rowcount
             conn.commit()
-        self.audit("approval_stale", request_id=request_id, new_status="stale", reason=",".join(reasons))
+        if changed != 1:
+            return {"status": "stale_transition_lost", "request_id": request_id}
+        self.audit(
+            "approval_stale", request_id=request_id, old_status=old_status,
+            new_status="stale", reason=",".join(reasons),
+        )
         return {"status": "stale", "request_id": request_id, "stale_reasons": reasons, "execution_allowed": False}
 
     def consume(self, request_id: str, result: dict[str, Any]) -> dict[str, Any]:
@@ -297,10 +322,198 @@ class DomainApprovalStore:
         self.audit("approval_consumed", request_id=request_id, new_status="consumed", result=result.get("status", ""))
         return {"status": "consumed", "request_id": request_id}
 
+    def claim_execution(self, request_id: str, *, action: str) -> dict[str, Any]:
+        """One-shot CAS before a non-idempotent external action."""
+
+        with self.connect() as conn:
+            conn.execute("begin immediate")
+            row = conn.execute(
+                "select * from approval_requests where request_id = ?", (request_id,)
+            ).fetchone()
+            if not row:
+                conn.commit()
+                return {"status": "not_found", "claimed": False}
+            req = _row_request(row)
+            effective = effective_approval_status(req)
+            if effective == "expired":
+                if req["status"] == "approved":
+                    self._set_status(conn, request_id, "expired")
+                conn.commit()
+                return {"status": "expired", "claimed": False}
+            if req["action"] != action:
+                conn.commit()
+                return {"status": "action_mismatch", "claimed": False}
+            changed = conn.execute(
+                "update approval_requests set status = 'executing' "
+                "where request_id = ? and status = 'approved' and consumed_at is null",
+                (request_id,),
+            ).rowcount
+            if changed != 1:
+                current = conn.execute(
+                    "select status from approval_requests where request_id = ?", (request_id,)
+                ).fetchone()
+                conn.commit()
+                return {
+                    "status": "already_" + str(current["status"] if current else "missing"),
+                    "claimed": False,
+                }
+            conn.execute(
+                "insert into approval_executions "
+                "(request_id, action, dry_run, status, created_at, result_json) "
+                "values (?, ?, 0, 'execution_started', ?, ?)",
+                (request_id, action, now_ts(), _json({"status": "execution_started"})),
+            )
+            conn.commit()
+        self.audit(
+            "execution_claimed", request_id=request_id, action=action,
+            old_status="approved", new_status="executing", result="execution_started",
+        )
+        return {"status": "execution_started", "claimed": True}
+
+    def finish_claimed_execution(
+        self,
+        request_id: str,
+        *,
+        action: str,
+        success: bool,
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Finalize only the execution claim; a failed/uncertain send is not retryable."""
+
+        final_status = "consumed" if success else "execution_failed"
+        with self.connect() as conn:
+            conn.execute("begin immediate")
+            changed = conn.execute(
+                "update approval_requests set status = ?, consumed_at = ? "
+                "where request_id = ? and status = 'executing'",
+                (final_status, now_ts() if success else None, request_id),
+            ).rowcount
+            if changed != 1:
+                conn.commit()
+                return {"status": "execution_claim_lost", "request_id": request_id}
+            conn.execute(
+                "insert into approval_executions "
+                "(request_id, action, dry_run, status, created_at, result_json) "
+                "values (?, ?, 0, ?, ?, ?)",
+                (request_id, action, final_status, now_ts(), _json(result)),
+            )
+            conn.commit()
+        self.audit(
+            "execution_completed" if success else "execution_failed",
+            request_id=request_id, action=action, old_status="executing",
+            new_status=final_status, result=final_status,
+        )
+        return {"status": final_status, "request_id": request_id}
+
     def record_execution(self, request_id: str, action: str, dry_run: bool, status: str, result: dict[str, Any]) -> None:
         with self.connect() as conn:
             conn.execute("insert into approval_executions (request_id, action, dry_run, status, created_at, result_json) values (?, ?, ?, ?, ?, ?)", (request_id, action, int(dry_run), status, now_ts(), _json(result)))
         self.audit("execution_completed" if status in {"dry_run", "executed"} else "execution_failed", request_id=request_id, action=action, result=status)
+
+    def reconciliation_snapshot(self, request_id: str) -> dict[str, Any]:
+        """Read approval, claim history and audit without changing execution state."""
+
+        with self.connect() as conn:
+            request = conn.execute(
+                "select * from approval_requests where request_id = ?", (request_id,)
+            ).fetchone()
+            decisions = conn.execute(
+                "select * from approval_decisions where request_id = ? order by decision_id",
+                (request_id,),
+            ).fetchall()
+            executions = conn.execute(
+                "select * from approval_executions where request_id = ? order by execution_id",
+                (request_id,),
+            ).fetchall()
+            audit_rows = conn.execute(
+                "select event_id, created_at, event_json from approval_audit_events "
+                "where json_extract(event_json, '$.request_id') = ? order by event_id",
+                (request_id,),
+            ).fetchall()
+        return {
+            "request": _row_request(request) if request else None,
+            "decisions": [dict(row) for row in decisions],
+            "executions": [dict(row) for row in executions],
+            "audit": [
+                {"event_id": int(row["event_id"]), "created_at": int(row["created_at"]),
+                 **json.loads(str(row["event_json"]))}
+                for row in audit_rows
+            ],
+        }
+
+    def reconcile_confirmed_execution(
+        self, request_id: str, *, action: str, evidence: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Record provider-confirmed reality; never claims or invokes an action."""
+
+        provider_message_id = str(evidence.get("provider_message_id") or "")
+        provider_thread_id = str(evidence.get("provider_thread_id") or "")
+        if not provider_message_id or not provider_thread_id:
+            return {"status": "invalid_reconciliation_evidence", "reconciled": False}
+        allowed = {"approved", "executing", "execution_failed", "stale", "expired", "consumed"}
+        with self.connect() as conn:
+            conn.execute("begin immediate")
+            row = conn.execute(
+                "select * from approval_requests where request_id = ?", (request_id,)
+            ).fetchone()
+            if not row:
+                conn.commit()
+                return {"status": "not_found", "reconciled": False}
+            old_status = str(row["status"])
+            if str(row["action"]) != action or old_status not in allowed:
+                conn.commit()
+                return {"status": "reconciliation_state_denied", "reconciled": False}
+            executions = conn.execute(
+                "select execution_id, status, result_json from approval_executions "
+                "where request_id = ? order by execution_id", (request_id,)
+            ).fetchall()
+            for execution in executions:
+                try:
+                    result = json.loads(str(execution["result_json"]))
+                except json.JSONDecodeError:
+                    result = {}
+                existing_id = str(
+                    result.get("provider_message_id") or result.get("message_id") or ""
+                )
+                if existing_id == provider_message_id and str(execution["status"]) in {
+                    "reconciled", "consumed", "executed"
+                }:
+                    conn.commit()
+                    return {
+                        "status": "already_reconciled", "reconciled": True,
+                        "approval_status": old_status, "execution_count": len(executions),
+                    }
+            recorded = {
+                "status": "executed_reconciled",
+                "action": action,
+                "sent": True,
+                "reconciled": True,
+                **evidence,
+            }
+            reconciled_at = now_ts()
+            conn.execute(
+                "update approval_requests set status = 'consumed', "
+                "consumed_at = coalesce(consumed_at, ?) where request_id = ?",
+                (reconciled_at, request_id),
+            )
+            conn.execute(
+                "insert into approval_executions "
+                "(request_id, action, dry_run, status, created_at, result_json) "
+                "values (?, ?, 0, 'reconciled', ?, ?)",
+                (request_id, action, reconciled_at, _json(recorded)),
+            )
+            execution_count = len(executions) + 1
+            conn.commit()
+        self.audit(
+            "execution_reconciled_from_provider_evidence",
+            request_id=request_id, action=action, old_status=old_status,
+            new_status="consumed", result="reconciled",
+            reason="provider_read_evidence",
+        )
+        return {
+            "status": "reconciled", "reconciled": True,
+            "approval_status": "consumed", "execution_count": execution_count,
+        }
 
     def register_nonce(self, nonce: str) -> bool:
         digest = hash_value(nonce)

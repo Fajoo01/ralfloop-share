@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 
 import pytest
@@ -99,12 +100,36 @@ def _identity(config: LlamaCppServerConfig, pid: int, *, ticks: int = 7) -> Proc
             str(config.server_bin),
             "--alias",
             config.model,
+            "--host",
+            "127.0.0.1",
             "--port",
             str(config.port),
             "--model",
             str(config.model_path),
         ),
     )
+
+
+def _pid_record(
+    config: LlamaCppServerConfig,
+    pid: int,
+    ticks: int,
+    *,
+    owner_pid: int | None,
+) -> dict:
+    return {
+        "pid": pid,
+        "owner_pid": owner_pid,
+        "owner_uid": os.getuid(),
+        "start_ticks": ticks,
+        "process_start_ticks": ticks,
+        "provider": "llama_cpp",
+        "mode": "chat",
+        "server_bin": str(config.server_bin.resolve()),
+        "model_path": str(config.model_path),
+        "model_hash": config.model_hash,
+        "port": config.port,
+    }
 
 
 def _owned_manager(tmp_path: Path, process: FakeProcess) -> LlamaCppServerManager:
@@ -117,15 +142,13 @@ def _owned_manager(tmp_path: Path, process: FakeProcess) -> LlamaCppServerManage
     config.state_dir.mkdir()
     config.pid_path.write_text(
         json.dumps(
-            {
-                "pid": process.pid,
-                "owner_pid": os.getpid(),
-                "owner_uid": os.getuid(),
-                "start_ticks": identity.start_ticks,
-            }
+            _pid_record(
+                config, process.pid, identity.start_ticks, owner_pid=os.getpid()
+            )
         ),
         encoding="utf-8",
     )
+    config.pid_path.chmod(0o600)
     _remember_local_child(process, lifecycle_key=manager.lifecycle_key)
     return manager
 
@@ -186,15 +209,11 @@ def test_lost_popen_reference_uses_owner_waitpid(tmp_path: Path) -> None:
     identity = _identity(config, pid)
     config.pid_path.write_text(
         json.dumps(
-            {
-                "pid": pid,
-                "owner_pid": os.getpid(),
-                "owner_uid": os.getuid(),
-                "start_ticks": identity.start_ticks,
-            }
+            _pid_record(config, pid, identity.start_ticks, owner_pid=os.getpid())
         ),
         encoding="utf-8",
     )
+    config.pid_path.chmod(0o600)
     waits = []
     manager = LlamaCppServerManager(
         config,
@@ -224,6 +243,7 @@ def test_startup_exit_and_health_timeout_reap_and_fail(tmp_path: Path) -> None:
         )
         manager.health = lambda: False
         manager.ollama_gpu_models = lambda: []
+        manager.resource_gate_status = lambda **kwargs: {"gate_reason": "gpu_available"}
         manager._port_in_use = lambda: False
         with pytest.raises(LlamaCppServerUnavailable):
             manager.start()
@@ -249,6 +269,7 @@ def test_new_start_after_stop_replaces_pid_and_health(tmp_path: Path) -> None:
     manager.health = lambda: any(item.alive for item in created)
     manager.ollama_gpu_models = lambda: []
     manager._port_in_use = lambda: False
+    manager.resource_gate_status = lambda **kwargs: {"gate_reason": "gpu_available"}
     first = manager.ensure_available()
     assert manager.status()["lifecycle_state"] == LlamaCppProcessState.RUNNING.value
     manager.stop()
@@ -288,6 +309,55 @@ def test_backend_exit_reaper_waits_for_owned_child(tmp_path: Path) -> None:
     assert process.wait_timeouts == [5.0]
     assert _local_child(process.pid) is None
     assert manager.status()["lifecycle_state"] == LlamaCppProcessState.STOPPED.value
+
+
+def test_detached_cli_child_survives_exit_and_is_cross_process_stoppable(tmp_path: Path) -> None:
+    config = _config(tmp_path, port=19222)
+    process = FakeProcess(41013)
+    identity = _identity(config, process.pid)
+    popen_kwargs = {}
+
+    def popen(*args, **kwargs):
+        popen_kwargs.update(kwargs)
+        return process
+
+    manager = LlamaCppServerManager(
+        config,
+        popen_factory=popen,
+        identity_reader=lambda pid: identity if pid == process.pid and process.alive else None,
+    )
+    manager.health = lambda: process.alive and _local_child(process.pid) is process
+    manager._port_in_use = lambda: False
+    manager.resource_gate_status = lambda **kwargs: {"gate_reason": "gpu_available"}
+
+    result = manager.start(detach=True)
+    record = json.loads(config.pid_path.read_text(encoding="utf-8"))
+    _reap_children_at_exit()
+
+    assert result["detached"] is True
+    assert popen_kwargs["env"]["GGML_CUDA_ENABLE_UNIFIED_MEMORY"] == "1"
+    assert record["owner_pid"] is None
+    assert process.terminate_calls == 0
+    assert process.alive is True
+    assert _local_child(process.pid) is None
+
+    signals = []
+
+    def kill(pid, sig):
+        signals.append((pid, sig))
+        process.alive = False
+
+    stopper = LlamaCppServerManager(
+        config,
+        identity_reader=lambda pid: identity if pid == process.pid and process.alive else None,
+        kill_fn=kill,
+        sleep_fn=lambda seconds: None,
+    )
+    stopped = stopper.stop()
+
+    assert stopped["changed"] is True
+    assert signals == [(process.pid, signal.SIGTERM)]
+    assert not config.pid_path.exists()
 
 
 class _Primary:

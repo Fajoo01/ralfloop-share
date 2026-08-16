@@ -1,0 +1,32 @@
+[Unit]
+Description=Ralf llama.cpp fixed-engine lifecycle broker
+After=network.target
+
+[Service]
+Type=simple
+User=bandi
+Group=bandi
+SupplementaryGroups=ralf-gpu
+EnvironmentFile=-/etc/ralfloop/fast-chat.env
+Environment=RALF_LLAMA_CPP_LIFECYCLE_SOCKET=
+Environment=PYTHONPATH=/home/sibilla-cumana/ralfloop-production/current
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_llama_cpp_lifecycle_broker.py --socket /run/ralf-llama-cpp-lifecycle/control.sock
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/bandi/.local/state/ralf /var/lib/ralf-llama-cpp
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

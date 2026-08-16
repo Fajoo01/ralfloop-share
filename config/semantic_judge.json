@@ -1,0 +1,40 @@
+{
+  "semantic_judge_enabled": false,
+  "semantic_judge_provider": "deepseek_v4_flash",
+  "semantic_judge_timeout_sec": 1800,
+  "semantic_judge_max_latency_for_normal_path_sec": 1800,
+  "semantic_judge_benchmark_sec": null,
+  "semantic_judge_fail_open_normal": false,
+  "semantic_judge_allow_normal": false,
+  "deepseek_runtime": {
+    "executable": "/home/sibilla-cumana/src/ds4-cuda-stream-pr739/ds4-server",
+    "model": "/home/sibilla-cumana/Dati/ralfloop-models/deepseek-v4-flash-pr739/gguf/DeepSeek-V4-Flash-IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8-chat-v2-imatrix-0731.gguf",
+    "backend": "cuda",
+    "ssd_streaming": true,
+    "cuda_low_vram_stream": true,
+    "ssd_streaming_cold": true,
+    "context_tokens": 1024,
+    "prefill_chunk": 128,
+    "max_output_tokens": 128,
+    "stage_mb": 1280,
+    "reserve_mb": 384,
+    "weight_cache_verbose": true,
+    "weight_cache_limit_gb": 3,
+    "host": "127.0.0.1",
+    "port": 19194,
+    "resident_sessions": 1,
+    "batching": false,
+    "temperature": 0,
+    "top_p": 1,
+    "thinking": false
+  },
+  "risk_levels": {
+    "LOW": "deterministic_only",
+    "NORMAL": "deterministic_only_unless_explicitly_opted_in",
+    "HIGH": "judge_required_fail_closed"
+  },
+  "provider_registry": [
+    "glm_colibri",
+    "deepseek_v4_flash"
+  ]
+}

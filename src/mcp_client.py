@@ -7,7 +7,6 @@ import os
 from ralfloop_agent.integration.confirmation_store import execute_confirmed_action, request_confirmation
 from src import audit
 from src.confirmation import get_confirmation
-from src.google_client import GoogleClient
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +25,6 @@ class MCPClient:
         self.google_enabled = enabled_flag == "1" or google_client is not None
         if google_client is not None:
             self.google = google_client
-        elif self.google_enabled:
-            self.google = GoogleClient(
-                client_secrets_path=os.getenv("RALF_GOOGLE_CLIENT_SECRETS"),
-                token_path=os.getenv("RALF_GOOGLE_TOKEN"),
-                draft_only=os.getenv("RALF_GOOGLE_DRAFT_ONLY", "1") == "1",
-            )
         else:
             self.google = None
 
@@ -91,25 +84,12 @@ class MCPClient:
     def _send_email_now(self, to: str, subject: str, body: str) -> dict[str, Any]:
         draft_only = getattr(self.google, "draft_only", True)
         try:
-            if self.google is not None and self.google.is_configured():
-                if draft_only:
-                    result = self.google.create_draft(to, subject, body)
-                else:
-                    result = self.google.send_email(to, subject, body)
+            if self.google is None or not self.google.is_configured():
+                raise RuntimeError("legacy_direct_google_fallback_disabled")
+            if draft_only:
+                result = self.google.create_draft(to, subject, body)
             else:
-                try:
-                    from arclio_mcp_gsuite import GSuiteClient  # type: ignore
-                except Exception:
-                    result = {
-                        "status": "not_configured",
-                        "connector": "google_email",
-                        "action": "send_email",
-                        "to": to,
-                    }
-                else:
-                    client = GSuiteClient()
-                    raw_result = client.send_email(to=to, subject=subject, body=body)
-                    result = {"status": "sent", "connector": "arclio_mcp_gsuite", "result": raw_result}
+                result = self.google.send_email(to, subject, body)
             audit.log_operation(
                 "mcp_send_email_executed",
                 {

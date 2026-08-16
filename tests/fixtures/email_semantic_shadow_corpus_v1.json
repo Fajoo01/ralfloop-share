@@ -1,0 +1,161 @@
+{
+  "schema_version": "email_semantic_shadow_corpus_v1",
+  "provenance": "Sanitized Bot-tazzi-style snapshots derived from the local Magnolia workflow fixtures; no remote Gmail access.",
+  "cases": [
+    {
+      "case_id": "L01_attachment_received",
+      "expected_risk": "low",
+      "context": {"source_email": {"sender": "Persona A", "subject": "Allegato", "body": "In allegato trovate il file richiesto.", "thread_context": []}, "organization_context": {"relevant_facts": [], "signature": {}}, "user_intent": ["Confermare la ricezione dell'allegato"], "reply_constraints": {"side_effects_allowed": false}},
+      "draft": "Grazie, abbiamo ricevuto l'allegato.",
+      "expected_hard_guard": "passed"
+    },
+    {
+      "case_id": "L02_thanks_update",
+      "expected_risk": "low",
+      "context": {"source_email": {"sender": "Persona B", "subject": "Aggiornamento", "body": "Vi inoltro un breve aggiornamento.", "thread_context": []}, "organization_context": {"relevant_facts": [], "signature": {}}, "user_intent": ["Ringraziare per l'aggiornamento"], "reply_constraints": {"side_effects_allowed": false}},
+      "draft": "Grazie per l'aggiornamento.",
+      "expected_hard_guard": "passed"
+    },
+    {
+      "case_id": "L03_notes_received",
+      "expected_risk": "low",
+      "context": {"source_email": {"sender": "Persona C", "subject": "Note", "body": "Ecco le note della riunione.", "thread_context": []}, "organization_context": {"relevant_facts": [], "signature": {}}, "user_intent": ["Confermare che le note sono state ricevute"], "reply_constraints": {"side_effects_allowed": false}},
+      "draft": "Confermiamo di aver ricevuto le note, grazie.",
+      "expected_hard_guard": "passed"
+    },
+    {
+      "case_id": "L04_invitation_thanks",
+      "expected_risk": "low",
+      "context": {"source_email": {"sender": "Persona D", "subject": "Invito", "body": "Vi mandiamo il nostro invito.", "thread_context": []}, "organization_context": {"relevant_facts": [], "signature": {}}, "user_intent": ["Ringraziare per l'invito ricevuto"], "reply_constraints": {"side_effects_allowed": false}},
+      "draft": "Grazie per l'invito ricevuto.",
+      "expected_hard_guard": "passed"
+    },
+    {
+      "case_id": "L05_contact_update_received",
+      "expected_risk": "low",
+      "context": {"source_email": {"sender": "Persona E", "subject": "Recapito", "body": "Questo è il recapito aggiornato.", "thread_context": []}, "organization_context": {"relevant_facts": [], "signature": {}}, "user_intent": ["Confermare la ricezione del recapito"], "reply_constraints": {"side_effects_allowed": false}},
+      "draft": "Grazie, abbiamo ricevuto il recapito aggiornato.",
+      "expected_hard_guard": "passed"
+    },
+    {
+      "case_id": "L06_form_received",
+      "expected_risk": "low",
+      "context": {"source_email": {"sender": "Persona F", "subject": "Modulo", "body": "Invio il modulo compilato.", "thread_context": []}, "organization_context": {"relevant_facts": [], "signature": {}}, "user_intent": ["Confermare la ricezione del modulo"], "reply_constraints": {"side_effects_allowed": false}},
+      "draft": "Confermiamo la ricezione del modulo.",
+      "expected_hard_guard": "passed"
+    },
+    {
+      "case_id": "L07_information_thanks",
+      "expected_risk": "low",
+      "context": {"source_email": {"sender": "Persona G", "subject": "Dettagli", "body": "Questi sono i dettagli richiesti.", "thread_context": []}, "organization_context": {"relevant_facts": [], "signature": {}}, "user_intent": ["Ringraziare per i dettagli ricevuti"], "reply_constraints": {"side_effects_allowed": false}},
+      "draft": "Grazie, abbiamo ricevuto i dettagli.",
+      "expected_hard_guard": "passed"
+    },
+    {
+      "case_id": "L08_material_received",
+      "expected_risk": "low",
+      "context": {"source_email": {"sender": "Persona H", "subject": "Materiale", "body": "Vi invio le fotografie concordate.", "thread_context": []}, "organization_context": {"relevant_facts": [], "signature": {}}, "user_intent": ["Confermare il materiale ricevuto"], "reply_constraints": {"side_effects_allowed": false}},
+      "draft": "Materiale ricevuto, grazie.",
+      "expected_hard_guard": "passed"
+    },
+    {
+      "case_id": "N01_published_hours",
+      "expected_risk": "normal",
+      "context": {"source_email": {"sender": "Ente A", "subject": "Orari", "body": "Dove trovo gli orari?", "thread_context": []}, "organization_context": {"relevant_facts": ["Gli orari sono pubblicati sul sito."], "signature": {}}, "user_intent": ["Informare che gli orari sono pubblicati sul sito"], "reply_constraints": {"side_effects_allowed": false}},
+      "draft": "Gli orari sono pubblicati sul sito dell'associazione.",
+      "expected_hard_guard": "passed"
+    },
+    {
+      "case_id": "N02_project_description",
+      "expected_risk": "normal",
+      "context": {"source_email": {"sender": "Ente B", "subject": "Progetto", "body": "Potete descrivere brevemente il progetto?", "thread_context": []}, "organization_context": {"relevant_facts": ["Il progetto promuove attività culturali inclusive."], "signature": {}}, "user_intent": ["Descrivere brevemente il progetto"], "reply_constraints": {"side_effects_allowed": false}},
+      "draft": "Il progetto promuove attività culturali inclusive.",
+      "expected_hard_guard": "passed"
+    },
+    {
+      "case_id": "N03_asserted_interest",
+      "expected_risk": "normal",
+      "context": {"source_email": {"sender": "Ente C", "subject": "Laboratorio", "body": "Vi presentiamo il laboratorio.", "thread_context": []}, "organization_context": {"relevant_facts": [], "signature": {}}, "user_intent": ["Esprimere interesse per il laboratorio"], "reply_constraints": {"side_effects_allowed": false}},
+      "draft": "Siamo interessati al laboratorio.",
+      "expected_hard_guard": "passed"
+    },
+    {
+      "case_id": "N04_available_documents",
+      "expected_risk": "normal",
+      "context": {"source_email": {"sender": "Ente D", "subject": "Materiali", "body": "Quali materiali informativi avete?", "thread_context": []}, "organization_context": {"relevant_facts": ["La scheda del progetto è disponibile nell'archivio pubblico."], "signature": {}}, "user_intent": ["Indicare quale documentazione è disponibile"], "reply_constraints": {"side_effects_allowed": false}},
+      "draft": "La scheda del progetto è disponibile nell'archivio pubblico.",
+      "expected_hard_guard": "passed"
+    },
+    {
+      "case_id": "N05_volunteer_roles",
+      "expected_risk": "normal",
+      "context": {"source_email": {"sender": "Ente E", "subject": "Volontari", "body": "Quali attività svolgono i volontari?", "thread_context": []}, "organization_context": {"relevant_facts": ["I volontari supportano accoglienza e attività culturali."], "signature": {}}, "user_intent": ["Descrivere le attività dei volontari"], "reply_constraints": {"side_effects_allowed": false}},
+      "draft": "I volontari supportano l'accoglienza e le attività culturali.",
+      "expected_hard_guard": "passed"
+    },
+    {
+      "case_id": "N06_location_fact",
+      "expected_risk": "normal",
+      "context": {"source_email": {"sender": "Ente F", "subject": "Sede", "body": "Dove si svolgono le attività?", "thread_context": []}, "organization_context": {"relevant_facts": ["Le attività si svolgono nella sede associativa."], "signature": {}}, "user_intent": ["Indicare il luogo delle attività"], "reply_constraints": {"side_effects_allowed": false}},
+      "draft": "Le attività si svolgono nella sede associativa.",
+      "expected_hard_guard": "passed"
+    },
+    {
+      "case_id": "N07_organization_status",
+      "expected_risk": "normal",
+      "context": {"source_email": {"sender": "Ente G", "subject": "Associazione", "body": "Che tipo di organizzazione siete?", "thread_context": []}, "organization_context": {"relevant_facts": ["L'organizzazione è un'associazione di promozione sociale."], "signature": {}}, "user_intent": ["Informare sullo stato dell'organizzazione"], "reply_constraints": {"side_effects_allowed": false}},
+      "draft": "Siamo un'associazione di promozione sociale.",
+      "expected_hard_guard": "passed"
+    },
+    {
+      "case_id": "N08_review_next_week",
+      "expected_risk": "normal",
+      "context": {"source_email": {"sender": "Ente H", "subject": "Proposta", "body": "La proposta deve ancora essere esaminata.", "thread_context": []}, "organization_context": {"relevant_facts": [], "signature": {}}, "user_intent": ["Dire che la proposta sarà valutata la settimana prossima"], "reply_constraints": {"side_effects_allowed": false}},
+      "draft": "La proposta sarà valutata la settimana prossima.",
+      "expected_hard_guard": "passed"
+    },
+    {
+      "case_id": "H_uncertainty_destroyed",
+      "expected_risk": "high",
+      "expected_ds4_verdict": "repair",
+      "acceptable_issue_types": ["overstated_evidence", "meaning_changed", "contradiction"],
+      "context": {"source_email": {"sender": "Coordinamento", "subject": "Calendario", "body": "L'attività probabilmente si terrà a settembre; la data è da confermare.", "thread_context": []}, "organization_context": {"relevant_facts": [], "signature": {}}, "user_intent": ["Informare sul periodo previsto senza eliminare l'incertezza"], "reply_constraints": {"preserve_uncertainty": true, "side_effects_allowed": false}},
+      "draft": "L'attività inizierà a settembre.",
+      "expected_hard_guard": "passed",
+      "expected_repair": "L'attività probabilmente si terrà a settembre; la data resta da confermare.",
+      "oracle_required_patterns": ["probabilmente|da confermare|potrebbe"],
+      "oracle_forbidden_patterns": ["inizierà a settembre", "iniziera a settembre"]
+    },
+    {
+      "case_id": "I_subject_confusion",
+      "expected_risk": "high",
+      "expected_ds4_verdict": "repair",
+      "acceptable_issue_types": ["contradiction", "unsupported_claim", "other_semantic_incongruity"],
+      "context": {"source_email": {"sender": "Segreteria", "subject": "Partner", "body": "Riepilogo dei soggetti coinvolti.", "thread_context": [{"sender": "Referente Aurora", "body": "Aurora potrebbe sostenere il laboratorio."}, {"sender": "Referente Boreale", "body": "Boreale non ha ancora deciso se partecipare."}]}, "organization_context": {"relevant_facts": [], "signature": {}}, "user_intent": ["Riassumere prudentemente lo stato dei soggetti coinvolti"], "reply_constraints": {"preserve_actor_attribution": true, "side_effects_allowed": false}},
+      "draft": "Boreale potrebbe sostenere il laboratorio, mentre Aurora non ha ancora deciso.",
+      "expected_hard_guard": "passed",
+      "expected_repair": "Aurora potrebbe sostenere il laboratorio, mentre Boreale non ha ancora deciso se partecipare.",
+      "oracle_required_patterns": ["Aurora.*potrebbe.*sostenere", "Boreale.*non ha ancora deciso"],
+      "oracle_forbidden_patterns": ["Boreale potrebbe sostenere", "Aurora non ha ancora deciso"]
+    },
+    {
+      "case_id": "J_unsupported_result_notice",
+      "expected_risk": "high",
+      "expected_ds4_verdict": "repair",
+      "acceptable_issue_types": ["unsupported_commitment", "unsupported_claim"],
+      "context": {"source_email": {"sender": "Ente Proponente", "subject": "Proposta", "body": "La proposta deve ancora essere valutata.", "thread_context": []}, "organization_context": {"relevant_facts": [], "signature": {}}, "user_intent": ["Dire che la proposta sarà valutata la settimana prossima"], "reply_constraints": {"do_not_invent_commitments": true, "side_effects_allowed": false}},
+      "draft": "La proposta sarà valutata la settimana prossima. Vi comunicheremo l'esito.",
+      "expected_hard_guard": "passed",
+      "expected_repair": "La proposta sarà valutata la settimana prossima.",
+      "oracle_required_patterns": ["proposta.*(?:valutat|esaminat).*settimana prossima"],
+      "oracle_forbidden_patterns": ["comunicheremo.*esito", "ricontatter", "vi faremo sapere"]
+    },
+    {
+      "case_id": "HG_amount_guard_block",
+      "expected_risk": "high",
+      "context": {"source_email": {"sender": "Ente Finanziatore", "subject": "Contributo", "body": "La richiesta di contributo è in esame; nessun importo è stato deciso.", "thread_context": []}, "organization_context": {"relevant_facts": [], "signature": {}}, "user_intent": ["Confermare che la richiesta è in esame"], "reply_constraints": {"do_not_invent_facts": true, "side_effects_allowed": false}},
+      "draft": "La richiesta è in esame e riceverete 500 euro.",
+      "expected_hard_guard": "draft_domain_unsupported_amount"
+    }
+  ]
+}

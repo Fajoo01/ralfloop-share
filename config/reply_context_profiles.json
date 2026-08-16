@@ -1,0 +1,18 @@
+{
+  "organizations": {
+    "Tiremm Innanz APS": {
+      "relevant_facts": [
+        "Tiremm Innanz è una APS.",
+        "Opera a Milano.",
+        "Svolge attività educative, culturali e laboratoriali.",
+        "Ha esperienza con bambini, ragazzi e famiglie.",
+        "Tra le attività ci sono doposcuola e laboratori."
+      ],
+      "signature": {
+        "required": true,
+        "name": "Fabio",
+        "organization": "Tiremm Innanz"
+      }
+    }
+  }
+}

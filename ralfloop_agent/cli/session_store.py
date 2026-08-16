@@ -41,6 +41,24 @@ ALLOWED_RECORD_KEYS = {
     "model",
     "context_enabled",
     "metadata",
+    "assistant_state",
+}
+
+ASSISTANT_STATE_KEYS = {"schema_version", "last_intent", "last_entities", "pending"}
+PENDING_STATE_KEYS = {"email", "whatsapp", "home", "infrastructure", "bandi", "clarification"}
+PENDING_ACTION_KEYS = {
+    "pending_id",
+    "domain",
+    "action",
+    "policy",
+    "payload",
+    "payload_digest",
+    "displayed_digest",
+    "version",
+    "created_at",
+    "expires_at",
+    "approval_ref",
+    "approved_digest",
 }
 
 
@@ -194,7 +212,7 @@ def _normalize_record(record: dict[str, Any], *, session_id: str) -> dict[str, A
         raise SessionStoreError("unsupported_session_metadata")
     provider = metadata.get("provider")
     safe_metadata = {"provider": _safe_scalar(provider)} if provider else {}
-    return {
+    result = {
         "session_id": session_id,
         "created_at": str(record.get("created_at") or ""),
         "updated_at": str(record.get("updated_at") or ""),
@@ -204,6 +222,77 @@ def _normalize_record(record: dict[str, Any], *, session_id: str) -> dict[str, A
         "context_enabled": bool(record.get("context_enabled", True)),
         "metadata": safe_metadata,
     }
+    if record.get("assistant_state") is not None:
+        result["assistant_state"] = _sanitize_assistant_state(record["assistant_state"])
+    return result
+
+
+def _sanitize_assistant_state(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) - ASSISTANT_STATE_KEYS:
+        raise SessionStoreError("unsupported_assistant_state")
+    if value.get("schema_version") != "unified_conversation_v1":
+        raise SessionStoreError("unsupported_assistant_state")
+    last_entities = value.get("last_entities") or {}
+    pending = value.get("pending") or {}
+    if not isinstance(last_entities, dict) or len(last_entities) > 8:
+        raise SessionStoreError("unsupported_assistant_state")
+    if not isinstance(pending, dict) or set(pending) - PENDING_STATE_KEYS:
+        raise SessionStoreError("unsupported_assistant_state")
+    safe_entities: dict[str, list[str]] = {}
+    for domain, entities in last_entities.items():
+        if domain not in PENDING_STATE_KEYS | {"personal_relational", "tiremm", "research", "code", "media"}:
+            raise SessionStoreError("unsupported_assistant_state")
+        if not isinstance(entities, (list, tuple)) or len(entities) > 8:
+            raise SessionStoreError("unsupported_assistant_state")
+        safe_entities[domain] = [_bounded_text(item, 240) for item in entities]
+    safe_pending: dict[str, Any] = {name: None for name in PENDING_STATE_KEYS}
+    for domain, item in pending.items():
+        if item is None:
+            continue
+        if not isinstance(item, dict) or set(item) != PENDING_ACTION_KEYS or item.get("domain") != domain:
+            raise SessionStoreError("unsupported_assistant_state")
+        safe_pending[domain] = {
+            key: _sanitize_state_value(child, depth=0)
+            for key, child in item.items()
+        }
+    result = {
+        "schema_version": "unified_conversation_v1",
+        "last_intent": _bounded_text(value.get("last_intent"), 96) if value.get("last_intent") else None,
+        "last_entities": safe_entities,
+        "pending": safe_pending,
+    }
+    if len(json.dumps(result, ensure_ascii=False)) > 32_768:
+        raise SessionStoreError("assistant_state_too_large")
+    return result
+
+
+def _sanitize_state_value(value: Any, *, depth: int) -> Any:
+    if depth > 6:
+        raise SessionStoreError("assistant_state_too_deep")
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return _bounded_text(value, 12_000)
+    if isinstance(value, (list, tuple)):
+        if len(value) > 64:
+            raise SessionStoreError("assistant_state_too_large")
+        return [_sanitize_state_value(item, depth=depth + 1) for item in value]
+    if isinstance(value, dict):
+        if len(value) > 64:
+            raise SessionStoreError("assistant_state_too_large")
+        _reject_secret_keys(value)
+        return {
+            _bounded_text(key, 96): _sanitize_state_value(item, depth=depth + 1)
+            for key, item in value.items()
+        }
+    raise SessionStoreError("unsupported_assistant_state_value")
+
+
+def _bounded_text(value: Any, maximum: int) -> str:
+    text = _safe_scalar(value)
+    if len(text) > maximum:
+        raise SessionStoreError("assistant_state_value_too_large")
+    return text
 
 
 def _safe_scalar(value: Any) -> str:

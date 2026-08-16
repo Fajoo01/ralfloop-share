@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "profile": "work",
+  "work_profile": true,
+  "default_namespace": "tiremm",
+  "default_policy": "read",
+  "deny_overrides": []
+}

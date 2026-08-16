@@ -172,18 +172,27 @@ def run_task(request: TaskRequest) -> TaskResponse:
     if route.mode == "patch_allowed":
         base_evidence = executor.run("pwd")
         patch_evidence = PatchEvidence(
-            command=base_evidence.command,
+            command="ralf repair run",
             path=base_evidence.path,
             exit_code=base_evidence.exit_code,
-            stdout=base_evidence.stdout,
+            stdout=(
+                "bounded_repair_required: run in isolated worktree; "
+                "then request persistent approval and apply the exact hash-bound patch"
+            ),
             stderr=base_evidence.stderr,
-            diff="mock diff: no repository files changed",
-            tests=["mock test: py_compile", "mock test: pytest targeted"],
+            diff="",
+            tests=[],
         )
         return _response(
             route=route,
             evidence=patch_evidence,
-            message=_join_messages("patch plan requires repro, minimal diff, targeted tests", skill_messages),
+            message=_join_messages(
+                "patch_allowed uses bounded repair: "
+                "ralf repair run -> ralf repair request-approval -> "
+                "human approval -> ralf repair apply; "
+                "no repository change has been fabricated or applied by this route",
+                skill_messages,
+            ),
             collaboration_trace=collaboration_trace,
         )
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
 
 import pytest
@@ -9,6 +11,7 @@ from ralfloop_agent.providers.llama_cpp_server import (
     LlamaCppServerConfig,
     LlamaCppServerManager,
     LlamaCppServerUnavailable,
+    ProcessIdentity,
     classify_gpu_resource_state,
 )
 
@@ -61,6 +64,48 @@ def classify(**overrides):
 
 def observer(*processes, free_mib=7425):
     return lambda: {"free_mib": free_mib, "processes": list(processes)}
+
+
+def identity(
+    pid: int,
+    cfg: LlamaCppServerConfig,
+    *,
+    port: int | None = None,
+    model: Path | None = None,
+):
+    return ProcessIdentity(
+        pid=pid,
+        uid=os.getuid(),
+        start_ticks=123,
+        executable=str(cfg.server_bin),
+        argv=(
+            str(cfg.server_bin),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port if port is not None else cfg.port),
+            "--model",
+            str(model if model is not None else cfg.model_path),
+            "--alias",
+            cfg.model,
+        ),
+    )
+
+
+def pid_record(cfg: LlamaCppServerConfig, pid: int, ticks: int = 123) -> dict:
+    return {
+        "pid": pid,
+        "owner_pid": None,
+        "owner_uid": os.getuid(),
+        "start_ticks": ticks,
+        "process_start_ticks": ticks,
+        "provider": "llama_cpp",
+        "mode": "chat",
+        "server_bin": str(cfg.server_bin.resolve()),
+        "model_path": str(cfg.model_path),
+        "model_hash": cfg.model_hash,
+        "port": cfg.port,
+    }
 
 
 def test_ollama_server_absent_is_distinct_from_loaded_model():
@@ -153,3 +198,130 @@ def test_cpu_only_ollama_model_does_not_emit_loaded_gpu_reason():
     assert status["ollama_model_loaded"] is True
     assert status["ollama_gpu_memory_in_use"] is False
     assert status["gate_reason"] == "gpu_available"
+
+
+def test_managed_target_present_is_already_running(tmp_path):
+    cfg = config(tmp_path)
+    cfg.state_dir.mkdir()
+    cfg.pid_path.write_text(json.dumps(pid_record(cfg, 91)), encoding="utf-8")
+    cfg.pid_path.chmod(0o600)
+    manager = LlamaCppServerManager(
+        cfg,
+        session=Session(Response({"models": []})),
+        gpu_observer=observer(
+            {"pid": 91, "process_name": "llama-server", "used_gpu_memory_mib": 3000}
+        ),
+        identity_reader=lambda pid: identity(pid, cfg),
+    )
+
+    status = manager.resource_gate_status()
+
+    assert status["gate_reason"] == "llama_cpp_already_running"
+    assert status["llama_cpp_pids"] == [91]
+
+
+def test_agentcpm_llama_server_on_other_port_is_foreign(tmp_path):
+    cfg = config(tmp_path)
+    manager = LlamaCppServerManager(
+        cfg,
+        session=Session(Response({"models": []})),
+        gpu_observer=observer(
+            {"pid": 415828, "process_name": "llama-server", "used_gpu_memory_mib": 3700},
+            free_mib=7000,
+        ),
+        identity_reader=lambda pid: identity(pid, cfg, port=19093, model=Path("AgentCPM.gguf")),
+    )
+
+    status = manager.resource_gate_status()
+
+    assert status["gate_reason"] == "gpu_available"
+    assert status["llama_cpp_pids"] == []
+    assert status["foreign_gpu_pids"] == [415828]
+
+
+def test_foreign_llama_server_with_insufficient_vram_fails_for_memory(tmp_path):
+    cfg = config(tmp_path)
+    manager = LlamaCppServerManager(
+        cfg,
+        session=Session(Response({"models": []})),
+        gpu_observer=observer(
+            {"pid": 415828, "process_name": "llama-server", "used_gpu_memory_mib": 3700},
+            free_mib=3500,
+        ),
+        identity_reader=lambda pid: identity(pid, cfg, port=19093, model=Path("AgentCPM.gguf")),
+    )
+
+    status = manager.resource_gate_status()
+
+    assert status["gate_reason"] == "insufficient_gpu_memory"
+    assert status["foreign_gpu_pids"] == [415828]
+
+
+def test_measured_profile_memory_gate_is_exact(tmp_path):
+    cfg = config(tmp_path)
+    low = LlamaCppServerManager(
+        cfg,
+        session=Session(Response({"models": []})),
+        gpu_observer=observer(free_mib=cfg.required_gpu_memory_mib - 1),
+    ).resource_gate_status()
+    enough = LlamaCppServerManager(
+        cfg,
+        session=Session(Response({"models": []})),
+        gpu_observer=observer(free_mib=cfg.required_gpu_memory_mib),
+    ).resource_gate_status()
+
+    assert low["gate_reason"] == "insufficient_gpu_memory"
+    assert enough["gate_reason"] == "gpu_available"
+    assert enough["required_gpu_memory_mib"] == 3600
+
+
+def test_stale_managed_pid_is_not_target_running(tmp_path):
+    cfg = config(tmp_path)
+    cfg.state_dir.mkdir()
+    cfg.pid_path.write_text(json.dumps(pid_record(cfg, 91)), encoding="utf-8")
+    cfg.pid_path.chmod(0o600)
+    manager = LlamaCppServerManager(
+        cfg,
+        session=Session(Response({"models": []})),
+        gpu_observer=observer(),
+        identity_reader=lambda pid: None,
+    )
+
+    status = manager.resource_gate_status()
+
+    assert status["gate_reason"] == "gpu_available"
+    assert status["llama_cpp_running"] is False
+
+
+def test_same_process_name_with_different_argv_is_foreign(tmp_path):
+    cfg = config(tmp_path)
+    manager = LlamaCppServerManager(
+        cfg,
+        session=Session(Response({"models": []})),
+        gpu_observer=observer(
+            {"pid": 93, "process_name": "llama-server", "used_gpu_memory_mib": 1000}
+        ),
+        identity_reader=lambda pid: identity(pid, cfg, port=19093),
+    )
+
+    status = manager.resource_gate_status()
+
+    assert status["gate_reason"] == "gpu_available"
+    assert status["foreign_gpu_pids"] == [93]
+
+
+def test_matching_target_port_and_model_is_target(tmp_path):
+    cfg = config(tmp_path)
+    manager = LlamaCppServerManager(
+        cfg,
+        session=Session(Response({"models": []})),
+        gpu_observer=observer(
+            {"pid": 91, "process_name": "llama-server", "used_gpu_memory_mib": 3000}
+        ),
+        identity_reader=lambda pid: identity(pid, cfg),
+    )
+
+    status = manager.resource_gate_status()
+
+    assert status["gate_reason"] == "llama_cpp_already_running"
+    assert status["llama_cpp_pids"] == [91]

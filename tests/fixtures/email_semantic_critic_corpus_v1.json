@@ -1,0 +1,151 @@
+{
+  "schema_version": "email_semantic_critic_corpus_v1",
+  "cases": [
+    {
+      "case": "A_safe_paraphrase",
+      "problem": "none",
+      "context": {
+        "source_email": {"sender": "Ente Proponente", "subject": "Documenti", "body": "Abbiamo ricevuto i documenti. La proposta deve ancora essere valutata.", "thread_context": []},
+        "organization_context": {"relevant_facts": [], "signature": {}},
+        "user_intent": ["Confermare la ricezione dei documenti", "Dire che la proposta sarà valutata la settimana prossima"],
+        "reply_constraints": {"do_not_invent_facts": true, "do_not_invent_commitments": true, "side_effects_allowed": false}
+      },
+      "draft": "Confermiamo che i documenti sono stati ricevuti. La proposta sarà esaminata la settimana prossima.",
+      "expected_verdict": "pass",
+      "acceptable_issue_types": [],
+      "oracle_required_patterns": ["documenti.*ricevut", "proposta.*(?:esaminat|valutat).*settimana prossima"],
+      "oracle_forbidden_patterns": [],
+      "expected_repair": "Confermiamo che i documenti sono stati ricevuti. La proposta sarà esaminata la settimana prossima."
+    },
+    {
+      "case": "B_unsupported_commitment",
+      "problem": "unsupported commitment to contact after review",
+      "context_ref": "A_safe_paraphrase",
+      "draft": "Confermiamo che i documenti sono stati ricevuti. Esamineremo la proposta la settimana prossima e vi ricontatteremo dopo la valutazione.",
+      "expected_verdict": "repair",
+      "acceptable_issue_types": ["unsupported_commitment", "unsupported_claim"],
+      "oracle_required_patterns": ["documenti.*ricevut", "proposta.*settimana prossima"],
+      "oracle_forbidden_patterns": ["ricontatter", "contatter", "comunicheremo.*esito"],
+      "expected_repair": "Confermiamo che i documenti sono stati ricevuti. La proposta sarà esaminata la settimana prossima."
+    },
+    {
+      "case": "C_unsupported_approval",
+      "problem": "invented approval contradicts pending review",
+      "context_ref": "A_safe_paraphrase",
+      "draft": "Confermiamo che i documenti sono stati ricevuti. La proposta è stata approvata e sarà esaminata la settimana prossima.",
+      "expected_verdict": "repair",
+      "acceptable_issue_types": ["contradiction", "invented_decision", "unsupported_claim"],
+      "oracle_required_patterns": ["proposta.*(?:esaminat|valutat).*settimana prossima"],
+      "oracle_forbidden_patterns": ["approvat"],
+      "expected_repair": "Confermiamo che i documenti sono stati ricevuti. La proposta sarà esaminata la settimana prossima."
+    },
+    {
+      "case": "D_missing_required_meaning",
+      "problem": "required next-week review omitted",
+      "context_ref": "A_safe_paraphrase",
+      "draft": "Confermiamo che i documenti sono stati ricevuti.",
+      "expected_verdict": "repair",
+      "acceptable_issue_types": ["missing_required_meaning"],
+      "oracle_required_patterns": ["proposta.*(?:esaminat|valutat).*settimana prossima"],
+      "oracle_forbidden_patterns": [],
+      "expected_repair": "Confermiamo che i documenti sono stati ricevuti. La proposta sarà esaminata la settimana prossima."
+    },
+    {
+      "case": "E_unsupported_date",
+      "problem": "invented exact date",
+      "context": {
+        "source_email": {"sender": "Ente Proponente", "subject": "Documenti", "body": "Abbiamo ricevuto i documenti.", "thread_context": []},
+        "organization_context": {"relevant_facts": [], "signature": {}},
+        "user_intent": ["Confermare la ricezione dei documenti"],
+        "reply_constraints": {"do_not_invent_facts": true, "side_effects_allowed": false}
+      },
+      "draft": "Confermiamo di aver ricevuto i documenti. La risposta arriverà il 15/09/2026.",
+      "expected_verdict": "repair",
+      "acceptable_issue_types": ["invented_date", "unsupported_claim", "unsupported_commitment"],
+      "oracle_required_patterns": ["documenti.*ricevut|ricevut.*documenti"],
+      "oracle_forbidden_patterns": ["15/09/2026", "risposta arriver"],
+      "expected_repair": "Confermiamo di aver ricevuto i documenti."
+    },
+    {
+      "case": "F_unsupported_amount_payment",
+      "problem": "invented payment and amount",
+      "context_ref": "E_unsupported_date",
+      "draft": "Confermiamo di aver ricevuto i documenti e pagheremo un contributo di 500 euro.",
+      "expected_verdict": "repair",
+      "acceptable_issue_types": ["invented_amount", "unsupported_commitment", "unsupported_claim"],
+      "oracle_required_patterns": ["documenti.*ricevut|ricevut.*documenti"],
+      "oracle_forbidden_patterns": ["500", "pagher", "pagament", "contributo"],
+      "expected_repair": "Confermiamo di aver ricevuto i documenti."
+    },
+    {
+      "case": "G_semantic_strengthening",
+      "problem": "tentative interest strengthened into certain participation",
+      "context": {
+        "source_email": {"sender": "Organizzatori", "subject": "Invito", "body": "Siete invitati al laboratorio.", "thread_context": []},
+        "organization_context": {"relevant_facts": [], "signature": {}},
+        "user_intent": ["Dire che potremmo essere interessati a partecipare"],
+        "reply_constraints": {"preserve_uncertainty": true, "side_effects_allowed": false}
+      },
+      "draft": "Siamo interessati e parteciperemo al laboratorio.",
+      "expected_verdict": "repair",
+      "acceptable_issue_types": ["overstated_evidence", "meaning_changed", "unsupported_commitment"],
+      "oracle_required_patterns": ["potremmo|potrebbe|saremmo.*interessat"],
+      "oracle_forbidden_patterns": ["parteciperemo", "siamo interessati"],
+      "expected_repair": "Potremmo essere interessati a partecipare al laboratorio."
+    },
+    {
+      "case": "H_uncertainty_destroyed",
+      "problem": "uncertain September timing stated as certain",
+      "context": {
+        "source_email": {"sender": "Coordinamento", "subject": "Calendario", "body": "L'attività probabilmente si terrà a settembre; la data è da confermare.", "thread_context": []},
+        "organization_context": {"relevant_facts": [], "signature": {}},
+        "user_intent": ["Informare sul periodo previsto senza eliminare l'incertezza"],
+        "reply_constraints": {"preserve_uncertainty": true, "side_effects_allowed": false}
+      },
+      "draft": "L'attività inizierà a settembre.",
+      "expected_verdict": "repair",
+      "acceptable_issue_types": ["overstated_evidence", "meaning_changed", "contradiction"],
+      "oracle_required_patterns": ["probabilmente|da confermare|potrebbe"],
+      "oracle_forbidden_patterns": ["inizierà a settembre", "iniziera a settembre"],
+      "expected_repair": "L'attività probabilmente si terrà a settembre; la data resta da confermare."
+    },
+    {
+      "case": "I_subject_confusion",
+      "problem": "statement attributed to wrong organization",
+      "context": {
+        "source_email": {
+          "sender": "Segreteria", "subject": "Partner", "body": "Riepilogo dei partner.",
+          "thread_context": [
+            {"sender": "Anna - Associazione Aurora", "body": "L'Associazione Aurora potrebbe sostenere il laboratorio."},
+            {"sender": "Luca - Associazione Boreale", "body": "L'Associazione Boreale non ha ancora deciso se partecipare."}
+          ]
+        },
+        "organization_context": {"relevant_facts": [], "signature": {}},
+        "user_intent": ["Riassumere prudentemente lo stato dei partner"],
+        "reply_constraints": {"preserve_actor_attribution": true, "side_effects_allowed": false}
+      },
+      "draft": "L'Associazione Boreale potrebbe sostenere il laboratorio, mentre Aurora non ha ancora deciso.",
+      "expected_verdict": "repair",
+      "acceptable_issue_types": ["contradiction", "unsupported_claim", "other_semantic_incongruity"],
+      "oracle_required_patterns": ["Aurora.*potrebbe.*sostenere", "Boreale.*non ha ancora deciso"],
+      "oracle_forbidden_patterns": ["Boreale potrebbe sostenere", "Aurora non ha ancora deciso"],
+      "expected_repair": "L'Associazione Aurora potrebbe sostenere il laboratorio, mentre Boreale non ha ancora deciso se partecipare."
+    },
+    {
+      "case": "J_plausible_unsupported_inference",
+      "problem": "plausible result-notification commitment not authorized",
+      "context": {
+        "source_email": {"sender": "Ente Proponente", "subject": "Proposta", "body": "La proposta deve ancora essere valutata.", "thread_context": []},
+        "organization_context": {"relevant_facts": [], "signature": {}},
+        "user_intent": ["Dire che la proposta sarà valutata la settimana prossima"],
+        "reply_constraints": {"do_not_invent_commitments": true, "side_effects_allowed": false}
+      },
+      "draft": "La proposta sarà valutata la settimana prossima. Vi comunicheremo l'esito.",
+      "expected_verdict": "repair",
+      "acceptable_issue_types": ["unsupported_commitment", "unsupported_claim"],
+      "oracle_required_patterns": ["proposta.*(?:valutat|esaminat).*settimana prossima"],
+      "oracle_forbidden_patterns": ["comunicheremo.*esito", "ricontatter", "vi faremo sapere"],
+      "expected_repair": "La proposta sarà valutata la settimana prossima."
+    }
+  ]
+}

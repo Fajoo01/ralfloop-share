@@ -41,6 +41,7 @@ def route_task(user_goal: str, mode: str | None = None) -> CapabilityRoute:
 
 
 def route_to_legacy_dict(route: CapabilityRoute) -> dict:
+    local_maintenance = "local_maintenance" in route.skills_used
     write_policy = {
         "check_only": "no_write",
         "read_only_system_inspection": "no_write",
@@ -76,6 +77,8 @@ def route_to_legacy_dict(route: CapabilityRoute) -> dict:
         blocked_actions.append("send_without_human_confirmation")
     if route.jury_policy.mode == "required":
         blocked_actions.append("final_answer_without_jury_review")
+    if local_maintenance:
+        blocked_actions.extend(["generic_arbitrary_shell", "unapproved_local_mutation"])
     return {
         **route.model_dump(),
         "task_mode": route.mode,
@@ -94,6 +97,12 @@ def route_to_legacy_dict(route: CapabilityRoute) -> dict:
         "required_output_fields": ["command", "path", "exit_code", "stdout", "stderr"],
         "workflow": workflow,
         "blocked_actions": blocked_actions,
+        "capability": "local_software_maintenance" if local_maintenance else "capability_router",
+        "canonical_actions_only": local_maintenance,
+        "local_maintenance_policy": (
+            "preview_check_hash_persistent_approval_one_shot_audit"
+            if local_maintenance else None
+        ),
     }
 
 

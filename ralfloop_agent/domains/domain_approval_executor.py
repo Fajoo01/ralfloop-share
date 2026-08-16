@@ -119,6 +119,24 @@ def execute_approved(request_id: str, *, dry_run: bool = False, store: DomainApp
         return result
     if effective != "approved":
         return {"status": "approval_required", "request_id": request_id, "current_status": effective, "stored_status": row["status"], "effective_status": effective, "execution_allowed": False}
+
+    # repair_apply ha scope e stale-check propri e usa claim_execution
+    # one-shot; non deve passare dagli stale-check dei domini bandi.
+    if row.get("action") == "repair_apply":
+        from ralfloop_agent.repair.approval import RepairApprovalService
+
+        service = RepairApprovalService.from_environment()
+        if dry_run:
+            run_id = str((row.get("scope") or {}).get("run_id") or "")
+            return {
+                **service.preview(run_id),
+                "status": "dry_run",
+                "request_id": request_id,
+                "would_execute": True,
+                "consumed": False,
+            }
+        return service.apply(request_id)
+
     stale = _stale_reasons(row)
     if stale:
         return store.mark_stale(request_id, stale)

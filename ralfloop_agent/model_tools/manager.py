@@ -187,7 +187,17 @@ def _subprocess_runner(spec: ModelToolSpec, snapshot: Path, payload: dict[str, A
         "snapshot": str(snapshot),
         "input": payload,
     }
-    with tempfile.TemporaryDirectory(prefix="ralf-model-tool-") as cwd:
+    tmp_root = Path(
+        os.environ.get(
+            "RALFLOOP_MODEL_TOOL_TMPDIR",
+            str(Path.home() / ".local" / "state" / "ralf" / "repair" / "tmp"),
+        )
+    )
+    tmp_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with tempfile.TemporaryDirectory(
+        prefix="ralf-model-tool-",
+        dir=tmp_root,
+    ) as cwd:
         process = subprocess.Popen(
             _worker_command(spec),
             stdin=subprocess.PIPE,
@@ -199,9 +209,53 @@ def _subprocess_runner(spec: ModelToolSpec, snapshot: Path, payload: dict[str, A
             shell=False,
             start_new_session=True,
         )
+
+        stop_memory_watch = threading.Event()
+        memory_limit_hit = threading.Event()
+
+        def memory_watch() -> None:
+            if not spec.max_ram_mb:
+                return
+            limit_kb = int(spec.max_ram_mb) * 1024
+            status_path = Path(f"/proc/{process.pid}/status")
+
+            while not stop_memory_watch.wait(0.05):
+                try:
+                    lines = status_path.read_text(
+                        encoding="ascii",
+                        errors="ignore",
+                    ).splitlines()
+                except (FileNotFoundError, ProcessLookupError, OSError):
+                    return
+
+                rss_kb = 0
+                for line in lines:
+                    if line.startswith("VmRSS:"):
+                        try:
+                            rss_kb = int(line.split()[1])
+                        except (IndexError, ValueError):
+                            rss_kb = 0
+                        break
+
+                if rss_kb > limit_kb:
+                    memory_limit_hit.set()
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    return
+
+        watcher = threading.Thread(
+            target=memory_watch,
+            name=f"ralf-model-memory-{spec.tool_id}",
+            daemon=True,
+        )
+        watcher.start()
+
         try:
             stdout, stderr = process.communicate(
-                json.dumps(request, ensure_ascii=False), timeout=spec.timeout_sec
+                json.dumps(request, ensure_ascii=False),
+                timeout=spec.timeout_sec,
             )
         except subprocess.TimeoutExpired:
             _terminate_worker_group(process)
@@ -209,6 +263,12 @@ def _subprocess_runner(spec: ModelToolSpec, snapshot: Path, payload: dict[str, A
         except BaseException:
             _terminate_worker_group(process)
             raise
+        finally:
+            stop_memory_watch.set()
+            watcher.join(timeout=1.0)
+
+        if memory_limit_hit.is_set():
+            raise RuntimeError("model_tool_memory_limit_exceeded")
     if process.returncode != 0:
         stderr_lines = stderr.strip().splitlines()
         detail = stderr_lines[-1] if stderr_lines else "no_stderr"

@@ -7,6 +7,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 
 from src.routing_config import load_routing_config, trigger_matches
 
@@ -15,6 +16,48 @@ logger = logging.getLogger(__name__)
 
 SkillHandler = Callable[[str], str]
 DEFAULT_SKILLS_DIR = Path("/home/sibilla-cumana/ralfloop_data/skills")
+
+
+_BANDI_SEMANTIC_RE = re.compile(
+    r"(?<!\w)(?:band[oi]|grant|candidatur\w*|contribut\w*|finanziament\w*|"
+    r"agevolazion\w*)(?!\w)",
+    re.IGNORECASE,
+)
+_LOCAL_MAINTENANCE_VERB_RE = re.compile(
+    r"(?<!\w)(?:manuten\w*|corregg\w*|fix\w*|patch\w*|ripar\w*|debug\w*|"
+    r"aggiorn\w*|modific\w*|deploy\w*|riavvi\w*|restart\w*|reload\w*|"
+    r"arrest\w*|audit\w*|verific\w*|controll\w*|test\w*)(?!\w)",
+    re.IGNORECASE,
+)
+_LOCAL_SOFTWARE_OBJECT_RE = re.compile(
+    r"(?<!\w)(?:codice|software|repository|repo|systemd|unit|servizio|service|"
+    r"daemon|launcher|deploy|router|pipeline|mcp|email_ops|pytest|py_compile|"
+    r"regression\w*|configurazion\w*|config|bot-?tazzi|bottazzi|browser[ _-]bridge)"
+    r"(?!\w)",
+    re.IGNORECASE,
+)
+_LOCAL_PATH_RE = re.compile(r"(?:^|\s)(?:/home/|/etc/systemd/|\./|\.\./)\S+", re.IGNORECASE)
+
+
+def is_bandi_semantic_intent(user_goal: str) -> bool:
+    """Require a real grant/application concept, never a username or pathname."""
+
+    semantic_text = _LOCAL_PATH_RE.sub(" ", user_goal)
+    semantic_text = re.sub(
+        r"(?i)(?<!\w)(?:username|user|utente|pathname|path|directory)\s*(?::|=)?\s*bandi(?!\w)",
+        " ",
+        semantic_text,
+    )
+    return bool(_BANDI_SEMANTIC_RE.search(semantic_text))
+
+
+def is_local_maintenance_intent(user_goal: str) -> bool:
+    """Recognize software maintenance without treating connector names as actions."""
+
+    return bool(
+        _LOCAL_MAINTENANCE_VERB_RE.search(user_goal)
+        and (_LOCAL_SOFTWARE_OBJECT_RE.search(user_goal) or _LOCAL_PATH_RE.search(user_goal))
+    )
 
 
 @dataclass
@@ -58,8 +101,14 @@ class SkillsRegistry:
 
     def match(self, user_goal: str) -> list[str]:
         goal = user_goal.lower()
+        bandi_intent = is_bandi_semantic_intent(goal)
+        local_maintenance = is_local_maintenance_intent(goal)
         scored: list[tuple[int, int, str]] = []
         for index, (skill_name, words) in enumerate(self.keywords.items()):
+            if skill_name in {"bandi", "bandi_browser_fill"} and not bandi_intent:
+                continue
+            if skill_name == "local_maintenance" and not local_maintenance:
+                continue
             strong_hits = []
             low_hits = []
             for raw_word in words:

@@ -66,6 +66,20 @@ except Exception as exc:
     audit("domain_approval_routes_load_failed", error=repr(exc))
 
 try:
+    from ralfloop_agent.integration.local_maintenance import register_local_maintenance_routes
+
+    register_local_maintenance_routes(app)
+except Exception as exc:
+    audit("local_maintenance_routes_load_failed", error=repr(exc))
+
+try:
+    from ralfloop_agent.repair.approval import register_repair_approval_routes
+
+    register_repair_approval_routes(app)
+except Exception as exc:
+    audit("repair_approval_routes_load_failed", error=repr(exc))
+
+try:
     from ralfloop_agent.glm_review.telegram_api import register_glm_review_routes
 
     register_glm_review_routes(app)
@@ -1120,6 +1134,7 @@ def _run_task_impl(req: TaskRunRequest):
     import re as _re
     from ralfloop_agent.integration.capability_adapter import route_task, route_to_legacy_dict
     from ralfloop_agent.models.result_envelope import ResultEnvelope
+    from src.skills import is_bandi_semantic_intent, is_local_maintenance_intent
 
     low_goal = (req.user_goal or "").lower()
     low_skill = (req.skill_context or "").lower()
@@ -1127,6 +1142,18 @@ def _run_task_impl(req: TaskRunRequest):
     capability_route = route_to_legacy_dict(route_model)
 
     if req.mode == "route_only" or (req.extra_context or {}).get("route_only") is True:
+        if (
+            os.getenv("RALFLOOP_UNIFIED_ASSISTANT", "0") == "1"
+            and str((req.extra_context or {}).get("source") or "").startswith("telegram_")
+        ):
+            try:
+                from ralfloop_agent.unified_assistant.runtime import unified_route_probe
+
+                unified_route = unified_route_probe(req.user_goal, req.extra_context or {})
+                if unified_route is not None:
+                    capability_route.update(unified_route)
+            except Exception as exc:
+                audit("unified_route_probe_failed_closed", error=type(exc).__name__)
         envelope = ResultEnvelope(
             route=route_model,
             answer="route_only",
@@ -1145,6 +1172,40 @@ def _run_task_impl(req: TaskRunRequest):
             "audit_summary": ["capability_router::route_only"],
         }
 
+    # Meowgram remains the only Telegram entry point. Explicit legacy commands
+    # are consumed by Meowgram first; this feature-flagged branch handles only
+    # natural Telegram requests. Route-only probes above expose tool-backed mode
+    # without executing providers, preserving Meowgram's two-step contract.
+    unified_candidate = (
+        os.getenv("RALFLOOP_UNIFIED_ASSISTANT", "0") == "1"
+        and str((req.extra_context or {}).get("source") or "").startswith("telegram_")
+    )
+    if unified_candidate:
+        try:
+            from ralfloop_agent.unified_assistant.runtime import (
+                is_unified_telegram_request,
+                run_unified_telegram,
+            )
+
+            if is_unified_telegram_request(req.user_goal, req.extra_context or {}):
+                return run_unified_telegram(req.user_goal, req.extra_context or {})
+        except Exception as exc:
+            audit("unified_assistant_failed_closed", error=type(exc).__name__)
+            return {
+            "ok": False,
+            "mode": req.mode,
+            "current_role": "unified_assistant",
+            "role_history": ["capability_router", "unified_assistant"],
+            "stop_reason": "unified_assistant_unavailable",
+            "interaction_mode": "unified_assistant",
+            "capability": "unified_assistant",
+            "approval_required": False,
+            "capability_route": capability_route,
+            "final_answer": "Unified assistant non disponibile; nessuna azione eseguita.",
+            "artifacts": [],
+            "audit_summary": ["unified_assistant::failed_closed"],
+            }
+
     if route_model.mode == "read_only_system_inspection":
         return _run_read_only_system_inspection(
             req, route_model, capability_route
@@ -1154,6 +1215,8 @@ def _run_task_impl(req: TaskRunRequest):
         route_model.mode == "external_action"
         and "browser" in route_model.mcp_used
         and "bandi" in route_model.skills_used
+        and is_bandi_semantic_intent(req.user_goal)
+        and not is_local_maintenance_intent(req.user_goal)
     ):
         from ralfloop_agent.domains.bandi_runtime_context import load_bandi_runtime_context
         from ralfloop_agent.integration.execution_provenance import empty_execution_provenance
@@ -1201,6 +1264,59 @@ def _run_task_impl(req: TaskRunRequest):
             "final_answer": envelope.answer,
             "artifacts": [],
             "audit_summary": ["bandi_browser_fill::mcp_execution_required"],
+        }
+
+    if is_local_maintenance_intent(req.user_goal) and route_model.mode == "external_action":
+        from ralfloop_agent.domains.domain_approval import DomainApprovalPolicy
+        from ralfloop_agent.domains.domain_approval_store import DomainApprovalStore
+        from ralfloop_agent.integration.local_maintenance import (
+            LocalMaintenanceApprovalService,
+            canonical_action_for_goal,
+        )
+
+        action_id = canonical_action_for_goal(req.user_goal)
+        if action_id is None:
+            return {
+                "ok": False,
+                "mode": req.mode,
+                "current_role": "local_software_maintenance",
+                "role_history": ["capability_router", "local_software_maintenance"],
+                "stop_reason": "unsupported_canonical_local_action",
+                "interaction_mode": "agent",
+                "capability": "local_software_maintenance",
+                "approval_required": True,
+                "capability_route": capability_route,
+                "final_answer": "Azione locale non presente nel registro canonico; nessun comando eseguito.",
+                "artifacts": [],
+                "audit_summary": ["local_maintenance::unsupported_canonical_action"],
+            }
+        policy = DomainApprovalPolicy.from_env()
+        service = LocalMaintenanceApprovalService(
+            DomainApprovalStore(policy=policy), policy=policy
+        )
+        preview = service.preview(action_id)
+        approval = service.request(action_id, requested_by="ralf_task_router")
+        answer = {
+            "action_id": action_id,
+            "preview": preview,
+            "approval": approval,
+            "apply_endpoint": "/local-maintenance/requests/{request_id}/apply",
+            "executed": False,
+        }
+        return {
+            "ok": False,
+            "mode": req.mode,
+            "current_role": "local_software_maintenance",
+            "role_history": ["capability_router", "local_software_maintenance"],
+            "stop_reason": "local_maintenance_approval_required",
+            "interaction_mode": "agent",
+            "capability": "local_software_maintenance",
+            "approval_required": True,
+            "capability_route": capability_route,
+            "local_maintenance": answer,
+            "final_answer": _json.dumps(answer, ensure_ascii=False, sort_keys=True),
+            "artifacts": [],
+            "audit_summary": ["local_maintenance::previewed_and_bound"],
         }
 
     if route_model.requires_confirmation and not (req.extra_context or {}).get("human_confirmed"):
@@ -1566,7 +1682,7 @@ def _run_task_impl(req: TaskRunRequest):
         timeout_sec=60,
     )
 
-    logger = AuditLogger(store_path="./logs")
+    logger = AuditLogger(store_path=str(BASE_DIR / "agent-audit"))
 
     agent = RalfloopAgent(
         adapter=adapter,
@@ -1670,8 +1786,34 @@ def _run_task_impl(req: TaskRunRequest):
 @app.post("/tasks/run")
 def run_task(req: TaskRunRequest):
     from src.router import route_task as classify_task
+    from src.skills import is_bandi_semantic_intent, is_local_maintenance_intent
 
-    if classify_task(req.user_goal).mode == "read_only_system_inspection":
+    unified_source = (
+        os.getenv("RALFLOOP_UNIFIED_ASSISTANT", "0") == "1"
+        and str((req.extra_context or {}).get("source") or "").startswith("telegram_")
+    )
+    if unified_source:
+        try:
+            from ralfloop_agent.unified_assistant.runtime import is_unified_telegram_request
+
+            if is_unified_telegram_request(req.user_goal, req.extra_context or {}):
+                return _run_task_impl(req)
+        except Exception:
+            return _run_task_impl(req)
+    classified = classify_task(req.user_goal)
+    if req.mode == "route_only":
+        return _run_task_impl(req)
+    if classified.mode == "read_only_system_inspection":
+        return _run_task_impl(req)
+    if (
+        classified.mode == "external_action"
+        and "browser" in classified.mcp_used
+        and "bandi" in classified.skills_used
+        and is_bandi_semantic_intent(req.user_goal)
+        and not is_local_maintenance_intent(req.user_goal)
+    ):
+        return _run_task_impl(req)
+    if classified.mode == "external_action" and is_local_maintenance_intent(req.user_goal):
         return _run_task_impl(req)
 
     from ralfloop_agent.providers.agent_gpu_handoff import AgentGpuCoordinator, AgentGpuHandoffError

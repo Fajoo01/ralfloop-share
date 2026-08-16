@@ -4,7 +4,12 @@
     {
       "name": "bandi",
       "description": "applico vincoli progetto/bandi locali",
-      "triggers": ["bandi", "bando", "regione", "progetto", "intesa", "sanpaolo", "san paolo"]
+      "triggers": ["bandi", "bando", "grant", "candidatura", "candidature", "contributo", "contributi", "finanziamento", "finanziamenti", "regione", "progetto", "intesa", "sanpaolo", "san paolo"]
+    },
+    {
+      "name": "local_maintenance",
+      "description": "manutenzione locale software con azioni canoniche e approval persistente",
+      "triggers": ["codice", "software", "repository", "repo", "systemd", "service", "servizio", "launcher", "deploy", "router", "pipeline", "mcp", "email_ops", "pytest", "py_compile", "bot-tazzi", "bottazzi", "browser bridge"]
     },
     {
       "name": "abc_memory",

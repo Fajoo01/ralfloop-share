@@ -1064,23 +1064,95 @@ def run_repair_command(
     from ralfloop_agent.repair.workflow import RepairManager, RepairStore
 
     action = args.repair_action
+
     try:
+        if action == "request-approval":
+            from ralfloop_agent.repair.approval import RepairApprovalService
+
+            result = RepairApprovalService.from_environment().request(
+                args.run_id,
+                requested_by="ralf_repair_cli",
+            )
+            print(
+                json.dumps(
+                    result,
+                    ensure_ascii=False,
+                    indent=2,
+                    default=str,
+                ),
+                file=out,
+            )
+            request_id = (
+                result.get("request_id")
+                or (
+                    (result.get("request") or {}).get("request_id")
+                    if isinstance(result.get("request"), dict)
+                    else None
+                )
+            )
+            return 0 if request_id else 1
+
+        if action == "apply":
+            from ralfloop_agent.repair.approval import RepairApprovalService
+
+            result = RepairApprovalService.from_environment().apply(
+                args.request_id
+            )
+            print(
+                json.dumps(
+                    result,
+                    ensure_ascii=False,
+                    indent=2,
+                    default=str,
+                ),
+                file=out,
+            )
+            return 0 if result.get("status") in {
+                "executed",
+                "already_executed",
+            } else 1
+
         if action == "status":
-            record = manager.status(args.run_id) if manager is not None else RepairStore(
-                Path.home() / ".local" / "state" / "ralf" / "repair" / "records"
-            ).load(args.run_id)
+            record = (
+                manager.status(args.run_id)
+                if manager is not None
+                else RepairStore(
+                    Path.home()
+                    / ".local"
+                    / "state"
+                    / "ralf"
+                    / "repair"
+                    / "records"
+                ).load(args.run_id)
+            )
         else:
-            selected = manager or RepairManager(getattr(args, "repo", None) or os.getcwd())
-            description = sanitize_terminal_text(" ".join(args.description).strip())
+            selected = manager or RepairManager(
+                getattr(args, "repo", None) or os.getcwd()
+            )
+            description = sanitize_terminal_text(
+                " ".join(args.description).strip()
+            )
             if not description:
                 print("missing_repair_description", file=err)
                 return 2
-            record = selected.plan(description) if action == "plan" else selected.run(description)
+
+            record = (
+                selected.plan(description)
+                if action == "plan"
+                else selected.run(description)
+            )
+
     except (KeyError, OSError, ValueError) as exc:
         print(sanitize_terminal_text(str(exc)), file=err)
         return 2
+
     print(record.model_dump_json(indent=2), file=out)
-    return 0 if record.status in {"planned", "approval_pending"} else 1
+    return 0 if record.status in {
+        "planned",
+        "approval_pending",
+        "approval_requested",
+        "applied",
+    } else 1
 
 
 def run_chat(
@@ -1326,7 +1398,7 @@ def run_engine_action(
     selected = manager or LlamaCppServerManager()
     try:
         if action == "start":
-            result = selected.start(dry_run=dry_run)
+            result = selected.start(dry_run=dry_run, detach=not dry_run)
         elif action == "stop":
             result = selected.stop()
         elif action == "health":
@@ -1625,6 +1697,22 @@ def build_parser() -> argparse.ArgumentParser:
     agent.add_argument("--yes", action="store_true", help="confirm full workflow in non-interactive mode")
     agent.add_argument("message", nargs="*", help="optional one-shot agent objective")
 
+    email = sub.add_parser("email", help="deterministic email operations")
+    email_sub = email.add_subparsers(dest="email_action", required=True)
+    reconcile = email_sub.add_parser(
+        "reconcile", help="read-only provider reconciliation; never sends email"
+    )
+    reconcile.add_argument("--approval", required=True)
+    reconcile.add_argument("--otp-request", required=True)
+    reconcile.add_argument("--thread", required=True)
+    renew = email_sub.add_parser(
+        "renew-approval", help="fresh approval after deterministic NOT_SENT proof"
+    )
+    renew.add_argument("--from-approval", required=True)
+    renew.add_argument("--otp-request", required=True)
+    renew.add_argument("--thread", required=True)
+    renew.add_argument("--session", required=True)
+
     doctor = sub.add_parser("doctor", help="run read-only Ralf diagnostics")
     doctor.add_argument("--json", action="store_true", help="print structured JSON")
     doctor.add_argument("--cwd", help="directory metadata to inspect")
@@ -1637,6 +1725,16 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("description", nargs="+", help="bounded repair description")
     repair_status = repair_sub.add_parser("status")
     repair_status.add_argument("run_id")
+    repair_request = repair_sub.add_parser(
+        "request-approval",
+        help="bind a verified repair to persistent Ralf approval",
+    )
+    repair_request.add_argument("run_id")
+    repair_apply = repair_sub.add_parser(
+        "apply",
+        help="apply one approved hash-bound repair exactly once",
+    )
+    repair_apply.add_argument("request_id")
 
     engine = sub.add_parser("engine", help="manage the user-space inference engine")
     engine_sub = engine.add_subparsers(dest="engine_action", required=True)
@@ -1691,6 +1789,27 @@ def main(argv: list[str] | None = None) -> int:
             return run_ask(args)
         if args.command == "agent":
             return run_agent(args)
+        if args.command == "email" and args.email_action == "reconcile":
+            from ralfloop_agent.unified_assistant.email_reconcile import EmailReconciler
+
+            result = EmailReconciler.from_environment().reconcile(
+                approval_id=args.approval,
+                otp_request_id=args.otp_request,
+                thread_id=args.thread,
+            )
+            print(result.lines())
+            return 0
+        if args.command == "email" and args.email_action == "renew-approval":
+            from ralfloop_agent.unified_assistant.email_renewal import EmailApprovalRenewal
+
+            result = EmailApprovalRenewal.from_environment().renew(
+                previous_approval_id=args.from_approval,
+                previous_otp_request_id=args.otp_request,
+                thread_id=args.thread,
+                session_id=args.session,
+            )
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+            return 0 if result.get("status") == "pending" else 2
         if args.command == "doctor":
             return run_doctor_command(args)
         if args.command == "repair":

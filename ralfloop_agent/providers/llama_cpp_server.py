@@ -21,6 +21,10 @@ from urllib.parse import urlparse
 import requests
 
 from ralfloop_agent.providers.gpu_arbiter import GpuArbiterBusy, InferenceGpuArbiter
+from ralfloop_agent.providers.llama_cpp_lifecycle import (
+    LlamaCppLifecycleClient,
+    LlamaCppLifecycleError,
+)
 
 
 DEFAULT_MODEL_PATH = Path(
@@ -223,6 +227,19 @@ def _env_float(name: str, default: float) -> float:
     return value if value > 0 else default
 
 
+def _env_uid(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"invalid_{name.lower()}") from exc
+    if value < 0:
+        raise ValueError(f"invalid_{name.lower()}")
+    return value
+
+
 @dataclass(frozen=True)
 class LlamaCppServerConfig:
     base_url: str = "http://127.0.0.1:19091"
@@ -236,6 +253,13 @@ class LlamaCppServerConfig:
     context: int = 4096
     gpu_layers: int = 24
     threads: int = 6
+    batch_size: int = 64
+    ubatch_size: int = 64
+    kv_offload: bool = False
+    op_offload: bool = False
+    unified_memory: bool = True
+    allow_healthy_reuse: bool = False
+    required_gpu_memory_mib: int = 3600
     slots: int = 1
     cache_prompt: bool = True
     cache_ram_mib: int = 1024
@@ -243,6 +267,9 @@ class LlamaCppServerConfig:
     autostart: bool = True
     fallback: str = "none"
     state_dir: Path = Path.home() / ".local" / "state" / "ralf"
+    expected_launcher_uid: int = field(default_factory=os.getuid)
+    pid_file: Path | None = None
+    lifecycle_socket: Path | None = None
     ollama_base_url: str = "http://127.0.0.1:11434"
 
     def __post_init__(self) -> None:
@@ -260,12 +287,21 @@ class LlamaCppServerConfig:
             raise ValueError("llama_cpp_endpoint_must_be_loopback_http")
         if self.slots != 1:
             raise ValueError("llama_cpp_slots_must_equal_one")
+        if self.batch_size <= 0 or self.ubatch_size <= 0 or self.ubatch_size > self.batch_size:
+            raise ValueError("invalid_llama_cpp_batch_size")
+        if self.required_gpu_memory_mib <= 0:
+            raise ValueError("invalid_llama_cpp_required_gpu_memory")
         if len(self.model_hash) != 64 or any(char not in "0123456789abcdef" for char in self.model_hash.lower()):
             raise ValueError("invalid_llama_cpp_model_hash")
         if self.fallback not in {"ollama", "none"}:
             raise ValueError("invalid_llama_cpp_fallback")
         if self.ngram:
             raise ValueError("llama_cpp_ngram_disabled")
+        if self.expected_launcher_uid < 0:
+            raise ValueError("invalid_llama_cpp_expected_launcher_uid")
+        for path in (self.pid_file, self.lifecycle_socket):
+            if path is not None and not path.is_absolute():
+                raise ValueError("llama_cpp_lifecycle_paths_must_be_absolute")
 
     @property
     def port(self) -> int:
@@ -275,7 +311,7 @@ class LlamaCppServerConfig:
 
     @property
     def pid_path(self) -> Path:
-        return self.state_dir / "llama_cpp.pid.json"
+        return self.pid_file or (self.state_dir / "llama_cpp.pid.json")
 
     @property
     def engine_lock_path(self) -> Path:
@@ -306,6 +342,13 @@ class LlamaCppServerConfig:
             context=_env_int("RALF_LLAMA_CPP_CONTEXT", 4096),
             gpu_layers=_env_int("RALF_LLAMA_CPP_GPU_LAYERS", 24),
             threads=_env_int("RALF_LLAMA_CPP_THREADS", 6),
+            batch_size=_env_int("RALF_LLAMA_CPP_BATCH_SIZE", 64),
+            ubatch_size=_env_int("RALF_LLAMA_CPP_UBATCH_SIZE", 64),
+            kv_offload=_env_bool("RALF_LLAMA_CPP_KV_OFFLOAD", False),
+            op_offload=_env_bool("RALF_LLAMA_CPP_OP_OFFLOAD", False),
+            unified_memory=_env_bool("RALF_LLAMA_CPP_UNIFIED_MEMORY", True),
+            allow_healthy_reuse=_env_bool("RALF_LLAMA_CPP_ALLOW_HEALTHY_REUSE", False),
+            required_gpu_memory_mib=_env_int("RALF_LLAMA_CPP_REQUIRED_GPU_MEMORY_MIB", 3600),
             slots=_env_int("RALF_LLAMA_CPP_SLOTS", 1),
             cache_prompt=_env_bool("RALF_LLAMA_CPP_CACHE_PROMPT", True),
             cache_ram_mib=_env_int("RALF_LLAMA_CPP_CACHE_RAM_MIB", 1024),
@@ -315,6 +358,17 @@ class LlamaCppServerConfig:
             state_dir=Path(
                 os.getenv("RALF_LLAMA_CPP_STATE_DIR", str(Path.home() / ".local" / "state" / "ralf"))
             ).expanduser(),
+            expected_launcher_uid=_env_uid("RALF_LLAMA_CPP_EXPECTED_LAUNCHER_UID", os.getuid()),
+            pid_file=(
+                Path(os.environ["RALF_LLAMA_CPP_PID_FILE"]).expanduser()
+                if os.getenv("RALF_LLAMA_CPP_PID_FILE", "").strip()
+                else None
+            ),
+            lifecycle_socket=(
+                Path(os.environ["RALF_LLAMA_CPP_LIFECYCLE_SOCKET"]).expanduser()
+                if os.getenv("RALF_LLAMA_CPP_LIFECYCLE_SOCKET", "").strip()
+                else None
+            ),
             ollama_base_url=os.getenv("RALF_OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/"),
         )
 
@@ -407,6 +461,8 @@ def classify_gpu_resource_state(
     gpu_free_mib: int | None,
     gpu_processes: list[dict[str, Any]],
     llama_cpp_running: bool,
+    target_llama_cpp_pids: set[int] | None = None,
+    required_gpu_memory_mib: int = 0,
 ) -> dict[str, Any]:
     ambiguous = gpu_free_mib is None or gpu_free_mib < 0
     loaded_models: list[str] = []
@@ -430,6 +486,7 @@ def classify_gpu_resource_state(
         ambiguous = True
 
     ollama_runner_pids: list[int] = []
+    target_pids = target_llama_cpp_pids or set()
     llama_cpp_pids: list[int] = []
     foreign_gpu_pids: list[int] = []
     for item in gpu_processes:
@@ -443,7 +500,7 @@ def classify_gpu_resource_state(
         if used_mib < 0:
             ambiguous = True
             continue
-        if "llama-server" in process_name or "llama_cpp" in process_name:
+        if pid in target_pids:
             llama_cpp_pids.append(pid)
         elif "ollama" in process_name:
             ollama_runner_pids.append(pid)
@@ -451,15 +508,18 @@ def classify_gpu_resource_state(
             foreign_gpu_pids.append(pid)
 
     llama_running = bool(llama_cpp_running or llama_cpp_pids)
-    gpu_available = bool(gpu_free_mib is not None and gpu_free_mib > 0)
+    enough_gpu_memory = bool(
+        gpu_free_mib is not None and gpu_free_mib >= required_gpu_memory_mib
+    )
+    gpu_available = enough_gpu_memory
     if ambiguous:
         reason = "gpu_resource_state_ambiguous"
     elif llama_running:
         reason = "llama_cpp_already_running"
     elif ollama_vram_bytes > 0:
         reason = "ollama_model_already_loaded"
-    elif not gpu_available:
-        reason = "gpu_unavailable"
+    elif not enough_gpu_memory:
+        reason = "insufficient_gpu_memory"
     else:
         reason = "gpu_available"
     return {
@@ -476,6 +536,7 @@ def classify_gpu_resource_state(
         "llama_cpp_pids": sorted(llama_cpp_pids),
         "gpu_available": gpu_available,
         "gpu_free_mib": gpu_free_mib,
+        "required_gpu_memory_mib": required_gpu_memory_mib,
         "ambiguous": ambiguous,
         "gate_reason": reason,
     }
@@ -495,6 +556,7 @@ class LlamaCppServerManager:
         monotonic: Callable[[], float] = time.monotonic,
         arbiter: InferenceGpuArbiter | None = None,
         gpu_observer: Callable[[], dict[str, Any]] = _observe_nvidia_gpu,
+        lifecycle_client: LlamaCppLifecycleClient | None = None,
     ) -> None:
         self.config = config or LlamaCppServerConfig.from_env()
         self.session = session or requests.Session()
@@ -506,6 +568,13 @@ class LlamaCppServerManager:
         self.monotonic = monotonic
         self.arbiter = arbiter or InferenceGpuArbiter(self.config.gpu_lock_path)
         self.gpu_observer = gpu_observer
+        self.lifecycle_client = lifecycle_client
+        if self.lifecycle_client is None and self.config.lifecycle_socket is not None:
+            self.lifecycle_client = LlamaCppLifecycleClient(
+                self.config.lifecycle_socket,
+                timeout=self.config.startup_timeout_sec + 20.0,
+                expected_server_uid=self.config.expected_launcher_uid,
+            )
         self.lifecycle_key = str(self.config.pid_path.resolve())
 
     def _signal_local(self, process: Any, pid: int, *, kill: bool) -> None:
@@ -645,6 +714,10 @@ class LlamaCppServerManager:
             str(cfg.threads),
             "--threads-batch",
             str(cfg.threads),
+            "--batch-size",
+            str(cfg.batch_size),
+            "--ubatch-size",
+            str(cfg.ubatch_size),
             "--parallel",
             str(cfg.slots),
             "--cache-ram",
@@ -655,7 +728,13 @@ class LlamaCppServerManager:
             str(int(cfg.request_timeout_sec)),
             "--offline",
             "--log-disable",
+            "--fit",
+            "off",
         ]
+        if not cfg.kv_offload:
+            command.append("--no-kv-offload")
+        if not cfg.op_offload:
+            command.append("--no-op-offload")
         if cfg.cache_prompt:
             command.append("--cache-prompt")
         return command
@@ -683,14 +762,20 @@ class LlamaCppServerManager:
             if models_response is not None:
                 models_response.close()
 
-    def ensure_available(self) -> dict[str, Any]:
+    def ensure_available(self, *, preacquired_gpu_fd: int | None = None) -> dict[str, Any]:
         if self.health():
-            if not self._managed_running():
+            managed = self._managed_running()
+            if not managed and not self.config.allow_healthy_reuse:
                 raise LlamaCppServerOwnershipError("llama_cpp_unmanaged_process_on_port")
-            return {"server_started": False, "server_reused": True, "server_startup_ms": None}
+            return {
+                "server_started": False,
+                "server_reused": True,
+                "server_startup_ms": None,
+                "managed": managed,
+            }
         if not self.config.autostart:
             raise LlamaCppServerUnavailable("llama_cpp_server_unavailable_autostart_disabled")
-        return self.start()
+        return self.start(preacquired_gpu_fd=preacquired_gpu_fd)
 
     def _ollama_ps_models(self) -> list[dict[str, Any]]:
         response = None
@@ -727,15 +812,61 @@ class LlamaCppServerManager:
         free_mib = observed.get("free_mib")
         if isinstance(free_mib, bool) or not isinstance(free_mib, int):
             free_mib = None
+        target_pids = self._target_gpu_pids(processes)
+        managed_running = self._managed_running()
         return classify_gpu_resource_state(
             ollama_server_running=True,
             ollama_models=models,
             gpu_free_mib=free_mib,
             gpu_processes=processes,
-            llama_cpp_running=llama_cpp_running,
+            llama_cpp_running=llama_cpp_running or managed_running,
+            target_llama_cpp_pids=target_pids,
+            required_gpu_memory_mib=self._required_gpu_memory_mib(),
         )
 
-    def start(self, *, dry_run: bool = False) -> dict[str, Any]:
+    def _required_gpu_memory_mib(self) -> int:
+        """Return the configured gate for the fixed, measured launch profile."""
+        return self.config.required_gpu_memory_mib
+
+    def _target_gpu_pids(self, processes: list[dict[str, Any]]) -> set[int]:
+        target_pids: set[int] = set()
+        for item in processes:
+            try:
+                pid = int(item["pid"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            identity = self._read_identity(pid)
+            if identity is not None and self._identity_matches_target(identity):
+                target_pids.add(pid)
+        return target_pids
+
+    def _identity_matches_target(self, identity: ProcessIdentity) -> bool:
+        if identity.uid != self.config.expected_launcher_uid:
+            return False
+        argv = list(identity.argv)
+        model_arg = self._single_argv_value(argv, "--model")
+        return (
+            self._single_argv_value(argv, "--port") == str(self.config.port)
+            and self._single_argv_value(argv, "--host") == "127.0.0.1"
+            and self._single_argv_value(argv, "--alias") == self.config.model
+            and model_arg is not None
+            and Path(model_arg).resolve() == self.config.model_path.resolve()
+        )
+
+    @staticmethod
+    def _single_argv_value(argv: list[str], flag: str) -> str | None:
+        positions = [index for index, value in enumerate(argv) if value == flag]
+        if len(positions) != 1 or positions[0] + 1 >= len(argv):
+            return None
+        return argv[positions[0] + 1]
+
+    def start(
+        self,
+        *,
+        dry_run: bool = False,
+        preacquired_gpu_fd: int | None = None,
+        detach: bool = False,
+    ) -> dict[str, Any]:
         command = self.command()
         if dry_run:
             return {
@@ -744,6 +875,31 @@ class LlamaCppServerManager:
                 "endpoint": self.config.base_url,
                 "dry_run": True,
                 "command": command,
+            }
+        if self.lifecycle_client is not None:
+            try:
+                broker = self.lifecycle_client.start()
+            except LlamaCppLifecycleError as exc:
+                raise LlamaCppServerUnavailable(str(exc)) from exc
+            record = self._read_pid_record()
+            identity = self._validated_identity(record) if record is not None else None
+            if (
+                identity is None
+                or not broker.get("active")
+                or not broker.get("managed")
+                or not broker.get("healthy")
+                or not self.health()
+            ):
+                raise LlamaCppServerUnavailable("llama_cpp_lifecycle_start_not_verified")
+            return {
+                "provider": "llama_cpp",
+                "status": "started" if broker.get("changed") else "already_healthy",
+                "managed": True,
+                "pid": identity.pid,
+                "server_started": bool(broker.get("changed")),
+                "server_reused": not bool(broker.get("changed")),
+                "server_startup_ms": broker.get("server_startup_ms"),
+                "brokered": True,
             }
         if self.health():
             if not self._managed_running():
@@ -772,7 +928,7 @@ class LlamaCppServerManager:
             if self._port_in_use():
                 raise LlamaCppServerOwnershipError("llama_cpp_unmanaged_process_on_port")
             lock = self.arbiter.status(clean_stale=True)
-            if lock.held:
+            if lock.held and preacquired_gpu_fd is None:
                 code = "agent_task_active" if lock.metadata.get("mode") == "agent" else "llama_cpp_gpu_lock_busy"
                 raise LlamaCppServerBusy(code)
             if not self.config.server_bin.is_file() or not os.access(self.config.server_bin, os.X_OK):
@@ -782,11 +938,17 @@ class LlamaCppServerManager:
             gate_reason = str(resource_gate["gate_reason"])
             if gate_reason != "gpu_available":
                 raise LlamaCppServerBusy(gate_reason)
-            gpu_fd = self._acquire_gpu_lock()
+            gpu_fd = preacquired_gpu_fd if preacquired_gpu_fd is not None else self._acquire_gpu_lock()
+            owns_gpu_fd = preacquired_gpu_fd is None
             started = self.monotonic()
             process = None
             _set_lifecycle(self.lifecycle_key, LlamaCppProcessState.STARTING)
             try:
+                child_env = os.environ.copy()
+                if self.config.unified_memory:
+                    child_env["GGML_CUDA_ENABLE_UNIFIED_MEMORY"] = "1"
+                else:
+                    child_env.pop("GGML_CUDA_ENABLE_UNIFIED_MEMORY", None)
                 process = self.popen_factory(
                     command,
                     stdin=subprocess.DEVNULL,
@@ -795,6 +957,7 @@ class LlamaCppServerManager:
                     close_fds=True,
                     pass_fds=(gpu_fd,),
                     start_new_session=True,
+                    env=child_env,
                 )
                 _remember_local_child(process, lifecycle_key=self.lifecycle_key)
                 identity = self._wait_identity(process.pid, timeout_sec=2.0)
@@ -804,7 +967,7 @@ class LlamaCppServerManager:
                 assert local_record is not None
                 metadata = {
                     "pid": process.pid,
-                    "owner_pid": os.getpid(),
+                    "owner_pid": None if detach else os.getpid(),
                     "provider": "llama_cpp",
                     "mode": "chat",
                     "timestamp": int(time.time()),
@@ -838,6 +1001,8 @@ class LlamaCppServerManager:
                             started_at=local_record.started_at,
                         )
                         self._append_log("started", pid=process.pid, startup_ms=round(startup_ms, 3))
+                        if detach:
+                            _forget_local_child(process.pid)
                         return {
                             "provider": "llama_cpp",
                             "status": "started",
@@ -846,6 +1011,7 @@ class LlamaCppServerManager:
                             "server_started": True,
                             "server_reused": False,
                             "server_startup_ms": startup_ms,
+                            "detached": detach,
                         }
                     self.sleep_fn(0.2)
                 raise LlamaCppServerUnavailable("llama_cpp_startup_timeout")
@@ -860,17 +1026,43 @@ class LlamaCppServerManager:
                 else:
                     _set_lifecycle(self.lifecycle_key, LlamaCppProcessState.FAILED)
                 self.config.pid_path.unlink(missing_ok=True)
-                self.arbiter.release_fd(gpu_fd)
+                if owns_gpu_fd:
+                    self.arbiter.release_fd(gpu_fd)
                 gpu_fd = -1
                 raise
             finally:
-                if gpu_fd >= 0:
+                if gpu_fd >= 0 and owns_gpu_fd:
                     os.close(gpu_fd)
 
     def stop(self, *, timeout_sec: float = 15.0) -> dict[str, Any]:
+        if self.lifecycle_client is not None:
+            record = self._read_pid_record()
+            if record is None:
+                if self.health() or self._port_in_use():
+                    raise LlamaCppServerOwnershipError("llama_cpp_unmanaged_process_on_port")
+                return {"provider": "llama_cpp", "status": "stopped", "changed": False}
+            identity = self._validated_identity(record)
+            if identity is None:
+                return {"provider": "llama_cpp", "status": "stopped", "changed": False}
+            try:
+                broker = self.lifecycle_client.stop()
+            except LlamaCppLifecycleError as exc:
+                raise LlamaCppServerOwnershipError(str(exc)) from exc
+            if broker.get("active") or broker.get("managed") or broker.get("healthy"):
+                raise LlamaCppServerError("llama_cpp_lifecycle_stop_not_verified")
+            if self.identity_reader(identity.pid) is not None or self._port_in_use():
+                raise LlamaCppServerError("llama_cpp_lifecycle_stop_not_quiescent")
+            return {
+                "provider": "llama_cpp",
+                "status": "stopped",
+                "changed": bool(broker.get("changed", True)),
+                "pid": identity.pid,
+                "returncode": broker.get("returncode"),
+                "brokered": True,
+            }
         self._ensure_state_dirs()
         with self._exclusive_lock(self.config.engine_lock_path):
-            record = self._read_json(self.config.pid_path)
+            record = self._read_pid_record()
             if record is None:
                 orphan = _local_child_for_lifecycle(self.lifecycle_key)
                 if orphan is not None:
@@ -959,7 +1151,10 @@ class LlamaCppServerManager:
             }
 
     def status(self) -> dict[str, Any]:
-        record = self._read_json(self.config.pid_path)
+        try:
+            record = self._read_pid_record()
+        except LlamaCppServerOwnershipError:
+            record = None
         managed = False
         pid = None
         if record is not None:
@@ -995,6 +1190,8 @@ class LlamaCppServerManager:
         os.chmod(self.config.state_dir, 0o700)
         self.config.log_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.config.log_path.parent, 0o700)
+        if self.config.pid_file is not None:
+            self.config.pid_path.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
 
     @contextmanager
     def _exclusive_lock(self, path: Path) -> Iterator[int]:
@@ -1029,8 +1226,48 @@ class LlamaCppServerManager:
             self.sleep_fn(0.01)
         return None
 
+    def _read_identity(self, pid: int) -> ProcessIdentity | None:
+        identity = self.identity_reader(pid)
+        if identity is not None or self.lifecycle_client is None:
+            return identity
+        try:
+            status = self.lifecycle_client.status()
+        except LlamaCppLifecycleError:
+            return None
+        provenance = status.get("provenance")
+        if (
+            not status.get("active")
+            or not status.get("managed")
+            or status.get("pid") != pid
+            or not isinstance(provenance, dict)
+        ):
+            return None
+        try:
+            attested = ProcessIdentity(
+                pid=int(provenance["pid"]),
+                uid=int(provenance["uid"]),
+                start_ticks=int(provenance["start_ticks"]),
+                executable=str(provenance["executable"]),
+                argv=tuple(str(item) for item in provenance["argv"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+        if (
+            attested.pid != pid
+            or isinstance(provenance.get("pid"), bool)
+            or isinstance(provenance.get("uid"), bool)
+            or isinstance(provenance.get("start_ticks"), bool)
+            or not isinstance(provenance.get("argv"), list)
+            or any(not isinstance(item, str) for item in provenance["argv"])
+        ):
+            return None
+        return attested
+
     def _managed_running(self) -> bool:
-        record = self._read_json(self.config.pid_path)
+        try:
+            record = self._read_pid_record()
+        except LlamaCppServerOwnershipError:
+            return False
         if record is None:
             return False
         if self._reap_exited_local(record):
@@ -1067,31 +1304,57 @@ class LlamaCppServerManager:
             pid = int(record["pid"])
             owner_uid = int(record["owner_uid"])
             start_ticks = int(record["start_ticks"])
+            process_start_ticks = int(record["process_start_ticks"])
+            record_port = int(record["port"])
+            record_server_bin = Path(str(record["server_bin"]))
+            record_model_path = Path(str(record["model_path"]))
         except (KeyError, TypeError, ValueError) as exc:
             raise LlamaCppServerOwnershipError("llama_cpp_pid_record_invalid") from exc
-        identity = self.identity_reader(pid)
+        if any(isinstance(record.get(field), bool) for field in ("pid", "owner_uid", "start_ticks", "process_start_ticks", "port")):
+            raise LlamaCppServerOwnershipError("llama_cpp_pid_record_invalid")
+        identity = self._read_identity(pid)
         if identity is None:
             return None
-        required = {
-            "--alias": self.config.model,
-            "--port": str(self.config.port),
-            "--model": str(self.config.model_path),
-        }
-        argv = list(identity.argv)
-        valid_args = all(key in argv and argv.index(key) + 1 < len(argv) and argv[argv.index(key) + 1] == value for key, value in required.items())
         if (
-            owner_uid != os.getuid()
-            or identity.uid != os.getuid()
+            record.get("provider") != "llama_cpp"
+            or record.get("mode") != "chat"
+            or owner_uid != self.config.expected_launcher_uid
+            or identity.uid != self.config.expected_launcher_uid
             or identity.start_ticks != start_ticks
-            or not valid_args
+            or process_start_ticks != start_ticks
+            or record_port != self.config.port
+            or record_server_bin.resolve() != self.config.server_bin.resolve()
+            or record_model_path.resolve() != self.config.model_path.resolve()
+            or record.get("model_hash") != self.config.model_hash
+            or not self._identity_matches_target(identity)
             or Path(identity.executable).resolve() != self.config.server_bin.resolve()
         ):
             raise LlamaCppServerOwnershipError()
         return identity
 
+    def _read_pid_record(self) -> dict[str, Any] | None:
+        try:
+            stat = self.config.pid_path.lstat()
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise LlamaCppServerOwnershipError("llama_cpp_pid_record_unreadable") from exc
+        if (
+            not self.config.pid_path.is_file()
+            or self.config.pid_path.is_symlink()
+            or stat.st_uid != self.config.expected_launcher_uid
+            or stat.st_mode & 0o022
+        ):
+            raise LlamaCppServerOwnershipError("llama_cpp_pid_record_untrusted")
+        record = self._read_json(self.config.pid_path)
+        if record is None:
+            raise LlamaCppServerOwnershipError("llama_cpp_pid_record_invalid")
+        return record
+
     def _atomic_json(self, path: Path, value: dict[str, Any]) -> None:
         temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        mode = 0o640 if self.config.pid_file is not None and path == self.config.pid_path else 0o600
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 json.dump(value, handle, sort_keys=True, separators=(",", ":"))
@@ -1099,7 +1362,7 @@ class LlamaCppServerManager:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, path)
-            os.chmod(path, 0o600)
+            os.chmod(path, mode)
         finally:
             temporary.unlink(missing_ok=True)
 

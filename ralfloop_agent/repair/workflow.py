@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 import requests
 
 from ralfloop_agent.model_tools import ModelToolManager, ModelToolRegistry
+from ralfloop_agent.model_tools.registry import DEFAULT_HF_CACHE
 from ralfloop_agent.providers.llama_cpp_server import LlamaCppServerConfig
 
 from .validator import PatchValidator
@@ -37,6 +38,8 @@ class RepairRecord(BaseModel):
     diff: str = ""
     approval_required: bool = False
     approval_status: str | None = None
+    approval_request_id: str | None = None
+    apply_result: dict[str, Any] = Field(default_factory=dict)
     rollback: list[str] = Field(default_factory=list)
     error: str | None = None
 
@@ -107,19 +110,44 @@ class RepairStore:
 
 class LocalModelToolCodeRetriever:
     def __init__(self, manager: ModelToolManager | None = None) -> None:
-        registry = ModelToolRegistry.load()
+        shared_cache = Path("/home/sibilla-cumana/.cache/huggingface/hub")
+        registry = ModelToolRegistry.load(
+            cache_root=shared_cache if shared_cache.is_dir() else DEFAULT_HF_CACHE
+        )
         self.manager = manager or ModelToolManager(registry)
         self.registry = registry
 
     def __call__(self, worktree: Path, description: str) -> dict[str, Any]:
-        spec = self.registry.for_capability("retrieve_code_context")
-        if spec is None:
-            return {"ok": False, "error_type": "tool_unavailable", "files": []}
         listed = _command(["git", "ls-files", "*.py"], worktree, timeout=20)
         if listed["exit_code"] != 0:
-            return {"ok": False, "error_type": "repository_scan_failed", "files": [], "evidence": listed}
+            return {
+                "ok": False,
+                "error_type": "repository_scan_failed",
+                "files": [],
+                "evidence": listed,
+            }
+
         documents = []
-        for raw in listed["stdout"].splitlines()[:200]:
+        search_terms = {
+            token
+            for token in re.findall(r"[a-zA-Z0-9_]{3,}", description.casefold())
+            if len(token) >= 3
+        }
+
+        tracked_files = set(listed["stdout"].splitlines())
+        explicit_paths = []
+        for candidate in re.findall(
+            r"(?:ralfloop_agent|tests|src|tools)/[A-Za-z0-9_./-]+\.py",
+            description,
+        ):
+            candidate = candidate.strip("/")
+            if (
+                candidate in tracked_files
+                and candidate not in explicit_paths
+            ):
+                explicit_paths.append(candidate)
+
+        for raw in listed["stdout"].splitlines():
             path = (worktree / raw).resolve()
             try:
                 path.relative_to(worktree.resolve())
@@ -128,26 +156,140 @@ class LocalModelToolCodeRetriever:
             if path.is_symlink() or not path.is_file():
                 continue
             try:
-                text = path.read_text(encoding="utf-8")[:12000]
+                source = path.read_text(encoding="utf-8")[:6000]
             except (OSError, UnicodeError):
                 continue
-            documents.append({"document_id": raw, "text": text})
-        envelope = self.manager.invoke(spec.tool_id, {"query": description, "documents": documents})
-        if not envelope.ok:
+
+            haystack = (raw + "\n" + source).casefold()
+            lexical_score = sum(
+                min(haystack.count(term), 8)
+                for term in search_terms
+            )
+
+            documents.append(
+                {
+                    "document_id": raw,
+                    "text": source,
+                    "_lexical_score": lexical_score,
+                }
+            )
+
+        # Semantic retrieval remains the final selector, but only over a
+        # deterministic bounded candidate set.
+        documents.sort(
+            key=lambda item: (
+                -int(item["_lexical_score"]),
+                str(item["document_id"]),
+            )
+        )
+        documents_by_id = {
+            str(item["document_id"]): item
+            for item in documents
+        }
+        pinned_documents = [
+            documents_by_id[path]
+            for path in explicit_paths
+            if path in documents_by_id
+        ]
+        remaining_documents = [
+            item
+            for item in documents
+            if str(item["document_id"]) not in explicit_paths
+        ]
+        documents = (pinned_documents + remaining_documents)[:16]
+
+        for item in documents:
+            item.pop("_lexical_score", None)
+
+        if not documents:
             return {
                 "ok": False,
-                "error_type": envelope.error_type or "tool_unavailable",
+                "error_type": "no_code_documents",
                 "files": [],
-                "result_envelope": envelope.model_dump(mode="json"),
             }
-        files = [str(row["document_id"]) for row in envelope.output.get("ranked", [])[:5]]
-        return {
-            "ok": bool(files),
-            "error_type": None if files else "no_code_context",
-            "files": files,
-            "result_envelope": envelope.model_dump(mode="json"),
-        }
 
+        candidates = []
+
+        primary = self.registry.for_capability("retrieve_code_context")
+        if primary is not None:
+            candidates.append(primary)
+
+        try:
+            fallback = self.registry.get("semantic_retriever_bge_m3_v1")
+        except KeyError:
+            fallback = None
+
+        if fallback is not None and all(
+            item.tool_id != fallback.tool_id for item in candidates
+        ):
+            candidates.append(fallback)
+
+        attempts = []
+
+        for spec in candidates:
+            availability = self.registry.availability(spec)
+            attempts.append(
+                {
+                    "tool_id": spec.tool_id,
+                    "availability": availability.status,
+                }
+            )
+
+            if not availability.ok:
+                continue
+
+            tool_payload = {
+                "query": description,
+                "documents": documents,
+            }
+            properties = dict(spec.input_schema.get("properties") or {})
+            if "top_k" in properties:
+                tool_payload["top_k"] = 8
+
+            envelope = self.manager.invoke(
+                spec.tool_id,
+                tool_payload,
+            )
+
+            attempts[-1]["invoke_ok"] = envelope.ok
+            attempts[-1]["error_type"] = envelope.error_type
+
+            if not envelope.ok:
+                continue
+
+            ranked_files = [
+                str(row["document_id"])
+                for row in envelope.output.get("ranked", [])
+            ]
+            files = []
+            for candidate in [*explicit_paths, *ranked_files]:
+                if candidate not in files:
+                    files.append(candidate)
+            files = files[:5]
+
+            if files:
+                return {
+                    "ok": True,
+                    "error_type": None,
+                    "files": files,
+                    "selected_tool": spec.tool_id,
+                    "attempts": attempts,
+                    "result_envelope": envelope.model_dump(mode="json"),
+                }
+
+        error_type = (
+            attempts[-1].get("error_type")
+            or attempts[-1].get("availability")
+            if attempts
+            else "tool_unavailable"
+        )
+
+        return {
+            "ok": False,
+            "error_type": error_type or "code_retriever_unavailable",
+            "files": [],
+            "attempts": attempts,
+        }
 
 class LlamaCppPatchProposer:
     def __init__(self, *, session: requests.Session | None = None) -> None:
@@ -336,7 +478,8 @@ class RepairManager:
         checks.extend(_command(command, worktree) for command in test_commands)
         checks.append(_command(["git", "diff", "--check"], worktree, timeout=20))
         record.post_tests = checks
-        record.diff = _command(["git", "diff", "--no-ext-diff"], worktree, timeout=20)["stdout"]
+        # Conserva il patch validato originale: include anche file nuovi/untracked.
+        record.diff = patch
         if not checks or any(check["exit_code"] != 0 for check in checks):
             record.status = "failed"
             record.error = "deterministic_verification_failed"

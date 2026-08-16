@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -65,6 +66,7 @@ def handle_decision_request(
     path: str | None = None,
     policy: DomainApprovalPolicy | None = None,
     store: DomainApprovalStore | None = None,
+    email_otp_gate: Any | None = None,
 ) -> dict[str, Any]:
     policy = policy or DomainApprovalPolicy.from_env()
     store = store or DomainApprovalStore(policy=policy)
@@ -86,7 +88,22 @@ def handle_decision_request(
         idempotency_key=str(payload.get("idempotency_key") or ""),
         chat_type=str(payload.get("chat_type") or "private"),
     )
-    return store.decide(decision, scope_digest_short=str(payload.get("scope_digest_short") or ""))
+    result = store.decide(decision, scope_digest_short=str(payload.get("scope_digest_short") or ""))
+    if (
+        result.get("status") == "approved"
+        and os.getenv("RALFLOOP_EMAIL_OTP_REQUIRED", "0") == "1"
+    ):
+        row = store.get_request(request_id)
+        if row and row.get("action") in {"send_email", "reply_email"}:
+            try:
+                if email_otp_gate is None:
+                    from ralfloop_agent.unified_assistant.email_otp import EmailOtpGate
+                    email_otp_gate = EmailOtpGate.from_environment()
+                otp = email_otp_gate.request_for_approval(row)
+            except Exception:
+                otp = {"status": "email_otp_request_failed", "requested": False}
+            result = {**result, "email_otp": otp, "email_otp_required": True}
+    return result
 
 
 def decision_headers(method: str, path: str, payload: dict[str, Any], *, key_file: str | Path, nonce: str, timestamp: int | None = None) -> dict[str, str]:

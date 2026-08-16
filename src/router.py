@@ -12,7 +12,7 @@ from src.routing_config import (
     mcp_keywords,
     verification_config,
 )
-from src.skills import SkillsRegistry
+from src.skills import SkillsRegistry, is_local_maintenance_intent
 
 
 ROUTING_CONFIG = load_routing_config()
@@ -29,9 +29,25 @@ class CapabilityRouter:
         self.skills = skills_registry or SkillsRegistry()
 
     def route(self, user_goal: str) -> CapabilityRoute:
-        mode, reason = self._classify_mode(user_goal)
+        local_maintenance = is_local_maintenance_intent(user_goal)
+        mode, reason = (
+            self._classify_local_maintenance_mode(user_goal)
+            if local_maintenance
+            else self._classify_mode(user_goal)
+        )
         skills_used = self.skills.match(user_goal)
-        mcp_used = self._match_mcp(user_goal) if mode == "external_action" else []
+        if local_maintenance:
+            skills_used = [
+                skill for skill in skills_used
+                if skill not in {"bandi", "bandi_browser_fill"}
+            ]
+            if "local_maintenance" not in skills_used:
+                skills_used.insert(0, "local_maintenance")
+        mcp_used = (
+            self._match_mcp(user_goal)
+            if mode == "external_action" and not local_maintenance
+            else []
+        )
         requires_confirmation = mode == "external_action" and any(connector != "browser" for connector in mcp_used)
         if mode == "external_action" and not mcp_used:
             requires_confirmation = True
@@ -84,6 +100,18 @@ class CapabilityRouter:
         if check_hit:
             return "check_only", "matched read/audit/check keywords"
         return "check_only", "defaulted to check_only for safety"
+
+    def _classify_local_maintenance_mode(self, user_goal: str) -> tuple[str, str]:
+        goal = user_goal.lower()
+        protected = (
+            "riavvia", "restart", "daemon-reload", "daemon reload", "reload service",
+            "arresta", "stop service", "termina processo", "kill", "chmod", "chown",
+        )
+        if any_unnegated_trigger_matches(protected, goal):
+            return "external_action", "matched canonical protected local maintenance action"
+        if any_unnegated_trigger_matches(self.mode_keywords.get("patch_allowed", []), goal):
+            return "patch_allowed", "matched local software patch intent"
+        return "check_only", "matched local software maintenance inspection/test intent"
 
     def _match_mcp(self, user_goal: str) -> list[str]:
         goal = user_goal.lower()

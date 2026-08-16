@@ -6,6 +6,11 @@ import stat
 import pytest
 
 from ralfloop_agent.cli.session_store import SessionStore, SessionStoreError, default_sessions_dir
+from ralfloop_agent.unified_assistant.contracts import PolicyClass
+from ralfloop_agent.unified_assistant.conversation import (
+    ConversationManager,
+    SessionConversationAdapter,
+)
 
 
 def test_session_persists_atomically_with_private_permissions(tmp_path):
@@ -114,3 +119,31 @@ def test_session_removes_terminal_control_characters_from_history(tmp_path):
 def test_default_state_directory_honors_xdg_state_home(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     assert default_sessions_dir() == tmp_path / "ralf" / "sessions"
+
+
+def test_email_reply_seed_with_thread_context_is_persistable(tmp_path):
+    store = SessionStore(tmp_path / "sessions")
+    record = store.create(cwd=str(tmp_path))
+    manager = ConversationManager()
+    manager.stage(
+        domain="email",
+        action="reply_email",
+        policy=PolicyClass.CONFIRM_WRITE,
+        payload={
+            "recipient": "caterina@example.org",
+            "working_seed": {
+                "source_email": {
+                    "thread_context": [{
+                        "sender": "Caterina",
+                        "body": "Invito al festival",
+                    }],
+                },
+            },
+        },
+        displayed_text="Preview",
+    )
+    adapter = SessionConversationAdapter(store)
+
+    adapter.save(record["session_id"], manager)
+
+    assert adapter.load(record["session_id"]).state == manager.state

@@ -10,7 +10,13 @@ from pathlib import Path
 from typing import Any
 
 
-ALLOWED_ACTIONS = {"promote_domain", "run_domain_canary", "apply_domain_source_update", "dispatch_glm_artifact"}
+ALLOWED_ACTIONS = {
+    "eyf_browser_apply",
+    "promote_domain", "run_domain_canary", "apply_domain_source_update",
+    "dispatch_glm_artifact", "reply_email", "send_email",
+    "whatsapp_send", "whatsapp_reply",
+    "local_maintenance_apply", "repair_apply",
+}
 FINAL_STATUSES = {"rejected", "expired", "stale", "consumed", "cancelled", "execution_failed", "executed"}
 
 
@@ -261,6 +267,9 @@ def render_telegram_request(request: DomainApprovalRequest) -> str:
         "promote_domain": "Promozione dominio",
         "apply_domain_source_update": "Aggiornamento fonti/regole",
         "dispatch_glm_artifact": "Azione esterna su artifact GLM",
+        "local_maintenance_apply": "Manutenzione locale protetta",
+        "repair_apply": "Applicazione patch locale verificata",
+        "eyf_browser_apply": "Modifica portale EYF/Support4Youth",
     }.get(request.action, request.action)
     lines = [
         "RALFLOOP — APPROVAZIONE RICHIESTA",

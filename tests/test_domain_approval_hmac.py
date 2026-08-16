@@ -2,6 +2,7 @@ import json
 import time
 
 from ralfloop_agent.domains.domain_approval import DomainApprovalPolicy
+from ralfloop_agent.domains.domain_approval_store import DomainApprovalStore
 from ralfloop_agent.domains.telegram_approval_api import decision_headers, handle_decision_request
 
 from domain_approval_fixtures import approval_env
@@ -31,3 +32,45 @@ def test_hmac_invalid_body_and_expired(monkeypatch, approval_env):
     assert handle_decision_request(request_id="apr_x", body=json.dumps(payload, sort_keys=True).encode(), headers=headers, path=path, policy=policy)["status"] == "signature_expired"
     headers = decision_headers("POST", path, payload, key_file=key, nonce="n3")
     assert handle_decision_request(request_id="apr_x", body=b'{"decision":"reject"}', headers=headers, path=path, policy=policy)["status"] == "signature_invalid"
+
+
+def test_email_approval_requests_mandatory_otp_without_executing(monkeypatch, approval_env):
+    key = approval_env / "hmac.key"
+    key.write_text("secret", encoding="utf-8")
+    monkeypatch.setenv("RALFLOOP_TELEGRAM_APPROVAL_HMAC_KEY_FILE", str(key))
+    monkeypatch.setenv("RALFLOOP_EMAIL_OTP_REQUIRED", "1")
+    policy = DomainApprovalPolicy.from_env()
+    store = DomainApprovalStore(policy=policy)
+    request = store.create_request(
+        action="reply_email", bando_id="google_workspace.gmail", version="1",
+        scope={"recipient": "caterina@example.invalid", "subject": "Magnolia"},
+        requested_by="test",
+    )["request"]
+    payload = {
+        "decision": "approve", "scope_digest_short": request["scope_digest_short"],
+        "telegram_user_id": 111, "telegram_chat_id": 111,
+        "telegram_message_id": 7, "idempotency_key": "otp-bound",
+    }
+    body = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
+    path = f"/domain-approvals/{request['request_id']}/decision"
+    headers = decision_headers("POST", path, payload, key_file=key, nonce="otp-n1")
+
+    class FakeOtp:
+        def __init__(self):
+            self.calls = []
+
+        def request_for_approval(self, row):
+            self.calls.append(row["request_id"])
+            return {"status": "pending", "requested": True, "authorized": False}
+
+    otp = FakeOtp()
+    result = handle_decision_request(
+        request_id=request["request_id"], body=body, headers=headers, path=path,
+        policy=policy, store=store, email_otp_gate=otp,
+    )
+
+    assert result["status"] == "approved"
+    assert result["email_otp_required"] is True
+    assert result["email_otp"]["status"] == "pending"
+    assert otp.calls == [request["request_id"]]
+    assert store.get_request(request["request_id"])["status"] == "approved"

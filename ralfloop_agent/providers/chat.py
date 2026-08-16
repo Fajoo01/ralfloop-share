@@ -613,21 +613,30 @@ def build_chat_provider(
     if not base_url or not model:
         raise ChatProviderConfigurationError("runtime_missing_base_url_or_model")
     if runtime_name == "ollama":
-        return OllamaChatProvider(
+        provider: ChatProvider = OllamaChatProvider(
             base_url=base_url,
             model=model,
             settings=settings,
             session=session,
         )
-    if runtime_name in {"openai_compat", "lmstudio"}:
-        return OpenAICompatibleChatProvider(
+    elif runtime_name in {"openai_compat", "lmstudio"}:
+        provider = OpenAICompatibleChatProvider(
             base_url=base_url,
             model=model,
             provider_name=runtime_name,
             settings=settings,
             session=session,
         )
-    raise ChatProviderConfigurationError(f"unsupported_runtime:{runtime_name or 'unknown'}")
+    else:
+        raise ChatProviderConfigurationError(f"unsupported_runtime:{runtime_name or 'unknown'}")
+
+    selected_provider = (os.getenv("RALF_CHAT_PROVIDER") or "").strip().lower()
+    if selected_provider == "llama_cpp":
+        # Lazy import: llama_cpp depends on the provider primitives in this module.
+        from ralfloop_agent.providers.llama_cpp import build_llama_cpp_chat_provider
+
+        return build_llama_cpp_chat_provider(fallback=provider, session=session)
+    return provider
 
 
 __all__ = [

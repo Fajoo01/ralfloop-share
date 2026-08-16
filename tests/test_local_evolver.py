@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -152,6 +153,20 @@ def test_49_50_no_network_and_sandbox_namespaces():
 
 def test_seccomp_filter_is_attached():
     assert "--seccomp" in BubblewrapSandbox().command("./candidate", seccomp_fd=9)
+
+
+def test_unavailable_systemd_user_bus_keeps_bwrap_and_hard_limits(monkeypatch):
+    sandbox = BubblewrapSandbox()
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 1),
+    )
+    assert not sandbox._systemd_user_scope_available()
+    command = sandbox.command("./candidate", seccomp_fd=9)
+    assert command[0] == "/usr/bin/bwrap"
+    assert "--unshare-all" in command
+    assert sandbox.limits.memory_mb > 0
 
 
 @pytest.mark.parametrize("source,expected", [
