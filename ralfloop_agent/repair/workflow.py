@@ -15,6 +15,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 import requests
 
+from ralfloop_agent.inference_lab.gguf_tokenizer import GGUFError, GGUFTokenizer
 from ralfloop_agent.model_tools import ModelToolManager, ModelToolRegistry
 from ralfloop_agent.model_tools.registry import DEFAULT_HF_CACHE
 from ralfloop_agent.providers.gpu_engine_scheduler import TransactionalGpuScheduler
@@ -303,9 +304,15 @@ class LlamaCppPatchProposer:
     """
 
     _EDIT_HEADER = re.compile(
-        r"^@@RALF_EDIT[ \t]+path=(?P<path>\S+)"
-        r"[ \t]+start=(?P<start>[0-9]+)"
-        r"[ \t]+end=(?P<end>[0-9]+)[ \t]*$"
+        r'^@@RALF_EDIT[ \t]+path=(?P<path>"[^"\r\n]+"|[^"\s]+)'
+        r'[ \t]+start=(?P<start>"[0-9]+"|[0-9]+)'
+        r'[ \t]+end=(?P<end>"[0-9]+"|[0-9]+)[ \t]*$'
+    )
+
+    _SYSTEM_MESSAGE = (
+        "You are a precise source-code editor. "
+        "Output only RALF_EDIT protocol v2 blocks. "
+        "Never output JSON, Markdown, prose or Git diff."
     )
 
     def __init__(
@@ -316,10 +323,15 @@ class LlamaCppPatchProposer:
     ) -> None:
         base = LlamaCppServerConfig.from_env()
 
-        repair_context = max(
-            int(base.context),
-            int(os.getenv("RALF_REPAIR_LLAMA_CONTEXT", "32768")),
+        repair_context = int(
+            os.getenv(
+                "RALF_REPAIR_LLAMA_CONTEXT",
+                str(base.context),
+            )
         )
+
+        if repair_context <= 0:
+            raise ValueError("repair_context_must_be_positive")
 
         self.config = replace(
             base,
@@ -335,16 +347,59 @@ class LlamaCppPatchProposer:
 
         self.request_timeout_sec = max(
             float(self.config.request_timeout_sec),
-            float(os.getenv("RALF_REPAIR_LLAMA_TIMEOUT_SEC", "900")),
+            float(
+                os.getenv(
+                    "RALF_REPAIR_LLAMA_TIMEOUT_SEC",
+                    "900",
+                )
+            ),
         )
 
         self.max_output_tokens = int(
-            os.getenv("RALF_REPAIR_MAX_OUTPUT_TOKENS", "5000")
+            os.getenv(
+                "RALF_REPAIR_MAX_OUTPUT_TOKENS",
+                "1200",
+            )
         )
 
         self.max_source_chars = int(
-            os.getenv("RALF_REPAIR_MAX_SOURCE_CHARS", "100000")
+            os.getenv(
+                "RALF_REPAIR_MAX_SOURCE_CHARS",
+                "12000",
+            )
         )
+
+        self.context_safety_margin = max(
+            128,
+            int(
+                os.getenv(
+                    "RALF_REPAIR_CONTEXT_SAFETY_MARGIN",
+                    "512",
+                )
+            ),
+        )
+
+        if self.max_output_tokens <= 0:
+            raise ValueError(
+                "repair_max_output_tokens_must_be_positive"
+            )
+
+        if self.max_source_chars <= 0:
+            raise ValueError(
+                "repair_max_source_chars_must_be_positive"
+            )
+
+        if (
+            self.max_output_tokens
+            + self.context_safety_margin
+            >= self.config.context
+        ):
+            raise ValueError(
+                "repair_reserved_context_exceeds_context"
+            )
+
+        self._tokenizer: GGUFTokenizer | None = None
+        self._tokenizer_checked = False
 
     @staticmethod
     def _description_tokens(description: str) -> list[str]:
@@ -467,6 +522,8 @@ class LlamaCppPatchProposer:
         worktree: Path,
         selected_files: list[str],
         description: str = "",
+        *,
+        source_char_budget: int | None = None,
     ) -> tuple[
         dict[str, str],
         str,
@@ -489,46 +546,220 @@ class LlamaCppPatchProposer:
         ]
 
         ordered = mentioned + [
-            rel for rel in selected_files if rel not in mentioned
+            rel
+            for rel in selected_files
+            if rel not in mentioned
         ]
 
         weights = {
             rel: (4 if rel in mentioned else 1)
             for rel in ordered
         }
-        weight_total = max(1, sum(weights.values()))
+
+        total_limit = self.max_source_chars
+
+        if source_char_budget is not None:
+            total_limit = min(
+                total_limit,
+                max(0, int(source_char_budget)),
+            )
+
+        if total_limit <= 0:
+            return (
+                originals,
+                "",
+                {rel: [] for rel in selected_files},
+            )
 
         blocks: list[str] = []
-        visible_spans: dict[str, list[tuple[int, int]]] = {}
+        visible_spans: dict[
+            str,
+            list[tuple[int, int]],
+        ] = {
+            rel: [] for rel in selected_files
+        }
 
-        for rel in ordered:
-            budget = max(
-                4000,
-                int(
-                    self.max_source_chars
-                    * weights[rel]
-                    / weight_total
-                ),
+        remaining_chars = total_limit
+        remaining_weight = max(
+            1,
+            sum(weights.values()),
+        )
+
+        for index, rel in enumerate(ordered):
+            separator_cost = 2 if blocks else 0
+            available = remaining_chars - separator_cost
+
+            if available <= 0:
+                break
+
+            weight = weights[rel]
+            is_last = index == len(ordered) - 1
+
+            share = (
+                available
+                if is_last
+                else int(
+                    available
+                    * weight
+                    / remaining_weight
+                )
             )
+
+            remaining_weight = max(
+                1,
+                remaining_weight - weight,
+            )
+
+            if share <= 0:
+                continue
+
+            prefix = f'<file path="{rel}">\n'
+            suffix = "</file>"
+            wrapper_cost = len(prefix) + len(suffix)
+
+            if share <= wrapper_cost:
+                continue
+
+            body_budget = share - wrapper_cost
 
             body, spans = self._render_source(
                 originals[rel],
                 description,
-                budget,
+                body_budget,
             )
 
+            block = prefix + body + suffix
+
+            while (
+                len(block) > share
+                and body_budget > 0
+            ):
+                excess = len(block) - share
+                body_budget = max(
+                    0,
+                    body_budget - max(1, excess),
+                )
+
+                body, spans = self._render_source(
+                    originals[rel],
+                    description,
+                    body_budget,
+                )
+
+                block = prefix + body + suffix
+
+            if len(block) > share:
+                continue
+
+            blocks.append(block)
             visible_spans[rel] = spans
-
-            blocks.append(
-                f'<file path="{rel}">\n'
-                f"{body}"
-                f"</file>"
+            remaining_chars -= (
+                separator_cost + len(block)
             )
 
+            if remaining_chars <= 0:
+                break
+
+        sources = "\n\n".join(blocks)
+
+        if len(sources) > total_limit:
+            raise RuntimeError(
+                "repair_source_budget_internal_error"
+            )
+
+        return originals, sources, visible_spans
+
+    def _get_tokenizer(
+        self,
+    ) -> GGUFTokenizer | None:
+        if self._tokenizer_checked:
+            return self._tokenizer
+
+        self._tokenizer_checked = True
+
+        try:
+            model_path = Path(self.config.model_path)
+
+            if not model_path.is_file():
+                return None
+
+            self._tokenizer = GGUFTokenizer.from_file(
+                model_path
+            )
+
+        except (OSError, ValueError, GGUFError):
+            self._tokenizer = None
+
+        return self._tokenizer
+
+    def _count_input_tokens(
+        self,
+        prompt: str,
+    ) -> int:
+        text = (
+            self._SYSTEM_MESSAGE
+            + "\n"
+            + prompt
+        )
+
+        tokenizer = self._get_tokenizer()
+
+        if tokenizer is not None:
+            try:
+                return len(tokenizer.encode(text))
+            except GGUFError:
+                self._tokenizer = None
+
+        # Fallback fail-closed: volutamente conservativo.
+        return len(text.encode("utf-8"))
+
+    def _context_requirement(
+        self,
+        prompt: str,
+    ) -> tuple[int, int]:
+        input_tokens = self._count_input_tokens(
+            prompt
+        )
+
+        required = (
+            input_tokens
+            + self.max_output_tokens
+            + self.context_safety_margin
+        )
+
+        return input_tokens, required
+
+    @staticmethod
+    def _build_prompt(
+        description: str,
+        sources: str,
+    ) -> str:
         return (
-            originals,
-            "\n\n".join(blocks),
-            visible_spans,
+            "Implement the requested repair using "
+            "RALF_EDIT protocol v2.\n\n"
+            "Each visible source line is prefixed with "
+            "its ORIGINAL 1-based line number and '|'. "
+            "The prefix is NOT source code.\n\n"
+            "For every edit output exactly:\n"
+            "@@RALF_EDIT path=RELATIVE_PATH "
+            "start=START end=END\n"
+            "<raw replacement source; no line-number "
+            "prefixes>\n"
+            "@@RALF_END\n\n"
+            "Coordinates are 1-based and half-open "
+            "against the ORIGINAL file. "
+            "For insertion use start=end.\n\n"
+            "Rules:\n"
+            "- Never copy old source text as an anchor.\n"
+            "- Never output JSON, Markdown, prose or "
+            "unified diff.\n"
+            "- Edit only lines visible in the supplied "
+            "windows.\n"
+            "- Modify only supplied files.\n"
+            "- Keep changes minimal and bounded.\n"
+            "- Do not weaken tests.\n\n"
+            f"Problem:\n{description[:8000]}\n\n"
+            f"Sources:\n{sources}"
         )
 
     def _request_plan(
@@ -536,6 +767,19 @@ class LlamaCppPatchProposer:
         prompt: str,
         selected_files: list[str],
     ) -> str:
+        input_tokens, required = (
+            self._context_requirement(prompt)
+        )
+
+        if required > int(self.config.context):
+            raise RuntimeError(
+                "repair_context_budget_exceeded:"
+                f"input={input_tokens}:"
+                f"output={self.max_output_tokens}:"
+                f"margin={self.context_safety_margin}:"
+                f"context={self.config.context}"
+            )
+
         payload = {
             "model": self.config.model,
             "temperature": 0,
@@ -543,11 +787,7 @@ class LlamaCppPatchProposer:
             "messages": [
                 {
                     "role": "system",
-                    "content": (
-                        "You are a precise source-code editor. "
-                        "Output only RALF_EDIT protocol v2 blocks. "
-                        "Never output JSON, Markdown, prose or Git diff."
-                    ),
+                    "content": self._SYSTEM_MESSAGE,
                 },
                 {
                     "role": "user",
@@ -557,9 +797,13 @@ class LlamaCppPatchProposer:
         }
 
         response = self.session.post(
-            f"{self.config.base_url}/v1/chat/completions",
+            f"{self.config.base_url}"
+            "/v1/chat/completions",
             json=payload,
-            timeout=(2.0, self.request_timeout_sec),
+            timeout=(
+                2.0,
+                self.request_timeout_sec,
+            ),
         )
 
         try:
@@ -569,14 +813,22 @@ class LlamaCppPatchProposer:
             response.close()
 
         try:
-            content = envelope["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as exc:
+            content = envelope[
+                "choices"
+            ][0]["message"]["content"]
+        except (
+            KeyError,
+            IndexError,
+            TypeError,
+        ) as exc:
             raise RuntimeError(
                 "repair_edit_response_invalid"
             ) from exc
 
         if not isinstance(content, str):
-            raise RuntimeError("repair_edit_content_not_text")
+            raise RuntimeError(
+                "repair_edit_content_not_text"
+            )
 
         return content
 
@@ -614,8 +866,18 @@ class LlamaCppPatchProposer:
                 )
 
             rel = match.group("path")
-            start = int(match.group("start"))
-            end = int(match.group("end"))
+            start_raw = match.group("start")
+            end_raw = match.group("end")
+
+            if rel.startswith('"'):
+                rel = rel[1:-1]
+            if start_raw.startswith('"'):
+                start_raw = start_raw[1:-1]
+            if end_raw.startswith('"'):
+                end_raw = end_raw[1:-1]
+
+            start = int(start_raw)
+            end = int(end_raw)
 
             if rel not in selected_files:
                 raise RuntimeError(
@@ -885,34 +1147,68 @@ class LlamaCppPatchProposer:
         description: str,
         selected_files: list[str],
     ) -> str:
-        selected_files = [str(path) for path in selected_files]
+        selected_files = [
+            str(path)
+            for path in selected_files
+        ]
 
-        originals, sources, visible_spans = self._source_blocks(
-            worktree,
-            selected_files,
-            description,
-        )
+        source_budget = self.max_source_chars
 
-        base_prompt = (
-            "Implement the requested repair using RALF_EDIT protocol v2.\n\n"
-            "Each visible source line is prefixed with its ORIGINAL "
-            "1-based line number and '|'. The prefix is NOT source code.\n\n"
-            "For every edit output exactly:\n"
-            "@@RALF_EDIT path=RELATIVE_PATH start=START end=END\n"
-            "<raw replacement source; no line-number prefixes>\n"
-            "@@RALF_END\n\n"
-            "Coordinates are 1-based and half-open against the ORIGINAL "
-            "file. For insertion use start=end.\n\n"
-            "Rules:\n"
-            "- Never copy old source text as an anchor.\n"
-            "- Never output JSON, Markdown, prose or unified diff.\n"
-            "- Edit only lines visible in the supplied windows.\n"
-            "- Modify only supplied files.\n"
-            "- Keep changes minimal and bounded.\n"
-            "- Do not weaken tests.\n\n"
-            f"Problem:\n{description[:8000]}\n\n"
-            f"Sources:\n{sources}"
-        )
+        while True:
+            (
+                originals,
+                sources,
+                visible_spans,
+            ) = self._source_blocks(
+                worktree,
+                selected_files,
+                description,
+                source_char_budget=source_budget,
+            )
+
+            base_prompt = self._build_prompt(
+                description,
+                sources,
+            )
+
+            input_tokens, required = (
+                self._context_requirement(
+                    base_prompt
+                )
+            )
+
+            if required <= int(
+                self.config.context
+            ):
+                break
+
+            if source_budget <= 0:
+                raise RuntimeError(
+                    "repair_context_budget_exceeded:"
+                    f"input={input_tokens}:"
+                    f"output={self.max_output_tokens}:"
+                    f"margin="
+                    f"{self.context_safety_margin}:"
+                    f"context={self.config.context}"
+                )
+
+            next_budget = (
+                source_budget * 3
+            ) // 4
+
+            if next_budget >= source_budget:
+                next_budget = source_budget - 1
+
+            source_budget = max(
+                0,
+                next_budget,
+            )
+
+        if not sources:
+            raise RuntimeError(
+                "repair_context_budget_exceeded:"
+                "no_source_capacity"
+            )
 
         with self.scheduler.engine_session(
             "qwen_chat",

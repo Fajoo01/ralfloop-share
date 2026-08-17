@@ -456,6 +456,29 @@ def test_edit_protocol_v2_rejects_non_visible_range():
         )
 
 
+
+def test_edit_protocol_v2_accepts_double_quoted_header_values():
+    from ralfloop_agent.repair.workflow import LlamaCppPatchProposer
+
+    edits = LlamaCppPatchProposer._parse_edit_protocol(
+        (
+            '@@RALF_EDIT path="sample.py" start="1" end="2"\n'
+            'x = 2\n'
+            '@@RALF_END\n'
+        ),
+        ["sample.py"],
+    )
+
+    assert edits == [
+        {
+            "path": "sample.py",
+            "start": 1,
+            "end": 2,
+            "replacement": "x = 2\n",
+        }
+    ]
+
+
 def test_edit_protocol_v2_requires_end_marker():
     import pytest
 
@@ -824,3 +847,153 @@ def test_backend_registers_repair_control_plane_routes(
     )
     assert response.status_code == 200
     assert response.json()["status"] == "planned"
+
+
+
+def test_repair_source_blocks_respect_total_character_budget(
+    tmp_path,
+):
+    from ralfloop_agent.repair.workflow import (
+        LlamaCppPatchProposer,
+    )
+
+    (tmp_path / "a.py").write_text(
+        "".join(
+            f"value_{i} = {i}\n"
+            for i in range(400)
+        ),
+        encoding="utf-8",
+    )
+
+    (tmp_path / "b.py").write_text(
+        "".join(
+            f"other_{i} = {i}\n"
+            for i in range(400)
+        ),
+        encoding="utf-8",
+    )
+
+    proposer = object.__new__(
+        LlamaCppPatchProposer
+    )
+    proposer.max_source_chars = 700
+
+    _originals, sources, _spans = (
+        proposer._source_blocks(
+            tmp_path,
+            ["a.py", "b.py"],
+            "Fix a.py value_200",
+        )
+    )
+
+    assert len(sources) <= 700
+    assert 'path="a.py"' in sources
+
+
+def test_repair_context_preflight_blocks_http_post():
+    from types import SimpleNamespace
+
+    import pytest
+
+    from ralfloop_agent.repair.workflow import (
+        LlamaCppPatchProposer,
+    )
+
+    class Session:
+        called = False
+
+        def post(self, *args, **kwargs):
+            self.called = True
+            raise AssertionError(
+                "HTTP POST must not happen"
+            )
+
+    proposer = object.__new__(
+        LlamaCppPatchProposer
+    )
+    proposer.config = SimpleNamespace(
+        context=100,
+        model="fixture",
+        base_url="http://127.0.0.1:19091",
+    )
+    proposer.max_output_tokens = 40
+    proposer.context_safety_margin = 20
+    proposer.request_timeout_sec = 1.0
+    proposer.session = Session()
+    proposer._count_input_tokens = (
+        lambda _prompt: 50
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="repair_context_budget_exceeded",
+    ):
+        proposer._request_plan(
+            "too large",
+            ["sample.py"],
+        )
+
+    assert proposer.session.called is False
+
+
+def test_repair_context_preflight_allows_fitting_prompt():
+    from types import SimpleNamespace
+
+    from ralfloop_agent.repair.workflow import (
+        LlamaCppPatchProposer,
+    )
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                "@@RALF_EDIT "
+                                "path=sample.py "
+                                "start=1 end=1\n"
+                                "value = 2\n"
+                                "@@RALF_END\n"
+                            )
+                        }
+                    }
+                ]
+            }
+
+        def close(self):
+            return None
+
+    class Session:
+        called = False
+
+        def post(self, *args, **kwargs):
+            self.called = True
+            return Response()
+
+    proposer = object.__new__(
+        LlamaCppPatchProposer
+    )
+    proposer.config = SimpleNamespace(
+        context=200,
+        model="fixture",
+        base_url="http://127.0.0.1:19091",
+    )
+    proposer.max_output_tokens = 40
+    proposer.context_safety_margin = 20
+    proposer.request_timeout_sec = 1.0
+    proposer.session = Session()
+    proposer._count_input_tokens = (
+        lambda _prompt: 50
+    )
+
+    result = proposer._request_plan(
+        "fits",
+        ["sample.py"],
+    )
+
+    assert proposer.session.called is True
+    assert "@@RALF_EDIT" in result
