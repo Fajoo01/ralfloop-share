@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -13,6 +14,7 @@ from ralfloop_agent.domains.domain_approval import (
     scope_digest,
 )
 from ralfloop_agent.domains.domain_approval_store import DomainApprovalStore
+from ralfloop_agent.domains.storage import append_jsonl
 
 from .workflow import RepairRecord, RepairStore
 
@@ -121,11 +123,21 @@ class RepairApprovalService:
         *,
         policy: DomainApprovalPolicy,
         repair_store: RepairStore | None = None,
+        outbox_path: str | Path | None = None,
     ) -> None:
         self.store = store
         self.policy = policy
         self.repair_store = repair_store or RepairStore(
             Path.home() / ".local" / "state" / "ralf" / "repair" / "records"
+        )
+        configured_outbox = (
+            outbox_path
+            or os.getenv("RALFLOOP_TELEGRAM_APPROVAL_OUTBOX")
+        )
+        self.outbox_path = (
+            Path(configured_outbox).expanduser()
+            if configured_outbox
+            else None
         )
 
     @classmethod
@@ -277,17 +289,61 @@ class RepairApprovalService:
             requested_by=requested_by,
         )
 
+        request = (
+            out.get("request")
+            if isinstance(out, Mapping)
+            else None
+        )
+
         request_id = str(
             out.get("request_id")
-            or ((out.get("request") or {}).get("request_id") if isinstance(out.get("request"), Mapping) else "")
+            or (
+                request.get("request_id")
+                if isinstance(request, Mapping)
+                else ""
+            )
             or ""
         )
+
+        notification_queued = False
+
+        if request_id and self.outbox_path is not None:
+            try:
+                append_jsonl(
+                    self.outbox_path,
+                    {
+                        "status": "queued",
+                        "request_id": request_id,
+                        "api_url": self.policy.api_url,
+                        "message": str(
+                            request.get("telegram_message") or ""
+                        )
+                        if isinstance(request, Mapping)
+                        else "",
+                    },
+                )
+            except OSError:
+                self.store.cancel(request_id)
+                return {
+                    "status": "approval_notification_failed",
+                    "approval_required": True,
+                    "request_id": request_id,
+                    "notification_queued": False,
+                }
+
+            notification_queued = True
 
         if request_id:
             record.approval_request_id = request_id
             record.approval_status = "pending_user"
             record.status = "approval_requested"
             self.repair_store.save(record)
+
+        if isinstance(out, Mapping):
+            return {
+                **out,
+                "notification_queued": notification_queued,
+            }
 
         return out
 
