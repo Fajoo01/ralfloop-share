@@ -294,74 +294,392 @@ class LocalModelToolCodeRetriever:
         }
 
 class LlamaCppPatchProposer:
+    """LLM code proposer with deterministic Git patch construction.
+
+    The model never writes unified-diff syntax. It returns structured exact
+    textual edits; Python applies those edits in memory and generates the Git
+    patch deterministically.
+    """
+
     def __init__(
         self,
         *,
         session: requests.Session | None = None,
         scheduler: TransactionalGpuScheduler | None = None,
     ) -> None:
-        # Repair non deve degradare su Ollama: usa llama.cpp + GPU lifecycle.
-        self.config = replace(
-            LlamaCppServerConfig.from_env(),
-            fallback="none",
+        base = LlamaCppServerConfig.from_env()
+
+        # Repair is deliberately llama.cpp-only and gets enough context for
+        # source editing. The RTX lifecycle scheduler still decides when the
+        # model may occupy the GPU.
+        repair_context = max(
+            int(base.context),
+            int(os.getenv("RALF_REPAIR_LLAMA_CONTEXT", "32768")),
         )
+
+        self.config = replace(
+            base,
+            fallback="none",
+            context=repair_context,
+        )
+
         self.session = session or requests.Session()
+
         self.scheduler = scheduler or TransactionalGpuScheduler(
             chat=LlamaCppServerManager(self.config)
         )
+
         self.request_timeout_sec = max(
             float(self.config.request_timeout_sec),
             float(os.getenv("RALF_REPAIR_LLAMA_TIMEOUT_SEC", "900")),
         )
 
-    def __call__(self, worktree: Path, description: str, selected_files: list[str]) -> str:
-        if self.config.fallback != "none":
-            raise RuntimeError("repair_requires_llama_cpp_without_fallback")
-        sources = []
-        for raw in selected_files[:5]:
-            path = (worktree / raw).resolve()
-            path.relative_to(worktree.resolve())
-            if path.is_symlink() or not path.is_file():
-                raise RuntimeError(f"invalid_selected_file:{raw}")
-            sources.append(f"<file path={json.dumps(raw)}>\n{path.read_text(encoding='utf-8')[:20000]}\n</file>")
-        prompt = (
-            "Produce only one unified git diff. Do not add prose or markdown fences. "
-            "Modify at most five supplied text files. Never bypass approval, touch credentials, services, .git, "
-            "Telegram, RecursiveMAS, checkpoints, models, or main_plugin.py.\n\n"
-            f"Problem:\n{description[:8000]}\n\n" + "\n".join(sources)
+        self.max_output_tokens = int(
+            os.getenv("RALF_REPAIR_MAX_OUTPUT_TOKENS", "5000")
         )
-        # Fail closed: nessuna POST finché l'handoff GPU non è riuscito.
+
+        self.max_source_chars = int(
+            os.getenv("RALF_REPAIR_MAX_SOURCE_CHARS", "65000")
+        )
+
+    def _source_blocks(
+        self,
+        worktree: Path,
+        selected_files: list[str],
+    ) -> tuple[dict[str, str], str]:
+        originals: dict[str, str] = {}
+
+        for rel in selected_files:
+            path = worktree / rel
+            originals[rel] = path.read_text(encoding="utf-8")
+
+        if not selected_files:
+            raise RuntimeError("repair_no_selected_files")
+
+        per_file = max(
+            4000,
+            self.max_source_chars // len(selected_files),
+        )
+
+        blocks: list[str] = []
+
+        for rel in selected_files:
+            text = originals[rel]
+            visible = text[:per_file]
+
+            blocks.append(
+                f'<file path="{rel}">\n'
+                f"{visible}\n"
+                f"</file>"
+            )
+
+        return originals, "\n\n".join(blocks)
+
+    def _request_plan(
+        self,
+        prompt: str,
+        selected_files: list[str],
+    ) -> dict[str, Any]:
+        schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["edits"],
+            "properties": {
+                "edits": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 24,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["path", "old", "new"],
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "enum": selected_files,
+                            },
+                            "old": {
+                                "type": "string",
+                                "minLength": 1,
+                            },
+                            "new": {
+                                "type": "string",
+                            },
+                        },
+                    },
+                },
+            },
+        }
+
+        base_payload = {
+            "model": self.config.model,
+            "temperature": 0,
+            "max_tokens": self.max_output_tokens,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a precise source-code editor. "
+                        "Return only structured exact textual replacements. "
+                        "Never return a Git diff."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ],
+        }
+
+        payload = dict(base_payload)
+        payload["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "ralf_repair_edits",
+                "strict": True,
+                "schema": schema,
+            },
+        }
+
+        response = self.session.post(
+            f"{self.config.base_url}/v1/chat/completions",
+            json=payload,
+            timeout=(2.0, self.request_timeout_sec),
+        )
+
+        # Compatibility path for llama.cpp builds that support JSON grammar
+        # but not the newer json_schema form.
+        if response.status_code == 400:
+            response.close()
+
+            payload = dict(base_payload)
+            payload["response_format"] = {
+                "type": "json_object"
+            }
+
+            response = self.session.post(
+                f"{self.config.base_url}/v1/chat/completions",
+                json=payload,
+                timeout=(2.0, self.request_timeout_sec),
+            )
+
+        try:
+            response.raise_for_status()
+            envelope = response.json()
+        finally:
+            response.close()
+
+        content = envelope["choices"][0]["message"]["content"]
+
+        if isinstance(content, dict):
+            plan = content
+        else:
+            try:
+                plan = json.loads(str(content).strip())
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"repair_structured_json_invalid:{exc}"
+                ) from exc
+
+        if not isinstance(plan, dict):
+            raise RuntimeError("repair_structured_plan_not_object")
+
+        return plan
+
+    @staticmethod
+    def _apply_plan(
+        originals: dict[str, str],
+        selected_files: list[str],
+        plan: dict[str, Any],
+    ) -> dict[str, str]:
+        edits = plan.get("edits")
+
+        if not isinstance(edits, list) or not edits:
+            raise RuntimeError("repair_structured_edits_missing")
+
+        if len(edits) > 24:
+            raise RuntimeError("repair_structured_edit_limit")
+
+        modified = dict(originals)
+
+        for index, edit in enumerate(edits):
+            if not isinstance(edit, dict):
+                raise RuntimeError(
+                    f"repair_structured_edit_not_object:{index}"
+                )
+
+            rel = edit.get("path")
+            old = edit.get("old")
+            new = edit.get("new")
+
+            if rel not in selected_files:
+                raise RuntimeError(
+                    f"repair_structured_path_forbidden:{rel}"
+                )
+
+            if not isinstance(old, str) or not old:
+                raise RuntimeError(
+                    f"repair_structured_old_invalid:{rel}:{index}"
+                )
+
+            if not isinstance(new, str):
+                raise RuntimeError(
+                    f"repair_structured_new_invalid:{rel}:{index}"
+                )
+
+            current = modified[rel]
+            occurrences = current.count(old)
+
+            if occurrences != 1:
+                raise RuntimeError(
+                    "repair_structured_old_occurrences:"
+                    f"{rel}:{index}:{occurrences}"
+                )
+
+            modified[rel] = current.replace(
+                old,
+                new,
+                1,
+            )
+
+        return modified
+
+    @staticmethod
+    def _build_patch(
+        worktree: Path,
+        originals: dict[str, str],
+        modified: dict[str, str],
+        selected_files: list[str],
+    ) -> str:
+        import difflib
+        import subprocess
+
+        chunks: list[str] = []
+
+        for rel in selected_files:
+            before = originals[rel]
+            after = modified[rel]
+
+            if before == after:
+                continue
+
+            body = "".join(
+                difflib.unified_diff(
+                    before.splitlines(keepends=True),
+                    after.splitlines(keepends=True),
+                    fromfile=f"a/{rel}",
+                    tofile=f"b/{rel}",
+                    n=3,
+                )
+            )
+
+            if body:
+                chunks.append(
+                    f"diff --git a/{rel} b/{rel}\n{body}"
+                )
+
+        patch = "".join(chunks)
+
+        if not patch:
+            raise RuntimeError("repair_structured_no_changes")
+
+        if not patch.endswith("\n"):
+            patch += "\n"
+
+        check = subprocess.run(
+            ["git", "apply", "--check", "-"],
+            cwd=worktree,
+            input=patch,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        if check.returncode != 0:
+            raise RuntimeError(
+                "repair_deterministic_patch_invalid:"
+                + check.stderr.strip()[:1000]
+            )
+
+        return patch
+
+    def __call__(
+        self,
+        worktree: Path,
+        description: str,
+        selected_files: list[str],
+    ) -> str:
+        selected_files = [
+            str(path)
+            for path in selected_files
+        ]
+
+        originals, sources = self._source_blocks(
+            worktree,
+            selected_files,
+        )
+
+        base_prompt = (
+            "Implement the requested repair using exact textual edits.\n\n"
+            "Rules:\n"
+            "- DO NOT write a unified diff.\n"
+            "- Each old value must be copied exactly and contiguously "
+            "from the provided source.\n"
+            "- Each old value must identify exactly one occurrence.\n"
+            "- Modify only the supplied files.\n"
+            "- Keep changes minimal and bounded.\n"
+            "- Add or update tests when required.\n"
+            "- Do not weaken existing tests merely to make them pass.\n"
+            "- Do not modify approval policy, credentials, models, "
+            "systemd, drivers or .git unless explicitly requested.\n\n"
+            f"Problem:\n{description[:8000]}\n\n"
+            f"Sources:\n{sources}"
+        )
+
+        # One GPU transaction may contain one bounded correction retry.
         with self.scheduler.engine_session(
             "qwen_chat",
             task_id="repair_patch_proposal",
         ):
-            response = self.session.post(
-                f"{self.config.base_url}/v1/chat/completions",
-                json={
-                    "model": self.config.model,
-                    "temperature": 0,
-                    "messages": [
-                        {"role": "system", "content": "You propose bounded code patches; validators decide whether they are safe."},
-                        {"role": "user", "content": prompt},
-                    ],
-                },
-                timeout=(2.0, self.request_timeout_sec),
-            )
-        try:
-            response.raise_for_status()
-            payload = response.json()
-        finally:
-            response.close()
-        try:
-            patch = str(payload["choices"][0]["message"]["content"]).strip()
-        except (KeyError, IndexError, TypeError) as exc:
-            raise RuntimeError("llama_cpp_patch_response_invalid") from exc
-        if patch.startswith("```"):
-            lines = patch.splitlines()
-            if lines and lines[-1].strip() == "```":
-                patch = "\n".join(lines[1:-1]).removeprefix("diff\n")
-        return patch
+            prompt = base_prompt
+            last_error: RuntimeError | None = None
 
+            for attempt in range(2):
+                plan = self._request_plan(
+                    prompt,
+                    selected_files,
+                )
+
+                try:
+                    modified = self._apply_plan(
+                        originals,
+                        selected_files,
+                        plan,
+                    )
+
+                    return self._build_patch(
+                        worktree,
+                        originals,
+                        modified,
+                        selected_files,
+                    )
+
+                except RuntimeError as exc:
+                    last_error = exc
+
+                    if attempt:
+                        raise
+
+                    prompt = (
+                        base_prompt
+                        + "\n\nYour previous structured edit plan could "
+                        "not be applied exactly. Produce a corrected plan. "
+                        "Do not change the requested behavior.\n"
+                        f"Validation error: {exc}"
+                    )
+
+            assert last_error is not None
+            raise last_error
 
 class RepairManager:
     def __init__(

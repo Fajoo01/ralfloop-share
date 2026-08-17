@@ -191,3 +191,172 @@ def test_patch_proposer_does_not_post_before_gpu_session(tmp_path):
         )
 
     assert session.called is False
+
+
+
+def test_structured_patch_proposer_builds_git_valid_diff(
+    tmp_path,
+):
+    from contextlib import contextmanager
+    import json
+    import subprocess
+
+    from ralfloop_agent.repair.workflow import (
+        LlamaCppPatchProposer,
+    )
+
+    source = tmp_path / "sample.py"
+    source.write_text(
+        "value = 1\nprint(value)\n",
+        encoding="utf-8",
+    )
+
+    class Scheduler:
+        entered = False
+
+        @contextmanager
+        def engine_session(
+            self,
+            engine,
+            *,
+            task_id="",
+        ):
+            assert engine == "qwen_chat"
+            self.entered = True
+            yield {
+                "gpu_lock_owner": "test",
+            }
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "edits": [
+                                        {
+                                            "path": "sample.py",
+                                            "old": "value = 1",
+                                            "new": "value = 2",
+                                        }
+                                    ]
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
+
+        def close(self):
+            return None
+
+    class Session:
+        payload = None
+
+        def post(self, url, **kwargs):
+            self.payload = kwargs["json"]
+            return Response()
+
+    scheduler = Scheduler()
+    session = Session()
+
+    proposer = LlamaCppPatchProposer(
+        session=session,
+        scheduler=scheduler,
+    )
+
+    patch = proposer(
+        tmp_path,
+        "Change value from 1 to 2",
+        ["sample.py"],
+    )
+
+    assert scheduler.entered is True
+
+    assert session.payload["response_format"]["type"] == (
+        "json_schema"
+    )
+
+    assert "diff --git a/sample.py b/sample.py" in patch
+    assert "-value = 1" in patch
+    assert "+value = 2" in patch
+
+    check = subprocess.run(
+        ["git", "apply", "--check", "-"],
+        cwd=tmp_path,
+        input=patch,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert check.returncode == 0, check.stderr
+
+
+def test_structured_patch_proposer_rejects_ambiguous_old_text(
+    tmp_path,
+):
+    from ralfloop_agent.repair.workflow import (
+        LlamaCppPatchProposer,
+    )
+
+    originals = {
+        "sample.py": "value = 1\nvalue = 1\n",
+    }
+
+    plan = {
+        "edits": [
+            {
+                "path": "sample.py",
+                "old": "value = 1",
+                "new": "value = 2",
+            }
+        ]
+    }
+
+    import pytest
+
+    with pytest.raises(
+        RuntimeError,
+        match="repair_structured_old_occurrences",
+    ):
+        LlamaCppPatchProposer._apply_plan(
+            originals,
+            ["sample.py"],
+            plan,
+        )
+
+
+def test_structured_patch_proposer_forbids_unselected_path(
+    tmp_path,
+):
+    from ralfloop_agent.repair.workflow import (
+        LlamaCppPatchProposer,
+    )
+
+    import pytest
+
+    with pytest.raises(
+        RuntimeError,
+        match="repair_structured_path_forbidden",
+    ):
+        LlamaCppPatchProposer._apply_plan(
+            {"sample.py": "value = 1\n"},
+            ["sample.py"],
+            {
+                "edits": [
+                    {
+                        "path": "../../evil.py",
+                        "old": "x",
+                        "new": "y",
+                    }
+                ]
+            },
+        )
