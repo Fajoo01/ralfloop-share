@@ -294,12 +294,19 @@ class LocalModelToolCodeRetriever:
         }
 
 class LlamaCppPatchProposer:
-    """LLM code proposer with deterministic Git patch construction.
+    """LLM proposer using deterministic line-coordinate edit protocol v2.
 
-    The model never writes unified-diff syntax. It returns structured exact
-    textual edits; Python applies those edits in memory and generates the Git
-    patch deterministically.
+    The model never copies source anchors and never writes unified-diff syntax.
+    It selects visible 1-based half-open line ranges and returns replacement
+    source as raw text. Python validates and applies the ranges in memory and
+    builds the Git patch deterministically.
     """
+
+    _EDIT_HEADER = re.compile(
+        r"^@@RALF_EDIT[ \t]+path=(?P<path>\S+)"
+        r"[ \t]+start=(?P<start>[0-9]+)"
+        r"[ \t]+end=(?P<end>[0-9]+)[ \t]*$"
+    )
 
     def __init__(
         self,
@@ -309,9 +316,6 @@ class LlamaCppPatchProposer:
     ) -> None:
         base = LlamaCppServerConfig.from_env()
 
-        # Repair is deliberately llama.cpp-only and gets enough context for
-        # source editing. The RTX lifecycle scheduler still decides when the
-        # model may occupy the GPU.
         repair_context = max(
             int(base.context),
             int(os.getenv("RALF_REPAIR_LLAMA_CONTEXT", "32768")),
@@ -339,82 +343,200 @@ class LlamaCppPatchProposer:
         )
 
         self.max_source_chars = int(
-            os.getenv("RALF_REPAIR_MAX_SOURCE_CHARS", "65000")
+            os.getenv("RALF_REPAIR_MAX_SOURCE_CHARS", "100000")
         )
+
+    @staticmethod
+    def _description_tokens(description: str) -> list[str]:
+        tokens = set(
+            re.findall(
+                r"[A-Za-z_][A-Za-z0-9_]{3,}",
+                description,
+            )
+        )
+        return sorted(
+            tokens,
+            key=lambda value: (
+                -int("_" in value),
+                -len(value),
+                value,
+            ),
+        )[:80]
+
+    @classmethod
+    def _source_windows(
+        cls,
+        text: str,
+        description: str,
+    ) -> list[tuple[int, int]]:
+        lines = text.splitlines(keepends=True)
+        total = len(lines)
+
+        if total == 0:
+            return [(1, 1)]
+
+        tokens = cls._description_tokens(description)
+        scored: list[tuple[int, int]] = []
+
+        for line_no, line in enumerate(lines, 1):
+            score = 0
+            for token in tokens:
+                if token in line:
+                    score += 12 if "_" in token else min(len(token), 8)
+            if score:
+                scored.append((score, line_no))
+
+        scored.sort(key=lambda row: (-row[0], row[1]))
+
+        windows: list[tuple[int, int]] = [
+            (1, min(total, 60)),
+        ]
+
+        for _score, line_no in scored[:10]:
+            windows.append(
+                (
+                    max(1, line_no - 100),
+                    min(total, line_no + 100),
+                )
+            )
+
+        if len(windows) == 1:
+            windows.append((1, min(total, 260)))
+
+        windows.sort()
+
+        merged: list[list[int]] = []
+        for start, end in windows:
+            if not merged or start > merged[-1][1] + 1:
+                merged.append([start, end])
+            else:
+                merged[-1][1] = max(merged[-1][1], end)
+
+        return [(start, end) for start, end in merged]
+
+    @classmethod
+    def _render_source(
+        cls,
+        text: str,
+        description: str,
+        budget: int,
+    ) -> tuple[str, list[tuple[int, int]]]:
+        lines = text.splitlines(keepends=True)
+
+        if not lines:
+            return "000001|<EMPTY FILE>\n", [(1, 1)]
+
+        rendered: list[str] = []
+        visible: list[tuple[int, int]] = []
+        used = 0
+
+        for start, end in cls._source_windows(text, description):
+            actual_start: int | None = None
+            actual_end: int | None = None
+
+            rendered.append(
+                f'<lines start="{start}" end="{end}">\n'
+            )
+
+            for line_no in range(start, end + 1):
+                line = lines[line_no - 1]
+                row = f"{line_no:06d}|{line}"
+
+                if used + len(row) > budget:
+                    break
+
+                if actual_start is None:
+                    actual_start = line_no
+
+                actual_end = line_no
+                rendered.append(row)
+                used += len(row)
+
+            rendered.append("</lines>\n")
+
+            if actual_start is not None and actual_end is not None:
+                visible.append((actual_start, actual_end))
+
+            if used >= budget:
+                break
+
+        return "".join(rendered), visible
 
     def _source_blocks(
         self,
         worktree: Path,
         selected_files: list[str],
-    ) -> tuple[dict[str, str], str]:
-        originals: dict[str, str] = {}
-
-        for rel in selected_files:
-            path = worktree / rel
-            originals[rel] = path.read_text(encoding="utf-8")
-
+        description: str = "",
+    ) -> tuple[
+        dict[str, str],
+        str,
+        dict[str, list[tuple[int, int]]],
+    ]:
         if not selected_files:
             raise RuntimeError("repair_no_selected_files")
 
-        per_file = max(
-            4000,
-            self.max_source_chars // len(selected_files),
-        )
-
-        blocks: list[str] = []
+        originals: dict[str, str] = {}
 
         for rel in selected_files:
-            text = originals[rel]
-            visible = text[:per_file]
+            originals[rel] = (worktree / rel).read_text(
+                encoding="utf-8"
+            )
+
+        mentioned = [
+            rel
+            for rel in selected_files
+            if rel in description
+        ]
+
+        ordered = mentioned + [
+            rel for rel in selected_files if rel not in mentioned
+        ]
+
+        weights = {
+            rel: (4 if rel in mentioned else 1)
+            for rel in ordered
+        }
+        weight_total = max(1, sum(weights.values()))
+
+        blocks: list[str] = []
+        visible_spans: dict[str, list[tuple[int, int]]] = {}
+
+        for rel in ordered:
+            budget = max(
+                4000,
+                int(
+                    self.max_source_chars
+                    * weights[rel]
+                    / weight_total
+                ),
+            )
+
+            body, spans = self._render_source(
+                originals[rel],
+                description,
+                budget,
+            )
+
+            visible_spans[rel] = spans
 
             blocks.append(
                 f'<file path="{rel}">\n'
-                f"{visible}\n"
+                f"{body}"
                 f"</file>"
             )
 
-        return originals, "\n\n".join(blocks)
+        return (
+            originals,
+            "\n\n".join(blocks),
+            visible_spans,
+        )
 
     def _request_plan(
         self,
         prompt: str,
         selected_files: list[str],
-    ) -> dict[str, Any]:
-        schema = {
-            "type": "object",
-            "additionalProperties": False,
-            "required": ["edits"],
-            "properties": {
-                "edits": {
-                    "type": "array",
-                    "minItems": 1,
-                    "maxItems": 24,
-                    "items": {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "required": ["path", "kind", "old", "new"],
-                        "properties": {
-                            "path": {
-                                "type": "string",
-                                "enum": selected_files,
-                            },
-                            "kind": {
-                                "type": "string",
-                                "enum": ["replace", "append"],
-                            },
-                            "old": {
-                                "type": "string",
-                            },
-                            "new": {
-                                "type": "string",
-                            },
-                        },
-                    },
-                },
-            },
-        }
-
-        base_payload = {
+    ) -> str:
+        payload = {
             "model": self.config.model,
             "temperature": 0,
             "max_tokens": self.max_output_tokens,
@@ -423,8 +545,8 @@ class LlamaCppPatchProposer:
                     "role": "system",
                     "content": (
                         "You are a precise source-code editor. "
-                        "Return only structured exact textual replacements. "
-                        "Never return a Git diff."
+                        "Output only RALF_EDIT protocol v2 blocks. "
+                        "Never output JSON, Markdown, prose or Git diff."
                     ),
                 },
                 {
@@ -434,37 +556,11 @@ class LlamaCppPatchProposer:
             ],
         }
 
-        payload = dict(base_payload)
-        payload["response_format"] = {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "ralf_repair_edits",
-                "strict": True,
-                "schema": schema,
-            },
-        }
-
         response = self.session.post(
             f"{self.config.base_url}/v1/chat/completions",
             json=payload,
             timeout=(2.0, self.request_timeout_sec),
         )
-
-        # Compatibility path for llama.cpp builds that support JSON grammar
-        # but not the newer json_schema form.
-        if response.status_code == 400:
-            response.close()
-
-            payload = dict(base_payload)
-            payload["response_format"] = {
-                "type": "json_object"
-            }
-
-            response = self.session.post(
-                f"{self.config.base_url}/v1/chat/completions",
-                json=payload,
-                timeout=(2.0, self.request_timeout_sec),
-            )
 
         try:
             response.raise_for_status()
@@ -472,28 +568,123 @@ class LlamaCppPatchProposer:
         finally:
             response.close()
 
-        content = envelope["choices"][0]["message"]["content"]
+        try:
+            content = envelope["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise RuntimeError(
+                "repair_edit_response_invalid"
+            ) from exc
 
-        if isinstance(content, dict):
-            plan = content
-        else:
-            try:
-                plan = json.loads(str(content).strip())
-            except json.JSONDecodeError as exc:
+        if not isinstance(content, str):
+            raise RuntimeError("repair_edit_content_not_text")
+
+        return content
+
+    @classmethod
+    def _parse_edit_protocol(
+        cls,
+        content: str,
+        selected_files: list[str],
+    ) -> list[dict[str, Any]]:
+        text = content.strip()
+
+        if text.startswith("```") and text.endswith("```"):
+            rows = text.splitlines(keepends=True)
+            if len(rows) >= 2:
+                rows = rows[1:-1]
+                text = "".join(rows).strip()
+
+        rows = text.splitlines(keepends=True)
+        edits: list[dict[str, Any]] = []
+        index = 0
+
+        while index < len(rows):
+            raw = rows[index]
+            stripped = raw.rstrip("\r\n")
+
+            if not stripped.strip():
+                index += 1
+                continue
+
+            match = cls._EDIT_HEADER.fullmatch(stripped)
+
+            if match is None:
                 raise RuntimeError(
-                    f"repair_structured_json_invalid:{exc}"
-                ) from exc
+                    f"repair_edit_unexpected_text:{index + 1}"
+                )
 
-        if not isinstance(plan, dict):
-            raise RuntimeError("repair_structured_plan_not_object")
+            rel = match.group("path")
+            start = int(match.group("start"))
+            end = int(match.group("end"))
 
-        return plan
+            if rel not in selected_files:
+                raise RuntimeError(
+                    f"repair_structured_path_forbidden:{rel}"
+                )
+
+            index += 1
+            body: list[str] = []
+
+            while index < len(rows):
+                if rows[index].strip() == "@@RALF_END":
+                    break
+
+                body.append(rows[index])
+                index += 1
+
+            if index >= len(rows):
+                raise RuntimeError(
+                    f"repair_edit_missing_end:{rel}"
+                )
+
+            edits.append(
+                {
+                    "path": rel,
+                    "start": start,
+                    "end": end,
+                    "replacement": "".join(body),
+                }
+            )
+
+            if len(edits) > 24:
+                raise RuntimeError("repair_structured_edit_limit")
+
+            index += 1
+
+        if not edits:
+            raise RuntimeError("repair_structured_edits_missing")
+
+        return edits
 
     @staticmethod
+    def _range_is_visible(
+        spans: list[tuple[int, int]],
+        start: int,
+        end: int,
+    ) -> bool:
+        if start == end:
+            return any(
+                span_start <= start <= span_end + 1
+                for span_start, span_end in spans
+            )
+
+        return any(
+            span_start <= start
+            and end - 1 <= span_end
+            for span_start, span_end in spans
+        )
+
+    @classmethod
     def _apply_plan(
+        cls,
         originals: dict[str, str],
         selected_files: list[str],
         plan: dict[str, Any],
+        *,
+        visible_spans: dict[
+            str,
+            list[tuple[int, int]],
+        ] | None = None,
     ) -> dict[str, str]:
         edits = plan.get("edits")
 
@@ -503,7 +694,10 @@ class LlamaCppPatchProposer:
         if len(edits) > 24:
             raise RuntimeError("repair_structured_edit_limit")
 
-        modified = dict(originals)
+        normalized: dict[
+            str,
+            list[tuple[int, int, str, int]],
+        ] = {}
 
         for index, edit in enumerate(edits):
             if not isinstance(edit, dict):
@@ -512,73 +706,107 @@ class LlamaCppPatchProposer:
                 )
 
             rel = edit.get("path")
-            kind = edit.get("kind", "replace")
-            old = edit.get("old")
-            new = edit.get("new")
+            start = edit.get("start")
+            end = edit.get("end")
+            replacement = edit.get("replacement")
 
             if rel not in selected_files:
                 raise RuntimeError(
                     f"repair_structured_path_forbidden:{rel}"
                 )
 
-            if kind not in {"replace", "append"}:
+            if (
+                not isinstance(start, int)
+                or isinstance(start, bool)
+                or not isinstance(end, int)
+                or isinstance(end, bool)
+            ):
                 raise RuntimeError(
-                    f"repair_structured_kind_invalid:{rel}:{index}:{kind}"
+                    f"repair_edit_range_invalid:{rel}:{index}"
                 )
 
-            if not isinstance(old, str):
-                raise RuntimeError(
-                    f"repair_structured_old_invalid:{rel}:{index}"
-                )
-
-            if not isinstance(new, str):
+            if not isinstance(replacement, str):
                 raise RuntimeError(
                     f"repair_structured_new_invalid:{rel}:{index}"
                 )
 
-            current = modified[rel]
+            line_count = len(
+                originals[rel].splitlines(keepends=True)
+            )
 
-            if kind == "append":
-                # Append è intenzionalmente molto limitato:
-                # può solo aggiungere in coda a un file già selezionato.
-                # Non usa anchor inventate dal modello.
-                if old != "":
-                    raise RuntimeError(
-                        f"repair_structured_append_old_must_be_empty:"
-                        f"{rel}:{index}"
-                    )
-
-                if not new:
-                    raise RuntimeError(
-                        f"repair_structured_append_empty:{rel}:{index}"
-                    )
-
-                separator = ""
-
-                if current and not current.endswith("\n"):
-                    separator = "\n"
-
-                modified[rel] = current + separator + new
-
-            else:
-                if not old:
-                    raise RuntimeError(
-                        f"repair_structured_old_invalid:{rel}:{index}"
-                    )
-
-                occurrences = current.count(old)
-
-                if occurrences != 1:
-                    raise RuntimeError(
-                        "repair_structured_old_occurrences:"
-                        f"{rel}:{index}:{occurrences}"
-                    )
-
-                modified[rel] = current.replace(
-                    old,
-                    new,
-                    1,
+            if (
+                start < 1
+                or end < start
+                or end > line_count + 1
+            ):
+                raise RuntimeError(
+                    f"repair_edit_range_bounds:"
+                    f"{rel}:{index}:{start}:{end}:{line_count}"
                 )
+
+            if visible_spans is not None:
+                spans = visible_spans.get(rel, [])
+
+                if not cls._range_is_visible(
+                    spans,
+                    start,
+                    end,
+                ):
+                    raise RuntimeError(
+                        f"repair_edit_range_not_visible:"
+                        f"{rel}:{index}:{start}:{end}"
+                    )
+
+            normalized.setdefault(rel, []).append(
+                (
+                    start - 1,
+                    end - 1,
+                    replacement,
+                    index,
+                )
+            )
+
+        modified = dict(originals)
+
+        for rel, file_edits in normalized.items():
+            ordered = sorted(
+                file_edits,
+                key=lambda row: (row[0], row[1], row[3]),
+            )
+
+            previous_end = -1
+            previous_start = -1
+
+            for start0, end0, _replacement, index in ordered:
+                if start0 < previous_end:
+                    raise RuntimeError(
+                        f"repair_edit_overlap:{rel}:{index}"
+                    )
+
+                if start0 == previous_start:
+                    raise RuntimeError(
+                        f"repair_edit_same_coordinate:{rel}:{index}"
+                    )
+
+                previous_start = start0
+                previous_end = max(previous_end, end0)
+
+            lines = originals[rel].splitlines(
+                keepends=True
+            )
+
+            for start0, end0, replacement, _index in sorted(
+                file_edits,
+                key=lambda row: (row[0], row[1], row[3]),
+                reverse=True,
+            ):
+                replacement_lines = replacement.splitlines(
+                    keepends=True
+                )
+
+                lines[start0:end0] = replacement_lines
+
+            modified[rel] = "".join(lines)
 
         return modified
 
@@ -596,6 +824,16 @@ class LlamaCppPatchProposer:
 
         for rel in selected_files:
             before = originals[rel]
+
+            current = (worktree / rel).read_text(
+                encoding="utf-8"
+            )
+
+            if current != before:
+                raise RuntimeError(
+                    f"repair_source_changed_during_proposal:{rel}"
+                )
+
             after = modified[rel]
 
             if before == after:
@@ -647,81 +885,64 @@ class LlamaCppPatchProposer:
         description: str,
         selected_files: list[str],
     ) -> str:
-        selected_files = [
-            str(path)
-            for path in selected_files
-        ]
+        selected_files = [str(path) for path in selected_files]
 
-        originals, sources = self._source_blocks(
+        originals, sources, visible_spans = self._source_blocks(
             worktree,
             selected_files,
+            description,
         )
 
         base_prompt = (
-            "Implement the requested repair using exact textual edits.\n\n"
+            "Implement the requested repair using RALF_EDIT protocol v2.\n\n"
+            "Each visible source line is prefixed with its ORIGINAL "
+            "1-based line number and '|'. The prefix is NOT source code.\n\n"
+            "For every edit output exactly:\n"
+            "@@RALF_EDIT path=RELATIVE_PATH start=START end=END\n"
+            "<raw replacement source; no line-number prefixes>\n"
+            "@@RALF_END\n\n"
+            "Coordinates are 1-based and half-open against the ORIGINAL "
+            "file. For insertion use start=end.\n\n"
             "Rules:\n"
-            "- DO NOT write a unified diff.\n"
-            "- Use kind=replace when modifying existing text.\n"
-            "- For replace, old must be copied exactly and contiguously "
-            "from the provided source and must identify exactly one "
-            "occurrence.\n"
-            "- Use kind=append when adding new code at the END of a file.\n"
-            "- For append, old MUST be the empty string.\n"
-            "- Never invent an anchor merely to append content.\n"
-            "- Modify only the supplied files.\n"
+            "- Never copy old source text as an anchor.\n"
+            "- Never output JSON, Markdown, prose or unified diff.\n"
+            "- Edit only lines visible in the supplied windows.\n"
+            "- Modify only supplied files.\n"
             "- Keep changes minimal and bounded.\n"
-            "- Add or update tests when required.\n"
-            "- Do not weaken existing tests merely to make them pass.\n"
-            "- Do not modify approval policy, credentials, models, "
-            "systemd, drivers or .git unless explicitly requested.\n\n"
+            "- Do not weaken tests.\n\n"
             f"Problem:\n{description[:8000]}\n\n"
             f"Sources:\n{sources}"
         )
 
-        # One GPU transaction may contain one bounded correction retry.
         with self.scheduler.engine_session(
             "qwen_chat",
             task_id="repair_patch_proposal",
         ):
-            prompt = base_prompt
-            last_error: RuntimeError | None = None
+            raw = self._request_plan(
+                base_prompt,
+                selected_files,
+            )
 
-            for attempt in range(2):
-                plan = self._request_plan(
-                    prompt,
+            plan = {
+                "edits": self._parse_edit_protocol(
+                    raw,
                     selected_files,
                 )
+            }
 
-                try:
-                    modified = self._apply_plan(
-                        originals,
-                        selected_files,
-                        plan,
-                    )
+            modified = self._apply_plan(
+                originals,
+                selected_files,
+                plan,
+                visible_spans=visible_spans,
+            )
 
-                    return self._build_patch(
-                        worktree,
-                        originals,
-                        modified,
-                        selected_files,
-                    )
-
-                except RuntimeError as exc:
-                    last_error = exc
-
-                    if attempt:
-                        raise
-
-                    prompt = (
-                        base_prompt
-                        + "\n\nYour previous structured edit plan could "
-                        "not be applied exactly. Produce a corrected plan. "
-                        "Do not change the requested behavior.\n"
-                        f"Validation error: {exc}"
-                    )
-
-            assert last_error is not None
-            raise last_error
+            return self._build_patch(
+                worktree,
+                originals,
+                modified,
+                selected_files,
+            )
 
 class RepairManager:
     def __init__(
@@ -788,6 +1009,7 @@ class RepairManager:
             f"Review and then remove runtime record {self.store.root / (record.run_id + '.json')}",
         ]
         self.store.save(record)
+
         added = _command(
             ["git", "worktree", "add", "--detach", str(worktree), "HEAD"],
             self.source_repo,
@@ -800,76 +1022,325 @@ class RepairManager:
             record.updated_at = _now()
             self.store.save(record)
             return record
+
         record.status = "diagnosing"
         test_commands = self._tests(worktree)
-        record.pre_tests = [_command(command, worktree) for command in test_commands]
-        retrieval = self.code_retriever(worktree, description)
+        record.pre_tests = [
+            _command(command, worktree)
+            for command in test_commands
+        ]
+
+        retrieval = self.code_retriever(
+            worktree,
+            description,
+        )
         record.code_retriever = retrieval
-        record.selected_files = [str(path) for path in retrieval.get("files", [])[: self.validator.max_files]]
-        if not retrieval.get("ok") or not record.selected_files:
+        record.selected_files = [
+            str(path)
+            for path in retrieval.get("files", [])[
+                : self.validator.max_files
+            ]
+        ]
+
+        if (
+            not retrieval.get("ok")
+            or not record.selected_files
+        ):
             record.status = "blocked"
-            record.error = str(retrieval.get("error_type") or "code_retriever_unavailable")
+            record.error = str(
+                retrieval.get("error_type")
+                or "code_retriever_unavailable"
+            )
             record.updated_at = _now()
             self.store.save(record)
             return record
-        try:
-            patch = self.proposer(worktree, description, record.selected_files)
-        except Exception as exc:
-            record.status = "failed"
-            record.error = f"patch_proposal_failed:{type(exc).__name__}:{exc}"
-            record.updated_at = _now()
-            self.store.save(record)
-            return record
+
         bounded_validator = PatchValidator(
             max_files=self.validator.max_files,
             max_changed_lines=self.validator.max_changed_lines,
             allowed_paths=tuple(record.selected_files),
             allowed_suffixes=self.validator.allowed_suffixes,
         )
-        validation = bounded_validator.validate(patch, worktree)
-        record.validation = {
-            "ok": validation.ok,
-            "files": list(validation.files),
-            "changed_lines": validation.changed_lines,
-            "errors": list(validation.errors),
-        }
-        if not validation.ok:
-            record.status = "failed"
-            record.error = "patch_validation_failed"
-            record.updated_at = _now()
-            self.store.save(record)
-            return record
-        applied = _command(["git", "apply", "-"], worktree, timeout=20, input_text=patch)
-        if applied["exit_code"] != 0:
-            record.status = "failed"
-            record.error = "patch_apply_failed"
-            record.validation["apply"] = applied
-            record.updated_at = _now()
-            self.store.save(record)
-            return record
-        changed = [path for path in validation.files if path.endswith(".py")]
-        checks: list[dict[str, Any]] = []
-        if changed:
+
+        attempts: list[dict[str, Any]] = []
+        correction_evidence = ""
+
+        for attempt_index in range(2):
+            attempt_no = attempt_index + 1
+
+            proposal_description = description
+            if correction_evidence:
+                proposal_description = (
+                    description
+                    + "\n\nCORRECTION ATTEMPT 2 OF 2. "
+                    "The previous candidate failed deterministic "
+                    "verification. Produce a corrected candidate against "
+                    "the ORIGINAL source. Do not change the requested "
+                    "behavior.\n\nFailure evidence:\n"
+                    + correction_evidence[:6000]
+                )
+
+            try:
+                patch = self.proposer(
+                    worktree,
+                    proposal_description,
+                    record.selected_files,
+                )
+            except Exception as exc:
+                evidence = (
+                    "patch_proposal_failed:"
+                    f"{type(exc).__name__}:{exc}"
+                )
+                attempts.append(
+                    {
+                        "attempt": attempt_no,
+                        "stage": "proposal",
+                        "ok": False,
+                        "error": evidence,
+                    }
+                )
+
+                if attempt_index == 0:
+                    correction_evidence = evidence
+                    continue
+
+                record.status = "failed"
+                record.error = evidence
+                record.validation = {
+                    "attempts": attempts,
+                }
+                record.updated_at = _now()
+                self.store.save(record)
+                return record
+
+            validation = bounded_validator.validate(
+                patch,
+                worktree,
+            )
+            validation_payload = {
+                "ok": validation.ok,
+                "files": list(validation.files),
+                "changed_lines": validation.changed_lines,
+                "errors": list(validation.errors),
+            }
+
+            if not validation.ok:
+                evidence = (
+                    "patch_validation_failed:"
+                    + ";".join(validation.errors)
+                )
+                attempts.append(
+                    {
+                        "attempt": attempt_no,
+                        "stage": "validation",
+                        "ok": False,
+                        "error": evidence,
+                        "validation": validation_payload,
+                    }
+                )
+                record.validation = {
+                    **validation_payload,
+                    "attempts": attempts,
+                }
+
+                if attempt_index == 0:
+                    correction_evidence = evidence
+                    continue
+
+                record.status = "failed"
+                record.error = "patch_validation_failed"
+                record.updated_at = _now()
+                self.store.save(record)
+                return record
+
+            applied = _command(
+                ["git", "apply", "-"],
+                worktree,
+                timeout=20,
+                input_text=patch,
+            )
+
+            if applied["exit_code"] != 0:
+                evidence = (
+                    "patch_apply_failed:\n"
+                    + str(applied.get("stderr") or "")[:3000]
+                )
+                attempts.append(
+                    {
+                        "attempt": attempt_no,
+                        "stage": "apply",
+                        "ok": False,
+                        "error": evidence,
+                        "apply": applied,
+                    }
+                )
+                record.validation = {
+                    **validation_payload,
+                    "apply": applied,
+                    "attempts": attempts,
+                }
+
+                if attempt_index == 0:
+                    correction_evidence = evidence
+                    continue
+
+                record.status = "failed"
+                record.error = "patch_apply_failed"
+                record.updated_at = _now()
+                self.store.save(record)
+                return record
+
+            changed = [
+                path
+                for path in validation.files
+                if path.endswith(".py")
+            ]
+
+            checks: list[dict[str, Any]] = []
+
+            if changed:
+                checks.append(
+                    _command(
+                        [
+                            self.python_executable,
+                            "-m",
+                            "py_compile",
+                            *changed,
+                        ],
+                        worktree,
+                        timeout=60,
+                        env_overrides={
+                            "PYTHONPYCACHEPREFIX":
+                                str(run_root / "pycache"),
+                        },
+                    )
+                )
+
+            checks.extend(
+                _command(command, worktree)
+                for command in test_commands
+            )
+
             checks.append(
                 _command(
-                    [self.python_executable, "-m", "py_compile", *changed],
+                    ["git", "diff", "--check"],
                     worktree,
-                    timeout=60,
-                    env_overrides={"PYTHONPYCACHEPREFIX": str(run_root / "pycache")},
+                    timeout=20,
                 )
             )
-        checks.extend(_command(command, worktree) for command in test_commands)
-        checks.append(_command(["git", "diff", "--check"], worktree, timeout=20))
-        record.post_tests = checks
-        # Conserva il patch validato originale: include anche file nuovi/untracked.
-        record.diff = patch
-        if not checks or any(check["exit_code"] != 0 for check in checks):
+
+            record.post_tests = checks
+            record.diff = patch
+
+            failing = [
+                check
+                for check in checks
+                if check["exit_code"] != 0
+            ]
+
+            if not failing:
+                attempts.append(
+                    {
+                        "attempt": attempt_no,
+                        "stage": "verification",
+                        "ok": True,
+                        "checks": checks,
+                    }
+                )
+                record.validation = {
+                    **validation_payload,
+                    "attempts": attempts,
+                }
+                record.status = "approval_pending"
+                record.approval_required = True
+                record.approval_status = "pending_user"
+                record.error = None
+                record.updated_at = _now()
+                self.store.save(record)
+                return record
+
+            evidence_rows = [
+                "deterministic_verification_failed"
+            ]
+
+            for check in failing:
+                evidence_rows.append(
+                    "\ncommand: "
+                    + str(check.get("command") or "")
+                    + "\nexit_code: "
+                    + str(check.get("exit_code"))
+                    + "\nstdout:\n"
+                    + str(check.get("stdout") or "")[:1500]
+                    + "\nstderr:\n"
+                    + str(check.get("stderr") or "")[:2500]
+                )
+
+            evidence = "\n".join(evidence_rows)
+
+            attempt_row: dict[str, Any] = {
+                "attempt": attempt_no,
+                "stage": "verification",
+                "ok": False,
+                "error": "deterministic_verification_failed",
+                "checks": checks,
+            }
+            attempts.append(attempt_row)
+
+            record.validation = {
+                **validation_payload,
+                "attempts": attempts,
+            }
+
+            if attempt_index == 0:
+                reverted = _command(
+                    ["git", "apply", "-R", "-"],
+                    worktree,
+                    timeout=20,
+                    input_text=patch,
+                )
+                attempt_row["candidate_revert"] = reverted
+
+                if reverted["exit_code"] != 0:
+                    record.status = "failed"
+                    record.error = "candidate_revert_failed"
+                    record.updated_at = _now()
+                    self.store.save(record)
+                    return record
+
+                clean = _command(
+                    [
+                        "git",
+                        "diff",
+                        "--quiet",
+                        "--",
+                        *validation.files,
+                    ],
+                    worktree,
+                    timeout=20,
+                )
+                attempt_row["candidate_revert_clean"] = clean
+
+                if clean["exit_code"] != 0:
+                    record.status = "failed"
+                    record.error = "candidate_revert_not_clean"
+                    record.updated_at = _now()
+                    self.store.save(record)
+                    return record
+
+                correction_evidence = evidence
+                continue
+
             record.status = "failed"
             record.error = "deterministic_verification_failed"
-        else:
-            record.status = "approval_pending"
-            record.approval_required = True
-            record.approval_status = "pending_user"
+            record.updated_at = _now()
+            self.store.save(record)
+            return record
+
+        record.status = "failed"
+        record.error = "repair_attempt_budget_exhausted"
+        record.validation = {
+            "attempts": attempts,
+        }
         record.updated_at = _now()
         self.store.save(record)
         return record

@@ -193,17 +193,11 @@ def test_patch_proposer_does_not_post_before_gpu_session(tmp_path):
     assert session.called is False
 
 
-
-def test_structured_patch_proposer_builds_git_valid_diff(
-    tmp_path,
-):
+def test_edit_protocol_v2_builds_git_valid_diff(tmp_path):
     from contextlib import contextmanager
-    import json
     import subprocess
 
-    from ralfloop_agent.repair.workflow import (
-        LlamaCppPatchProposer,
-    )
+    from ralfloop_agent.repair.workflow import LlamaCppPatchProposer
 
     source = tmp_path / "sample.py"
     source.write_text(
@@ -215,17 +209,10 @@ def test_structured_patch_proposer_builds_git_valid_diff(
         entered = False
 
         @contextmanager
-        def engine_session(
-            self,
-            engine,
-            *,
-            task_id="",
-        ):
+        def engine_session(self, engine, *, task_id=""):
             assert engine == "qwen_chat"
             self.entered = True
-            yield {
-                "gpu_lock_owner": "test",
-            }
+            yield {"gpu_lock_owner": "test"}
 
     class Response:
         status_code = 200
@@ -238,16 +225,10 @@ def test_structured_patch_proposer_builds_git_valid_diff(
                 "choices": [
                     {
                         "message": {
-                            "content": json.dumps(
-                                {
-                                    "edits": [
-                                        {
-                                            "path": "sample.py",
-                                            "old": "value = 1",
-                                            "new": "value = 2",
-                                        }
-                                    ]
-                                }
+                            "content": (
+                                "@@RALF_EDIT path=sample.py start=1 end=2\n"
+                                "value = 2\n"
+                                "@@RALF_END\n"
                             )
                         }
                     }
@@ -279,12 +260,10 @@ def test_structured_patch_proposer_builds_git_valid_diff(
     )
 
     assert scheduler.entered is True
-
-    assert session.payload["response_format"]["type"] == (
-        "json_schema"
+    assert "response_format" not in session.payload
+    assert "000001|value = 1" in (
+        session.payload["messages"][1]["content"]
     )
-
-    assert "diff --git a/sample.py b/sample.py" in patch
     assert "-value = 1" in patch
     assert "+value = 2" in patch
 
@@ -300,90 +279,48 @@ def test_structured_patch_proposer_builds_git_valid_diff(
     assert check.returncode == 0, check.stderr
 
 
-def test_structured_patch_proposer_rejects_ambiguous_old_text(
-    tmp_path,
-):
-    from ralfloop_agent.repair.workflow import (
-        LlamaCppPatchProposer,
-    )
-
-    originals = {
-        "sample.py": "value = 1\nvalue = 1\n",
-    }
-
-    plan = {
-        "edits": [
-            {
-                "path": "sample.py",
-                "old": "value = 1",
-                "new": "value = 2",
-            }
-        ]
-    }
-
-    import pytest
-
-    with pytest.raises(
-        RuntimeError,
-        match="repair_structured_old_occurrences",
-    ):
-        LlamaCppPatchProposer._apply_plan(
-            originals,
-            ["sample.py"],
-            plan,
-        )
-
-
-def test_structured_patch_proposer_forbids_unselected_path(
-    tmp_path,
-):
-    from ralfloop_agent.repair.workflow import (
-        LlamaCppPatchProposer,
-    )
-
-    import pytest
-
-    with pytest.raises(
-        RuntimeError,
-        match="repair_structured_path_forbidden",
-    ):
-        LlamaCppPatchProposer._apply_plan(
-            {"sample.py": "value = 1\n"},
-            ["sample.py"],
-            {
-                "edits": [
-                    {
-                        "path": "../../evil.py",
-                        "old": "x",
-                        "new": "y",
-                    }
-                ]
-            },
-        )
-
-
-
-def test_structured_patch_proposer_supports_safe_append(
-    tmp_path,
-):
-    from ralfloop_agent.repair.workflow import (
-        LlamaCppPatchProposer,
-    )
-
-    originals = {
-        "sample.py": "value = 1\n",
-    }
+def test_edit_protocol_v2_repeated_text_is_not_ambiguous():
+    from ralfloop_agent.repair.workflow import LlamaCppPatchProposer
 
     modified = LlamaCppPatchProposer._apply_plan(
-        originals,
+        {
+            "sample.py": (
+                "value = 1\n"
+                "value = 1\n"
+            )
+        },
         ["sample.py"],
         {
             "edits": [
                 {
                     "path": "sample.py",
-                    "kind": "append",
-                    "old": "",
-                    "new": (
+                    "start": 2,
+                    "end": 3,
+                    "replacement": "value = 2\n",
+                }
+            ]
+        },
+    )
+
+    assert modified["sample.py"] == (
+        "value = 1\n"
+        "value = 2\n"
+    )
+
+
+def test_edit_protocol_v2_supports_safe_append():
+    from ralfloop_agent.repair.workflow import LlamaCppPatchProposer
+
+    modified = LlamaCppPatchProposer._apply_plan(
+        {"sample.py": "value = 1\n"},
+        ["sample.py"],
+        {
+            "edits": [
+                {
+                    "path": "sample.py",
+                    "start": 2,
+                    "end": 2,
+                    "replacement": (
                         "\ndef test_marker():\n"
                         "    assert True\n"
                     ),
@@ -400,30 +337,248 @@ def test_structured_patch_proposer_supports_safe_append(
     )
 
 
-def test_structured_patch_proposer_append_rejects_anchor(
-    tmp_path,
-):
+def test_edit_protocol_v2_rejects_unselected_path():
     import pytest
 
-    from ralfloop_agent.repair.workflow import (
-        LlamaCppPatchProposer,
-    )
+    from ralfloop_agent.repair.workflow import LlamaCppPatchProposer
 
     with pytest.raises(
         RuntimeError,
-        match="append_old_must_be_empty",
+        match="repair_structured_path_forbidden",
     ):
         LlamaCppPatchProposer._apply_plan(
-            {"sample.py": "value = 1\n"},
+            {"sample.py": "x = 1\n"},
+            ["sample.py"],
+            {
+                "edits": [
+                    {
+                        "path": "../../evil.py",
+                        "start": 1,
+                        "end": 2,
+                        "replacement": "x = 2\n",
+                    }
+                ]
+            },
+        )
+
+
+def test_edit_protocol_v2_rejects_out_of_bounds():
+    import pytest
+
+    from ralfloop_agent.repair.workflow import LlamaCppPatchProposer
+
+    with pytest.raises(
+        RuntimeError,
+        match="repair_edit_range_bounds",
+    ):
+        LlamaCppPatchProposer._apply_plan(
+            {"sample.py": "x = 1\n"},
             ["sample.py"],
             {
                 "edits": [
                     {
                         "path": "sample.py",
-                        "kind": "append",
-                        "old": "value = 1",
-                        "new": "value = 2",
+                        "start": 3,
+                        "end": 3,
+                        "replacement": "x = 2\n",
                     }
                 ]
             },
         )
+
+
+def test_edit_protocol_v2_rejects_overlap():
+    import pytest
+
+    from ralfloop_agent.repair.workflow import LlamaCppPatchProposer
+
+    with pytest.raises(
+        RuntimeError,
+        match="repair_edit_overlap",
+    ):
+        LlamaCppPatchProposer._apply_plan(
+            {
+                "sample.py": (
+                    "a = 1\n"
+                    "b = 2\n"
+                    "c = 3\n"
+                )
+            },
+            ["sample.py"],
+            {
+                "edits": [
+                    {
+                        "path": "sample.py",
+                        "start": 1,
+                        "end": 3,
+                        "replacement": "a = 10\n",
+                    },
+                    {
+                        "path": "sample.py",
+                        "start": 2,
+                        "end": 4,
+                        "replacement": "b = 20\n",
+                    },
+                ]
+            },
+        )
+
+
+def test_edit_protocol_v2_rejects_non_visible_range():
+    import pytest
+
+    from ralfloop_agent.repair.workflow import LlamaCppPatchProposer
+
+    with pytest.raises(
+        RuntimeError,
+        match="repair_edit_range_not_visible",
+    ):
+        LlamaCppPatchProposer._apply_plan(
+            {
+                "sample.py": (
+                    "a = 1\n"
+                    "b = 2\n"
+                    "c = 3\n"
+                )
+            },
+            ["sample.py"],
+            {
+                "edits": [
+                    {
+                        "path": "sample.py",
+                        "start": 3,
+                        "end": 4,
+                        "replacement": "c = 30\n",
+                    }
+                ]
+            },
+            visible_spans={"sample.py": [(1, 2)]},
+        )
+
+
+def test_edit_protocol_v2_requires_end_marker():
+    import pytest
+
+    from ralfloop_agent.repair.workflow import LlamaCppPatchProposer
+
+    with pytest.raises(
+        RuntimeError,
+        match="repair_edit_missing_end",
+    ):
+        LlamaCppPatchProposer._parse_edit_protocol(
+            (
+                "@@RALF_EDIT path=sample.py start=1 end=2\n"
+                "x = 2\n"
+            ),
+            ["sample.py"],
+        )
+
+
+
+def test_verification_failure_gets_one_bounded_retry(tmp_path: Path) -> None:
+    repo = _synthetic_repo(tmp_path)
+    original = (repo / "router.py").read_text(encoding="utf-8")
+
+    invalid_patch = """diff --git a/router.py b/router.py
+--- a/router.py
++++ b/router.py
+@@ -2,3 +2,3 @@
+
+ def matches(goal):
+-    return any(trigger in goal for trigger in TRIGGERS)
++    return (
+"""
+
+    calls: list[str] = []
+
+    def proposer(worktree, description, files):
+        calls.append(description)
+        if len(calls) == 1:
+            return invalid_patch
+        if len(calls) == 2:
+            return PATCH
+        raise AssertionError("third proposer call forbidden")
+
+    def retrieve(worktree, description):
+        return {
+            "ok": True,
+            "files": ["router.py"],
+            "result_envelope": {
+                "ok": True,
+                "tool_id": "fixture",
+            },
+        }
+
+    manager = RepairManager(
+        repo,
+        state_root=tmp_path / "state",
+        python_executable=sys.executable,
+        code_retriever=retrieve,
+        proposer=proposer,
+    )
+
+    record = manager.run("fix matcher")
+
+    assert len(calls) == 2
+    assert "CORRECTION ATTEMPT 2 OF 2" in calls[1]
+    assert "py_compile" in calls[1]
+    assert record.status == "approval_pending"
+    assert record.approval_required is True
+    assert record.approval_status == "pending_user"
+    assert record.error is None
+    assert record.validation["attempts"][0]["ok"] is False
+    assert record.validation["attempts"][1]["ok"] is True
+    assert (repo / "router.py").read_text(encoding="utf-8") == original
+    assert "import re" in (
+        Path(record.worktree) / "router.py"
+    ).read_text(encoding="utf-8")
+
+
+def test_verification_retry_stops_after_two_failures(tmp_path: Path) -> None:
+    repo = _synthetic_repo(tmp_path)
+    original = (repo / "router.py").read_text(encoding="utf-8")
+
+    invalid_patch = """diff --git a/router.py b/router.py
+--- a/router.py
++++ b/router.py
+@@ -2,3 +2,3 @@
+
+ def matches(goal):
+-    return any(trigger in goal for trigger in TRIGGERS)
++    return (
+"""
+
+    calls: list[str] = []
+
+    def proposer(worktree, description, files):
+        calls.append(description)
+        if len(calls) > 2:
+            raise AssertionError("third proposer call forbidden")
+        return invalid_patch
+
+    def retrieve(worktree, description):
+        return {
+            "ok": True,
+            "files": ["router.py"],
+            "result_envelope": {
+                "ok": True,
+                "tool_id": "fixture",
+            },
+        }
+
+    manager = RepairManager(
+        repo,
+        state_root=tmp_path / "state",
+        python_executable=sys.executable,
+        code_retriever=retrieve,
+        proposer=proposer,
+    )
+
+    record = manager.run("fix matcher")
+
+    assert len(calls) == 2
+    assert record.status == "failed"
+    assert record.error == "deterministic_verification_failed"
+    assert record.approval_required is False
+    assert len(record.validation["attempts"]) == 2
+    assert (repo / "router.py").read_text(encoding="utf-8") == original
