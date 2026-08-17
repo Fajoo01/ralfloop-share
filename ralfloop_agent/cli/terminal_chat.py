@@ -1054,6 +1054,50 @@ def run_doctor_command(
     return 0 if report.ok else 1
 
 
+def _repair_backend_request(
+    method: str,
+    path: str,
+    *,
+    payload: dict[str, Any] | None = None,
+    timeout: float = 30.0,
+) -> dict[str, Any]:
+    import requests
+
+    base_url = (
+        os.getenv("RALF_REPAIR_BACKEND_URL")
+        or os.getenv("RALFLOOP_BACKEND_URL")
+        or DEFAULT_BASE_URL
+    ).rstrip("/")
+
+    try:
+        response = requests.request(
+            method,
+            f"{base_url}{path}",
+            json=payload,
+            timeout=(DEFAULT_CONNECT_TIMEOUT, timeout),
+        )
+        response.raise_for_status()
+        data = response.json()
+    except requests.RequestException as exc:
+        raise OSError(
+            f"repair_backend_unavailable:{exc}"
+        ) from exc
+    except ValueError as exc:
+        raise OSError(
+            "repair_backend_invalid_json"
+        ) from exc
+    finally:
+        try:
+            response.close()
+        except UnboundLocalError:
+            pass
+
+    if not isinstance(data, dict):
+        raise OSError("repair_backend_invalid_response")
+
+    return data
+
+
 def run_repair_command(
     args: argparse.Namespace,
     *,
@@ -1061,93 +1105,127 @@ def run_repair_command(
     out: TextIO = sys.stdout,
     err: TextIO = sys.stderr,
 ) -> int:
-    from ralfloop_agent.repair.workflow import RepairManager, RepairStore
-
     action = args.repair_action
 
     try:
-        if action == "request-approval":
-            from ralfloop_agent.repair.approval import RepairApprovalService
-
-            result = RepairApprovalService.from_environment().request(
-                args.run_id,
-                requested_by="ralf_repair_cli",
-            )
-            print(
-                json.dumps(
-                    result,
-                    ensure_ascii=False,
-                    indent=2,
-                    default=str,
-                ),
-                file=out,
-            )
-            request_id = (
-                result.get("request_id")
-                or (
-                    (result.get("request") or {}).get("request_id")
-                    if isinstance(result.get("request"), dict)
-                    else None
+        # Dependency injection remains local only for tests/library callers.
+        if manager is not None and action in {
+            "plan",
+            "run",
+            "status",
+        }:
+            if action == "status":
+                record = manager.status(args.run_id)
+            else:
+                description = sanitize_terminal_text(
+                    " ".join(args.description).strip()
                 )
-            )
-            return 0 if request_id else 1
 
-        if action == "apply":
-            from ralfloop_agent.repair.approval import RepairApprovalService
+                if not description:
+                    print(
+                        "missing_repair_description",
+                        file=err,
+                    )
+                    return 2
 
-            result = RepairApprovalService.from_environment().apply(
-                args.request_id
-            )
-            print(
-                json.dumps(
-                    result,
-                    ensure_ascii=False,
-                    indent=2,
-                    default=str,
-                ),
-                file=out,
-            )
-            return 0 if result.get("status") in {
-                "executed",
-                "already_executed",
-            } else 1
+                record = (
+                    manager.plan(description)
+                    if action == "plan"
+                    else manager.run(description)
+                )
 
-        if action == "status":
-            record = (
-                manager.status(args.run_id)
-                if manager is not None
-                else RepairStore(
-                    Path.home()
-                    / ".local"
-                    / "state"
-                    / "ralf"
-                    / "repair"
-                    / "records"
-                ).load(args.run_id)
+            result = record.model_dump(mode="json")
+
+        elif action == "request-approval":
+            result = _repair_backend_request(
+                "POST",
+                f"/repairs/{args.run_id}/approval-request",
+                payload={
+                    "requested_by": "ralf_repair_cli",
+                },
+                timeout=30.0,
             )
+
+        elif action == "apply":
+            result = _repair_backend_request(
+                "POST",
+                f"/repair-approvals/{args.request_id}/apply",
+                timeout=60.0,
+            )
+
+        elif action == "status":
+            result = _repair_backend_request(
+                "GET",
+                f"/repairs/{args.run_id}",
+                timeout=30.0,
+            )
+
         else:
-            selected = manager or RepairManager(
-                getattr(args, "repo", None) or os.getcwd()
-            )
             description = sanitize_terminal_text(
                 " ".join(args.description).strip()
             )
+
             if not description:
-                print("missing_repair_description", file=err)
+                print(
+                    "missing_repair_description",
+                    file=err,
+                )
                 return 2
 
-            record = (
-                selected.plan(description)
-                if action == "plan"
-                else selected.run(description)
+            payload: dict[str, Any] = {
+                "description": description,
+            }
+
+            repo = getattr(args, "repo", None)
+            if repo:
+                payload["repo"] = str(repo)
+
+            result = _repair_backend_request(
+                "POST",
+                f"/repairs/{action}",
+                payload=payload,
+                timeout=(
+                    DEFAULT_AGENT_TIMEOUT
+                    if action == "run"
+                    else 60.0
+                ),
             )
 
     except (KeyError, OSError, ValueError) as exc:
-        print(sanitize_terminal_text(str(exc)), file=err)
+        print(
+            sanitize_terminal_text(str(exc)),
+            file=err,
+        )
         return 2
 
-    print(record.model_dump_json(indent=2), file=out)
-    return 0 if record.status in {
+    print(
+        json.dumps(
+            result,
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        ),
+        file=out,
+    )
+
+    if action == "request-approval":
+        request_id = (
+            result.get("request_id")
+            or (
+                (result.get("request") or {}).get("request_id")
+                if isinstance(result.get("request"), dict)
+                else None
+            )
+        )
+        return 0 if request_id else 1
+
+    if action == "apply":
+        return 0 if result.get("status") in {
+            "executed",
+            "already_executed",
+        } else 1
+
+    return 0 if result.get("status") in {
         "planned",
         "approval_pending",
         "approval_requested",

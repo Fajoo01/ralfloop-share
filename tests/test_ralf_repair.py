@@ -582,3 +582,245 @@ def test_verification_retry_stops_after_two_failures(tmp_path: Path) -> None:
     assert record.approval_required is False
     assert len(record.validation["attempts"]) == 2
     assert (repo / "router.py").read_text(encoding="utf-8") == original
+
+
+
+def test_repair_cli_without_manager_uses_backend_only(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    def fake_request(
+        method,
+        path,
+        *,
+        payload=None,
+        timeout=30.0,
+    ):
+        calls.append(
+            (method, path, payload, timeout)
+        )
+
+        if path == "/repairs/plan":
+            return {
+                "run_id": "a" * 32,
+                "status": "planned",
+            }
+
+        if path == "/repairs/" + ("a" * 32):
+            return {
+                "run_id": "a" * 32,
+                "status": "planned",
+            }
+
+        raise AssertionError(path)
+
+    monkeypatch.setattr(
+        terminal_chat,
+        "_repair_backend_request",
+        fake_request,
+    )
+
+    plan_args = (
+        terminal_chat.build_parser().parse_args(
+            ["repair", "plan", "matcher bug"]
+        )
+    )
+
+    out = io.StringIO()
+
+    assert terminal_chat.run_repair_command(
+        plan_args,
+        out=out,
+        err=io.StringIO(),
+    ) == 0
+
+    assert calls[0][0] == "POST"
+    assert calls[0][1] == "/repairs/plan"
+    assert calls[0][2]["description"] == "matcher bug"
+
+    status_args = (
+        terminal_chat.build_parser().parse_args(
+            ["repair", "status", "a" * 32]
+        )
+    )
+
+    out = io.StringIO()
+
+    assert terminal_chat.run_repair_command(
+        status_args,
+        out=out,
+        err=io.StringIO(),
+    ) == 0
+
+    assert calls[1][0] == "GET"
+    assert calls[1][1] == "/repairs/" + ("a" * 32)
+
+
+def test_repair_cli_approval_and_apply_use_backend(
+    monkeypatch,
+) -> None:
+    from types import SimpleNamespace
+
+    calls = []
+
+    def fake_request(
+        method,
+        path,
+        *,
+        payload=None,
+        timeout=30.0,
+    ):
+        calls.append((method, path, payload))
+
+        if path.endswith("/approval-request"):
+            return {
+                "status": "approval_requested",
+                "request_id": "apr_test",
+            }
+
+        if path == "/repair-approvals/apr_test/apply":
+            return {
+                "status": "executed",
+            }
+
+        raise AssertionError(path)
+
+    monkeypatch.setattr(
+        terminal_chat,
+        "_repair_backend_request",
+        fake_request,
+    )
+
+    request_args = SimpleNamespace(
+        repair_action="request-approval",
+        run_id="b" * 32,
+    )
+
+    assert terminal_chat.run_repair_command(
+        request_args,
+        out=io.StringIO(),
+        err=io.StringIO(),
+    ) == 0
+
+    assert calls[0][0] == "POST"
+    assert calls[0][1] == (
+        "/repairs/" + ("b" * 32) + "/approval-request"
+    )
+
+    apply_args = SimpleNamespace(
+        repair_action="apply",
+        request_id="apr_test",
+    )
+
+    assert terminal_chat.run_repair_command(
+        apply_args,
+        out=io.StringIO(),
+        err=io.StringIO(),
+    ) == 0
+
+    assert calls[1][1] == (
+        "/repair-approvals/apr_test/apply"
+    )
+
+
+def test_backend_registers_repair_control_plane_routes(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import ralfloop_agent.repair.approval as approval_module
+    import ralfloop_agent.repair.workflow as workflow_module
+
+    class Record:
+        def __init__(self, status):
+            self.status = status
+
+        def model_dump(self, mode=None):
+            return {
+                "run_id": "c" * 32,
+                "status": self.status,
+            }
+
+    class Store:
+        root = tmp_path / "repair" / "records"
+
+        def load(self, run_id):
+            assert run_id == "c" * 32
+            return Record("planned")
+
+    class Service:
+        repair_store = Store()
+
+        def preview(self, run_id):
+            return {"status": "preview"}
+
+        def request(self, run_id, requested_by):
+            return {
+                "status": "approval_requested",
+                "request_id": "apr_test",
+            }
+
+        def apply(self, request_id):
+            return {"status": "executed"}
+
+    service = Service()
+
+    class ApprovalFactory:
+        @classmethod
+        def from_environment(cls):
+            return service
+
+    class Manager:
+        def __init__(
+            self,
+            source_repo,
+            *,
+            state_root,
+        ):
+            assert state_root == Store.root.parent
+
+        def plan(self, description):
+            assert description == "fix"
+            return Record("planned")
+
+        def run(self, description):
+            assert description == "fix"
+            return Record("approval_pending")
+
+    monkeypatch.setattr(
+        approval_module,
+        "RepairApprovalService",
+        ApprovalFactory,
+    )
+    monkeypatch.setattr(
+        workflow_module,
+        "RepairManager",
+        Manager,
+    )
+
+    app = FastAPI()
+    approval_module.register_repair_approval_routes(app)
+    client = TestClient(app)
+
+    response = client.post(
+        "/repairs/plan",
+        json={"description": "fix"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "planned"
+
+    response = client.post(
+        "/repairs/run",
+        json={"description": "fix"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "approval_pending"
+
+    response = client.get(
+        "/repairs/" + ("c" * 32)
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "planned"

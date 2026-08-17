@@ -656,8 +656,115 @@ class RepairApprovalService:
 def register_repair_approval_routes(app: Any) -> None:
     service = RepairApprovalService.from_environment()
 
+    canonical_repo = Path(
+        os.getenv(
+            "RALF_REPAIR_SOURCE_REPO",
+            "/home/sibilla-cumana/ralfloop_local_architecture_worktree",
+        )
+    ).expanduser().resolve()
+
+    def _manager():
+        from ralfloop_agent.repair.workflow import RepairManager
+
+        return RepairManager(
+            canonical_repo,
+            state_root=service.repair_store.root.parent,
+        )
+
+    def _check_repo(payload: dict[str, Any] | None) -> str | None:
+        requested = str((payload or {}).get("repo") or "").strip()
+        if not requested:
+            return None
+
+        try:
+            resolved = Path(requested).expanduser().resolve()
+        except OSError:
+            return "invalid_repair_repo"
+
+        if resolved != canonical_repo:
+            return "repair_repo_forbidden"
+
+        return None
+
+    @app.post("/repairs/plan")
+    def repair_plan(
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        repo_error = _check_repo(payload)
+        if repo_error:
+            return {
+                "status": "repair_plan_failed",
+                "error": repo_error,
+            }
+
+        description = str(
+            (payload or {}).get("description") or ""
+        ).strip()
+
+        if not description:
+            return {
+                "status": "repair_plan_failed",
+                "error": "missing_repair_description",
+            }
+
+        try:
+            return _manager().plan(description).model_dump(
+                mode="json"
+            )
+        except (KeyError, OSError, ValueError, RuntimeError) as exc:
+            return {
+                "status": "repair_plan_failed",
+                "error": str(exc),
+            }
+
+    @app.post("/repairs/run")
+    def repair_run(
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        repo_error = _check_repo(payload)
+        if repo_error:
+            return {
+                "status": "repair_run_failed",
+                "error": repo_error,
+            }
+
+        description = str(
+            (payload or {}).get("description") or ""
+        ).strip()
+
+        if not description:
+            return {
+                "status": "repair_run_failed",
+                "error": "missing_repair_description",
+            }
+
+        try:
+            return _manager().run(description).model_dump(
+                mode="json"
+            )
+        except (KeyError, OSError, ValueError, RuntimeError) as exc:
+            return {
+                "status": "repair_run_failed",
+                "error": str(exc),
+            }
+
+    @app.get("/repairs/{run_id}")
+    def repair_status(run_id: str) -> dict[str, Any]:
+        try:
+            return service.repair_store.load(run_id).model_dump(
+                mode="json"
+            )
+        except (KeyError, OSError, ValueError) as exc:
+            return {
+                "status": "repair_status_failed",
+                "run_id": run_id,
+                "error": str(exc),
+            }
+
     @app.get("/repairs/{run_id}/approval-preview")
-    async def repair_approval_preview(run_id: str) -> dict[str, Any]:
+    async def repair_approval_preview(
+        run_id: str,
+    ) -> dict[str, Any]:
         try:
             return service.preview(run_id)
         except (KeyError, OSError, ValueError) as exc:
