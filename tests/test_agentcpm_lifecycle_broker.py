@@ -67,7 +67,7 @@ def test_request_rejections(raw, error):
 
 def test_peer_uid_policy_is_exact():
     assert peer_uid_allowed(1000)
-    assert not peer_uid_allowed(1001)
+    assert peer_uid_allowed(1001)
     assert not peer_uid_allowed(2000)
 
 

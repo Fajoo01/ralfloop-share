@@ -138,87 +138,216 @@ class TransactionalGpuScheduler:
         self.audit_fn = audit_fn
 
     @contextmanager
-    def engine_session(self, engine: str, *, task_id: str = "") -> Iterator[dict[str, Any]]:
+    def engine_session(
+        self,
+        engine: str,
+        *,
+        task_id: str = "",
+    ) -> Iterator[dict[str, Any]]:
         if engine not in {"qwen_chat", "deepseek"}:
             raise ValueError("unsupported_gpu_engine")
-        try:
-            fd = self.arbiter.acquire_fd(provider=engine, mode="scheduler", task_id=task_id)
-        except GpuArbiterBusy as exc:
-            raise GpuEngineTransitionError("gpu_scheduler_busy") from exc
+
+        # Il preacquired fd è utilizzabile solo nello stesso processo.
+        # Se llama.cpp viene avviato via lifecycle broker, il broker deve
+        # acquisire autonomamente il lock GPU.
+        brokered_qwen = (
+            engine == "qwen_chat"
+            and getattr(self.chat, "lifecycle_client", None) is not None
+        )
+
+        fd = -1
+
+        if not brokered_qwen:
+            try:
+                fd = self.arbiter.acquire_fd(
+                    provider=engine,
+                    mode="scheduler",
+                    task_id=task_id,
+                )
+            except GpuArbiterBusy as exc:
+                raise GpuEngineTransitionError(
+                    "gpu_scheduler_busy"
+                ) from exc
+
         initial: EngineProvenance | None = None
-        result: dict[str, Any] = {"engine": engine, "initial_engine": "unknown", "external_stopped": False, "external_restored": False}
+
+        result: dict[str, Any] = {
+            "engine": engine,
+            "initial_engine": "unknown",
+            "external_stopped": False,
+            "external_restored": False,
+            "gpu_lock_owner": (
+                "llama_lifecycle_broker"
+                if brokered_qwen
+                else "scheduler_caller"
+            ),
+        }
+
         primary_error: BaseException | None = None
         chat_started_here = False
+
         try:
             healthy_qwen = (
                 engine == "qwen_chat"
                 and callable(getattr(self.chat, "health", None))
                 and self.chat.health()
             )
+
             if healthy_qwen:
                 result["initial_engine"] = "qwen_chat_coexisting"
                 result["external_preserved"] = True
-                started = self.chat.ensure_available(preacquired_gpu_fd=fd)
+
+                started = (
+                    self.chat.ensure_available()
+                    if brokered_qwen
+                    else self.chat.ensure_available(
+                        preacquired_gpu_fd=fd
+                    )
+                )
+
             else:
                 initial = self.external.discover()
-                result["initial_engine"] = "agentcpm" if initial else "free"
+
+                result["initial_engine"] = (
+                    "agentcpm" if initial else "free"
+                )
+
                 if initial:
                     self.external.stop(initial)
                     result["external_stopped"] = True
-                gate = self.chat.resource_gate_status(llama_cpp_running=False)
-                result["vram_after_release_mib"] = gate.get("gpu_free_mib")
-                result["required_gpu_memory_mib"] = gate.get("required_gpu_memory_mib")
-                if gate.get("gpu_free_mib") is None or int(gate["gpu_free_mib"]) < int(gate["required_gpu_memory_mib"]):
-                    raise GpuEngineTransitionError("insufficient_gpu_memory_after_release")
-                started = self.chat.ensure_available(preacquired_gpu_fd=fd) if engine == "qwen_chat" else {}
-            chat_started_here = bool(started.get("server_started"))
+
+                gate = self.chat.resource_gate_status(
+                    llama_cpp_running=False
+                )
+
+                result["vram_after_release_mib"] = gate.get(
+                    "gpu_free_mib"
+                )
+                result["required_gpu_memory_mib"] = gate.get(
+                    "required_gpu_memory_mib"
+                )
+
+                if (
+                    gate.get("gpu_free_mib") is None
+                    or int(gate["gpu_free_mib"])
+                    < int(gate["required_gpu_memory_mib"])
+                ):
+                    raise GpuEngineTransitionError(
+                        "insufficient_gpu_memory_after_release"
+                    )
+
+                if engine == "qwen_chat":
+                    started = (
+                        self.chat.ensure_available()
+                        if brokered_qwen
+                        else self.chat.ensure_available(
+                            preacquired_gpu_fd=fd
+                        )
+                    )
+                else:
+                    started = {}
+
+            chat_started_here = bool(
+                started.get("server_started")
+            )
+
             result.update(started)
             yield result
+
         except BaseException as exc:
             primary_error = exc
             result["primary_error"] = repr(exc)
             raise
+
         finally:
             cleanup_error: BaseException | None = None
             restore_error: BaseException | None = None
+
             try:
                 if engine == "qwen_chat" and chat_started_here:
                     status = self.chat.status()
+
                     if status.get("managed"):
                         self.chat.stop()
+
                     if self.chat.status().get("managed"):
-                        raise GpuEngineTransitionError("qwen_stop_verification_failed")
-                    observer = getattr(self.chat, "gpu_observer", None)
+                        raise GpuEngineTransitionError(
+                            "qwen_stop_verification_failed"
+                        )
+
+                    observer = getattr(
+                        self.chat,
+                        "gpu_observer",
+                        None,
+                    )
+
                     if callable(observer):
                         observed = observer()
-                        if not isinstance(observed, dict) or not isinstance(observed.get("free_mib"), int):
-                            raise GpuEngineTransitionError("qwen_vram_release_unverifiable")
-                        result["vram_after_qwen_stop_mib"] = observed["free_mib"]
+
+                        if (
+                            not isinstance(observed, dict)
+                            or not isinstance(
+                                observed.get("free_mib"),
+                                int,
+                            )
+                        ):
+                            raise GpuEngineTransitionError(
+                                "qwen_vram_release_unverifiable"
+                            )
+
+                        result[
+                            "vram_after_qwen_stop_mib"
+                        ] = observed["free_mib"]
+
             except BaseException as exc:
                 cleanup_error = exc
                 result["cleanup_error"] = repr(exc)
+
             try:
                 if initial and result["external_stopped"]:
                     self.external.start(initial)
                     result["external_restored"] = True
+
             except BaseException as exc:
                 restore_error = exc
                 result["restore_error"] = repr(exc)
-                self._audit("gpu_engine_restore_failed", primary_error=repr(primary_error), restore_error=repr(exc))
+
+                self._audit(
+                    "gpu_engine_restore_failed",
+                    primary_error=repr(primary_error),
+                    restore_error=repr(exc),
+                )
+
             finally:
+                # In brokered mode fd == -1:
+                # il lifecycle broker possiede il proprio lock.
                 if fd >= 0:
                     self.arbiter.release_fd(fd)
+
             if primary_error is not None:
                 if cleanup_error is not None:
-                    primary_error.add_note(f"Qwen cleanup also failed: {cleanup_error!r}")
+                    primary_error.add_note(
+                        f"Qwen cleanup also failed: {cleanup_error!r}"
+                    )
+
                 if restore_error is not None:
-                    primary_error.add_note(f"AgentCPM restore also failed: {restore_error!r}")
+                    primary_error.add_note(
+                        f"AgentCPM restore also failed: {restore_error!r}"
+                    )
+
             elif cleanup_error is not None:
                 if restore_error is not None:
-                    cleanup_error.add_note(f"AgentCPM restore also failed: {restore_error!r}")
+                    cleanup_error.add_note(
+                        f"AgentCPM restore also failed: {restore_error!r}"
+                    )
+
                 raise cleanup_error
+
             elif restore_error is not None:
-                raise GpuEngineTransitionError("agentcpm_restore_failed", restore_error=restore_error) from restore_error
+                raise GpuEngineTransitionError(
+                    "agentcpm_restore_failed",
+                    restore_error=restore_error,
+                ) from restore_error
 
     def _audit(self, event: str, **fields: Any) -> None:
         if self.audit_fn:

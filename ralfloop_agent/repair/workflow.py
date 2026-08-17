@@ -1,4 +1,5 @@
 from __future__ import annotations
+from dataclasses import replace
 
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -16,7 +17,8 @@ import requests
 
 from ralfloop_agent.model_tools import ModelToolManager, ModelToolRegistry
 from ralfloop_agent.model_tools.registry import DEFAULT_HF_CACHE
-from ralfloop_agent.providers.llama_cpp_server import LlamaCppServerConfig
+from ralfloop_agent.providers.gpu_engine_scheduler import TransactionalGpuScheduler
+from ralfloop_agent.providers.llama_cpp_server import LlamaCppServerConfig, LlamaCppServerManager
 
 from .validator import PatchValidator
 
@@ -292,9 +294,25 @@ class LocalModelToolCodeRetriever:
         }
 
 class LlamaCppPatchProposer:
-    def __init__(self, *, session: requests.Session | None = None) -> None:
-        self.config = LlamaCppServerConfig.from_env()
+    def __init__(
+        self,
+        *,
+        session: requests.Session | None = None,
+        scheduler: TransactionalGpuScheduler | None = None,
+    ) -> None:
+        # Repair non deve degradare su Ollama: usa llama.cpp + GPU lifecycle.
+        self.config = replace(
+            LlamaCppServerConfig.from_env(),
+            fallback="none",
+        )
         self.session = session or requests.Session()
+        self.scheduler = scheduler or TransactionalGpuScheduler(
+            chat=LlamaCppServerManager(self.config)
+        )
+        self.request_timeout_sec = max(
+            float(self.config.request_timeout_sec),
+            float(os.getenv("RALF_REPAIR_LLAMA_TIMEOUT_SEC", "900")),
+        )
 
     def __call__(self, worktree: Path, description: str, selected_files: list[str]) -> str:
         if self.config.fallback != "none":
@@ -312,18 +330,23 @@ class LlamaCppPatchProposer:
             "Telegram, RecursiveMAS, checkpoints, models, or main_plugin.py.\n\n"
             f"Problem:\n{description[:8000]}\n\n" + "\n".join(sources)
         )
-        response = self.session.post(
-            f"{self.config.base_url}/v1/chat/completions",
-            json={
-                "model": self.config.model,
-                "temperature": 0,
-                "messages": [
-                    {"role": "system", "content": "You propose bounded code patches; validators decide whether they are safe."},
-                    {"role": "user", "content": prompt},
-                ],
-            },
-            timeout=(2.0, min(self.config.request_timeout_sec, 180.0)),
-        )
+        # Fail closed: nessuna POST finché l'handoff GPU non è riuscito.
+        with self.scheduler.engine_session(
+            "qwen_chat",
+            task_id="repair_patch_proposal",
+        ):
+            response = self.session.post(
+                f"{self.config.base_url}/v1/chat/completions",
+                json={
+                    "model": self.config.model,
+                    "temperature": 0,
+                    "messages": [
+                        {"role": "system", "content": "You propose bounded code patches; validators decide whether they are safe."},
+                        {"role": "user", "content": prompt},
+                    ],
+                },
+                timeout=(2.0, self.request_timeout_sec),
+            )
         try:
             response.raise_for_status()
             payload = response.json()

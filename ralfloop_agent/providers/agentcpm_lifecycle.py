@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import errno
 import json
 from pathlib import Path
 import socket
+import time
 from typing import Any
 
 
@@ -22,21 +24,51 @@ class AgentCpmLifecycleClient:
         if action not in self.ACTIONS:
             raise ValueError("unsupported_agentcpm_action")
         wire = json.dumps({"action": action}, separators=(",", ":")).encode() + b"\n"
-        try:
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-                client.settimeout(self.timeout)
-                client.connect(str(self.socket_path))
-                client.sendall(wire)
-                response = bytearray()
-                while len(response) <= self.max_response_bytes:
-                    chunk = client.recv(min(512, self.max_response_bytes + 1 - len(response)))
-                    if not chunk:
-                        break
-                    response.extend(chunk)
-                    if b"\n" in chunk:
-                        break
-        except (OSError, TimeoutError) as exc:
-            raise AgentCpmLifecycleError(f"agentcpm_broker_unavailable:{exc}") from exc
+        # systemd Type=simple considera il broker active prima che il
+        # socket Unix sia necessariamente bind/listen-ready. ENOENT ed
+        # ECONNREFUSED sono quindi transitori per un intervallo limitato.
+        connect_deadline = time.monotonic() + min(
+            max(float(self.timeout), 0.0),
+            2.0,
+        )
+
+        while True:
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                    client.settimeout(self.timeout)
+                    client.connect(str(self.socket_path))
+                    client.sendall(wire)
+                    response = bytearray()
+                    while len(response) <= self.max_response_bytes:
+                        chunk = client.recv(
+                            min(
+                                512,
+                                self.max_response_bytes + 1 - len(response),
+                            )
+                        )
+                        if not chunk:
+                            break
+                        response.extend(chunk)
+                        if b"\n" in chunk:
+                            break
+                break
+
+            except OSError as exc:
+                if (
+                    exc.errno in {errno.ENOENT, errno.ECONNREFUSED}
+                    and time.monotonic() < connect_deadline
+                ):
+                    time.sleep(0.02)
+                    continue
+
+                raise AgentCpmLifecycleError(
+                    f"agentcpm_broker_unavailable:{exc}"
+                ) from exc
+
+            except TimeoutError as exc:
+                raise AgentCpmLifecycleError(
+                    f"agentcpm_broker_unavailable:{exc}"
+                ) from exc
         if len(response) > self.max_response_bytes or b"\n" not in response:
             raise AgentCpmLifecycleError("agentcpm_broker_invalid_response_size")
         line, trailing = bytes(response).split(b"\n", 1)

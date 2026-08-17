@@ -15,6 +15,7 @@ from urllib.request import urlopen
 
 UNIT = "ralfloop-agentcpm.service"
 ALLOWED_UID = 1000
+ALLOWED_PEER_UIDS = frozenset({1000, 1001})
 SERVICE_UID = 1001
 PORT = 19093
 MODEL = "AgentCPM-Explore"
@@ -175,7 +176,7 @@ def parse_request(raw: bytes) -> str:
 
 
 def peer_uid_allowed(uid: int) -> bool:
-    return uid == ALLOWED_UID
+    return uid in ALLOWED_PEER_UIDS
 
 
 def handle_connection(conn: socket.socket, controller: AgentCpmController) -> None:

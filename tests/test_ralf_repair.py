@@ -145,3 +145,49 @@ def test_repair_cli_plan_and_status_with_injected_manager(tmp_path: Path) -> Non
     status_out = io.StringIO()
     assert terminal_chat.run_repair_command(status_args, manager=manager, out=status_out, err=io.StringIO()) == 0
     assert json.loads(status_out.getvalue())["status"] == "planned"
+
+
+
+def test_patch_proposer_does_not_post_before_gpu_session(tmp_path):
+    from contextlib import contextmanager
+    import pytest
+
+    from ralfloop_agent.repair.workflow import (
+        LlamaCppPatchProposer,
+    )
+
+    source = tmp_path / "sample.py"
+    source.write_text("value = 1\n", encoding="utf-8")
+
+    class FailingScheduler:
+        @contextmanager
+        def engine_session(self, engine, *, task_id=""):
+            assert engine == "qwen_chat"
+            raise RuntimeError("gpu_session_failed")
+            yield {}
+
+    class Session:
+        called = False
+
+        def post(self, *args, **kwargs):
+            self.called = True
+            raise AssertionError("POST must not be called")
+
+    session = Session()
+
+    proposer = LlamaCppPatchProposer(
+        session=session,
+        scheduler=FailingScheduler(),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="gpu_session_failed",
+    ):
+        proposer(
+            tmp_path,
+            "test",
+            ["sample.py"],
+        )
+
+    assert session.called is False
