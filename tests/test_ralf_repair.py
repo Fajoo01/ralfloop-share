@@ -360,3 +360,70 @@ def test_structured_patch_proposer_forbids_unselected_path(
                 ]
             },
         )
+
+
+
+def test_structured_patch_proposer_supports_safe_append(
+    tmp_path,
+):
+    from ralfloop_agent.repair.workflow import (
+        LlamaCppPatchProposer,
+    )
+
+    originals = {
+        "sample.py": "value = 1\n",
+    }
+
+    modified = LlamaCppPatchProposer._apply_plan(
+        originals,
+        ["sample.py"],
+        {
+            "edits": [
+                {
+                    "path": "sample.py",
+                    "kind": "append",
+                    "old": "",
+                    "new": (
+                        "\ndef test_marker():\n"
+                        "    assert True\n"
+                    ),
+                }
+            ]
+        },
+    )
+
+    assert modified["sample.py"] == (
+        "value = 1\n"
+        "\n"
+        "def test_marker():\n"
+        "    assert True\n"
+    )
+
+
+def test_structured_patch_proposer_append_rejects_anchor(
+    tmp_path,
+):
+    import pytest
+
+    from ralfloop_agent.repair.workflow import (
+        LlamaCppPatchProposer,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="append_old_must_be_empty",
+    ):
+        LlamaCppPatchProposer._apply_plan(
+            {"sample.py": "value = 1\n"},
+            ["sample.py"],
+            {
+                "edits": [
+                    {
+                        "path": "sample.py",
+                        "kind": "append",
+                        "old": "value = 1",
+                        "new": "value = 2",
+                    }
+                ]
+            },
+        )

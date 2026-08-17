@@ -392,15 +392,18 @@ class LlamaCppPatchProposer:
                     "items": {
                         "type": "object",
                         "additionalProperties": False,
-                        "required": ["path", "old", "new"],
+                        "required": ["path", "kind", "old", "new"],
                         "properties": {
                             "path": {
                                 "type": "string",
                                 "enum": selected_files,
                             },
+                            "kind": {
+                                "type": "string",
+                                "enum": ["replace", "append"],
+                            },
                             "old": {
                                 "type": "string",
-                                "minLength": 1,
                             },
                             "new": {
                                 "type": "string",
@@ -509,6 +512,7 @@ class LlamaCppPatchProposer:
                 )
 
             rel = edit.get("path")
+            kind = edit.get("kind", "replace")
             old = edit.get("old")
             new = edit.get("new")
 
@@ -517,7 +521,12 @@ class LlamaCppPatchProposer:
                     f"repair_structured_path_forbidden:{rel}"
                 )
 
-            if not isinstance(old, str) or not old:
+            if kind not in {"replace", "append"}:
+                raise RuntimeError(
+                    f"repair_structured_kind_invalid:{rel}:{index}:{kind}"
+                )
+
+            if not isinstance(old, str):
                 raise RuntimeError(
                     f"repair_structured_old_invalid:{rel}:{index}"
                 )
@@ -528,19 +537,48 @@ class LlamaCppPatchProposer:
                 )
 
             current = modified[rel]
-            occurrences = current.count(old)
 
-            if occurrences != 1:
-                raise RuntimeError(
-                    "repair_structured_old_occurrences:"
-                    f"{rel}:{index}:{occurrences}"
+            if kind == "append":
+                # Append è intenzionalmente molto limitato:
+                # può solo aggiungere in coda a un file già selezionato.
+                # Non usa anchor inventate dal modello.
+                if old != "":
+                    raise RuntimeError(
+                        f"repair_structured_append_old_must_be_empty:"
+                        f"{rel}:{index}"
+                    )
+
+                if not new:
+                    raise RuntimeError(
+                        f"repair_structured_append_empty:{rel}:{index}"
+                    )
+
+                separator = ""
+
+                if current and not current.endswith("\n"):
+                    separator = "\n"
+
+                modified[rel] = current + separator + new
+
+            else:
+                if not old:
+                    raise RuntimeError(
+                        f"repair_structured_old_invalid:{rel}:{index}"
+                    )
+
+                occurrences = current.count(old)
+
+                if occurrences != 1:
+                    raise RuntimeError(
+                        "repair_structured_old_occurrences:"
+                        f"{rel}:{index}:{occurrences}"
+                    )
+
+                modified[rel] = current.replace(
+                    old,
+                    new,
+                    1,
                 )
-
-            modified[rel] = current.replace(
-                old,
-                new,
-                1,
-            )
 
         return modified
 
@@ -623,9 +661,13 @@ class LlamaCppPatchProposer:
             "Implement the requested repair using exact textual edits.\n\n"
             "Rules:\n"
             "- DO NOT write a unified diff.\n"
-            "- Each old value must be copied exactly and contiguously "
-            "from the provided source.\n"
-            "- Each old value must identify exactly one occurrence.\n"
+            "- Use kind=replace when modifying existing text.\n"
+            "- For replace, old must be copied exactly and contiguously "
+            "from the provided source and must identify exactly one "
+            "occurrence.\n"
+            "- Use kind=append when adding new code at the END of a file.\n"
+            "- For append, old MUST be the empty string.\n"
+            "- Never invent an anchor merely to append content.\n"
             "- Modify only the supplied files.\n"
             "- Keep changes minimal and bounded.\n"
             "- Add or update tests when required.\n"
