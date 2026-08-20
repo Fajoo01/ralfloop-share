@@ -13,6 +13,12 @@
     "tests": 218,
     "junit_sha256": "9f13aa3908c6717c2ae5790026d9d21d95dbdfec24c5a4c85aae782c93ab88ba"
   },
+  "arci_broker_uid_hotfix": {
+    "status": "pass",
+    "tested_commit": "7ef1d2f5fa97ce36faca1e812f8b56e01bf23b54",
+    "tests": 13,
+    "systemd_analyze_verify": "pass"
+  },
   "fake_router": "pass",
   "fake_llm_director": "pass",
   "fake_evolver": "pass",
