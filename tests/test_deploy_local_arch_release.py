@@ -110,6 +110,18 @@ def _release(root: Path, directory: str, commit: str) -> Path:
     return release
 
 
+def _allow_preflight(monkeypatch, production: Path, model: Path) -> None:
+    monkeypatch.setattr(deploy, "PRODUCTION", production)
+    monkeypatch.setattr(deploy, "MODEL", model)
+    monkeypatch.setattr(deploy, "port_free", lambda port: True)
+    monkeypatch.setattr(deploy, "process_match", lambda needles: False)
+    monkeypatch.setattr(
+        deploy,
+        "meminfo",
+        lambda: {"MemAvailable": 8192, "SwapFree": 1024},
+    )
+
+
 def test_publish_rejects_release_commit_directory_mismatch(tmp_path, monkeypatch) -> None:
     production = tmp_path / "production"
     old = _release(production, "a" * 40, "a" * 40)
@@ -117,11 +129,7 @@ def test_publish_rejects_release_commit_directory_mismatch(tmp_path, monkeypatch
     (production / "current").symlink_to(old)
     model = tmp_path / "model.gguf"
     model.write_bytes(b"model")
-    monkeypatch.setattr(deploy, "PRODUCTION", production)
-    monkeypatch.setattr(deploy, "MODEL", model)
-    monkeypatch.setattr(deploy, "port_free", lambda port: True)
-    monkeypatch.setattr(deploy, "process_match", lambda needles: False)
-    monkeypatch.setattr(deploy, "meminfo", lambda: {"MemAvailable": 8192, "SwapFree": 1024})
+    _allow_preflight(monkeypatch, production, model)
 
     result = deploy.publish(candidate)
 
@@ -129,3 +137,147 @@ def test_publish_rejects_release_commit_directory_mismatch(tmp_path, monkeypatch
     assert result["checks"]["release_identity"] is False
     assert (production / "current").resolve() == old.resolve()
     assert not (production / "previous").exists()
+
+
+def test_publish_preserves_valid_previous_when_current_identity_is_invalid(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    production = tmp_path / "production"
+    current = _release(production, "a" * 40, "d" * 40)
+    previous = _release(production, "b" * 40, "b" * 40)
+    candidate = _release(production, "c" * 40, "c" * 40)
+    (production / "current").symlink_to(current)
+    (production / "previous").symlink_to(previous)
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"model")
+    _allow_preflight(monkeypatch, production, model)
+    current_integrity = deploy.rollback_integrity(current)
+
+    result = deploy.publish(candidate)
+
+    assert current_integrity["release_identity"] is False
+    assert current_integrity["manifest"] is True
+    assert result["published"] is True
+    assert result["rollback_source"] == "previous"
+    assert result["rollback_integrity"]["allowed"] is True
+    assert (production / "current").resolve() == candidate.resolve()
+    assert (production / "previous").resolve() == previous.resolve()
+
+
+def test_publish_preserves_valid_previous_when_current_manifest_is_invalid(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    production = tmp_path / "production"
+    current = _release(production, "a" * 40, "a" * 40)
+    previous = _release(production, "b" * 40, "b" * 40)
+    candidate = _release(production, "c" * 40, "c" * 40)
+    (current / ".ralf_run/local_arch_v1/gates.json").write_text(
+        "{}",
+        encoding="utf-8",
+    )
+    (production / "current").symlink_to(current)
+    (production / "previous").symlink_to(previous)
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"model")
+    _allow_preflight(monkeypatch, production, model)
+    current_integrity = deploy.rollback_integrity(current)
+
+    result = deploy.publish(candidate)
+
+    assert current_integrity["release_identity"] is True
+    assert current_integrity["manifest"] is False
+    assert result["published"] is True
+    assert result["rollback_source"] == "previous"
+    assert (production / "current").resolve() == candidate.resolve()
+    assert (production / "previous").resolve() == previous.resolve()
+
+
+def test_publish_blocks_when_no_integrity_checked_rollback_exists(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    production = tmp_path / "production"
+    current = _release(production, "a" * 40, "d" * 40)
+    previous = _release(production, "b" * 40, "e" * 40)
+    candidate = _release(production, "c" * 40, "c" * 40)
+    (production / "current").symlink_to(current)
+    (production / "previous").symlink_to(previous)
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"model")
+    _allow_preflight(monkeypatch, production, model)
+
+    result = deploy.publish(candidate)
+
+    assert result["published"] is False
+    assert result["reason"] == "rollback_release_unavailable"
+    assert result["rollback_integrity"]["allowed"] is False
+    assert (production / "current").resolve() == current.resolve()
+    assert (production / "previous").resolve() == previous.resolve()
+
+
+def test_rollback_drill_uses_valid_previous_when_current_is_invalid(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    production = tmp_path / "production"
+    current = _release(production, "a" * 40, "d" * 40)
+    previous = _release(production, "b" * 40, "b" * 40)
+    candidate = _release(production, "c" * 40, "c" * 40)
+    (production / "current").symlink_to(current)
+    (production / "previous").symlink_to(previous)
+    monkeypatch.setattr(deploy, "PRODUCTION", production)
+
+    result = deploy.rollback_drill(candidate)
+
+    assert result["ok"] is True
+    assert result["rollback_source"] == "previous"
+    assert result["restored"] == str(previous.resolve())
+
+
+def test_rollback_integrity_does_not_run_candidate_runtime_gates(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    production = tmp_path / "production"
+    release = _release(production, "a" * 40, "a" * 40)
+    monkeypatch.setattr(deploy, "PRODUCTION", production)
+    monkeypatch.setattr(
+        deploy,
+        "gate_marker_details",
+        lambda path: pytest.fail("rollback integrity must not evaluate gates"),
+    )
+    monkeypatch.setattr(
+        deploy,
+        "port_free",
+        lambda port: pytest.fail("rollback integrity must not inspect runtime"),
+    )
+
+    result = deploy.rollback_integrity(release)
+
+    assert result == {
+        "release_under_root": True,
+        "release_metadata": True,
+        "release_identity": True,
+        "manifest": True,
+        "allowed": True,
+    }
+
+
+def test_main_exits_nonzero_when_publish_cannot_preserve_rollback(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(deploy, "preflight", lambda release: {"allowed": True})
+    monkeypatch.setattr(
+        deploy,
+        "publish",
+        lambda release: {"published": False},
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["deploy_local_arch_release.py", str(tmp_path), "--publish"],
+    )
+
+    assert deploy.main() == 3

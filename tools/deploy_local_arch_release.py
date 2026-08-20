@@ -49,6 +49,28 @@ def release_identity(release: Path) -> bool:
     return isinstance(data, dict) and data.get("commit") == release.resolve().name
 
 
+def rollback_integrity(release: Path) -> dict[str, bool]:
+    """Validate immutable release identity only; runtime gates stay candidate-only."""
+    checks = {
+        "release_under_root": release.resolve().parent
+        == (PRODUCTION / "releases").resolve(),
+        "release_metadata": (release / "RELEASE.json").is_file(),
+        "release_identity": release_identity(release),
+        "manifest": verify_manifest(release),
+    }
+    checks["allowed"] = all(checks.values())
+    return checks
+
+
+def select_rollback_release() -> tuple[Path, str, dict[str, bool]]:
+    current = (PRODUCTION / "current").resolve()
+    checks = rollback_integrity(current)
+    if checks["allowed"]:
+        return current, "current", checks
+    previous = (PRODUCTION / "previous").resolve()
+    return previous, "previous", rollback_integrity(previous)
+
+
 def verify_manifest(release: Path) -> bool:
     manifest = release / "MANIFEST.sha256"
     if not manifest.is_file():
@@ -172,23 +194,51 @@ def publish(release: Path) -> dict[str, object]:
     checks = preflight(release)
     if not checks["allowed"]:
         return {"published": False, "checks": checks}
-    old = (PRODUCTION / "current").resolve()
-    atomic_link(PRODUCTION / "previous", old)
+    rollback, rollback_source, rollback_checks = select_rollback_release()
+    if not rollback_checks["allowed"]:
+        return {
+            "published": False,
+            "checks": checks,
+            "reason": "rollback_release_unavailable",
+            "rollback_source": rollback_source,
+            "rollback_integrity": rollback_checks,
+        }
+    atomic_link(PRODUCTION / "previous", rollback)
     atomic_link(PRODUCTION / "current", release)
-    return {"published": True, "previous": str(old), "current": str(release.resolve()), "checks": checks}
+    return {
+        "published": True,
+        "previous": str(rollback),
+        "current": str(release.resolve()),
+        "checks": checks,
+        "rollback_source": rollback_source,
+        "rollback_integrity": rollback_checks,
+    }
 
 
 def rollback_drill(release: Path) -> dict[str, object]:
-    old = (PRODUCTION / "current").resolve()
+    rollback, rollback_source, rollback_checks = select_rollback_release()
+    if not rollback_checks["allowed"]:
+        return {
+            "ok": False,
+            "reason": "rollback_release_unavailable",
+            "rollback_source": rollback_source,
+            "rollback_integrity": rollback_checks,
+        }
     with tempfile.TemporaryDirectory(prefix="ralf-rollback-drill-") as raw:
         root = Path(raw)
         current = root / "current"
         previous = root / "previous"
-        atomic_link(current, old)
-        atomic_link(previous, old)
+        atomic_link(current, rollback)
+        atomic_link(previous, rollback)
         atomic_link(current, release)
         atomic_link(current, previous.resolve())
-        return {"ok": current.resolve() == old, "restored": str(current.resolve()), "target": str(old)}
+        return {
+            "ok": current.resolve() == rollback,
+            "restored": str(current.resolve()),
+            "target": str(rollback),
+            "rollback_source": rollback_source,
+            "rollback_integrity": rollback_checks,
+        }
 
 
 def main() -> int:
@@ -203,7 +253,12 @@ def main() -> int:
     if args.publish:
         result["deploy"] = publish(args.release)
     print(json.dumps(result, sort_keys=True, indent=2))
-    return 0 if result["preflight"]["allowed"] else 3
+    allowed = result["preflight"]["allowed"]
+    if args.rollback_drill:
+        allowed = allowed and result["rollback_drill"]["ok"]
+    if args.publish:
+        allowed = allowed and result["deploy"]["published"]
+    return 0 if allowed else 3
 
 
 if __name__ == "__main__":
