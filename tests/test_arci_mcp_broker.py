@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -18,8 +17,6 @@ def test_arci_broker_relays_strict_server_tool_list(tmp_path):
         "scripts/ralf_arci_mcp_broker.py",
         "--socket",
         str(socket_path),
-        "--allow-uid",
-        str(os.getuid()),
         "--command",
         str(server),
         "--idle-timeout",
@@ -53,7 +50,8 @@ def test_arci_systemd_candidate_is_read_only_and_loopback_bounded():
     ).read_text(encoding="utf-8")
 
     assert "RuntimeDirectory=ralf-arci-mcp" in unit
-    assert "--allow-uid %U" in unit
+    assert "--allow-uid" not in unit
+    assert "User=sibilla-cumana" in unit
     assert "ralf_arci_mcp_broker.py" in unit
     assert "ralf_arci_mcp_server.py" in unit
     assert "ralfloop_agent_scaffold/.venv/bin/python" in unit

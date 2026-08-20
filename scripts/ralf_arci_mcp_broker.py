@@ -83,7 +83,7 @@ def _relay(conn: socket.socket, command: str, idle_timeout: float) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--socket", required=True)
-    parser.add_argument("--allow-uid", required=True, type=int)
+    parser.add_argument("--allow-uid", type=int, default=os.getuid())
     parser.add_argument("--command", required=True)
     parser.add_argument("--idle-timeout", type=float, default=60.0)
     args = parser.parse_args()
