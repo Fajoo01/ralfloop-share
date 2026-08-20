@@ -257,13 +257,19 @@ class CdpReadOnlySnapshotClient:
         self,
         *,
         expected_host: str,
+        expected_path_prefix: str = "/",
+        expected_path: str | None = None,
         function: str,
         arguments: tuple[Any, ...],
         operation: str,
     ) -> FixedScriptResult:
         if function not in self._fixed_functions:
             raise BrowserReadOnlyError("cdp_function_denied")
-        page = self._page(expected_host, "/")
+        page = self._page(
+            expected_host,
+            expected_path_prefix,
+            exact_path=expected_path,
+        )
         document, response = self._call_sequence(page, (
             ("Runtime.evaluate", {"expression": "document", "returnByValue": False}),
             ("Runtime.callFunctionOn", {
@@ -293,14 +299,31 @@ class CdpReadOnlySnapshotClient:
         self._call(page, "Input.dispatchKeyEvent", params)
         self._call(page, "Input.dispatchKeyEvent", {**params, "type": "keyUp"})
 
-    def _page(self, expected_host: str, expected_path_prefix: str) -> BrowserPage:
+    def _page(
+        self,
+        expected_host: str,
+        expected_path_prefix: str,
+        *,
+        exact_path: str | None = None,
+    ) -> BrowserPage:
         matches: list[BrowserPage] = []
         for page in self.pages():
             parsed = urlparse(page.url)
+            try:
+                port = parsed.port
+            except ValueError:
+                continue
             if (
                 parsed.scheme == "https"
                 and (parsed.hostname or "").casefold() == expected_host.casefold()
-                and parsed.path.startswith(expected_path_prefix)
+                and port in {None, 443}
+                and parsed.username is None
+                and parsed.password is None
+                and (
+                    parsed.path == exact_path
+                    if exact_path is not None
+                    else parsed.path.startswith(expected_path_prefix)
+                )
             ):
                 matches.append(page)
         if len(matches) != 1:

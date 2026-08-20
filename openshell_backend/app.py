@@ -73,6 +73,15 @@ except Exception as exc:
     audit("local_maintenance_routes_load_failed", error=repr(exc))
 
 try:
+    from ralfloop_agent.integration.eyf_support4youth_cdp import (
+        register_eyf_support4youth_routes,
+    )
+
+    register_eyf_support4youth_routes(app)
+except Exception as exc:
+    audit("eyf_support4youth_routes_load_failed", error=repr(exc))
+
+try:
     from ralfloop_agent.repair.approval import register_repair_approval_routes
 
     register_repair_approval_routes(app)
@@ -92,6 +101,38 @@ try:
     app.include_router(chat_router)
 except Exception as exc:
     audit("chat_router_load_failed", error=repr(exc))
+
+
+def _read_arci_profile(context_factory=None) -> dict[str, object]:
+    """Run fixed semantic ARCI read; never expose transport error details."""
+    if context_factory is None:
+        from src.arci import ArciMCPContext
+
+        context_factory = ArciMCPContext.from_environment
+    try:
+        with context_factory() as gateway:
+            return dict(gateway.read_organization_profile())
+    except Exception as exc:
+        try:
+            audit("arci_profile_read_failed", error_type=type(exc).__name__)
+        except Exception:
+            pass
+        return {
+            "ok": False,
+            "operation": "read_organization_profile",
+            "status": "SOURCE_UNAVAILABLE",
+            "session_authenticated": False,
+            "read_operations": [],
+            "write_operations": 0,
+            "side_effects": 0,
+            "writes": 0,
+            "sends": 0,
+        }
+
+
+@app.get("/portals/arci/profile")
+def arci_profile() -> dict[str, object]:
+    return _read_arci_profile()
 
 
 def sandbox_root(sid: str) -> Path:

@@ -19,6 +19,7 @@ def preflight(release: Path) -> dict[str, object]:
     checks: dict[str, object] = {
         "release_under_root": release.resolve().parent == (PRODUCTION / "releases").resolve(),
         "release_metadata": (release / "RELEASE.json").is_file(),
+        "release_identity": release_identity(release),
         "manifest": verify_manifest(release),
         "functiongemma_model": MODEL.is_file(),
         "port_19104_free": port_free(19104),
@@ -35,6 +36,17 @@ def preflight(release: Path) -> dict[str, object]:
     informational = {"ram_available_mb", "swap_free_mb", "quality_gate_path", "quality_gate_blockers", "allowed"}
     checks["allowed"] = all(value is True for key, value in checks.items() if key not in informational)
     return checks
+
+
+def release_identity(release: Path) -> bool:
+    metadata = release / "RELEASE.json"
+    if not metadata.is_file():
+        return False
+    try:
+        data = json.loads(metadata.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return isinstance(data, dict) and data.get("commit") == release.resolve().name
 
 
 def verify_manifest(release: Path) -> bool:

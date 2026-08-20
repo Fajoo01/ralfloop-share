@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from typing import Any
+import json
 import logging
 import os
+from urllib.parse import urlparse
 
 from ralfloop_agent.integration.confirmation_store import execute_confirmed_action, request_confirmation
 from src import audit
@@ -19,7 +21,12 @@ class NeedsConfirmationError(RuntimeError):
 
 
 class MCPClient:
-    def __init__(self, google_client: Any | None = None) -> None:
+    def __init__(
+        self,
+        google_client: Any | None = None,
+        *,
+        arci_gateway: Any | None = None,
+    ) -> None:
         enabled_flag = os.getenv("RALF_MCP_GOOGLE_ENABLED")
         self._google_explicitly_disabled = enabled_flag is not None and enabled_flag != "1"
         self.google_enabled = enabled_flag == "1" or google_client is not None
@@ -27,6 +34,7 @@ class MCPClient:
             self.google = google_client
         else:
             self.google = None
+        self.arci_gateway = arci_gateway
 
     def send_email(self, to: str, subject: str, body: str) -> str:
         if self._google_explicitly_disabled:
@@ -70,7 +78,22 @@ class MCPClient:
 
     def browser_inspect(self, url: str) -> str:
         logger.info("mcp_browser_inspect url=%s", url)
+        if _is_arci_members_url(url):
+            return json.dumps(
+                self.arci_organization_profile(),
+                ensure_ascii=False,
+                sort_keys=True,
+            )
         return f"Browser inspect mock: {url}"
+
+    def arci_organization_profile(self) -> dict[str, Any]:
+        if self.arci_gateway is not None:
+            return dict(self.arci_gateway.read_organization_profile())
+
+        from src.arci import ArciMCPContext
+
+        with ArciMCPContext.from_environment() as gateway:
+            return dict(gateway.read_organization_profile())
 
     def execute_confirmed(self, confirmation_id: str) -> str:
         item = get_confirmation(confirmation_id)
@@ -127,3 +150,22 @@ class MCPClient:
         client = GSuiteClient()
         result = client.drive_upload(content=content, filename=filename)
         return {"status": "uploaded", "connector": "arclio_mcp_gsuite", "result": result}
+
+
+def _is_arci_members_url(value: str) -> bool:
+    try:
+        parsed = urlparse(value)
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "https"
+        and (parsed.hostname or "").casefold() == "portale.arci.it"
+        and port in {None, 443}
+        and parsed.username is None
+        and parsed.password is None
+        and parsed.path == "/admin/office/circolosoci/"
+        and not parsed.params
+        and not parsed.query
+        and not parsed.fragment
+    )

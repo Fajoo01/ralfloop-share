@@ -300,6 +300,28 @@ def render_telegram_request(request: DomainApprovalRequest) -> str:
                 f"Legacy fallback: {'sì' if canary.get('legacy_fallback_expected') else 'no'}",
             ]
         )
+    if request.action == "eyf_browser_apply":
+        phase = str(request.scope.get("approval_phase") or "unknown")
+        lines.extend(
+            [
+                "",
+                f"Fase portale: {phase}",
+                "Operazioni esatte:",
+            ]
+        )
+        summary = request.scope.get("approval_summary") or []
+        if isinstance(summary, list):
+            lines.extend(f"- {str(item)}" for item in summary)
+        if phase == "final_submission":
+            lines.extend(
+                [
+                    "",
+                    "FINAL SUBMISSION: Send updates",
+                    "Autorizza il controllo di entrambe le dichiarazioni:",
+                    "- accettazione termini",
+                    "- accettazione trattamento dati",
+                ]
+            )
     lines.extend(
         [
             "",

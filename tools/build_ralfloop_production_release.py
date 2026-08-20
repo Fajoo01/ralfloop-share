@@ -111,11 +111,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--publish", action="store_true")
     parser.add_argument("--record-previous")
     args = parser.parse_args(argv)
+    if args.publish:
+        raise SystemExit(
+            "direct_publish_forbidden_use_deploy_local_arch_release"
+        )
     result = build_release(
         args.repo,
         args.commit,
         args.output_root,
-        args.current_link if args.publish else None,
+        None,
         args.record_previous,
     )
     print(json.dumps(result, sort_keys=True, indent=2))

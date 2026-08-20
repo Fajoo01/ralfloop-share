@@ -1,0 +1,26 @@
+[Unit]
+Description=Ralf ARCI read-only MCP broker
+After=network.target
+
+[Service]
+Type=simple
+User=sibilla-cumana
+Group=sibilla-cumana
+WorkingDirectory=/home/sibilla-cumana/ralfloop-production/current
+UMask=0077
+RuntimeDirectory=ralf-arci-mcp
+RuntimeDirectoryMode=0700
+EnvironmentFile=-/etc/ralfloop/arci-mcp.env
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_arci_mcp_broker.py --socket /run/ralf-arci-mcp/mcp.sock --allow-uid %U --command /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_arci_mcp_server.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

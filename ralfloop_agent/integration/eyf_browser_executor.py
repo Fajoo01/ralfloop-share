@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import os
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
-from urllib.parse import urlparse
+from urllib.parse import urlsplit
 
 from ralfloop_agent.domains.domain_approval import (
     DomainApprovalPolicy,
@@ -12,12 +14,19 @@ from ralfloop_agent.domains.domain_approval import (
     scope_digest,
 )
 from ralfloop_agent.domains.domain_approval_store import DomainApprovalStore
+from ralfloop_agent.domains.storage import append_jsonl
 
 
 CAPABILITY = "eyf_support4youth_browser"
 APPROVAL_ACTION = "eyf_browser_apply"
-SCHEMA_VERSION = "eyf_browser_v1"
+SCHEMA_VERSION = "eyf_browser_v2"
 ALLOWED_HOST = "support4youth.coe.int"
+ALLOWED_PATH = "/organization/profile"
+FINAL_SUBMIT_TARGET = "workflow:send-updates"
+FINAL_DECLARATIONS = {
+    "accept_terms": True,
+    "accept_data_processing": True,
+}
 
 _ALLOWED_KINDS = {"fill", "upload", "click", "submit"}
 _VOLATILE_SNAPSHOT_KEYS = {
@@ -55,6 +64,7 @@ class EyfBrowserApprovalService:
         policy: DomainApprovalPolicy,
         browser: EyfBrowserAdapter,
         allowed_uploads: Sequence[str | Path] = (),
+        approval_outbox: str | Path | None = None,
     ) -> None:
         self.store = store
         self.policy = policy
@@ -63,14 +73,24 @@ class EyfBrowserApprovalService:
             str(Path(item).expanduser().resolve(strict=True))
             for item in allowed_uploads
         }
+        configured_outbox = approval_outbox or os.getenv(
+            "RALFLOOP_TELEGRAM_APPROVAL_OUTBOX"
+        )
+        self.approval_outbox = (
+            Path(configured_outbox).expanduser()
+            if configured_outbox
+            else None
+        )
 
     def preview(
         self,
         operations: Sequence[Mapping[str, Any]],
     ) -> dict[str, Any]:
-        snapshot = self._snapshot()
         normalized, files = self._normalize_operations(operations)
-        scope = _build_scope(snapshot, normalized, files)
+        phase = _approval_phase(normalized)
+        snapshot = self._snapshot()
+        self._validate_snapshot_operations(normalized, snapshot)
+        scope = _build_scope(snapshot, normalized, files, phase)
 
         return {
             "status": "preview",
@@ -79,6 +99,8 @@ class EyfBrowserApprovalService:
             "operation_count": len(normalized),
             "file_count": len(files),
             "has_submit": any(item["kind"] == "submit" for item in normalized),
+            "approval_phase": phase,
+            "target_id": scope["target_id"],
             "page_sha256": scope["page_sha256"],
             "batch_sha256": scope["batch_sha256"],
             "scope_digest": scope_digest(scope),
@@ -108,8 +130,10 @@ class EyfBrowserApprovalService:
             }
 
         try:
-            snapshot = self._snapshot()
             normalized, files = self._normalize_operations(operations)
+            phase = _approval_phase(normalized)
+            snapshot = self._snapshot()
+            self._validate_snapshot_operations(normalized, snapshot)
         except ValueError as exc:
             return {
                 "status": str(exc),
@@ -117,15 +141,52 @@ class EyfBrowserApprovalService:
                 "executed": False,
             }
 
-        scope = _build_scope(snapshot, normalized, files)
+        scope = _build_scope(snapshot, normalized, files, phase)
 
-        return self.store.create_request(
+        out = self.store.create_request(
             action=APPROVAL_ACTION,
             bando_id="eyf.support4youth",
             version=SCHEMA_VERSION,
             scope=scope,
             requested_by=requested_by,
         )
+        request = out.get("request") if isinstance(out, Mapping) else None
+        request_id = str(
+            request.get("request_id")
+            if isinstance(request, Mapping)
+            else ""
+        )
+        if not request_id:
+            return out
+        if self.approval_outbox is None:
+            self.store.cancel(request_id)
+            return {
+                "status": "approval_notification_unconfigured",
+                "request_id": request_id,
+                "approval_required": True,
+                "notification_queued": False,
+                "executed": False,
+            }
+        try:
+            append_jsonl(
+                self.approval_outbox,
+                {
+                    "status": "queued",
+                    "request_id": request_id,
+                    "api_url": self.policy.api_url,
+                    "message": str(request.get("telegram_message") or ""),
+                },
+            )
+        except OSError:
+            self.store.cancel(request_id)
+            return {
+                "status": "approval_notification_failed",
+                "request_id": request_id,
+                "approval_required": True,
+                "notification_queued": False,
+                "executed": False,
+            }
+        return {**out, "notification_queued": True}
 
     def execute(self, request_id: str) -> dict[str, Any]:
         if not self.policy.enabled:
@@ -182,11 +243,31 @@ class EyfBrowserApprovalService:
         if not isinstance(scope, Mapping):
             return self._stale(request_id, "scope_missing")
 
+        approved_scope_digest = str(row.get("scope_digest") or "")
+        current_scope_digest = scope_digest(dict(scope))
+        if not approved_scope_digest or not hmac.compare_digest(
+            approved_scope_digest,
+            current_scope_digest,
+        ):
+            return self._stale(request_id, "scope_digest_changed")
+
         # Verifica integrità del batch memorizzato.
         expected_batch = str(scope.get("batch_sha256") or "")
         reconstructed = _batch_digest_from_scope(scope)
         if not expected_batch or reconstructed != expected_batch:
             return self._stale(request_id, "batch_changed")
+
+        try:
+            stored_phase = _approval_phase(list(scope.get("operations") or []))
+        except ValueError as exc:
+            return self._stale(request_id, str(exc))
+        if stored_phase != str(scope.get("approval_phase") or ""):
+            return self._stale(request_id, "approval_phase_changed")
+        if (
+            stored_phase == "final_submission"
+            and scope.get("final_declarations") != FINAL_DECLARATIONS
+        ):
+            return self._stale(request_id, "final_declarations_changed")
 
         # Snapshot read-only PRIMA del claim.
         try:
@@ -196,6 +277,20 @@ class EyfBrowserApprovalService:
 
         if current_snapshot["page_sha256"] != str(scope.get("page_sha256") or ""):
             return self._stale(request_id, "page_changed")
+
+        state_validator = getattr(
+            self.browser,
+            "validate_snapshot_for_operations",
+            None,
+        )
+        if callable(state_validator):
+            try:
+                state_validator(
+                    list(scope.get("operations") or []),
+                    current_snapshot.get("verification_state") or {},
+                )
+            except ValueError as exc:
+                return self._stale(request_id, str(exc))
 
         # File re-hash PRIMA del claim.
         try:
@@ -241,14 +336,33 @@ class EyfBrowserApprovalService:
                 executed.append(kind)
 
             post = self._snapshot()
+            verifier = getattr(self.browser, "verify_postconditions", None)
+            verification: Mapping[str, Any] = {
+                "ok": False,
+                "reason": "adapter_verifier_unavailable",
+            }
+            if not callable(verifier):
+                raise RuntimeError("adapter_verifier_unavailable")
+            candidate = verifier(
+                list(scope.get("operations") or []),
+                scope.get("verification_state") or {},
+                post.get("verification_state") or {},
+            )
+            if not isinstance(candidate, Mapping):
+                raise RuntimeError("browser_postcondition_invalid")
+            verification = candidate
+            if verification.get("ok") is not True:
+                raise RuntimeError("browser_postcondition_unverified")
 
             result = {
                 "status": "executed",
                 "request_id": request_id,
                 "capability": CAPABILITY,
                 "batch_sha256": expected_batch,
+                "approval_phase": stored_phase,
                 "executed": True,
-                "verified": True,
+                "verified": verification.get("ok") is True,
+                "verification": dict(verification),
                 "operation_count": len(executed),
                 "post_page_sha256": post["page_sha256"],
                 "retry_allowed": False,
@@ -290,16 +404,32 @@ class EyfBrowserApprovalService:
             )
             return result
 
-    def _snapshot(self) -> dict[str, str]:
+    def _snapshot(self) -> dict[str, Any]:
         raw = self.browser.snapshot()
         if not isinstance(raw, Mapping):
             raise ValueError("snapshot_invalid")
 
         url = str(raw.get("url") or "")
-        parsed = urlparse(url)
+        parsed = urlsplit(url)
 
-        if parsed.scheme != "https" or parsed.hostname != ALLOWED_HOST:
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError("host_forbidden") from exc
+        if (
+            parsed.scheme != "https"
+            or (parsed.hostname or "").casefold() != ALLOWED_HOST
+            or port not in {None, 443}
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
             raise ValueError("host_forbidden")
+        if (
+            parsed.path.rstrip("/") != ALLOWED_PATH
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("path_forbidden")
 
         stable = raw.get("stable")
         if stable is None:
@@ -311,16 +441,20 @@ class EyfBrowserApprovalService:
 
         canonical = _canonical_json(stable)
 
-        return {
+        snapshot: dict[str, Any] = {
             "url": url,
+            "target_id": str(raw.get("target_id") or ""),
             "page_sha256": hashlib.sha256(canonical).hexdigest(),
         }
+        if callable(getattr(self.browser, "verify_postconditions", None)):
+            snapshot["verification_state"] = stable
+        return snapshot
 
     def _normalize_operations(
         self,
         operations: Sequence[Mapping[str, Any]],
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        if not operations or len(operations) > 64:
+        if not operations or len(operations) > 128:
             raise ValueError("batch_size_invalid")
 
         normalized: list[dict[str, Any]] = []
@@ -377,7 +511,34 @@ class EyfBrowserApprovalService:
         if submit_indexes and submit_indexes[0] != len(normalized) - 1:
             raise ValueError("submit_must_be_final")
 
+        validator = getattr(self.browser, "validate_operation", None)
+        if callable(validator):
+            for operation in normalized:
+                validator(operation)
+        batch_validator = getattr(self.browser, "validate_batch", None)
+        if callable(batch_validator):
+            batch_validator(normalized)
+
+        if len("\n".join(_approval_summary(normalized))) > 2400:
+            raise ValueError("approval_summary_too_large")
+
         return normalized, files
+
+    def _validate_snapshot_operations(
+        self,
+        operations: Sequence[Mapping[str, Any]],
+        snapshot: Mapping[str, Any],
+    ) -> None:
+        validator = getattr(
+            self.browser,
+            "validate_snapshot_for_operations",
+            None,
+        )
+        if callable(validator):
+            validator(
+                operations,
+                snapshot.get("verification_state") or {},
+            )
 
     def _file_binding(self, raw: str) -> dict[str, Any]:
         try:
@@ -426,20 +587,45 @@ class EyfBrowserApprovalService:
         }
 
 
+def _approval_phase(operations: Sequence[Mapping[str, Any]]) -> str:
+    submit_indexes = [
+        index
+        for index, operation in enumerate(operations)
+        if str(operation.get("kind") or "") == "submit"
+    ]
+    if submit_indexes:
+        if (
+            len(submit_indexes) != 1
+            or len(operations) != 1
+            or str(operations[0].get("target") or "")
+            != FINAL_SUBMIT_TARGET
+        ):
+            raise ValueError("final_submit_requires_separate_approval")
+        return "final_submission"
+    return "save_batch"
+
+
 def _build_scope(
-    snapshot: Mapping[str, str],
+    snapshot: Mapping[str, Any],
     operations: list[dict[str, Any]],
     files: list[dict[str, Any]],
+    approval_phase: str,
 ) -> dict[str, Any]:
     payload = {
         "schema_version": SCHEMA_VERSION,
         "capability": CAPABILITY,
         "host": ALLOWED_HOST,
         "url": str(snapshot["url"]),
+        "target_id": str(snapshot.get("target_id") or ""),
         "page_sha256": str(snapshot["page_sha256"]),
+        "approval_phase": approval_phase,
+        "approval_summary": _approval_summary(operations),
+        "verification_state": snapshot.get("verification_state") or {},
         "operations": operations,
         "files": files,
     }
+    if approval_phase == "final_submission":
+        payload["final_declarations"] = dict(FINAL_DECLARATIONS)
 
     return {
         **payload,
@@ -453,10 +639,16 @@ def _batch_digest_from_scope(scope: Mapping[str, Any]) -> str:
         "capability": scope.get("capability"),
         "host": scope.get("host"),
         "url": scope.get("url"),
+        "target_id": scope.get("target_id"),
         "page_sha256": scope.get("page_sha256"),
+        "approval_phase": scope.get("approval_phase"),
+        "approval_summary": scope.get("approval_summary"),
+        "verification_state": scope.get("verification_state"),
         "operations": scope.get("operations"),
         "files": scope.get("files"),
     }
+    if scope.get("approval_phase") == "final_submission":
+        payload["final_declarations"] = scope.get("final_declarations")
     return hashlib.sha256(_canonical_json(payload)).hexdigest()
 
 
@@ -467,6 +659,30 @@ def _canonical_json(value: Any) -> bytes:
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
+
+
+def _approval_summary(
+    operations: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    lines: list[str] = []
+    for operation in operations:
+        kind = str(operation.get("kind") or "")
+        target = str(operation.get("target") or "")
+        if kind == "fill":
+            value = json.dumps(
+                str(operation.get("value") or ""),
+                ensure_ascii=False,
+            )
+            lines.append(f"fill {target} = {value}")
+        elif kind == "upload":
+            lines.append(
+                "upload "
+                f"{target} sha256={operation.get('sha256')} "
+                f"size={operation.get('size')}"
+            )
+        else:
+            lines.append(f"{kind} {target}")
+    return lines
 
 
 def _sha256_file(path: Path) -> str:
@@ -482,9 +698,11 @@ def _sha256_file(path: Path) -> str:
 
 __all__ = [
     "ALLOWED_HOST",
+    "ALLOWED_PATH",
     "APPROVAL_ACTION",
     "CAPABILITY",
     "EyfBrowserAdapter",
     "EyfBrowserApprovalService",
+    "FINAL_SUBMIT_TARGET",
     "SCHEMA_VERSION",
 ]

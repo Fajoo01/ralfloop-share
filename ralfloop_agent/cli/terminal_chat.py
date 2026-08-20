@@ -1233,6 +1233,108 @@ def run_repair_command(
     } else 1
 
 
+def _parse_portal_operations(raw: str) -> list[dict[str, Any]]:
+    try:
+        operations = json.loads(raw)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("portal_operations_json_invalid") from exc
+
+    if not isinstance(operations, list):
+        raise ValueError("portal_operations_must_be_array")
+    if not 1 <= len(operations) <= 64:
+        raise ValueError("portal_operations_count_invalid")
+    if any(not isinstance(operation, dict) for operation in operations):
+        raise ValueError("portal_operation_must_be_object")
+    return operations
+
+
+def _portal_result_succeeded(result: dict[str, Any]) -> bool:
+    if result.get("ok") is False:
+        return False
+    status = result.get("status")
+    if status is None:
+        return True
+    return str(status) in {
+        "FOUND",
+        "already_executed",
+        "approved",
+        "consumed",
+        "executed",
+        "ok",
+        "pending",
+        "preview",
+    }
+
+
+def run_portal_command(
+    args: argparse.Namespace,
+    *,
+    out: TextIO = sys.stdout,
+    err: TextIO = sys.stderr,
+) -> int:
+    action = args.portal_action
+
+    try:
+        if action == "arci-profile":
+            result = _repair_backend_request(
+                "GET",
+                "/portals/arci/profile",
+            )
+        elif action == "support4youth-snapshot":
+            result = _repair_backend_request(
+                "GET",
+                "/portals/support4youth/snapshot",
+            )
+        elif action == "support4youth-send-updates-preview":
+            result = _repair_backend_request(
+                "GET",
+                "/portals/support4youth/send-updates/preview",
+            )
+        elif action == "support4youth-send-updates-request":
+            result = _repair_backend_request(
+                "POST",
+                "/portals/support4youth/send-updates/requests",
+                payload={"requested_by": "ralf_portal_cli"},
+            )
+        elif action in {
+            "support4youth-preview",
+            "support4youth-request",
+        }:
+            operations = _parse_portal_operations(args.operations_json)
+            payload: dict[str, Any] = {"operations": operations}
+            if action == "support4youth-request":
+                payload["requested_by"] = "ralf_portal_cli"
+            result = _repair_backend_request(
+                "POST",
+                (
+                    "/portals/support4youth/preview"
+                    if action == "support4youth-preview"
+                    else "/portals/support4youth/requests"
+                ),
+                payload=payload,
+            )
+        elif action == "support4youth-apply":
+            request_id = str(args.request_id)
+            if not re.fullmatch(r"apr_[A-Z2-9]{8}", request_id):
+                raise ValueError("portal_request_id_invalid")
+            result = _repair_backend_request(
+                "POST",
+                f"/portals/support4youth/requests/{request_id}/apply",
+                timeout=60.0,
+            )
+        else:
+            raise ValueError("portal_action_invalid")
+    except (KeyError, OSError, ValueError) as exc:
+        print(sanitize_terminal_text(str(exc)), file=err)
+        return 2
+
+    print(
+        json.dumps(result, ensure_ascii=False, indent=2, default=str),
+        file=out,
+    )
+    return 0 if _portal_result_succeeded(result) else 1
+
+
 def run_chat(
     args: argparse.Namespace,
     *,
@@ -1799,7 +1901,10 @@ def build_parser() -> argparse.ArgumentParser:
     repair_sub = repair.add_subparsers(dest="repair_action", required=True)
     for action in ("plan", "run"):
         command = repair_sub.add_parser(action)
-        command.add_argument("--repo", help="source Git repository; defaults to cwd")
+        command.add_argument(
+            "--repo",
+            help="source Git repository; defaults to configured canonical repository",
+        )
         command.add_argument("description", nargs="+", help="bounded repair description")
     repair_status = repair_sub.add_parser("status")
     repair_status.add_argument("run_id")
@@ -1813,6 +1918,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="apply one approved hash-bound repair exactly once",
     )
     repair_apply.add_argument("request_id")
+
+    portal = sub.add_parser("portal", help="approval-bound organization portal operations")
+    portal_sub = portal.add_subparsers(dest="portal_action", required=True)
+    portal_sub.add_parser("arci-profile", help="read sanitized ARCI organization profile")
+    portal_sub.add_parser(
+        "support4youth-snapshot",
+        help="read sanitized Support4Youth profile snapshot",
+    )
+    portal_sub.add_parser(
+        "support4youth-send-updates-preview",
+        help="preview final Send updates operation",
+    )
+    portal_sub.add_parser(
+        "support4youth-send-updates-request",
+        help="request separate approval for final Send updates operation",
+    )
+    for action in ("support4youth-preview", "support4youth-request"):
+        command = portal_sub.add_parser(action)
+        command.add_argument(
+            "--operations-json",
+            required=True,
+            help="JSON array containing 1..64 portal operations",
+        )
+    portal_apply = portal_sub.add_parser("support4youth-apply")
+    portal_apply.add_argument("request_id")
 
     engine = sub.add_parser("engine", help="manage the user-space inference engine")
     engine_sub = engine.add_subparsers(dest="engine_action", required=True)
@@ -1892,6 +2022,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_doctor_command(args)
         if args.command == "repair":
             return run_repair_command(args)
+        if args.command == "portal":
+            return run_portal_command(args)
         if args.command == "engine":
             return run_engine(args)
         if args.command == "domain" and args.domain_action == "reason":

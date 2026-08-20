@@ -1294,8 +1294,78 @@ class RepairManager:
             return []
         return [[self.python_executable, "-m", "pytest", "-q"]]
 
+    def _persist_stage(
+        self,
+        record: RepairRecord,
+        status: str,
+    ) -> None:
+        record.status = status
+        record.updated_at = _now()
+        self.store.save(record)
+
     def run(self, description: str) -> RepairRecord:
         record = self._new_record("run", description)
+        record.rollback = [
+            "No worktree created; no rollback required."
+        ]
+        self._persist_stage(record, "source_preflight")
+
+        source_status = _command(
+            [
+                "git",
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                "--ignore-submodules=none",
+            ],
+            self.source_repo,
+            timeout=20,
+        )
+        source_preflight: dict[str, Any] = {
+            "clean": (
+                source_status["exit_code"] == 0
+                and not str(source_status["stdout"]).strip()
+            ),
+            "status": source_status,
+        }
+        record.validation = {
+            "source_preflight": source_preflight,
+        }
+
+        if source_status["exit_code"] != 0:
+            record.status = "failed"
+            record.error = "repair_source_status_failed"
+            record.updated_at = _now()
+            self.store.save(record)
+            return record
+
+        if str(source_status["stdout"]).strip():
+            record.status = "blocked"
+            record.error = "repair_source_dirty"
+            record.updated_at = _now()
+            self.store.save(record)
+            return record
+
+        source_head = _command(
+            [
+                "git",
+                "rev-parse",
+                "--verify",
+                "HEAD^{commit}",
+            ],
+            self.source_repo,
+            timeout=10,
+        )
+        source_preflight["head"] = source_head
+
+        if source_head["exit_code"] != 0:
+            record.status = "failed"
+            record.error = "repair_source_head_failed"
+            record.updated_at = _now()
+            self.store.save(record)
+            return record
+
+        base_head = str(source_head["stdout"]).strip()
         run_root = self.state_root / "runs" / record.run_id
         worktree = run_root / "worktree"
         run_root.mkdir(parents=True, exist_ok=False, mode=0o700)
@@ -1304,22 +1374,32 @@ class RepairManager:
             f"git -C {self.source_repo} worktree remove {worktree}",
             f"Review and then remove runtime record {self.store.root / (record.run_id + '.json')}",
         ]
-        self.store.save(record)
+        self._persist_stage(record, "creating_worktree")
 
         added = _command(
-            ["git", "worktree", "add", "--detach", str(worktree), "HEAD"],
+            [
+                "git",
+                "worktree",
+                "add",
+                "--detach",
+                str(worktree),
+                base_head,
+            ],
             self.source_repo,
             timeout=60,
         )
         if added["exit_code"] != 0:
             record.status = "failed"
             record.error = "isolated_worktree_creation_failed"
-            record.validation = {"worktree_add": added}
+            record.validation = {
+                "source_preflight": source_preflight,
+                "worktree_add": added,
+            }
             record.updated_at = _now()
             self.store.save(record)
             return record
 
-        record.status = "diagnosing"
+        self._persist_stage(record, "diagnosing")
         test_commands = self._tests(worktree)
         record.pre_tests = [
             _command(command, worktree)
@@ -1364,6 +1444,12 @@ class RepairManager:
         for attempt_index in range(2):
             attempt_no = attempt_index + 1
 
+            record.validation = {
+                "source_preflight": source_preflight,
+                "attempts": attempts,
+            }
+            self._persist_stage(record, "proposing")
+
             proposal_description = description
             if correction_evidence:
                 proposal_description = (
@@ -1403,6 +1489,7 @@ class RepairManager:
                 record.status = "failed"
                 record.error = evidence
                 record.validation = {
+                    "source_preflight": source_preflight,
                     "attempts": attempts,
                 }
                 record.updated_at = _now()
@@ -1435,6 +1522,7 @@ class RepairManager:
                     }
                 )
                 record.validation = {
+                    "source_preflight": source_preflight,
                     **validation_payload,
                     "attempts": attempts,
                 }
@@ -1471,6 +1559,7 @@ class RepairManager:
                     }
                 )
                 record.validation = {
+                    "source_preflight": source_preflight,
                     **validation_payload,
                     "apply": applied,
                     "attempts": attempts,
@@ -1491,6 +1580,13 @@ class RepairManager:
                 for path in validation.files
                 if path.endswith(".py")
             ]
+
+            record.validation = {
+                "source_preflight": source_preflight,
+                **validation_payload,
+                "attempts": attempts,
+            }
+            self._persist_stage(record, "verifying")
 
             checks: list[dict[str, Any]] = []
 
@@ -1544,6 +1640,7 @@ class RepairManager:
                     }
                 )
                 record.validation = {
+                    "source_preflight": source_preflight,
                     **validation_payload,
                     "attempts": attempts,
                 }
@@ -1583,6 +1680,7 @@ class RepairManager:
             attempts.append(attempt_row)
 
             record.validation = {
+                "source_preflight": source_preflight,
                 **validation_payload,
                 "attempts": attempts,
             }
@@ -1635,6 +1733,7 @@ class RepairManager:
         record.status = "failed"
         record.error = "repair_attempt_budget_exhausted"
         record.validation = {
+            "source_preflight": source_preflight,
             "attempts": attempts,
         }
         record.updated_at = _now()

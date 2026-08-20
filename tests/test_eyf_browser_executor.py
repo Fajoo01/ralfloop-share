@@ -12,10 +12,12 @@ from ralfloop_agent.domains.domain_approval_store import DomainApprovalStore
 from ralfloop_agent.integration.eyf_browser_executor import (
     APPROVAL_ACTION,
     EyfBrowserApprovalService,
+    FINAL_SUBMIT_TARGET,
+    _batch_digest_from_scope,
 )
 
 
-URL = "https://support4youth.coe.int/organisation/profile"
+URL = "https://support4youth.coe.int/organization/profile"
 
 
 class FakeBrowser:
@@ -60,6 +62,13 @@ class FakeBrowser:
         self.page = "page-after-submit"
         return result
 
+    def verify_postconditions(self, operations, before, after):
+        return {"ok": True, "operation_count": len(operations)}
+
+
+class NoVerifierBrowser(FakeBrowser):
+    verify_postconditions = None
+
 
 def policy(tmp_path):
     return DomainApprovalPolicy(
@@ -83,6 +92,7 @@ def service(tmp_path, browser=None, *, allowed=()):
             policy=p,
             browser=browser or FakeBrowser(),
             allowed_uploads=allowed,
+            approval_outbox=tmp_path / "approval-outbox.jsonl",
         ),
         store,
     )
@@ -119,7 +129,7 @@ def operations(file_path=None):
                 "path": str(file_path),
             }
         )
-    out.append({"kind": "submit", "target": "save"})
+    out.append({"kind": "click", "target": "save"})
     return out
 
 
@@ -164,6 +174,18 @@ def test_pending_rejected_and_expired_never_touch_browser(tmp_path):
     assert svc.execute(expired["request"]["request_id"])["status"] == "expired"
     assert browser.calls == []
 
+
+def test_request_without_telegram_outbox_cancels_fail_closed(tmp_path, monkeypatch):
+    monkeypatch.delenv("RALFLOOP_TELEGRAM_APPROVAL_OUTBOX", raising=False)
+    p = policy(tmp_path)
+    store = DomainApprovalStore(policy=p)
+    svc = EyfBrowserApprovalService(store, policy=p, browser=FakeBrowser())
+
+    result = svc.request(operations(), requested_by="test")
+
+    assert result["status"] == "approval_notification_unconfigured"
+    assert result["notification_queued"] is False
+    assert store.get_request(result["request_id"])["status"] == "cancelled"
 
 def test_wrong_host_is_fail_closed(tmp_path):
     svc, store = service(
@@ -251,7 +273,7 @@ def test_batch_mutation_marks_stale_before_claim(tmp_path):
             "target": "organisation.name",
             "value": "MUTATED",
         },
-        {"kind": "submit", "target": "save"},
+        {"kind": "click", "target": "save"},
     ]
 
     with store.connect() as conn:
@@ -266,7 +288,7 @@ def test_batch_mutation_marks_stale_before_claim(tmp_path):
     result = svc.execute(request_id)
 
     assert result["status"] == "stale"
-    assert result["reason"] == "batch_changed"
+    assert result["reason"] == "scope_digest_changed"
     assert browser.calls == []
 
 
@@ -275,7 +297,7 @@ def test_submit_cannot_run_without_approval(tmp_path):
     svc, _ = service(tmp_path, browser)
 
     created = svc.request(
-        [{"kind": "submit", "target": "save"}],
+        [{"kind": "submit", "target": FINAL_SUBMIT_TARGET}],
         requested_by="test",
     )
 
@@ -312,7 +334,7 @@ def test_success_is_exactly_once(tmp_path):
     assert [row[0] for row in browser.calls] == [
         "fill",
         "upload",
-        "submit",
+        "click",
     ]
     assert store.get_request(request_id)["status"] == "consumed"
 
@@ -342,6 +364,19 @@ def test_failure_or_uncertainty_is_not_retryable(tmp_path):
     assert store.get_request(request_id)["status"] == "execution_failed"
 
 
+def test_missing_postcondition_verifier_never_consumes_success(tmp_path):
+    browser = NoVerifierBrowser()
+    svc, store = service(tmp_path, browser)
+    created = svc.request(operations(), requested_by="test")
+    approve(store, created)
+
+    result = svc.execute(created["request"]["request_id"])
+
+    assert result["status"] == "execution_failed"
+    assert result["retry_allowed"] is False
+    assert store.get_request(created["request"]["request_id"])["status"] == "execution_failed"
+
+
 def test_submit_must_be_final(tmp_path):
     svc, store = service(tmp_path)
 
@@ -359,6 +394,43 @@ def test_submit_must_be_final(tmp_path):
 
     assert result["status"] == "submit_must_be_final"
     assert store.list_pending() == []
+
+
+def test_unknown_submit_target_is_rejected(tmp_path):
+    svc, store = service(tmp_path)
+
+    result = svc.request(
+        [{"kind": "submit", "target": "save"}],
+        requested_by="test",
+    )
+
+    assert result["status"] == "final_submit_requires_separate_approval"
+    assert store.list_pending() == []
+
+
+def test_scope_digest_detects_recomputed_inner_batch(tmp_path):
+    browser = FakeBrowser()
+    svc, store = service(tmp_path, browser)
+    created = svc.request(operations(), requested_by="test")
+    approve(store, created)
+    request_id = created["request"]["request_id"]
+    scope = dict(store.get_request(request_id)["scope"])
+    scope["operations"] = [
+        {"kind": "fill", "target": "organisation.name", "value": "MUTATED"},
+        {"kind": "click", "target": "save"},
+    ]
+    scope["batch_sha256"] = _batch_digest_from_scope(scope)
+    with store.connect() as conn:
+        conn.execute(
+            "update approval_requests set scope_json = ? where request_id = ?",
+            (json.dumps(scope, sort_keys=True, separators=(",", ":")), request_id),
+        )
+
+    result = svc.execute(request_id)
+
+    assert result["status"] == "stale"
+    assert result["reason"] == "scope_digest_changed"
+    assert browser.calls == []
 
 
 def test_action_is_real_domain_approval_action(tmp_path):

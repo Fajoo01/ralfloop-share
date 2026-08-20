@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
+import json
+from pathlib import Path
 
 import pytest
 
+from tools import deploy_local_arch_release as deploy
 from tools.deploy_local_arch_release import evaluate_quality_gate
 
 
@@ -89,3 +93,39 @@ def test_candidate_error_blocks() -> None:
     assert isinstance(candidate, dict)
     candidate["errors"] = 1
     assert_blocked(data)
+
+
+def _release(root: Path, directory: str, commit: str) -> Path:
+    release = root / "releases" / directory
+    gate = release / ".ralf_run/local_arch_v1/gates.json"
+    gate.parent.mkdir(parents=True)
+    metadata = release / "RELEASE.json"
+    metadata.write_text(json.dumps({"commit": commit}), encoding="utf-8")
+    gate.write_text(json.dumps(legacy_gate()), encoding="utf-8")
+    rows = []
+    for path in (metadata, gate):
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        rows.append(f"{digest}  {path.relative_to(release)}")
+    (release / "MANIFEST.sha256").write_text("\n".join(rows) + "\n", encoding="utf-8")
+    return release
+
+
+def test_publish_rejects_release_commit_directory_mismatch(tmp_path, monkeypatch) -> None:
+    production = tmp_path / "production"
+    old = _release(production, "a" * 40, "a" * 40)
+    candidate = _release(production, "b" * 40, "c" * 40)
+    (production / "current").symlink_to(old)
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"model")
+    monkeypatch.setattr(deploy, "PRODUCTION", production)
+    monkeypatch.setattr(deploy, "MODEL", model)
+    monkeypatch.setattr(deploy, "port_free", lambda port: True)
+    monkeypatch.setattr(deploy, "process_match", lambda needles: False)
+    monkeypatch.setattr(deploy, "meminfo", lambda: {"MemAvailable": 8192, "SwapFree": 1024})
+
+    result = deploy.publish(candidate)
+
+    assert result["published"] is False
+    assert result["checks"]["release_identity"] is False
+    assert (production / "current").resolve() == old.resolve()
+    assert not (production / "previous").exists()

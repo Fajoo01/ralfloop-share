@@ -7,6 +7,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 from ralfloop_agent.cli import terminal_chat
 from ralfloop_agent.repair import PatchValidator, RepairManager
 
@@ -91,10 +93,59 @@ def test_repair_plan_creates_no_worktree(tmp_path: Path) -> None:
     assert not (tmp_path / "state" / "runs").exists()
 
 
+@pytest.mark.parametrize("dirty_kind", ["tracked", "untracked"])
+def test_repair_run_blocks_dirty_source_before_worktree_and_models(
+    tmp_path: Path,
+    dirty_kind: str,
+) -> None:
+    repo = _synthetic_repo(tmp_path)
+
+    if dirty_kind == "tracked":
+        (repo / "router.py").write_text(
+            (repo / "router.py").read_text(encoding="utf-8")
+            + "\n# local change\n",
+            encoding="utf-8",
+        )
+    else:
+        (repo / "untracked.py").write_text(
+            "value = 1\n",
+            encoding="utf-8",
+        )
+
+    calls: list[str] = []
+    manager = RepairManager(
+        repo,
+        state_root=tmp_path / "state",
+        code_retriever=lambda *args: calls.append("retrieve") or {},
+        proposer=lambda *args: calls.append("propose") or PATCH,
+    )
+
+    record = manager.run("fix matcher")
+
+    assert record.status == "blocked"
+    assert record.error == "repair_source_dirty"
+    assert record.worktree is None
+    assert record.approval_required is False
+    assert record.validation["source_preflight"]["clean"] is False
+    assert calls == []
+    assert not (tmp_path / "state" / "runs").exists()
+    assert manager.status(record.run_id).error == "repair_source_dirty"
+
+
 def test_self_repair_canary_isolated_and_approval_pending(tmp_path: Path) -> None:
     repo = _synthetic_repo(tmp_path)
     before_head = _run(["git", "rev-parse", "HEAD"], repo).stdout.strip()
-    assert _run([sys.executable, "-m", "pytest", "-q"], repo).returncode != 0
+    assert _run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        ],
+        repo,
+    ).returncode != 0
 
     def retrieve(worktree, description):
         return {
@@ -110,6 +161,14 @@ def test_self_repair_canary_isolated_and_approval_pending(tmp_path: Path) -> Non
         code_retriever=retrieve,
         proposer=lambda worktree, description, files: PATCH,
     )
+    saved_statuses: list[str] = []
+    original_save = manager.store.save
+
+    def recording_save(record):
+        saved_statuses.append(record.status)
+        original_save(record)
+
+    manager.store.save = recording_save
     record = manager.run("posta must not match spostare")
 
     assert record.status == "approval_pending"
@@ -127,6 +186,18 @@ def test_self_repair_canary_isolated_and_approval_pending(tmp_path: Path) -> Non
     assert _run(["git", "status", "--porcelain"], Path(record.worktree)).stdout.strip() == "M router.py"
     assert any("worktree remove" in row for row in record.rollback)
     assert manager.status(record.run_id).status == "approval_pending"
+    assert saved_statuses == [
+        "source_preflight",
+        "creating_worktree",
+        "diagnosing",
+        "proposing",
+        "verifying",
+        "approval_pending",
+    ]
+    assert (
+        record.validation["source_preflight"]["head"]["stdout"].strip()
+        == before_head
+    )
 
 
 def test_repair_cli_plan_and_status_with_injected_manager(tmp_path: Path) -> None:
@@ -747,15 +818,99 @@ def test_repair_cli_approval_and_apply_use_backend(
     )
 
 
+def test_repair_repo_policy_uses_exact_resolved_paths(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from ralfloop_agent.repair.approval import (
+        _repair_repo_policy,
+        _select_repair_repo,
+    )
+
+    canonical = tmp_path / "canonical"
+    allowed_extra = tmp_path / "allowed-extra"
+    forbidden = tmp_path / "forbidden"
+    prefix_trick = tmp_path / "allowed-extra-evil"
+    for path in (
+        canonical,
+        allowed_extra,
+        forbidden,
+        prefix_trick,
+    ):
+        path.mkdir()
+
+    allowed_alias = tmp_path / "allowed-alias"
+    allowed_alias.symlink_to(allowed_extra, target_is_directory=True)
+    escape = tmp_path / "allowed-escape"
+    escape.symlink_to(forbidden, target_is_directory=True)
+
+    monkeypatch.setenv(
+        "RALF_REPAIR_SOURCE_REPO",
+        str(canonical),
+    )
+    monkeypatch.setenv(
+        "RALF_REPAIR_ALLOWED_REPOS",
+        str(allowed_extra),
+    )
+
+    configured_canonical, allowed = _repair_repo_policy()
+
+    assert configured_canonical == canonical.resolve()
+    assert _select_repair_repo(
+        None,
+        canonical=configured_canonical,
+        allowed=allowed,
+    ) == canonical.resolve()
+    assert _select_repair_repo(
+        {"repo": str(allowed_extra)},
+        canonical=configured_canonical,
+        allowed=allowed,
+    ) == allowed_extra.resolve()
+    assert _select_repair_repo(
+        {"repo": str(allowed_alias)},
+        canonical=configured_canonical,
+        allowed=allowed,
+    ) == allowed_extra.resolve()
+
+    for path in (forbidden, prefix_trick, escape):
+        with pytest.raises(
+            ValueError,
+            match="^repair_repo_forbidden$",
+        ):
+            _select_repair_repo(
+                {"repo": str(path)},
+                canonical=configured_canonical,
+                allowed=allowed,
+            )
+
+
 def test_backend_registers_repair_control_plane_routes(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
     from fastapi import FastAPI
-    from fastapi.testclient import TestClient
 
     import ralfloop_agent.repair.approval as approval_module
     import ralfloop_agent.repair.workflow as workflow_module
+
+    canonical_repo = tmp_path / "canonical"
+    allowed_repo = tmp_path / "allowed"
+    forbidden_repo = tmp_path / "forbidden"
+    for path in (
+        canonical_repo,
+        allowed_repo,
+        forbidden_repo,
+    ):
+        path.mkdir()
+
+    monkeypatch.setenv(
+        "RALF_REPAIR_SOURCE_REPO",
+        str(canonical_repo),
+    )
+    monkeypatch.setenv(
+        "RALF_REPAIR_ALLOWED_REPOS",
+        str(allowed_repo),
+    )
 
     class Record:
         def __init__(self, status):
@@ -790,6 +945,7 @@ def test_backend_registers_repair_control_plane_routes(
             return {"status": "executed"}
 
     service = Service()
+    selected_repos: list[Path] = []
 
     class ApprovalFactory:
         @classmethod
@@ -804,6 +960,9 @@ def test_backend_registers_repair_control_plane_routes(
             state_root,
         ):
             assert state_root == Store.root.parent
+            selected_repos.append(
+                Path(source_repo).resolve()
+            )
 
         def plan(self, description):
             assert description == "fix"
@@ -826,27 +985,104 @@ def test_backend_registers_repair_control_plane_routes(
 
     app = FastAPI()
     approval_module.register_repair_approval_routes(app)
-    client = TestClient(app)
+    endpoints = {
+        route.path: route.endpoint
+        for route in app.routes
+        if hasattr(route, "endpoint")
+    }
 
-    response = client.post(
-        "/repairs/plan",
-        json={"description": "fix"},
+    response = endpoints["/repairs/plan"](
+        {"description": "fix"}
     )
-    assert response.status_code == 200
-    assert response.json()["status"] == "planned"
+    assert response["status"] == "planned"
 
-    response = client.post(
-        "/repairs/run",
-        json={"description": "fix"},
+    response = endpoints["/repairs/run"](
+        {
+            "description": "fix",
+            "repo": str(allowed_repo),
+        }
     )
-    assert response.status_code == 200
-    assert response.json()["status"] == "approval_pending"
+    assert response["status"] == "approval_pending"
 
-    response = client.get(
-        "/repairs/" + ("c" * 32)
+    response = endpoints["/repairs/plan"](
+        {
+            "description": "fix",
+            "repo": str(forbidden_repo),
+        }
     )
-    assert response.status_code == 200
-    assert response.json()["status"] == "planned"
+    assert response == {
+        "status": "repair_plan_failed",
+        "error": "repair_repo_forbidden",
+    }
+
+    response = endpoints["/repairs/{run_id}"]("c" * 32)
+    assert response["status"] == "planned"
+    assert selected_repos == [
+        canonical_repo.resolve(),
+        allowed_repo.resolve(),
+    ]
+
+
+def test_repair_snapshot_rechecks_repo_policy_and_clean_source(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from ralfloop_agent.repair.approval import (
+        RepairApprovalService,
+    )
+
+    repo = _synthetic_repo(tmp_path)
+    canonical_repo = tmp_path / "canonical"
+    canonical_repo.mkdir()
+
+    manager = RepairManager(
+        repo,
+        state_root=tmp_path / "state",
+        python_executable=sys.executable,
+        code_retriever=lambda *args: {
+            "ok": True,
+            "files": ["router.py"],
+        },
+        proposer=lambda *args: PATCH,
+    )
+    record = manager.run("fix matcher")
+    assert record.status == "approval_pending"
+
+    monkeypatch.setenv(
+        "RALF_REPAIR_SOURCE_REPO",
+        str(canonical_repo),
+    )
+    monkeypatch.setenv(
+        "RALF_REPAIR_ALLOWED_REPOS",
+        str(repo),
+    )
+    service = object.__new__(RepairApprovalService)
+
+    scope = service._snapshot(record)
+    assert scope["source_repo"] == str(repo.resolve())
+    assert len(scope["diff_sha256"]) == 64
+    assert len(scope["validation_sha256"]) == 64
+
+    monkeypatch.setenv("RALF_REPAIR_ALLOWED_REPOS", "")
+    with pytest.raises(
+        ValueError,
+        match="^repair_repo_forbidden$",
+    ):
+        service._snapshot(record)
+
+    monkeypatch.setenv(
+        "RALF_REPAIR_ALLOWED_REPOS",
+        str(repo),
+    )
+    (repo / "local-note.txt").write_text(
+        "dirty\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        ValueError,
+        match="^repair_source_dirty$",
+    ):
+        service._snapshot(record)
 
 
 

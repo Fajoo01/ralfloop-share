@@ -24,6 +24,51 @@ APPROVAL_ACTION = "repair_apply"
 SCHEMA_VERSION = "repair_apply_v1"
 
 
+def _resolve_repair_repo(value: str | Path) -> Path:
+    try:
+        return Path(value).expanduser().resolve()
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        raise ValueError("invalid_repair_repo") from exc
+
+
+def _repair_repo_policy() -> tuple[Path, frozenset[Path]]:
+    canonical_raw = os.getenv(
+        "RALF_REPAIR_SOURCE_REPO",
+        "/home/sibilla-cumana/ralfloop_local_architecture_worktree",
+    ).strip()
+    canonical = _resolve_repair_repo(
+        canonical_raw
+        or "/home/sibilla-cumana/ralfloop_local_architecture_worktree"
+    )
+    allowed = {canonical}
+
+    for raw in os.getenv(
+        "RALF_REPAIR_ALLOWED_REPOS",
+        "",
+    ).split(os.pathsep):
+        if raw.strip():
+            allowed.add(_resolve_repair_repo(raw.strip()))
+
+    return canonical, frozenset(allowed)
+
+
+def _select_repair_repo(
+    payload: Mapping[str, Any] | None,
+    *,
+    canonical: Path,
+    allowed: frozenset[Path],
+) -> Path:
+    requested = str((payload or {}).get("repo") or "").strip()
+    if not requested:
+        return canonical
+
+    resolved = _resolve_repair_repo(requested)
+    if resolved not in allowed:
+        raise ValueError("repair_repo_forbidden")
+
+    return resolved
+
+
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -184,6 +229,26 @@ class RepairApprovalService:
 
         if not source.is_dir() or not worktree.is_dir():
             raise ValueError("repair_paths_missing")
+
+        _, allowed_repos = _repair_repo_policy()
+        if source not in allowed_repos:
+            raise ValueError("repair_repo_forbidden")
+
+        source_status = _run(
+            (
+                "git",
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                "--ignore-submodules=none",
+            ),
+            source,
+            timeout=30,
+        )
+        if source_status["exit_code"] != 0:
+            raise ValueError("repair_source_status_failed")
+        if str(source_status["stdout"]).strip():
+            raise ValueError("repair_source_dirty")
 
         source_head = _git_output(source, "rev-parse", "HEAD")
         worktree_head = _git_output(worktree, "rev-parse", "HEAD")
@@ -655,46 +720,30 @@ class RepairApprovalService:
 
 def register_repair_approval_routes(app: Any) -> None:
     service = RepairApprovalService.from_environment()
+    canonical_repo, allowed_repos = _repair_repo_policy()
 
-    canonical_repo = Path(
-        os.getenv(
-            "RALF_REPAIR_SOURCE_REPO",
-            "/home/sibilla-cumana/ralfloop_local_architecture_worktree",
-        )
-    ).expanduser().resolve()
-
-    def _manager():
+    def _manager(source_repo: Path):
         from ralfloop_agent.repair.workflow import RepairManager
 
         return RepairManager(
-            canonical_repo,
+            source_repo,
             state_root=service.repair_store.root.parent,
         )
-
-    def _check_repo(payload: dict[str, Any] | None) -> str | None:
-        requested = str((payload or {}).get("repo") or "").strip()
-        if not requested:
-            return None
-
-        try:
-            resolved = Path(requested).expanduser().resolve()
-        except OSError:
-            return "invalid_repair_repo"
-
-        if resolved != canonical_repo:
-            return "repair_repo_forbidden"
-
-        return None
 
     @app.post("/repairs/plan")
     def repair_plan(
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        repo_error = _check_repo(payload)
-        if repo_error:
+        try:
+            source_repo = _select_repair_repo(
+                payload,
+                canonical=canonical_repo,
+                allowed=allowed_repos,
+            )
+        except ValueError as exc:
             return {
                 "status": "repair_plan_failed",
-                "error": repo_error,
+                "error": str(exc),
             }
 
         description = str(
@@ -708,7 +757,7 @@ def register_repair_approval_routes(app: Any) -> None:
             }
 
         try:
-            return _manager().plan(description).model_dump(
+            return _manager(source_repo).plan(description).model_dump(
                 mode="json"
             )
         except (KeyError, OSError, ValueError, RuntimeError) as exc:
@@ -721,11 +770,16 @@ def register_repair_approval_routes(app: Any) -> None:
     def repair_run(
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        repo_error = _check_repo(payload)
-        if repo_error:
+        try:
+            source_repo = _select_repair_repo(
+                payload,
+                canonical=canonical_repo,
+                allowed=allowed_repos,
+            )
+        except ValueError as exc:
             return {
                 "status": "repair_run_failed",
-                "error": repo_error,
+                "error": str(exc),
             }
 
         description = str(
@@ -739,7 +793,7 @@ def register_repair_approval_routes(app: Any) -> None:
             }
 
         try:
-            return _manager().run(description).model_dump(
+            return _manager(source_repo).run(description).model_dump(
                 mode="json"
             )
         except (KeyError, OSError, ValueError, RuntimeError) as exc:

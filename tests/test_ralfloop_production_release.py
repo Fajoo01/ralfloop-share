@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import subprocess
 
+import pytest
+
 
 def load_builder():
     path = Path(__file__).parents[1] / "tools/build_ralfloop_production_release.py"
@@ -32,3 +34,19 @@ def test_full_release_from_commit_is_immutable_and_atomic(tmp_path):
     assert json.loads((release / "RELEASE.json").read_text())["commit"] == git(repo, "rev-parse", "HEAD").strip()
     assert (tmp_path / "current").resolve() == release
     assert (release.stat().st_mode & 0o222) == 0
+
+
+def test_cli_direct_publish_is_forbidden_before_build(tmp_path):
+    builder = load_builder()
+
+    with pytest.raises(
+        SystemExit,
+        match="direct_publish_forbidden_use_deploy_local_arch_release",
+    ):
+        builder.main([
+            "--repo",
+            str(tmp_path / "missing"),
+            "--publish",
+        ])
+
+    assert not (tmp_path / "releases").exists()
