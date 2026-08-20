@@ -793,7 +793,18 @@ def register_repair_approval_routes(app: Any) -> None:
             }
 
         try:
-            return _manager(source_repo).run(description).model_dump(
+            run_id = str(
+                (payload or {}).get("run_id") or ""
+            ).strip()
+            kwargs = (
+                {"run_id": run_id}
+                if run_id
+                else {}
+            )
+            return _manager(source_repo).run(
+                description,
+                **kwargs,
+            ).model_dump(
                 mode="json"
             )
         except (KeyError, OSError, ValueError, RuntimeError) as exc:

@@ -163,12 +163,18 @@ def test_self_repair_canary_isolated_and_approval_pending(tmp_path: Path) -> Non
     )
     saved_statuses: list[str] = []
     original_save = manager.store.save
+    original_create = manager.store.create
 
     def recording_save(record):
         saved_statuses.append(record.status)
         original_save(record)
 
+    def recording_create(record):
+        saved_statuses.append(record.status)
+        original_create(record)
+
     manager.store.save = recording_save
+    manager.store.create = recording_create
     record = manager.run("posta must not match spostare")
 
     assert record.status == "approval_pending"
@@ -198,6 +204,109 @@ def test_self_repair_canary_isolated_and_approval_pending(tmp_path: Path) -> Non
         record.validation["source_preflight"]["head"]["stdout"].strip()
         == before_head
     )
+
+
+def test_repair_known_run_id_persists_proposing_stage(
+    tmp_path: Path,
+) -> None:
+    repo = _synthetic_repo(tmp_path)
+    known_run_id = "d" * 32
+    manager: RepairManager
+
+    def proposer(worktree, description, files):
+        assert manager.status(known_run_id).status == "proposing"
+        return PATCH
+
+    manager = RepairManager(
+        repo,
+        state_root=tmp_path / "state",
+        python_executable=sys.executable,
+        code_retriever=lambda *args: {
+            "ok": True,
+            "files": ["router.py"],
+        },
+        proposer=proposer,
+    )
+
+    record = manager.run(
+        "fix matcher",
+        run_id=known_run_id,
+    )
+
+    assert record.run_id == known_run_id
+    assert record.status == "approval_pending"
+    with pytest.raises(
+        ValueError,
+        match="^repair_run_id_exists$",
+    ):
+        manager.run("duplicate", run_id=known_run_id)
+
+
+def test_repair_run_id_claim_is_atomic_under_collision(
+    tmp_path: Path,
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    repo = _synthetic_repo(tmp_path)
+    (repo / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+    manager = RepairManager(
+        repo,
+        state_root=tmp_path / "state",
+        code_retriever=lambda *args: pytest.fail(
+            "dirty source must block retrieval"
+        ),
+        proposer=lambda *args: pytest.fail(
+            "dirty source must block proposal"
+        ),
+    )
+    known_run_id = "e" * 32
+    barrier = Barrier(2)
+    original_create = manager.store.create
+
+    def synchronized_create(record):
+        barrier.wait(timeout=5)
+        return original_create(record)
+
+    manager.store.create = synchronized_create
+
+    def invoke() -> str:
+        try:
+            return manager.run(
+                "fix matcher",
+                run_id=known_run_id,
+            ).status
+        except ValueError as exc:
+            return str(exc)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: invoke(), range(2)))
+
+    assert sorted(results) == [
+        "blocked",
+        "repair_run_id_exists",
+    ]
+    assert manager.status(known_run_id).status == "blocked"
+
+
+def test_repair_rejects_invalid_supplied_run_id(
+    tmp_path: Path,
+) -> None:
+    repo = _synthetic_repo(tmp_path)
+    manager = RepairManager(
+        repo,
+        state_root=tmp_path / "state",
+        code_retriever=lambda *args: {},
+        proposer=lambda *args: "",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="^invalid_repair_run_id$",
+    ):
+        manager.run("fix", run_id="not-a-run-id")
+
+    assert not manager.store.root.exists()
 
 
 def test_repair_cli_plan_and_status_with_injected_manager(tmp_path: Path) -> None:
@@ -751,6 +860,110 @@ def test_repair_cli_without_manager_uses_backend_only(
     assert calls[1][1] == "/repairs/" + ("a" * 32)
 
 
+def test_repair_cli_run_binds_id_and_reports_read_timeout(
+    monkeypatch,
+) -> None:
+    submitted: dict[str, object] = {}
+
+    def fake_request(
+        method,
+        path,
+        *,
+        payload=None,
+        timeout=30.0,
+    ):
+        submitted.update(payload or {})
+        raise terminal_chat.RepairBackendReadTimeout(
+            "repair_backend_read_timeout"
+        )
+
+    monkeypatch.setattr(
+        terminal_chat,
+        "_repair_backend_request",
+        fake_request,
+    )
+    args = terminal_chat.build_parser().parse_args(
+        [
+            "repair",
+            "run",
+            "--repo",
+            "/allowed/repo",
+            "fix matcher",
+        ]
+    )
+    out = io.StringIO()
+
+    assert terminal_chat.run_repair_command(
+        args,
+        out=out,
+        err=io.StringIO(),
+    ) == 1
+
+    result = json.loads(out.getvalue())
+    assert result["run_id"] == submitted["run_id"]
+    assert len(str(result["run_id"])) == 32
+    assert result["status"] == "repair_run_status_unknown"
+    assert result["next"] == (
+        "ralf repair status " + str(result["run_id"])
+    )
+    assert submitted["repo"] == "/allowed/repo"
+
+
+def test_repair_backend_read_timeout_has_distinct_class(
+    monkeypatch,
+) -> None:
+    def timeout(*args, **kwargs):
+        raise terminal_chat.requests.ReadTimeout("slow")
+
+    monkeypatch.setattr(
+        terminal_chat.requests,
+        "request",
+        timeout,
+    )
+
+    with pytest.raises(
+        terminal_chat.RepairBackendReadTimeout,
+        match="^repair_backend_read_timeout$",
+    ):
+        terminal_chat._repair_backend_request(
+            "POST",
+            "/repairs/run",
+            payload={"description": "fix"},
+        )
+
+
+def test_repair_cli_recovers_id_on_ambiguous_request_error(
+    monkeypatch,
+) -> None:
+    def unavailable(*args, **kwargs):
+        raise terminal_chat.requests.ConnectionError("reset")
+
+    monkeypatch.setattr(
+        terminal_chat.requests,
+        "request",
+        unavailable,
+    )
+    args = terminal_chat.build_parser().parse_args(
+        ["repair", "run", "fix matcher"]
+    )
+    out = io.StringIO()
+
+    assert terminal_chat.run_repair_command(
+        args,
+        out=out,
+        err=io.StringIO(),
+    ) == 1
+
+    result = json.loads(out.getvalue())
+    assert result["status"] == "repair_run_status_unknown"
+    assert result["error"] == (
+        "repair_backend_request_uncertain:ConnectionError"
+    )
+    assert result["next"] == (
+        "ralf repair status " + result["run_id"]
+    )
+
+
 def test_repair_cli_approval_and_apply_use_backend(
     monkeypatch,
 ) -> None:
@@ -968,8 +1181,9 @@ def test_backend_registers_repair_control_plane_routes(
             assert description == "fix"
             return Record("planned")
 
-        def run(self, description):
+        def run(self, description, *, run_id=None):
             assert description == "fix"
+            assert run_id == "d" * 32
             return Record("approval_pending")
 
     monkeypatch.setattr(
@@ -1000,6 +1214,7 @@ def test_backend_registers_repair_control_plane_routes(
         {
             "description": "fix",
             "repo": str(allowed_repo),
+            "run_id": "d" * 32,
         }
     )
     assert response["status"] == "approval_pending"
@@ -1124,6 +1339,26 @@ def test_repair_source_blocks_respect_total_character_budget(
 
     assert len(sources) <= 700
     assert 'path="a.py"' in sources
+
+
+def test_repair_correction_keeps_original_source_selection() -> None:
+    from ralfloop_agent.repair.workflow import (
+        LlamaCppPatchProposer,
+    )
+
+    original = "Fix target_symbol"
+    corrected = (
+        original
+        + LlamaCppPatchProposer._CORRECTION_MARKER
+        + " Failure evidence: SyntaxError at discarded line 489"
+    )
+
+    assert (
+        LlamaCppPatchProposer._source_selection_description(
+            corrected
+        )
+        == original
+    )
 
 
 def test_repair_context_preflight_blocks_http_post():

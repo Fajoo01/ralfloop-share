@@ -102,6 +102,20 @@ class RepairStore:
         temporary.chmod(0o600)
         temporary.replace(target)
 
+    def create(self, record: RepairRecord) -> None:
+        """Atomically persist a new run without replacing an existing ID."""
+        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        target = self.root / f"{record.run_id}.json"
+        temporary = self.root / f".{record.run_id}.{uuid4().hex}.tmp"
+        temporary.write_text(record.model_dump_json(indent=2), encoding="utf-8")
+        temporary.chmod(0o600)
+        try:
+            os.link(temporary, target)
+        except FileExistsError as exc:
+            raise ValueError("repair_run_id_exists") from exc
+        finally:
+            temporary.unlink(missing_ok=True)
+
     def load(self, run_id: str) -> RepairRecord:
         if not re.fullmatch(r"[a-f0-9]{32}", run_id):
             raise ValueError("invalid_repair_run_id")
@@ -315,6 +329,10 @@ class LlamaCppPatchProposer:
         "Never output JSON, Markdown, prose or Git diff."
     )
 
+    _CORRECTION_MARKER = (
+        "\n\nCORRECTION ATTEMPT 2 OF 2."
+    )
+
     def __init__(
         self,
         *,
@@ -417,6 +435,18 @@ class LlamaCppPatchProposer:
                 value,
             ),
         )[:80]
+
+    @classmethod
+    def _source_selection_description(
+        cls,
+        description: str,
+    ) -> str:
+        # Verification output contains coordinates from the discarded
+        # candidate.  It must guide the correction, but must not move the
+        # ORIGINAL-source windows between bounded attempts.
+        return description.partition(
+            cls._CORRECTION_MARKER
+        )[0]
 
     @classmethod
     def _source_windows(
@@ -1153,6 +1183,11 @@ class LlamaCppPatchProposer:
         ]
 
         source_budget = self.max_source_chars
+        source_description = (
+            self._source_selection_description(
+                description
+            )
+        )
 
         while True:
             (
@@ -1162,7 +1197,7 @@ class LlamaCppPatchProposer:
             ) = self._source_blocks(
                 worktree,
                 selected_files,
-                description,
+                source_description,
                 source_char_budget=source_budget,
             )
 
@@ -1262,10 +1297,22 @@ class RepairManager:
         if probe["exit_code"] != 0 or Path(probe["stdout"].strip()).resolve() != self.source_repo:
             raise ValueError("repair_source_must_be_git_root")
 
-    def _new_record(self, action: str, description: str) -> RepairRecord:
+    def _new_record(
+        self,
+        action: str,
+        description: str,
+        *,
+        run_id: str | None = None,
+    ) -> RepairRecord:
+        selected_run_id = run_id or uuid4().hex
+        if not re.fullmatch(
+            r"[a-f0-9]{32}",
+            selected_run_id,
+        ):
+            raise ValueError("invalid_repair_run_id")
         now = _now()
         return RepairRecord(
-            run_id=uuid4().hex,
+            run_id=selected_run_id,
             action=action,
             description=description,
             status="planned" if action == "plan" else "initializing",
@@ -1285,7 +1332,7 @@ class RepairManager:
             "deploy": False,
         }
         record.rollback = ["No worktree created; no rollback required."]
-        self.store.save(record)
+        self.store.create(record)
         return record
 
     def _tests(self, worktree: Path) -> list[list[str]]:
@@ -1298,17 +1345,35 @@ class RepairManager:
         self,
         record: RepairRecord,
         status: str,
+        *,
+        create: bool = False,
     ) -> None:
         record.status = status
         record.updated_at = _now()
-        self.store.save(record)
+        if create:
+            self.store.create(record)
+        else:
+            self.store.save(record)
 
-    def run(self, description: str) -> RepairRecord:
-        record = self._new_record("run", description)
+    def run(
+        self,
+        description: str,
+        *,
+        run_id: str | None = None,
+    ) -> RepairRecord:
+        record = self._new_record(
+            "run",
+            description,
+            run_id=run_id,
+        )
         record.rollback = [
             "No worktree created; no rollback required."
         ]
-        self._persist_stage(record, "source_preflight")
+        self._persist_stage(
+            record,
+            "source_preflight",
+            create=True,
+        )
 
         source_status = _command(
             [
@@ -1454,11 +1519,15 @@ class RepairManager:
             if correction_evidence:
                 proposal_description = (
                     description
-                    + "\n\nCORRECTION ATTEMPT 2 OF 2. "
+                    + LlamaCppPatchProposer._CORRECTION_MARKER
+                    + " "
                     "The previous candidate failed deterministic "
                     "verification. Produce a corrected candidate against "
                     "the ORIGINAL source. Do not change the requested "
-                    "behavior.\n\nFailure evidence:\n"
+                    "behavior. Failure evidence may contain line numbers "
+                    "from the discarded candidate; select coordinates "
+                    "only from the supplied ORIGINAL source windows."
+                    "\n\nFailure evidence:\n"
                     + correction_evidence[:6000]
                 )
 

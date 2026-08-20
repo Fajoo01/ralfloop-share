@@ -8,6 +8,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator, TextIO
+from uuid import uuid4
 
 import requests
 
@@ -58,6 +59,18 @@ class BackendUnavailable(RalfTerminalError):
 
 
 class BackendTimeout(RalfTerminalError):
+    pass
+
+
+class RepairBackendRequestUncertain(OSError):
+    """The request may have reached the backend; query the bound run ID."""
+
+    pass
+
+
+class RepairBackendReadTimeout(RepairBackendRequestUncertain):
+    """A repair response timed out after the request was submitted."""
+
     pass
 
 
@@ -1078,9 +1091,14 @@ def _repair_backend_request(
         )
         response.raise_for_status()
         data = response.json()
+    except requests.ReadTimeout as exc:
+        raise RepairBackendReadTimeout(
+            "repair_backend_read_timeout"
+        ) from exc
     except requests.RequestException as exc:
-        raise OSError(
-            f"repair_backend_unavailable:{exc}"
+        raise RepairBackendRequestUncertain(
+            "repair_backend_request_uncertain:"
+            f"{type(exc).__name__}"
         ) from exc
     except ValueError as exc:
         raise OSError(
@@ -1106,6 +1124,7 @@ def run_repair_command(
     err: TextIO = sys.stderr,
 ) -> int:
     action = args.repair_action
+    submitted_run_id: str | None = None
 
     try:
         # Dependency injection remains local only for tests/library callers.
@@ -1176,6 +1195,10 @@ def run_repair_command(
                 "description": description,
             }
 
+            if action == "run":
+                submitted_run_id = uuid4().hex
+                payload["run_id"] = submitted_run_id
+
             repo = getattr(args, "repo", None)
             if repo:
                 payload["repo"] = str(repo)
@@ -1191,6 +1214,30 @@ def run_repair_command(
                 ),
             )
 
+    except RepairBackendRequestUncertain as exc:
+        if action == "run" and submitted_run_id:
+            print(
+                json.dumps(
+                    {
+                        "run_id": submitted_run_id,
+                        "status": "repair_run_status_unknown",
+                        "error": str(exc),
+                        "next": (
+                            "ralf repair status "
+                            + submitted_run_id
+                        ),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                file=out,
+            )
+            return 1
+        print(
+            sanitize_terminal_text(str(exc)),
+            file=err,
+        )
+        return 2
     except (KeyError, OSError, ValueError) as exc:
         print(
             sanitize_terminal_text(str(exc)),
