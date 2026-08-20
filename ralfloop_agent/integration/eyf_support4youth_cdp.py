@@ -174,6 +174,19 @@ function(keys) {
     return style.display !== 'none' && style.visibility !== 'hidden'
       && node.getClientRects().length > 0;
   };
+  const fieldValue = (node) => {
+    if (!node) return '';
+    const children = Array.from(node.children);
+    if (children.some((child) => child.classList.contains('line-through'))) {
+      const replacement = children.filter(
+        (child) => visible(child)
+          && !child.classList.contains('line-through')
+      ).map((child) => clean(child.innerText || child.textContent))
+        .filter(Boolean);
+      if (replacement.length) return clean(replacement.join(' '));
+    }
+    return clean(node.innerText || node.textContent);
+  };
   const fields = keys.map((key) => {
     const label = document.getElementById(`df-${key}-label`);
     const text = document.getElementById(`df-${key}-text`);
@@ -193,7 +206,7 @@ function(keys) {
     return {
       key,
       label: clean(label && (label.innerText || label.textContent)).slice(0, 500),
-      value: clean(text && (text.innerText || text.textContent)).slice(0, 2000),
+      value: fieldValue(text).slice(0, 2000),
       comments: comments.slice(0, 20),
       reply_value: clean(reply && reply.value).slice(0, 4000),
       dom: {

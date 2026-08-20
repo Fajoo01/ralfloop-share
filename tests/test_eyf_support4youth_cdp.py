@@ -160,6 +160,15 @@ def test_field_save_scopes_duplicate_id_to_active_dialog():
     assert "!activeField.isConnected || !dialog.isConnected" in source
 
 
+def test_snapshot_uses_pending_replacement_not_struck_old_value():
+    source = cdp_module._SNAPSHOT_FUNCTION
+
+    assert "const fieldValue = (node)" in source
+    assert "child.classList.contains('line-through')" in source
+    assert "!child.classList.contains('line-through')" in source
+    assert "value: fieldValue(text).slice(0, 2000)" in source
+
+
 def test_snapshot_is_read_only_stable_and_target_bound():
     transport = FakeTransport()
     adapter = EyfSupport4YouthCdpAdapter(transport)
