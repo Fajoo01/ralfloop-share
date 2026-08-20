@@ -1,5 +1,7 @@
 {
-  "v": 1,
+  "v": 2,
+  "verified_at": "2026-08-20T08:18:30Z",
+  "tested_commit": "867fb6e9b764ce727a1fdfd86e43ab722d2d22f5",
   "local_model_present": true,
   "local_search_paths": [
     "/home/sibilla-cumana/Dati/ralfloop-models",
@@ -22,6 +24,7 @@
   "runtime_canary": "pass",
   "functiongemma_real": true,
   "canary_evidence": ".ralf_run/local_arch_v1/functiongemma-real-canary.json",
+  "canary_sha256": "385e65632e546f6159e668e15a49c77f7ff5df391d09716175aa79b936723ed5",
   "cpu_only": true,
   "policy_bypass": 0,
   "approval_miss": 0,

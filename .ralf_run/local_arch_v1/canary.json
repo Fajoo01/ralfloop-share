@@ -1,7 +1,18 @@
 {
-  "v": 1,
+  "v": 2,
+  "verified_at": "2026-08-20T08:18:30Z",
+  "tested_commit": "867fb6e9b764ce727a1fdfd86e43ab722d2d22f5",
   "static": "pass",
-  "unit_new_arch": {"status":"pass","tests":149},
+  "unit_new_arch": {
+    "status": "pass",
+    "tests": 137,
+    "junit_sha256": "75649c99b41728d54bca01939fd6a216abe495ad9d379596c41025a88bcd2a35"
+  },
+  "changed_scope": {
+    "status": "pass",
+    "tests": 218,
+    "junit_sha256": "9f13aa3908c6717c2ae5790026d9d21d95dbdfec24c5a4c85aae782c93ab88ba"
+  },
   "fake_router": "pass",
   "fake_llm_director": "pass",
   "fake_evolver": "pass",
@@ -10,7 +21,7 @@
   "seccomp_network_block": "pass",
   "seccomp_process_block": "pass",
   "cgroup_v2_limits": "pass",
-  "functiongemma_real_dry_run": "blocked_model_absent_license_gated",
+  "functiongemma_real_dry_run": "pass",
   "visual_worker_dry_run": "pass",
   "tts_local_minimal": "blocked_model_not_selected_or_installed",
   "social_image_deterministic": {"status":"pass","artifact":"sha256:195bf14cffdc1403b54d737cec698b695542c83fe37369da027c3b0c21d96bb6"},
@@ -18,5 +29,11 @@
   "video_model": "not_loaded_optional_first_canary",
   "evolver_micro": "pass_no_promotion_due_noise",
   "integration_dry_run": "pass",
+  "integration_tests": {
+    "status": "pass",
+    "tests": 6,
+    "deselected_preexisting_failure": 1,
+    "junit_sha256": "faa2509e2b4cd25af1e20379f22284dcab84c1cef6646af47f8925f4af6b3b5f"
+  },
   "published": false
 }
