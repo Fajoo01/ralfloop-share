@@ -146,6 +146,20 @@ def test_mutation_function_has_in_dom_route_guard_and_real_final_selectors():
     assert "edit-field-dialog-body" in cdp_module._SNAPSHOT_FUNCTION
 
 
+def test_field_save_scopes_duplicate_id_to_active_dialog():
+    source = cdp_module._ACTION_FUNCTION
+
+    assert "const buttonFor = (id, root = document)" in source
+    assert "const activeField = document.getElementById(base)" in source
+    assert (
+        "const dialog = activeField.closest('[role=\"dialog\"],.p-dialog')"
+        in source
+    )
+    assert "buttonFor('edit-field-save', dialog).click()" in source
+    assert "buttonFor('edit-field-save').click()" not in source
+    assert "!activeField.isConnected || !dialog.isConnected" in source
+
+
 def test_snapshot_is_read_only_stable_and_target_bound():
     transport = FakeTransport()
     adapter = EyfSupport4YouthCdpAdapter(transport)

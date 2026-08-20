@@ -333,9 +333,13 @@ async function(action, key, value) {
     node.dispatchEvent(new Event('change', {bubbles: true}));
     node.dispatchEvent(new Event('blur', {bubbles: true}));
   };
-  const buttonFor = (id) => {
+  const buttonFor = (id, root = document) => {
     assertProfileLocation();
-    const host = document.getElementById(id);
+    const host = root === document
+      ? document.getElementById(id)
+      : Array.from(root.querySelectorAll('[id]')).find(
+        (node) => node.id === id
+      );
     if (!host) throw new Error(`missing:${id}`);
     const button = host instanceof HTMLButtonElement ? host : host.querySelector('button');
     if (!button || button.disabled || button.getAttribute('aria-disabled') === 'true') {
@@ -452,9 +456,15 @@ async function(action, key, value) {
     }
   } else if (action === 'field_save') {
     assertProfileLocation();
-    buttonFor('edit-field-save').click();
+    const base = `edit-field-${spec.local}`;
+    const activeField = document.getElementById(base);
+    if (!activeField) throw new Error('edit_dialog_field_missing');
+    const dialog = activeField.closest('[role="dialog"],.p-dialog');
+    if (!dialog) throw new Error('edit_dialog_missing');
+    buttonFor('edit-field-save', dialog).click();
     await waitFor(
-      () => !document.getElementById(`edit-field-${spec.local}`),
+      () => !activeField.isConnected || !dialog.isConnected
+        || activeField.getClientRects().length === 0,
       'edit_dialog_save_unconfirmed'
     );
   } else if (action === 'reply_fill') {
