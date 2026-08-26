@@ -177,17 +177,27 @@ def _validated_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         raise MCPProtocolError("arci_result_invalid") from exc
     if profile.status not in {"FOUND", "PARTIAL"}:
         raise MCPProtocolError("arci_result_unavailable")
-    buckets = sum((
-        profile.governance_under_15 or 0,
-        profile.governance_age_15_30 or 0,
-        profile.governance_over_30 or 0,
-    ))
-    if (
-        buckets != profile.governance_dated
-        or (profile.governance_dated or 0) > (profile.governance_total or 0)
-        or (profile.member_count or 0) < (profile.governance_total or 0)
-    ):
-        raise MCPProtocolError("arci_result_invalid")
+    governance_values = (
+        profile.governance_total,
+        profile.governance_dated,
+        profile.governance_under_15,
+        profile.governance_age_15_30,
+        profile.governance_over_30,
+    )
+    if not all(value is None for value in governance_values):
+        if any(value is None for value in governance_values):
+            raise MCPProtocolError("arci_result_invalid")
+        buckets = sum((
+            profile.governance_under_15,
+            profile.governance_age_15_30,
+            profile.governance_over_30,
+        ))
+        if (
+            buckets != profile.governance_dated
+            or profile.governance_dated > profile.governance_total
+            or (profile.member_count or 0) < profile.governance_total
+        ):
+            raise MCPProtocolError("arci_result_invalid")
 
     return {
         "ok": True,

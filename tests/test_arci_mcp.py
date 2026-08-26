@@ -136,6 +136,83 @@ def test_arci_gateway_validates_discovery_and_pii_minimized_result():
     assert result["side_effects"] == 0
 
 
+def partial_rest_payload(**overrides):
+    payload = {
+        "ok": True,
+        "operation": "read_organization_profile",
+        "status": "PARTIAL",
+        "session_authenticated": True,
+        "organization_name": "TIREMM INNANZ APS",
+        "member_count": None,
+        "as_of": None,
+        "governance_total": None,
+        "governance_dated": None,
+        "governance_under_15": None,
+        "governance_age_15_30": None,
+        "governance_over_30": None,
+        "provenance": ["arci_rest:user.cards.club"],
+        "read_operations": ["arci.rest.user.read"],
+        "write_operations": 0,
+        "side_effects": 0,
+        "content_role": "data",
+        "writes": 0,
+        "sends": 0,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def gateway_result(payload):
+    gateway = ArciGateway(FakeSession(payload=payload))
+    gateway.discover()
+    return gateway.read_organization_profile()
+
+
+def test_arci_gateway_accepts_partial_rest_profile_without_governance():
+    result = gateway_result(partial_rest_payload())
+
+    assert result["status"] == "PARTIAL"
+    assert result["organization_name"] == "TIREMM INNANZ APS"
+    assert result["member_count"] is None
+    assert result["governance_total"] is None
+    assert result["governance_dated"] is None
+    assert result["governance_under_15"] is None
+    assert result["governance_age_15_30"] is None
+    assert result["governance_over_30"] is None
+    assert result["side_effects"] == 0
+    assert result["writes"] == 0
+    assert result["sends"] == 0
+
+
+def test_arci_gateway_keeps_complete_legacy_governance_validation():
+    result = gateway_result(FakeSession().call_tool(READ_TOOL, {})["structuredContent"])
+
+    assert result["status"] == "FOUND"
+    assert result["governance_total"] == 8
+    assert result["governance_dated"] == 8
+
+
+def test_arci_gateway_rejects_complete_inconsistent_governance():
+    payload = FakeSession().call_tool(READ_TOOL, {})["structuredContent"]
+    payload["governance_over_30"] = 7
+
+    with pytest.raises(MCPProtocolError, match="arci_result_invalid"):
+        gateway_result(payload)
+
+
+@pytest.mark.parametrize("overrides", [
+    {"governance_total": 8},
+    {
+        "governance_total": 8,
+        "governance_dated": 8,
+        "governance_under_15": 0,
+    },
+])
+def test_arci_gateway_rejects_partially_available_governance(overrides):
+    with pytest.raises(MCPProtocolError, match="arci_result_invalid"):
+        gateway_result(partial_rest_payload(**overrides))
+
+
 def test_arci_gateway_rejects_generic_schema_and_pii_output():
     generic = MCPTool(
         "arci_click",
