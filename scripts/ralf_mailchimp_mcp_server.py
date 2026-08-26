@@ -7,6 +7,7 @@ import base64
 import json
 import os
 from pathlib import Path
+import re
 import sys
 from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
@@ -45,6 +46,28 @@ OFFSET = {
     "maximum": 1_000_000,
 }
 
+RESOURCE_ID = {
+    "type": "string",
+    "pattern": r"^[A-Za-z0-9_-]{1,128}$",
+}
+
+SUBSCRIBER_HASH = {
+    "type": "string",
+    "pattern": r"^[a-fA-F0-9]{32}$",
+}
+
+MEMBER_STATUS = {
+    "type": "string",
+    "enum": [
+        "subscribed",
+        "unsubscribed",
+        "cleaned",
+        "pending",
+        "transactional",
+        "archived",
+    ],
+}
+
 
 TOOLS: dict[str, dict[str, Any]] = {
     "mailchimp_ping": _schema({}),
@@ -56,6 +79,29 @@ TOOLS: dict[str, dict[str, Any]] = {
         "count": COUNT,
         "offset": OFFSET,
     }),
+    "mailchimp_list_members": _schema({
+        "list_id": RESOURCE_ID,
+        "count": COUNT,
+        "offset": OFFSET,
+        "status": MEMBER_STATUS,
+    }, ("list_id",)),
+    "mailchimp_list_segments": _schema({
+        "list_id": RESOURCE_ID,
+        "count": COUNT,
+        "offset": OFFSET,
+    }, ("list_id",)),
+    "mailchimp_list_tags": _schema({
+        "list_id": RESOURCE_ID,
+        "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+        },
+    }, ("list_id",)),
+    "mailchimp_list_member_tags": _schema({
+        "list_id": RESOURCE_ID,
+        "subscriber_hash": SUBSCRIBER_HASH,
+    }, ("list_id", "subscriber_hash")),
 }
 
 
@@ -333,6 +379,109 @@ class MailchimpClient:
             "offset": offset,
         }
 
+    def list_members(
+        self,
+        list_id: str,
+        *,
+        count: int = 20,
+        offset: int = 0,
+        status: str | None = None,
+    ) -> dict[str, Any]:
+        payload = self._request(
+            f"lists/{list_id}/members",
+            query={"count": count, "offset": offset, "status": status},
+        )
+        rows = []
+        for item in payload.get("members") or []:
+            if not isinstance(item, Mapping):
+                continue
+            merge_fields = item.get("merge_fields")
+            tags = item.get("tags")
+            rows.append({
+                "id": str(item.get("id") or ""),
+                "email_address": str(item.get("email_address") or ""),
+                "status": str(item.get("status") or ""),
+                "merge_fields": dict(merge_fields) if isinstance(merge_fields, Mapping) else {},
+                "tags": [dict(tag) for tag in tags if isinstance(tag, Mapping)] if isinstance(tags, list) else [],
+                "timestamp_signup": item.get("timestamp_signup"),
+                "last_changed": item.get("last_changed"),
+            })
+        return {
+            "results": rows,
+            "total_items": int(payload.get("total_items") or 0),
+            "count": count,
+            "offset": offset,
+        }
+
+    def list_segments(
+        self,
+        list_id: str,
+        *,
+        count: int = 20,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        payload = self._request(
+            f"lists/{list_id}/segments",
+            query={"count": count, "offset": offset},
+        )
+        rows = []
+        for item in payload.get("segments") or []:
+            if not isinstance(item, Mapping):
+                continue
+            rows.append({
+                "id": item.get("id"),
+                "name": str(item.get("name") or ""),
+                "member_count": item.get("member_count"),
+                "type": str(item.get("type") or ""),
+                "created_at": item.get("created_at"),
+                "updated_at": item.get("updated_at"),
+            })
+        return {
+            "results": rows,
+            "total_items": int(payload.get("total_items") or 0),
+            "count": count,
+            "offset": offset,
+        }
+
+    def list_tags(
+        self,
+        list_id: str,
+        *,
+        name: str | None = None,
+    ) -> dict[str, Any]:
+        payload = self._request(
+            f"lists/{list_id}/tag-search",
+            query={"name": name},
+        )
+        rows = []
+        for item in payload.get("tags") or []:
+            if not isinstance(item, Mapping):
+                continue
+            rows.append({
+                "id": item.get("id"),
+                "name": str(item.get("name") or ""),
+                "member_count": item.get("member_count"),
+            })
+        return {"results": rows}
+
+    def list_member_tags(
+        self,
+        list_id: str,
+        subscriber_hash: str,
+    ) -> dict[str, Any]:
+        payload = self._request(
+            f"lists/{list_id}/members/{subscriber_hash}/tags",
+        )
+        rows = []
+        for item in payload.get("tags") or []:
+            if not isinstance(item, Mapping):
+                continue
+            rows.append({
+                "id": item.get("id"),
+                "name": str(item.get("name") or ""),
+            })
+        return {"results": rows}
+
 
 class MailchimpMCPServer:
     def __init__(
@@ -349,6 +498,14 @@ class MailchimpMCPServer:
                 "List Mailchimp audiences without modifying remote data.",
             "mailchimp_list_campaigns":
                 "List Mailchimp campaigns without modifying remote data.",
+            "mailchimp_list_members":
+                "List minimized Mailchimp audience members without modifying them.",
+            "mailchimp_list_segments":
+                "List Mailchimp audience segments without modifying them.",
+            "mailchimp_list_tags":
+                "List or search Mailchimp audience tags without modifying them.",
+            "mailchimp_list_member_tags":
+                "List tags for one Mailchimp member without modifying them.",
         }
 
         return [
@@ -414,6 +571,39 @@ class MailchimpMCPServer:
                     payload,
                 )
 
+            list_id = str(arguments.get("list_id") or "")
+
+            if name == "mailchimp_list_members":
+                payload = self.client.list_members(
+                    list_id,
+                    count=count,
+                    offset=offset,
+                    status=arguments.get("status"),
+                )
+                return _read("list_members", payload)
+
+            if name == "mailchimp_list_segments":
+                payload = self.client.list_segments(
+                    list_id,
+                    count=count,
+                    offset=offset,
+                )
+                return _read("list_segments", payload)
+
+            if name == "mailchimp_list_tags":
+                payload = self.client.list_tags(
+                    list_id,
+                    name=arguments.get("name"),
+                )
+                return _read("list_tags", payload)
+
+            if name == "mailchimp_list_member_tags":
+                payload = self.client.list_member_tags(
+                    list_id,
+                    str(arguments.get("subscriber_hash") or ""),
+                )
+                return _read("list_member_tags", payload)
+
             return _error("POLICY_DENIED")
 
         except MailchimpAPIError as exc:
@@ -459,6 +649,18 @@ def _validate(
             )
 
             if not minimum <= value <= maximum:
+                return "POLICY_DENIED"
+
+        if spec.get("type") == "string":
+            if not isinstance(value, str):
+                return "POLICY_DENIED"
+            if len(value) < int(spec.get("minLength", 0)):
+                return "POLICY_DENIED"
+            if len(value) > int(spec.get("maxLength", len(value))):
+                return "POLICY_DENIED"
+            if spec.get("enum") and value not in spec["enum"]:
+                return "POLICY_DENIED"
+            if spec.get("pattern") and re.fullmatch(str(spec["pattern"]), value) is None:
                 return "POLICY_DENIED"
 
     return ""

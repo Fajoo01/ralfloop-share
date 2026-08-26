@@ -373,7 +373,14 @@ class UnifiedAssistantCore:
             "ping": "mailchimp_ping",
             "audiences": "mailchimp_list_audiences",
             "campaigns": "mailchimp_list_campaigns",
+            "members": "mailchimp_list_members",
+            "segments": "mailchimp_list_segments",
+            "tags": "mailchimp_list_tags",
+            "member_tags": "mailchimp_list_member_tags",
         }
+
+        if operation == "audience_analysis":
+            return self._analyze_mailchimp_audience(assignment, plan)
 
         tool = tools.get(operation)
         if tool is None:
@@ -410,6 +417,31 @@ class UnifiedAssistantCore:
                 "count": count,
                 "offset": offset,
             }
+
+        if operation in {"members", "segments", "tags", "member_tags"}:
+            list_id = str(assignment.arguments.get("list_id") or "")
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", list_id):
+                return self._result(
+                    "clarification_required",
+                    "Specifica il list_id dell'audience Mailchimp.",
+                    plan=plan, selected_skill="mailchimp.read", tools_executed=False,
+                    side_effects=0, writes=0, sends=0,
+                )
+            arguments["list_id"] = list_id
+            if operation == "tags":
+                arguments.pop("count", None)
+                arguments.pop("offset", None)
+            if operation == "member_tags":
+                arguments.pop("count", None)
+                arguments.pop("offset", None)
+                subscriber_hash = str(assignment.arguments.get("subscriber_hash") or "")
+                if not re.fullmatch(r"[a-fA-F0-9]{32}", subscriber_hash):
+                    return self._result(
+                        "clarification_required", "Specifica il subscriber_hash Mailchimp.",
+                        plan=plan, selected_skill="mailchimp.read", tools_executed=False,
+                        side_effects=0, writes=0, sends=0,
+                    )
+                arguments["subscriber_hash"] = subscriber_hash
 
         try:
             with self.mailchimp_gateway_factory() as gateway:
@@ -483,7 +515,7 @@ class UnifiedAssistantCore:
                 + (f" {preview}" if preview else "")
             )
 
-        else:
+        elif operation == "campaigns":
             rows = list(payload.get("results") or ())
             preview = "; ".join(
                 (
@@ -497,6 +529,9 @@ class UnifiedAssistantCore:
                 f"Mailchimp: lette {len(rows)} campagne."
                 + (f" {preview}" if preview else "")
             )
+        else:
+            rows = list(payload.get("results") or ())
+            message = f"Mailchimp: letti {len(rows)} elementi ({operation})."
 
         self._audit(
             domain="mailchimp",
@@ -526,6 +561,44 @@ class UnifiedAssistantCore:
             side_effects=0,
             writes=0,
             sends=0,
+        )
+
+    def _analyze_mailchimp_audience(self, assignment, plan: dict[str, Any]) -> UnifiedAssistantResult:
+        """Compose bounded audience/segment/tag/member reads; never choose among multiple lists."""
+        try:
+            with self.mailchimp_gateway_factory() as gateway:
+                audience_payload = gateway.invoke_read("mailchimp_list_audiences", count=100, offset=0)
+                audiences = list(audience_payload.get("results") or ())
+                if len(audiences) != 1:
+                    return self._result(
+                        "clarification_required",
+                        "Seleziona una audience Mailchimp tramite list_id.",
+                        plan=plan, selected_skill="mailchimp.read", tools_executed=True,
+                        mailchimp_operation="audience_analysis",
+                        mailchimp_tool="mailchimp_list_audiences",
+                        mailchimp={"results": audiences, "analysis_complete": False},
+                        side_effects=0, writes=0, sends=0,
+                    )
+                list_id = str(audiences[0].get("id") or "")
+                payloads = {
+                    "audiences": audiences,
+                    "segments": list(gateway.invoke_read("mailchimp_list_segments", list_id=list_id, count=100, offset=0).get("results") or ()),
+                    "tags": list(gateway.invoke_read("mailchimp_list_tags", list_id=list_id).get("results") or ()),
+                    "members": list(gateway.invoke_read("mailchimp_list_members", list_id=list_id, count=1000, offset=0, status="subscribed").get("results") or ()),
+                }
+        except (OSError, RuntimeError, ValueError) as exc:
+            return self._result(
+                "unavailable", f"Mailchimp MCP non disponibile: {type(exc).__name__}.",
+                plan=plan, selected_skill="mailchimp.read", tools_executed=False,
+                side_effects=0, writes=0, sends=0,
+            )
+        return self._result(
+            "completed", "Analisi audience Mailchimp READ completata.", plan=plan,
+            interaction_class="TOOL_BACKED_READ", selected_skill="mailchimp.read",
+            tool_selected="mailchimp.marketing.read_only", mailchimp_operation="audience_analysis",
+            mailchimp_tool="mailchimp_read_composition", policy=PolicyClass.READ.value,
+            tools_executed=True, mailchimp={**payloads, "results": payloads["members"]},
+            memory_trace=self._memory_trace("mailchimp"), side_effects=0, writes=0, sends=0,
         )
 
     def _memory_trace(self, domain: str) -> dict[str, Any]:

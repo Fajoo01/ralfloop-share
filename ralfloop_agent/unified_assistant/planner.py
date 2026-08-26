@@ -58,6 +58,16 @@ _MAILCHIMP_AUDIENCE_RE = re.compile(
     r"\b(?:audience|audiences|liste?|pubblico|contatti)\b",
     re.I,
 )
+_MAILCHIMP_MEMBERS_RE = re.compile(r"\b(?:membri|iscritti|contatti)\b", re.I)
+_MAILCHIMP_SEGMENTS_RE = re.compile(r"\bsegment[oi]\b", re.I)
+_MAILCHIMP_TAGS_RE = re.compile(r"\btag\b", re.I)
+_MAILCHIMP_ANALYSIS_RE = re.compile(
+    r"\b(?:chi\s+abbiamo|potrebbe\s+essere\s+interessat|analizza)\b", re.I
+)
+_MAILCHIMP_LIST_ID_RE = re.compile(
+    r"\blist[_ -]?id\s*[:=]?\s*(?P<list_id>[A-Za-z0-9_-]{1,128})\b",
+    re.I,
+)
 _MAILCHIMP_PING_RE = re.compile(
     r"\b(?:ping|stato|health|connessione|funziona|disponibile)\b",
     re.I,
@@ -141,8 +151,17 @@ class UnifiedPlanner:
             if _MAILCHIMP_MUTATION_RE.search(goal):
                 return self._denied("mailchimp_mutation_not_available")
 
+            list_id_match = _MAILCHIMP_LIST_ID_RE.search(goal)
             operation = (
-                "audiences"
+                "audience_analysis"
+                if _MAILCHIMP_ANALYSIS_RE.search(goal)
+                else "segments"
+                if _MAILCHIMP_SEGMENTS_RE.search(goal)
+                else "tags"
+                if _MAILCHIMP_TAGS_RE.search(goal)
+                else "members"
+                if _MAILCHIMP_MEMBERS_RE.search(goal)
+                else "audiences"
                 if _MAILCHIMP_AUDIENCE_RE.search(goal)
                 else "ping"
                 if _MAILCHIMP_PING_RE.search(goal)
@@ -163,6 +182,10 @@ class UnifiedPlanner:
                         "operation": operation,
                         "count": 10,
                         "offset": 0,
+                        **(
+                            {"list_id": list_id_match.group("list_id")}
+                            if list_id_match else {}
+                        ),
                     },
                 ),),
             )

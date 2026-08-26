@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import AbstractContextManager
 import os
+import re
 from typing import Any, Mapping
 
 from src.mcp_transport import MCPClientSession, MCPProtocolError, UnixMCPTransport
@@ -13,6 +14,10 @@ READ_TOOLS = frozenset({
     "mailchimp_ping",
     "mailchimp_list_audiences",
     "mailchimp_list_campaigns",
+    "mailchimp_list_members",
+    "mailchimp_list_segments",
+    "mailchimp_list_tags",
+    "mailchimp_list_member_tags",
 })
 ALL_TOOLS = READ_TOOLS
 
@@ -27,6 +32,8 @@ FORBIDDEN_INPUTS = frozenset({
     "coordinate",
     "coordinates",
     "url",
+    "endpoint",
+    "method",
 })
 
 
@@ -102,6 +109,27 @@ class MailchimpGateway:
             raise MailchimpGatewayError(
                 "mailchimp_argument_not_allowlisted"
             )
+
+        required = set(schema.get("required") or ())
+        if required - set(arguments):
+            raise MailchimpGatewayError("mailchimp_required_argument_missing")
+
+        for name, value in arguments.items():
+            spec = (schema.get("properties") or {}).get(name) or {}
+            if spec.get("type") == "integer":
+                if not isinstance(value, int) or isinstance(value, bool):
+                    raise MailchimpGatewayError("mailchimp_argument_invalid")
+                if value < int(spec.get("minimum", value)) or value > int(spec.get("maximum", value)):
+                    raise MailchimpGatewayError("mailchimp_argument_invalid")
+            elif spec.get("type") == "string":
+                if not isinstance(value, str):
+                    raise MailchimpGatewayError("mailchimp_argument_invalid")
+                if len(value) < int(spec.get("minLength", 0)) or len(value) > int(spec.get("maxLength", len(value))):
+                    raise MailchimpGatewayError("mailchimp_argument_invalid")
+                if spec.get("enum") and value not in spec["enum"]:
+                    raise MailchimpGatewayError("mailchimp_argument_invalid")
+                if spec.get("pattern") and re.fullmatch(str(spec["pattern"]), value) is None:
+                    raise MailchimpGatewayError("mailchimp_argument_invalid")
 
         result = self.session.call_tool(
             tool,

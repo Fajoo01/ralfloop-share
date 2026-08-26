@@ -21,9 +21,10 @@ def schema(properties=None):
 
 def valid_tools():
     paging = {
-        "count": {"type": "integer"},
-        "offset": {"type": "integer"},
+        "count": {"type": "integer", "minimum": 1, "maximum": 1000},
+        "offset": {"type": "integer", "minimum": 0, "maximum": 1000000},
     }
+    resource = {"type": "string", "pattern": r"^[A-Za-z0-9_-]{1,128}$"}
     return [
         SimpleNamespace(
             name="mailchimp_ping",
@@ -37,6 +38,21 @@ def valid_tools():
             name="mailchimp_list_campaigns",
             input_schema=schema(paging),
         ),
+        SimpleNamespace(name="mailchimp_list_members", input_schema={
+            **schema({"list_id": resource, **paging, "status": {"type": "string", "enum": ["subscribed"]}}),
+            "required": ["list_id"],
+        }),
+        SimpleNamespace(name="mailchimp_list_segments", input_schema={
+            **schema({"list_id": resource, **paging}), "required": ["list_id"],
+        }),
+        SimpleNamespace(name="mailchimp_list_tags", input_schema={
+            **schema({"list_id": resource, "name": {"type": "string", "minLength": 1, "maxLength": 255}}),
+            "required": ["list_id"],
+        }),
+        SimpleNamespace(name="mailchimp_list_member_tags", input_schema={
+            **schema({"list_id": resource, "subscriber_hash": {"type": "string", "pattern": r"^[a-fA-F0-9]{32}$"}}),
+            "required": ["list_id", "subscriber_hash"],
+        }),
     ]
 
 
@@ -174,6 +190,19 @@ def test_invoke_read_rejects_unknown_argument():
             count=3,
             arbitrary="no",
         )
+
+
+@pytest.mark.parametrize("tool,arguments", [
+    ("mailchimp_list_members", {"list_id": "aud_123", "count": 0}),
+    ("mailchimp_list_segments", {"list_id": "aud_123", "offset": -1}),
+    ("mailchimp_list_tags", {"list_id": "bad/id"}),
+    ("mailchimp_list_member_tags", {"list_id": "aud_123", "subscriber_hash": "not-a-hash"}),
+])
+def test_invoke_read_rejects_invalid_semantic_arguments(tool, arguments):
+    gateway = MailchimpGateway(FakeSession())
+    gateway.discover()
+    with pytest.raises(MailchimpGatewayError, match="mailchimp_argument_invalid"):
+        gateway.invoke_read(tool, **arguments)
 
 
 @pytest.mark.parametrize(
