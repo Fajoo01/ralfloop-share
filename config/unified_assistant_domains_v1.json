@@ -217,7 +217,8 @@
       "status": "ready",
       "source_refs": ["ralfloop_agent/unified_assistant/planner.py"]
     }
-  ],
+  ,
+    {"id":"mailchimp","aliases":["mailchimp","mailchimp marketing"],"description":"Read-only Mailchimp Marketing evidence for Tiremm Innanz.","supported_skills":["mailchimp.read"],"allowed_memory_namespaces":["tiremm"],"context_builder":"src.mailchimp.MailchimpMCPContext","policy":"READ only; remote writes and sends unavailable","validators":["strict MCP schema","read tool allowlist","side_effects=0","writes=0","sends=0"],"specialist_capabilities":[],"status":"ready","source_refs":["src/mailchimp.py","ralfloop_agent/unified_assistant/planner.py","ralfloop_agent/unified_assistant/runtime.py"]}],
   "skills": [
     {"id":"email.search","domains":["email","tiremm"],"required_arguments":["organization","concept"],"required_capabilities":["google_workspace.gmail.search","google_workspace.gmail.read"],"classification":"READ","workflow":"ralfloop_agent.unified_assistant.email_search.GoogleWorkspaceEmailSearch","verification_method":"read-only operations + searched scope + message provenance","status":"ready"},
     {"id":"fastweb.portal.read","domains":["tiremm"],"required_arguments":["objective"],"required_capabilities":["fastweb.portal.read_only"],"classification":"READ","workflow":"ralfloop_agent.unified_assistant.fastweb_portal.FastwebPortalReadOnly","verification_method":"authenticated current-page accessibility snapshot + field provenance","status":"ready"},
@@ -240,5 +241,6 @@
     {"id":"code.inspect","domains":["code"],"required_arguments":["objective"],"required_capabilities":["sandboxed_remote_code"],"classification":"READ","workflow":"ralfloop_agent.model_tools.remote_code","verification_method":"sandbox audit + artifact hash","status":"ready"},
     {"id":"media.compose","domains":["media"],"required_arguments":["artifact_refs","objective"],"required_capabilities":["media_compose"],"classification":"AUTO_WRITE","workflow":"ralfloop_agent.local_arch.media","verification_method":"artifact hash","status":"ready"},
     {"id":"assistant.clarify","domains":["general_assistant"],"required_arguments":["question"],"required_capabilities":["ask_user"],"classification":"READ","workflow":"ralfloop_agent.unified_assistant.planner.UnifiedPlanner","verification_method":"explicit user answer","status":"ready"}
-  ]
+  ,
+    {"id":"mailchimp.read","domains":["mailchimp"],"required_arguments":["operation"],"required_capabilities":["mailchimp.ping","mailchimp.audiences.read","mailchimp.campaigns.read"],"classification":"READ","workflow":"ralfloop_agent.unified_assistant.core.UnifiedAssistantCore._read_mailchimp","verification_method":"strict MCP schema + side_effects=0 + writes=0 + sends=0","status":"ready"}]
 }
