@@ -29,6 +29,13 @@ DEFAULT_WHATSAPP_SCOPES = PROJECT_ROOT / "config" / "whatsapp_memory_scopes_v1.j
 DEFAULT_DOMAIN_REGISTRY = PROJECT_ROOT / "domains" / "registry.json"
 
 
+def _observable_path_exists(path: Path) -> bool:
+    try:
+        return path.exists()
+    except OSError:
+        return False
+
+
 class UnifiedRegistryFacade:
     """Read-only facade; existing registries remain authoritative."""
 
@@ -189,6 +196,7 @@ class UnifiedRegistryFacade:
             and whatsapp_scopes.get("default_namespace") == "tiremm"
         )
         whatsapp_socket = Path("/run/ralf-whatsapp-mcp/mcp.sock")
+        mailchimp_socket = Path("/run/ralf-mailchimp-mcp/mcp.sock")
         rows = [UnifiedToolSpec(
             id="google_workspace.gmail.read_only",
             capabilities=("google_workspace.gmail.search", "google_workspace.gmail.read", "google_workspace.gmail.thread"),
@@ -239,6 +247,29 @@ class UnifiedRegistryFacade:
             health="Unix MCP broker + approval store",
             verification_method="hash/version/chat/message binding + CAS + outbound readback",
             source_registry=str(PROJECT_ROOT / "src" / "whatsapp.py"),
+        ), UnifiedToolSpec(
+            id="mailchimp.marketing.read_only",
+            capabilities=(
+                "mailchimp.ping",
+                "mailchimp.audiences.read",
+                "mailchimp.campaigns.read",
+                "mailchimp.members.read",
+                "mailchimp.segments.read",
+                "mailchimp.tags.read",
+                "mailchimp.member_tags.read",
+            ),
+            input_schema="strict semantic Mailchimp MCP schemas",
+            output_schema="verified Mailchimp MCP result contracts",
+            classification=PolicyClass.READ,
+            side_effect_class="none",
+            availability=(
+                "available"
+                if _observable_path_exists(mailchimp_socket)
+                else "constrained:broker_unavailable"
+            ),
+            health="Unix MCP broker + strict tool discovery",
+            verification_method="read side_effects=0 + writes=0 + sends=0",
+            source_registry=str(PROJECT_ROOT / "src" / "mailchimp.py"),
         ), UnifiedToolSpec(
             id="home_assistant.adapter",
             capabilities=("home.state.read", "home.service.call"),

@@ -45,6 +45,34 @@ _FASTWEB_PORTAL_RE = re.compile(
     r"myfastpage|fattur[ae]|decorrenza|entrato\s+in\s+vigore|controlla\s+fastweb)\b",
     re.I,
 )
+_MAILCHIMP_RE = re.compile(
+    r"\bmailchimp\b",
+    re.I,
+)
+_MAILCHIMP_MUTATION_RE = re.compile(
+    r"\b(?:invia|manda|send|crea|modifica|aggiorna|elimina|programma|schedula|"
+    r"aggiungi|rimuovi|iscrivi|disiscrivi|subscribe|unsubscribe)\b",
+    re.I,
+)
+_MAILCHIMP_AUDIENCE_RE = re.compile(
+    r"\b(?:audience|audiences|liste?|pubblico|contatti)\b",
+    re.I,
+)
+_MAILCHIMP_MEMBERS_RE = re.compile(r"\b(?:membri|iscritti|contatti)\b", re.I)
+_MAILCHIMP_SEGMENTS_RE = re.compile(r"\bsegment[oi]\b", re.I)
+_MAILCHIMP_TAGS_RE = re.compile(r"\btag\b", re.I)
+_MAILCHIMP_ANALYSIS_RE = re.compile(
+    r"\b(?:chi\s+abbiamo|potrebbe\s+essere\s+interessat|analizza)\b", re.I
+)
+_MAILCHIMP_LIST_ID_RE = re.compile(
+    r"\blist[_ -]?id\s*[:=]?\s*(?P<list_id>[A-Za-z0-9_-]{1,128})\b",
+    re.I,
+)
+_MAILCHIMP_PING_RE = re.compile(
+    r"\b(?:ping|stato|health|connessione|funziona|disponibile)\b",
+    re.I,
+)
+
 _WHATSAPP_RE = re.compile(r"\b(?:whatsapp|whatsapp\s+web|wapp)\b", re.I)
 _WHATSAPP_COMPOSE_RE = re.compile(
     r"\b(?:scrivi|manda|invia)\s+(?:un\s+messaggio\s+)?(?:su\s+)?(?:whatsapp|wapp)\s+a\s+"
@@ -118,6 +146,49 @@ class UnifiedPlanner:
             return self._denied("fastweb_portal_mutation_denied")
         if _FASTWEB_RE.search(goal) and _FASTWEB_COMPARE_RE.search(goal):
             return self._fastweb_compare_plan(goal)
+
+        if _MAILCHIMP_RE.search(goal):
+            if _MAILCHIMP_MUTATION_RE.search(goal):
+                return self._denied("mailchimp_mutation_not_available")
+
+            list_id_match = _MAILCHIMP_LIST_ID_RE.search(goal)
+            operation = (
+                "audience_analysis"
+                if _MAILCHIMP_ANALYSIS_RE.search(goal)
+                else "segments"
+                if _MAILCHIMP_SEGMENTS_RE.search(goal)
+                else "tags"
+                if _MAILCHIMP_TAGS_RE.search(goal)
+                else "members"
+                if _MAILCHIMP_MEMBERS_RE.search(goal)
+                else "audiences"
+                if _MAILCHIMP_AUDIENCE_RE.search(goal)
+                else "ping"
+                if _MAILCHIMP_PING_RE.search(goal)
+                else "campaigns"
+            )
+
+            return AssistantPlan(
+                intent="mailchimp.read",
+                domains=("mailchimp",),
+                assignments=(self._assignment(
+                    domain="mailchimp",
+                    skill="mailchimp.read",
+                    objective=goal,
+                    input_refs=("user.goal",),
+                    output_ref="artifact.mailchimp",
+                    policy=PolicyClass.READ,
+                    arguments={
+                        "operation": operation,
+                        "count": 10,
+                        "offset": 0,
+                        **(
+                            {"list_id": list_id_match.group("list_id")}
+                            if list_id_match else {}
+                        ),
+                    },
+                ),),
+            )
 
         # Email payload is data. Embedded home/tool words cannot add assignments.
         if email and grant:

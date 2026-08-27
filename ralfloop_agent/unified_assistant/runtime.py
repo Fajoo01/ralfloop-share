@@ -31,6 +31,7 @@ from .whatsapp_mcp_adapter import WhatsAppMCPReadOnly
 from .whatsapp_send import (
     UnifiedWhatsAppApprovalCoordinator, UnifiedWhatsAppApprovalExecutor,
 )
+from src.mailchimp import MailchimpMCPContext
 from src.whatsapp import WhatsAppMCPContext
 
 
@@ -40,7 +41,7 @@ _SUPPORTED = re.compile(
     r"manda\s+(?:una\s+)?(?:mail|email)|rispondi\s+(?:a|alla\s+mail(?:\s+di)?)|accendi|spegni|apri|chiudi|"
     r"imposta|metti|porta|abbassala|alzala|temperatura|quanto\s+fa|fa\s+caldo|"
     r"fa\s+freddo|rendila|cambiala|aggiungi|modifica|ok|invia|mandala|va\s+bene|annulla|"
-    r"fastweb|myfastpage|whatsapp|wapp)\b",
+    r"fastweb|myfastpage|whatsapp|wapp|mailchimp)\b",
     re.I,
 )
 
@@ -83,7 +84,12 @@ def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any]
     planner = UnifiedPlanner(UnifiedRegistryFacade())
     plan = planner.validate(planner.plan(text))
     skills = [item.skill for item in plan.assignments]
-    if "email.search" in skills or "fastweb.portal.read" in skills or "whatsapp.read" in skills:
+    if (
+        "email.search" in skills
+        or "fastweb.portal.read" in skills
+        or "whatsapp.read" in skills
+        or "mailchimp.read" in skills
+    ):
         task_mode = "tool_backed_read"
         interaction_class = "TOOL_BACKED_READ"
         connectors = []
@@ -93,6 +99,8 @@ def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any]
             connectors.append("fastweb.portal.read_only")
         if "whatsapp.read" in skills:
             connectors.append("whatsapp.web.mcp")
+        if "mailchimp.read" in skills:
+            connectors.append("mailchimp.marketing")
     elif all(item.policy.value == "READ" for item in plan.assignments):
         task_mode = "tool_backed_read"
         interaction_class = "TOOL_BACKED_READ"
@@ -141,6 +149,7 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
     fastweb_portal = FastwebPortalReadOnly.from_environment()
     whatsapp_gateway_factory = WhatsAppMCPContext.from_environment
     whatsapp_read = WhatsAppMCPReadOnly(whatsapp_gateway_factory)
+    mailchimp_gateway_factory = MailchimpMCPContext.from_environment
     home_workflow = None
     if flags.home_assistant_read_live or flags.home_assistant_live:
         try:
@@ -220,6 +229,7 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
         email_search=GoogleWorkspaceEmailSearch.from_environment(),
         fastweb_portal=fastweb_portal,
         whatsapp_read=whatsapp_read,
+        mailchimp_gateway_factory=mailchimp_gateway_factory,
         whatsapp_compose=whatsapp_compose,
         recipient_resolver=GoogleWorkspaceRecipientResolver.from_environment(),
         approval_executor=approval_executor,
@@ -519,6 +529,28 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
             "evidence_refs": list(portal.get("provenance") or ()),
             "content_role": "data",
             "side_effects": 0,
+        })
+    elif result.data.get("selected_skill") == "mailchimp.read":
+        mailchimp = result.data.get("mailchimp") or {}
+        artifacts.append({
+            "artifact_type": "mailchimp_read_result",
+            "version": 1,
+            "status": result.status,
+            "operation": result.data.get("mailchimp_operation"),
+            "tool": result.data.get("mailchimp_tool"),
+            "results": list(mailchimp.get("results") or ()),
+            "audiences": list(mailchimp.get("audiences") or ()),
+            "segments": list(mailchimp.get("segments") or ()),
+            "tags": list(mailchimp.get("tags") or ()),
+            "analysis_complete": mailchimp.get("analysis_complete"),
+            "health_status": mailchimp.get("health_status"),
+            "count": mailchimp.get("count"),
+            "offset": mailchimp.get("offset"),
+            "content_role": "data",
+            "persistent_memory_writes": 0,
+            "side_effects": 0,
+            "writes": 0,
+            "sends": 0,
         })
     elif result.data.get("selected_skill") == "whatsapp.read":
         whatsapp = result.data.get("whatsapp") or {}

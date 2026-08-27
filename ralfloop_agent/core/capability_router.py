@@ -94,8 +94,38 @@ DOMAIN_SKILLS = (
     ("responder", ("risponditore", "bozza", "gmail", "whatsapp", "wapp")),
 )
 
+READ_ONLY_MCP_CONNECTORS = frozenset({
+    "mailchimp.marketing",
+})
+
+EXTERNAL_MUTATION_MARKERS = (
+    "invia newsletter",
+    "manda newsletter",
+    "invia campagna",
+    "manda campagna",
+    "send campaign",
+    "send test",
+    "schedule campaign",
+    "programma campagna",
+    "schedula campagna",
+    "crea campagna",
+    "modifica campagna",
+    "aggiorna campagna",
+    "elimina campagna",
+    "aggiungi contatto",
+    "rimuovi contatto",
+    "iscrivi contatto",
+    "disiscrivi contatto",
+    "subscribe",
+    "unsubscribe",
+)
+
 MCP_CONNECTORS = (
     ("google_workspace.gmail", ("gmail", "email", "mail", "posta")),
+    (
+        "mailchimp.marketing",
+        ("mailchimp",),
+    ),
     ("telegram.bot", ("telegram",)),
     ("google_workspace.drive", ("drive", "google drive", "documento condiviso")),
     ("browser", ("browser", "sito", "pagina web")),
@@ -158,7 +188,23 @@ def route_task(
     mcp_connectors = _collect_named(text, MCP_CONNECTORS)
     wants_external_connector = bool(mcp_connectors)
 
-    if wants_send or wants_destructive or wants_external_connector:
+    read_only_mcp = bool(mcp_connectors) and all(
+        connector in READ_ONLY_MCP_CONNECTORS
+        for connector in mcp_connectors
+    )
+    wants_external_mutation = _has_unnegated(
+        text,
+        EXTERNAL_MUTATION_MARKERS,
+    )
+    wants_external_side_effect = (
+        wants_external_connector
+        and (
+            not read_only_mcp
+            or wants_external_mutation
+        )
+    )
+
+    if wants_send or wants_destructive or wants_external_side_effect:
         task_mode = "external_action"
         write_policy = "external_side_effect_requires_confirmation"
     elif has_inspection and (has_read_only or not has_patch):
@@ -177,7 +223,11 @@ def route_task(
     if "telegram" in text and "telegram.bot" not in mcp_connectors:
         mcp_connectors.append("telegram.bot")
 
-    needs_human_confirmation = wants_send or wants_destructive or wants_external_connector
+    needs_human_confirmation = (
+        wants_send
+        or wants_destructive
+        or wants_external_side_effect
+    )
     if extra_context.get("human_confirmed") is True:
         needs_human_confirmation = False
 
@@ -204,6 +254,9 @@ def route_task(
     if task_mode == "external_action":
         workflow.extend(["prepare_draft", "request_human_confirmation", "execute_mcp_after_confirmation"])
         blocked_actions.extend(["send_without_human_confirmation", "write_external_state_without_confirmation"])
+    elif wants_external_connector:
+        workflow.append("execute_read_only_mcp")
+        blocked_actions.append("write_external_state")
 
     if not domain_skills:
         domain_skills = ["general"]
