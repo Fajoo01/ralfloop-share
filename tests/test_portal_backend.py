@@ -34,6 +34,11 @@ class FakeGateway:
         self.calls += 1
         return PROFILE
 
+    def read_club(self):
+        self.calls += 1
+        return {"ok": True, "operation": "read_club", "status": "FOUND",
+                "name": "TIREMM INNANZ APS", "side_effects": 0, "writes": 0, "sends": 0}
+
 
 class FakeContext:
     def __init__(self, gateway: FakeGateway) -> None:
@@ -53,6 +58,7 @@ def test_backend_registers_portal_routes():
     paths = {route.path for route in backend.app.routes}
 
     assert "/portals/arci/profile" in paths
+    assert "/portals/arci/{resource}" in paths
     assert "/portals/support4youth/snapshot" in paths
     assert "/portals/support4youth/preview" in paths
     assert "/portals/support4youth/requests" in paths
@@ -93,3 +99,17 @@ def test_arci_endpoint_fails_closed_without_error_details():
         "sends": 0,
     }
     assert secret not in repr(result)
+
+
+def test_arci_resource_endpoint_uses_fixed_reader_and_fails_closed():
+    gateway = FakeGateway()
+    result = backend._read_arci_resource("club", lambda: FakeContext(gateway))
+    assert result["operation"] == "read_club"
+    assert gateway.calls == 1
+    failed = backend._read_arci_resource("cards", lambda: (_ for _ in ()).throw(RuntimeError("secret")))
+    assert failed == {
+        "ok": False, "operation": "read_current_cards", "status": "SOURCE_UNAVAILABLE",
+        "read_operations": [], "write_operations": 0, "side_effects": 0,
+        "content_role": "data", "writes": 0, "sends": 0,
+    }
+    assert backend._read_arci_resource("members")["status"] == "NOT_FOUND"

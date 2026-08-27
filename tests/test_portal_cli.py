@@ -21,7 +21,10 @@ def test_portal_read_only_actions_use_expected_endpoints(monkeypatch) -> None:
 
     monkeypatch.setattr(terminal_chat, "_repair_backend_request", fake_request)
 
-    for action in ("arci-profile", "support4youth-snapshot"):
+    for action in (
+        "arci-profile", "arci-club", "arci-cards", "arci-committee",
+        "arci-regional", "arci-dashboard-alerts", "support4youth-snapshot",
+    ):
         out = io.StringIO()
         assert terminal_chat.run_portal_command(
             _args("portal", action),
@@ -32,6 +35,11 @@ def test_portal_read_only_actions_use_expected_endpoints(monkeypatch) -> None:
 
     assert calls == [
         ("GET", "/portals/arci/profile", None, 30.0),
+        ("GET", "/portals/arci/club", None, 30.0),
+        ("GET", "/portals/arci/cards", None, 30.0),
+        ("GET", "/portals/arci/committee", None, 30.0),
+        ("GET", "/portals/arci/regional", None, 30.0),
+        ("GET", "/portals/arci/dashboard-alerts", None, 30.0),
         ("GET", "/portals/support4youth/snapshot", None, 30.0),
     ]
 

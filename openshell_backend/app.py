@@ -130,9 +130,45 @@ def _read_arci_profile(context_factory=None) -> dict[str, object]:
         }
 
 
+_ARCI_READERS = {
+    "club": ("read_club", "read_club"),
+    "cards": ("read_current_cards", "read_current_cards"),
+    "committee": ("read_committee", "read_committee"),
+    "regional": ("read_regional", "read_regional"),
+    "dashboard-alerts": ("read_dashboard_alerts", "read_dashboard_alerts"),
+}
+
+
+def _read_arci_resource(resource: str, context_factory=None) -> dict[str, object]:
+    if resource not in _ARCI_READERS:
+        return {"ok": False, "status": "NOT_FOUND", "side_effects": 0, "writes": 0, "sends": 0}
+    method_name, operation = _ARCI_READERS[resource]
+    if context_factory is None:
+        from src.arci import ArciMCPContext
+        context_factory = ArciMCPContext.from_environment
+    try:
+        with context_factory() as gateway:
+            return dict(getattr(gateway, method_name)())
+    except Exception as exc:
+        try:
+            audit("arci_resource_read_failed", resource=resource, error_type=type(exc).__name__)
+        except Exception:
+            pass
+        return {
+            "ok": False, "operation": operation, "status": "SOURCE_UNAVAILABLE",
+            "read_operations": [], "write_operations": 0, "side_effects": 0,
+            "content_role": "data", "writes": 0, "sends": 0,
+        }
+
+
 @app.get("/portals/arci/profile")
 def arci_profile() -> dict[str, object]:
     return _read_arci_profile()
+
+
+@app.get("/portals/arci/{resource}")
+def arci_read_resource(resource: str) -> dict[str, object]:
+    return _read_arci_resource(resource)
 
 
 def sandbox_root(sid: str) -> Path:

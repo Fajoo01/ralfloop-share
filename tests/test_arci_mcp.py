@@ -6,7 +6,7 @@ import pytest
 
 from ralfloop_agent.unified_assistant.arci_portal import ArciOrganizationProfile
 from scripts.ralf_arci_mcp_server import ArciMCPServer, TOOLS, _response
-from src.arci import ArciGateway, READ_TOOL
+from src.arci import ArciGateway, READ_TOOL, READ_TOOLS, SEMANTIC_TOOLS
 from src.mcp_client import MCPClient
 from src.mcp_transport import MCPProtocolError, MCPTool
 
@@ -45,9 +45,16 @@ class FakeSession:
     def list_tools(self):
         if self.tools is not None:
             return tuple(self.tools)
-        return tuple(
+        legacy = tuple(
             MCPTool(name, "semantic", schema)
             for name, schema in TOOLS.items()
+        )
+        present = {tool.name for tool in legacy}
+        return legacy + tuple(
+            MCPTool(name, "semantic", {
+                "type": "object", "properties": {}, "required": [],
+                "additionalProperties": False,
+            }) for name in sorted(READ_TOOLS - present)
         )
 
     def call_tool(self, name, arguments):
@@ -125,7 +132,7 @@ def test_arci_gateway_validates_discovery_and_pii_minimized_result():
     session = FakeSession()
     gateway = ArciGateway(session)
 
-    assert gateway.discover() == (READ_TOOL,)
+    assert gateway.discover() == tuple(sorted(READ_TOOLS))
     result = gateway.read_organization_profile()
 
     assert session.calls == [(READ_TOOL, {})]
@@ -250,8 +257,9 @@ def test_arci_gateway_rejects_generic_schema_and_pii_output():
             "additionalProperties": False,
         },
     )
+    other_tools = tuple(tool for tool in FakeSession().list_tools() if tool.name != READ_TOOL)
     with pytest.raises(MCPProtocolError, match="schema_not_strict"):
-        ArciGateway(FakeSession(tools=(unsafe_schema,))).discover()
+        ArciGateway(FakeSession(tools=(unsafe_schema, *other_tools))).discover()
 
     payload = {
         "ok": True,
@@ -265,6 +273,55 @@ def test_arci_gateway_rejects_generic_schema_and_pii_output():
     pii_gateway.discover()
     with pytest.raises(MCPProtocolError, match="unapproved_fields"):
         pii_gateway.read_organization_profile()
+
+
+@pytest.mark.parametrize("tool,method,payload", [
+    ("arci_read_club", "read_club", {
+        "name": "TIREMM INNANZ APS", "code": "D061661", "type": "club",
+        "committee_code": "D06", "regional_code": "D00", "validity_year": 2026,
+        "manually_disabled": False, "digitization_enabled": True,
+    }),
+    ("arci_read_current_cards", "read_current_cards", {"count": 1, "cards": [{
+        "status": 20, "validity": "2026", "expired": False, "enabled_at": None,
+        "disabled_at": None, "preregistration": False, "consumer_movement_status": None,
+    }]}),
+    ("arci_read_committee", "read_committee", {"name": "Committee", "code": "D06", "active": True}),
+    ("arci_read_regional", "read_regional", {"name": "Regional", "code": "D00", "consumer_movement_active": False}),
+    ("arci_read_dashboard_alerts", "read_dashboard_alerts", {"count": 1, "alerts": [{
+        "title": "Notice", "description": "Text", "enabled": True, "updated_at": "2026-08-27",
+    }]}),
+])
+def test_semantic_gateway_reads_are_strict_and_zero_effect(tool, method, payload):
+    operation = SEMANTIC_TOOLS[tool]
+    result_payload = {
+        "ok": True, "operation": operation, "status": "FOUND", **payload,
+        "provenance": [f"arci_rest:{operation}"], "read_operations": [f"arci.rest.{operation}"],
+        "write_operations": 0, "side_effects": 0, "content_role": "data", "writes": 0, "sends": 0,
+    }
+    session = FakeSession(payload=result_payload)
+    gateway = ArciGateway(session)
+    gateway.discover()
+    result = getattr(gateway, method)()
+    assert session.calls == [(tool, {})]
+    assert result["operation"] == operation
+    assert (result["side_effects"], result["writes"], result["sends"]) == (0, 0, 0)
+
+
+def test_semantic_gateway_rejects_pii_and_effects():
+    base = {
+        "ok": True, "operation": "read_current_cards", "status": "FOUND",
+        "count": 1, "cards": [{"status": 20, "email": "private@example.invalid"}],
+        "provenance": ["arci_rest:user.cards"], "read_operations": ["arci.rest.user.read"],
+        "write_operations": 0, "side_effects": 0, "content_role": "data", "writes": 0, "sends": 0,
+    }
+    gateway = ArciGateway(FakeSession(payload=base)); gateway.discover()
+    with pytest.raises(MCPProtocolError, match="unapproved_fields"):
+        gateway.read_current_cards()
+    base["cards"] = [{"status": 20}]
+    base["side_effects"] = 1
+    gateway = ArciGateway(FakeSession(payload=base)); gateway.discover()
+    with pytest.raises(MCPProtocolError, match="reported_side_effect"):
+        gateway.read_current_cards()
 
 
 class FakeGateway:

@@ -1256,6 +1256,7 @@ def _portal_result_succeeded(result: dict[str, Any]) -> bool:
         return True
     return str(status) in {
         "FOUND",
+        "PARTIAL",
         "already_executed",
         "approved",
         "consumed",
@@ -1280,6 +1281,12 @@ def run_portal_command(
                 "GET",
                 "/portals/arci/profile",
             )
+        elif action in {
+            "arci-club", "arci-cards", "arci-committee", "arci-regional",
+            "arci-dashboard-alerts",
+        }:
+            resource = action.removeprefix("arci-")
+            result = _repair_backend_request("GET", f"/portals/arci/{resource}")
         elif action == "support4youth-snapshot":
             result = _repair_backend_request(
                 "GET",
@@ -1922,6 +1929,11 @@ def build_parser() -> argparse.ArgumentParser:
     portal = sub.add_parser("portal", help="approval-bound organization portal operations")
     portal_sub = portal.add_subparsers(dest="portal_action", required=True)
     portal_sub.add_parser("arci-profile", help="read sanitized ARCI organization profile")
+    portal_sub.add_parser("arci-club", help="read sanitized current ARCI club")
+    portal_sub.add_parser("arci-cards", help="read sanitized current ARCI card states")
+    portal_sub.add_parser("arci-committee", help="read current ARCI committee")
+    portal_sub.add_parser("arci-regional", help="read current ARCI regional organization")
+    portal_sub.add_parser("arci-dashboard-alerts", help="read sanitized ARCI dashboard alerts")
     portal_sub.add_parser(
         "support4youth-snapshot",
         help="read sanitized Support4Youth profile snapshot",

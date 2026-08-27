@@ -15,7 +15,15 @@ from src.mcp_transport import (
 
 
 READ_TOOL = "arci_read_organization_profile"
-READ_TOOLS = frozenset({READ_TOOL})
+SEMANTIC_TOOLS = {
+    READ_TOOL: "read_organization_profile",
+    "arci_read_club": "read_club",
+    "arci_read_current_cards": "read_current_cards",
+    "arci_read_committee": "read_committee",
+    "arci_read_regional": "read_regional",
+    "arci_read_dashboard_alerts": "read_dashboard_alerts",
+}
+READ_TOOLS = frozenset(SEMANTIC_TOOLS)
 FORBIDDEN_INPUTS = frozenset({
     "selector",
     "css",
@@ -105,9 +113,27 @@ class ArciGateway:
         return self.discovered_tools
 
     def read_organization_profile(self) -> Mapping[str, Any]:
-        if READ_TOOL not in self.discovered_tools:
+        return self._read(READ_TOOL)
+
+    def read_club(self) -> Mapping[str, Any]:
+        return self._read("arci_read_club")
+
+    def read_current_cards(self) -> Mapping[str, Any]:
+        return self._read("arci_read_current_cards")
+
+    def read_committee(self) -> Mapping[str, Any]:
+        return self._read("arci_read_committee")
+
+    def read_regional(self) -> Mapping[str, Any]:
+        return self._read("arci_read_regional")
+
+    def read_dashboard_alerts(self) -> Mapping[str, Any]:
+        return self._read("arci_read_dashboard_alerts")
+
+    def _read(self, tool: str) -> Mapping[str, Any]:
+        if tool not in self.discovered_tools:
             raise MCPProtocolError("arci_tool_not_discovered")
-        result = self.session.call_tool(READ_TOOL, {})
+        result = self.session.call_tool(tool, {})
         structured = (
             result.get("structuredContent")
             if isinstance(result, Mapping)
@@ -116,7 +142,7 @@ class ArciGateway:
         payload = structured if isinstance(structured, Mapping) else result
         if not isinstance(payload, Mapping):
             raise MCPProtocolError("arci_result_not_object")
-        return _validated_payload(payload)
+        return _validated_payload(payload) if tool == READ_TOOL else _validated_semantic_payload(tool, payload)
 
 
 class ArciMCPContext(AbstractContextManager[ArciGateway]):
@@ -208,6 +234,59 @@ def _validated_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+_COMMON_KEYS = frozenset({
+    "ok", "operation", "status", "provenance", "read_operations",
+    "write_operations", "side_effects", "content_role", "writes", "sends",
+})
+_SEMANTIC_OUTPUT_KEYS = {
+    "arci_read_club": frozenset({
+        "name", "code", "type", "committee_code", "regional_code",
+        "validity_year", "manually_disabled", "digitization_enabled",
+    }),
+    "arci_read_current_cards": frozenset({"count", "cards"}),
+    "arci_read_committee": frozenset({"name", "code", "active"}),
+    "arci_read_regional": frozenset({"name", "code", "consumer_movement_active"}),
+    "arci_read_dashboard_alerts": frozenset({"count", "alerts"}),
+}
+_CARD_KEYS = frozenset({
+    "status", "validity", "expired", "enabled_at", "disabled_at",
+    "preregistration", "consumer_movement_status",
+})
+_ALERT_KEYS = frozenset({"title", "description", "enabled", "updated_at"})
+
+
+def _validated_semantic_payload(tool: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+    expected_operation = SEMANTIC_TOOLS[tool]
+    allowed = _COMMON_KEYS | _SEMANTIC_OUTPUT_KEYS[tool]
+    if set(payload) - allowed:
+        raise MCPProtocolError("arci_result_contains_unapproved_fields")
+    if payload.get("ok") is not True or payload.get("status") != "FOUND":
+        raise MCPProtocolError("arci_result_unavailable")
+    if payload.get("operation") != expected_operation:
+        raise MCPProtocolError("arci_result_operation_invalid")
+    if any(payload.get(key, 0) not in (0, None) for key in (
+        "side_effects", "write_operations", "writes", "sends",
+    )):
+        raise MCPProtocolError("arci_read_reported_side_effect")
+    if payload.get("content_role") != "data":
+        raise MCPProtocolError("arci_result_invalid")
+    if not isinstance(payload.get("provenance"), list) or not isinstance(payload.get("read_operations"), list):
+        raise MCPProtocolError("arci_result_invalid")
+    if tool == "arci_read_current_cards":
+        rows = payload.get("cards")
+        if not isinstance(rows, list) or payload.get("count") != len(rows):
+            raise MCPProtocolError("arci_result_invalid")
+        if any(not isinstance(row, Mapping) or set(row) - _CARD_KEYS for row in rows):
+            raise MCPProtocolError("arci_result_contains_unapproved_fields")
+    if tool == "arci_read_dashboard_alerts":
+        rows = payload.get("alerts")
+        if not isinstance(rows, list) or payload.get("count") != len(rows):
+            raise MCPProtocolError("arci_result_invalid")
+        if any(not isinstance(row, Mapping) or set(row) - _ALERT_KEYS for row in rows):
+            raise MCPProtocolError("arci_result_contains_unapproved_fields")
+    return dict(payload)
+
+
 __all__ = [
     "ArciGateway",
     "ArciGatewayError",
@@ -215,4 +294,5 @@ __all__ = [
     "FORBIDDEN_INPUTS",
     "READ_TOOL",
     "READ_TOOLS",
+    "SEMANTIC_TOOLS",
 ]
