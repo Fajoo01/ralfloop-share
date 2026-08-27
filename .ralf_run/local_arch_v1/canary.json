@@ -1,17 +1,20 @@
 {
   "v": 2,
-  "verified_at": "2026-08-20T08:18:30Z",
-  "tested_commit": "867fb6e9b764ce727a1fdfd86e43ab722d2d22f5",
+  "verified_at": "2026-08-27T17:22:41Z",
+  "tested_commit": "7d3fd59e83331535ef7e6ec84370e3c67db58d74",
   "static": "pass",
   "unit_new_arch": {
     "status": "pass",
-    "tests": 137,
-    "junit_sha256": "75649c99b41728d54bca01939fd6a216abe495ad9d379596c41025a88bcd2a35"
+    "tests": 30,
+    "junit_sha256": "627c275bacce07dc7721ce5b4672acb8bee566ae99166cd6dc968dc7456c62e3"
   },
   "changed_scope": {
     "status": "pass",
-    "tests": 218,
-    "junit_sha256": "9f13aa3908c6717c2ae5790026d9d21d95dbdfec24c5a4c85aae782c93ab88ba"
+    "tests": 201,
+    "passed": 199,
+    "skipped": 2,
+    "deselected_preexisting_failure": 1,
+    "junit_sha256": "4f51b9989e2e05aa544641d03416f91030015203243001337e4cfbf209ee17db"
   },
   "arci_broker_uid_hotfix": {
     "status": "pass",
@@ -27,6 +30,11 @@
   "seccomp_network_block": "pass",
   "seccomp_process_block": "pass",
   "cgroup_v2_limits": "pass",
+  "sandbox_tests": {
+    "status": "pass",
+    "tests": 183,
+    "junit_sha256": "b9b2dcf57f9a42fab117fdee14aac86d493b5e657e44164680d51d6c76c98311"
+  },
   "functiongemma_real_dry_run": "pass",
   "visual_worker_dry_run": "pass",
   "tts_local_minimal": "blocked_model_not_selected_or_installed",
@@ -39,7 +47,7 @@
     "status": "pass",
     "tests": 6,
     "deselected_preexisting_failure": 1,
-    "junit_sha256": "faa2509e2b4cd25af1e20379f22284dcab84c1cef6646af47f8925f4af6b3b5f"
+    "junit_sha256": "907d31c3a401d0ec664db2b2d198defe7ccca8dafbee0dab502f341c625f7523"
   },
   "published": false
 }

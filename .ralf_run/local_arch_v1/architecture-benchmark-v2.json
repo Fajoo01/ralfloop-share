@@ -4,10 +4,10 @@
     "GPU use is zero by design"
   ],
   "measured": {
-    "peak_rss_mb": 22.9453125,
-    "route_latency_p50_ms": 0.064195,
-    "route_latency_p95_ms": 0.114438,
-    "wall_ms": 7.183941
+    "peak_rss_mb": 22.53125,
+    "route_latency_p50_ms": 0.063667,
+    "route_latency_p95_ms": 0.110119,
+    "wall_ms": 7.101035
   },
   "mode": "deterministic_control_plane_trace_replay",
   "profiles": {

@@ -3,7 +3,7 @@
     "errors": 0,
     "failures": 64,
     "skipped": 17,
-    "tests": 1965
+    "tests": 2038
   },
   "baseline_exit": "139",
   "baseline_failure_ids": [
@@ -73,12 +73,12 @@
     "tests.test_routing::test_patch_allowed_mode"
   ],
   "baseline_report_complete": true,
-  "baseline_report_sha256": "c46f5a55e0bede1beeca9ce5ba6d3dfa489ecc8f686cfb45c48fe3087b2fb4dd",
+  "baseline_report_sha256": "8c69db396b2247d3aaf506f14fa3513e0ac05d7023ce3fb4283c2ba743af099b",
   "candidate": {
     "errors": 0,
     "failures": 64,
     "skipped": 17,
-    "tests": 2033
+    "tests": 2068
   },
   "candidate_exit": "139",
   "candidate_failure_ids": [
@@ -148,7 +148,7 @@
     "tests.test_routing::test_patch_allowed_mode"
   ],
   "candidate_report_complete": true,
-  "candidate_report_sha256": "4051012ccb7b87bb86a4567d01b8e467c424901375613c9ebf0ec7c8061ad937",
+  "candidate_report_sha256": "6a36de001f1926e16ee2c01e5858e9804ac41e14462e3a0ba5cbb93d0d49b524",
   "new_failure_count": 0,
   "new_failures": [],
   "no_regression": true,
