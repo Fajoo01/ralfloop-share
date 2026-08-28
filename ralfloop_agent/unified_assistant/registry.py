@@ -253,6 +253,7 @@ class UnifiedRegistryFacade:
                 "mailchimp.ping",
                 "mailchimp.audiences.read",
                 "mailchimp.campaigns.read",
+                "mailchimp.campaign_content.read",
                 "mailchimp.members.read",
                 "mailchimp.segments.read",
                 "mailchimp.tags.read",

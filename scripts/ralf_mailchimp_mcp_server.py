@@ -94,6 +94,9 @@ TOOLS: dict[str, dict[str, Any]] = {
         "count": COUNT,
         "offset": OFFSET,
     }),
+    "mailchimp_get_campaign_content": _schema({
+        "campaign_id": RESOURCE_ID,
+    }, ("campaign_id",)),
     "mailchimp_list_members": _schema({
         "list_id": RESOURCE_ID,
         "count": COUNT,
@@ -329,6 +332,34 @@ class MailchimpClient:
             self._request(f"campaigns/{campaign_id}"),
             self._request(f"campaigns/{campaign_id}/content"),
         )
+
+    def get_campaign_content(self, campaign_id: str) -> dict[str, Any]:
+        info = self._request(f"campaigns/{campaign_id}")
+        content = self._request(f"campaigns/{campaign_id}/content")
+        settings = info.get("settings") if isinstance(info.get("settings"), Mapping) else {}
+        recipients = info.get("recipients") if isinstance(info.get("recipients"), Mapping) else {}
+        html_content = str(content.get("html") or "")
+        plain_text = str(content.get("plain_text") or "")
+        return {
+            "campaign_id": str(info.get("id") or ""),
+            "list_id": str(recipients.get("list_id") or ""),
+            "type": str(info.get("type") or ""),
+            "status": str(info.get("status") or ""),
+            "create_time": info.get("create_time"),
+            "send_time": info.get("send_time"),
+            "subject": str(settings.get("subject_line") or ""),
+            "preheader": str(settings.get("preview_text") or ""),
+            "title": str(settings.get("title") or ""),
+            "from_name": str(settings.get("from_name") or ""),
+            "reply_to": str(settings.get("reply_to") or ""),
+            "template_id": settings.get("template_id"),
+            "content_type": info.get("content_type"),
+            "archive_url": str(info.get("archive_url") or ""),
+            "html": html_content,
+            "plain_text": plain_text,
+            "html_sha256": hashlib.sha256(html_content.encode()).hexdigest(),
+            "plain_text_sha256": hashlib.sha256(plain_text.encode()).hexdigest(),
+        }
 
     def create_campaign(self, scope: Mapping[str, Any]) -> dict[str, Any]:
         created = self._request("campaigns", method="POST", body={
@@ -602,6 +633,8 @@ class MailchimpMCPServer:
                 "List Mailchimp audiences without modifying remote data.",
             "mailchimp_list_campaigns":
                 "List Mailchimp campaigns without modifying remote data.",
+            "mailchimp_get_campaign_content":
+                "Read exact Mailchimp campaign HTML and plain text without modifying it.",
             "mailchimp_list_members":
                 "List minimized Mailchimp audience members without modifying them.",
             "mailchimp_list_segments":
@@ -756,6 +789,12 @@ class MailchimpMCPServer:
                 return _read(
                     "list_campaigns",
                     payload,
+                )
+
+            if name == "mailchimp_get_campaign_content":
+                return _read(
+                    "get_campaign_content",
+                    self.client.get_campaign_content(str(arguments["campaign_id"])),
                 )
 
             list_id = str(arguments.get("list_id") or "")

@@ -39,6 +39,9 @@ def valid_tools():
             name="mailchimp_list_campaigns",
             input_schema=schema(paging),
         ),
+        SimpleNamespace(name="mailchimp_get_campaign_content", input_schema={
+            **schema({"campaign_id": resource}), "required": ["campaign_id"],
+        }),
         SimpleNamespace(name="mailchimp_list_members", input_schema={
             **schema({"list_id": resource, **paging, "status": {"type": "string", "enum": ["subscribed"]}}),
             "required": ["list_id"],
@@ -91,7 +94,7 @@ def test_discover_accepts_exact_read_and_protected_contract():
     discovered = gateway.discover()
 
     assert set(discovered) == ALL_TOOLS
-    assert len(READ_TOOLS) == 7
+    assert len(READ_TOOLS) == 8
 
 
 def test_discover_fails_if_required_tool_missing():
@@ -208,6 +211,7 @@ def test_invoke_read_rejects_unknown_argument():
     ("mailchimp_list_segments", {"list_id": "aud_123", "offset": -1}),
     ("mailchimp_list_tags", {"list_id": "bad/id"}),
     ("mailchimp_list_member_tags", {"list_id": "aud_123", "subscriber_hash": "not-a-hash"}),
+    ("mailchimp_get_campaign_content", {"campaign_id": "bad/id"}),
 ])
 def test_invoke_read_rejects_invalid_semantic_arguments(tool, arguments):
     gateway = MailchimpGateway(FakeSession())

@@ -40,12 +40,26 @@ class FakeClient:
         self.calls.append(("member_tags", list_id, subscriber_hash))
         return {"results": [{"id": 2, "name": "Famiglie"}]}
 
+    def get_campaign_content(self, campaign_id):
+        self.calls.append(("campaign_content", campaign_id))
+        return {
+            "campaign_id": campaign_id,
+            "list_id": "aud_123",
+            "subject": "Laboratorio famiglie",
+            "preheader": "Anteprima",
+            "html": '<html><img src="https://example.invalid/image.jpg"><a href="https://example.invalid/cta">CTA</a></html>',
+            "plain_text": "Laboratorio famiglie",
+            "template_id": 42,
+            "content_type": "template",
+        }
+
 
 @pytest.mark.parametrize("tool,arguments,operation", [
     ("mailchimp_list_members", {"list_id": "aud_123", "count": 2, "offset": 0, "status": "subscribed"}, "list_members"),
     ("mailchimp_list_segments", {"list_id": "aud_123", "count": 2, "offset": 0}, "list_segments"),
     ("mailchimp_list_tags", {"list_id": "aud_123"}, "list_tags"),
     ("mailchimp_list_member_tags", {"list_id": "aud_123", "subscriber_hash": "a" * 32}, "list_member_tags"),
+    ("mailchimp_get_campaign_content", {"campaign_id": "cmp_123"}, "get_campaign_content"),
 ])
 def test_server_semantic_reads_are_zero_effect(tool, arguments, operation):
     result = SERVER.MailchimpMCPServer(FakeClient()).call(tool, arguments)
@@ -64,6 +78,58 @@ def test_server_rejects_invalid_or_injected_member_arguments(arguments):
     result = SERVER.MailchimpMCPServer(FakeClient()).call("mailchimp_list_members", arguments)
     assert result["isError"] is True
     assert result["structuredContent"]["status"] == "POLICY_DENIED"
+
+
+def test_campaign_content_read_returns_full_content_with_zero_effects():
+    result = SERVER.MailchimpMCPServer(FakeClient()).call(
+        "mailchimp_get_campaign_content", {"campaign_id": "cmp_123"},
+    )
+    assert result["html"].startswith("<html>")
+    assert result["plain_text"] == "Laboratorio famiglie"
+    assert result["template_id"] == 42
+    assert (result["side_effects"], result["writes"], result["sends"]) == (0, 0, 0)
+
+
+def test_campaign_content_schema_blocks_method_url_and_unknown_fields():
+    server = SERVER.MailchimpMCPServer(FakeClient())
+    for arguments in (
+        {"campaign_id": "cmp_123", "method": "POST"},
+        {"campaign_id": "cmp_123", "url": "https://example.invalid"},
+        {"campaign_id": "../content"},
+    ):
+        result = server.call("mailchimp_get_campaign_content", arguments)
+        assert result["structuredContent"]["status"] == "POLICY_DENIED"
+
+
+def test_campaign_content_client_uses_only_two_hardcoded_gets():
+    class RecordingClient(SERVER.MailchimpClient):
+        def __init__(self):
+            super().__init__("fake-us1", "us1")
+            self.requests = []
+
+        def _request(self, path, **kwargs):
+            self.requests.append((path, kwargs))
+            if path.endswith("/content"):
+                return {"html": "<html>content</html>", "plain_text": "content"}
+            return {
+                "id": "cmp_123", "type": "regular", "status": "sent",
+                "recipients": {"list_id": "aud_123"},
+                "settings": {
+                    "subject_line": "Subject", "preview_text": "Preview",
+                    "from_name": "TIREMM", "reply_to": "info@example.invalid",
+                    "template_id": 42,
+                },
+            }
+
+    client = RecordingClient()
+    result = client.get_campaign_content("cmp_123")
+
+    assert client.requests == [
+        ("campaigns/cmp_123", {}),
+        ("campaigns/cmp_123/content", {}),
+    ]
+    assert result["subject"] == "Subject"
+    assert result["html_sha256"]
 
 
 def test_planner_routes_explicit_mailchimp_reads_only():

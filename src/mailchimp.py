@@ -14,6 +14,7 @@ READ_TOOLS = frozenset({
     "mailchimp_ping",
     "mailchimp_list_audiences",
     "mailchimp_list_campaigns",
+    "mailchimp_get_campaign_content",
     "mailchimp_list_members",
     "mailchimp_list_segments",
     "mailchimp_list_tags",

@@ -365,7 +365,8 @@ def test_registry_separates_read_and_approval_bound_capabilities():
     tools = {tool.id: tool for tool in UnifiedRegistryFacade().list_tools()}
     read = tools["mailchimp.marketing.read_only"]
     protected = tools["mailchimp.marketing.approval_bound"]
-    assert len(read.capabilities) == 7
+    assert len(read.capabilities) == 8
+    assert "mailchimp.campaign_content.read" in read.capabilities
     assert all(cap.endswith(".read") or cap == "mailchimp.ping" for cap in read.capabilities)
     assert protected.classification.value == "CONFIRM_WRITE"
     assert protected.capabilities == (
