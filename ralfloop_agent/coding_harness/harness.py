@@ -11,6 +11,10 @@ import pwd
 import subprocess
 from typing import Any, Mapping
 
+from ralfloop_agent.shell_judge import (
+    RalfShellJudge, ShellDecision, ShellPolicy, safe_execution_environment,
+)
+
 from .judge import ResidentDs4CodingJudge
 
 
@@ -226,6 +230,12 @@ def assess_coding_risk(
 
 
 def _run_shell(command: str, root: Path, timeout_sec: int) -> tuple[int, str]:
+    environment = safe_execution_environment(os.environ)
+    review = RalfShellJudge(ShellPolicy.for_sandbox(root)).review(
+        command, str(root), environment,
+    )
+    if review.decision not in {ShellDecision.ALLOW, ShellDecision.ALLOW_READONLY}:
+        return 126, f"SHELL_JUDGE_{review.decision.value}:{review.deterministic_reason}"
     try:
         result = subprocess.run(
             command,
@@ -237,6 +247,7 @@ def _run_shell(command: str, root: Path, timeout_sec: int) -> tuple[int, str]:
             stderr=subprocess.STDOUT,
             text=True,
             timeout=timeout_sec,
+            env=environment,
         )
         return result.returncode, _trim(result.stdout or "")
     except subprocess.TimeoutExpired as exc:

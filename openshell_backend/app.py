@@ -11,6 +11,10 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
+from ralfloop_agent.shell_judge import (
+    RalfShellJudge, ShellDecision, ShellPolicy, safe_execution_environment,
+)
+
 BASE_DIR = Path("/home/sibilla-cumana/ralfloop_agent_scaffold/.openshell_backend")
 BASE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -183,12 +187,25 @@ def resolve_in_sandbox(root: Path, rel_path: str) -> Path:
     return full
 
 
-def check_command_allowed(command: str) -> tuple[bool, str]:
-    lowered = command.lower()
-    for pat in DESTRUCTIVE_PATTERNS:
-        if pat in lowered:
-            return False, f"destructive_command:{pat.strip()}"
-    return True, "allowed"
+def _safe_shell_environment() -> dict[str, str]:
+    return safe_execution_environment(os.environ, path_prefix=BACKEND_VENV_BIN)
+
+
+def review_shell_command(command: str, *, cwd: str | Path) -> object:
+    return RalfShellJudge(ShellPolicy.for_sandbox(cwd)).review(
+        command, str(cwd), _safe_shell_environment(),
+    )
+
+
+def check_command_allowed(command: str, cwd: str | Path | None = None) -> tuple[bool, str]:
+    """Compatibility wrapper; all decisions delegate to the canonical judge."""
+    target = Path(cwd or BASE_DIR)
+    target.mkdir(parents=True, exist_ok=True)
+    result = review_shell_command(command, cwd=target)
+    return (
+        result.decision in {ShellDecision.ALLOW, ShellDecision.ALLOW_READONLY},
+        result.deterministic_reason,
+    )
 
 
 class SandboxCreateResponse(BaseModel):
@@ -281,14 +298,30 @@ def exec_in_sandbox(sid: str, payload: ExecRequest):
     if not root.exists():
         raise HTTPException(status_code=404, detail="sandbox_not_found")
 
-    allowed, reason = check_command_allowed(payload.command)
+    review = review_shell_command(payload.command, cwd=root)
+    allowed = review.decision in {ShellDecision.ALLOW, ShellDecision.ALLOW_READONLY}
+    audit_fields = {
+        "sandbox_id": sid,
+        "command_digest": RalfShellJudge.command_digest(payload.command),
+        "decision": review.decision.value,
+        "reason": review.deterministic_reason,
+        "destructive_level": review.capabilities.destructive_level.value,
+        "read_paths": len(review.capabilities.resolved_paths_read),
+        "write_paths": len(review.capabilities.resolved_paths_write),
+        "delete_paths": len(review.capabilities.resolved_paths_delete),
+        "reviewer_used": False,
+        "execution_allowed": allowed,
+    }
     if not allowed:
-        audit("exec_denied", sandbox_id=sid, command=payload.command, reason=reason)
-        raise HTTPException(status_code=403, detail=reason)
+        audit("exec_denied", **audit_fields)
+        raise HTTPException(status_code=403, detail={
+            "decision": review.decision.value,
+            "reason": review.deterministic_reason,
+            "reviewer_required": review.reviewer_required,
+        })
 
     try:
-        env = os.environ.copy()
-        env["PATH"] = BACKEND_VENV_BIN + os.pathsep + env.get("PATH", "")
+        env = _safe_shell_environment()
         proc = subprocess.run(
             ["/bin/bash", "-lc", payload.command],
             cwd=root,
@@ -300,7 +333,8 @@ def exec_in_sandbox(sid: str, payload: ExecRequest):
         audit(
             "exec",
             sandbox_id=sid,
-            command=payload.command,
+            command_digest=RalfShellJudge.command_digest(payload.command),
+            decision=review.decision.value,
             exit_code=proc.returncode,
             stdout_len=len(proc.stdout or ""),
             stderr_len=len(proc.stderr or ""),

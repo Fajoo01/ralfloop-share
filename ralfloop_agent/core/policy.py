@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import PurePosixPath
 from urllib.parse import urlparse
 
+from ralfloop_agent.shell_judge import RalfShellJudge, ShellDecision, ShellPolicy
+
 from ralfloop_agent.tools.contracts import PolicyDecision
 
 
@@ -26,12 +28,13 @@ class PolicyLayer:
         ]
         self.destructive_patterns = destructive_patterns or ["rm -rf", "dd", "mkfs", "shutdown", "reboot"]
 
-    def check_command(self, command: str) -> PolicyDecision:
-        lowered = command.lower()
-        for pattern in self.destructive_patterns:
-            if pattern in lowered:
-                return PolicyDecision(allowed=False, reason=f"destructive_command:{pattern}")
-        return PolicyDecision(allowed=True, reason="allowed")
+    def check_command(self, command: str, *, cwd: str = ".") -> PolicyDecision:
+        """Compatibility wrapper; semantic decisions live in RalfShellJudge."""
+        result = RalfShellJudge(ShellPolicy.for_sandbox(cwd)).review(command, cwd, {})
+        return PolicyDecision(
+            allowed=result.decision in {ShellDecision.ALLOW, ShellDecision.ALLOW_READONLY},
+            reason=result.deterministic_reason,
+        )
 
     def check_read_path(self, path: str) -> PolicyDecision:
         return self._check_path(path, self.readable_paths, "read")

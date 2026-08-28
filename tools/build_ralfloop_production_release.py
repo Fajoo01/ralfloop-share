@@ -40,6 +40,7 @@ def build_release(
         archive = subprocess.check_output(_git_command(repo_path, "archive", "--format=tar", commit_sha), cwd=repo_path)
         with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as bundle:
             bundle.extractall(temporary, filter="data")
+        _build_shell_parser(temporary)
         metadata = {
             "schema_version": 1,
             "commit": commit_sha,
@@ -81,6 +82,20 @@ def _manifest(root: Path) -> list[dict[str, Any]]:
         data = path.read_bytes()
         rows.append({"path": str(path.relative_to(root)), "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)})
     return rows
+
+
+def _build_shell_parser(root: Path) -> None:
+    source = root / "ralfloop_agent" / "shell_judge" / "mvdan"
+    if not source.is_dir():
+        return
+    destination = root / "bin" / "ralf-shell-ast"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["go", "build", "-trimpath", "-o", str(destination), "./judge.go"],
+        cwd=source, check=True, shell=False,
+        env={**os.environ, "CGO_ENABLED": "0"},
+    )
+    destination.chmod(0o555)
 
 
 def _make_read_only(root: Path) -> None:

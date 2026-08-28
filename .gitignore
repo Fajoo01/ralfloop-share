@@ -16,6 +16,7 @@ tmp/
 out/
 dist/
 build/
+/bin/ralf-shell-ast
 
 *.sqlite
 *.db

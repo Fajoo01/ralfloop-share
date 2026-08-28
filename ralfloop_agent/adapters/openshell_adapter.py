@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import time
@@ -9,6 +10,9 @@ import requests
 from pathlib import Path
 
 from ralfloop_agent.core.policy import PolicyLayer
+from ralfloop_agent.shell_judge import (
+    RalfShellJudge, ShellDecision, ShellPolicy, safe_execution_environment,
+)
 from ralfloop_agent.tools.contracts import ToolResult
 
 
@@ -163,16 +167,20 @@ class OpenShellAdapterStub:
 
     def exec(self, sandbox: dict, command: str, timeout_sec: int = 20) -> ToolResult:
         started = time.time()
-        decision = self.policy.check_command(command)
-        if not decision.allowed:
+        root = Path(sandbox["root"]).resolve(strict=True)
+        environment = safe_execution_environment(os.environ)
+        decision = RalfShellJudge(ShellPolicy.for_sandbox(root)).review(
+            command, str(root), environment,
+        )
+        if decision.decision not in {ShellDecision.ALLOW, ShellDecision.ALLOW_READONLY}:
             return self._envelope(
                 "sandbox_exec",
                 started,
                 ok=False,
                 exit_code=1,
-                stderr=decision.reason,
+                stderr=decision.deterministic_reason,
                 allowed=False,
-                reason=decision.reason,
+                reason=decision.deterministic_reason,
                 error_type="policy_denied",
             )
 
@@ -183,6 +191,7 @@ class OpenShellAdapterStub:
                 capture_output=True,
                 text=True,
                 timeout=timeout_sec,
+                env=environment,
             )
             return self._envelope(
                 "sandbox_exec",
