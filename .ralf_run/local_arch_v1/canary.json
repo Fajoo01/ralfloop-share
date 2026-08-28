@@ -1,53 +1,41 @@
 {
-  "v": 2,
-  "verified_at": "2026-08-27T17:22:41Z",
-  "tested_commit": "7d3fd59e83331535ef7e6ec84370e3c67db58d74",
-  "static": "pass",
-  "unit_new_arch": {
-    "status": "pass",
-    "tests": 30,
-    "junit_sha256": "627c275bacce07dc7721ce5b4672acb8bee566ae99166cd6dc968dc7456c62e3"
-  },
-  "changed_scope": {
-    "status": "pass",
-    "tests": 201,
-    "passed": 199,
-    "skipped": 2,
-    "deselected_preexisting_failure": 1,
-    "junit_sha256": "4f51b9989e2e05aa544641d03416f91030015203243001337e4cfbf209ee17db"
-  },
-  "arci_broker_uid_hotfix": {
-    "status": "pass",
-    "tested_commit": "7ef1d2f5fa97ce36faca1e812f8b56e01bf23b54",
-    "tests": 13,
-    "systemd_analyze_verify": "pass"
-  },
-  "fake_router": "pass",
-  "fake_llm_director": "pass",
-  "fake_evolver": "pass",
-  "fake_media": "pass",
   "bwrap_real_c": "pass",
-  "seccomp_network_block": "pass",
-  "seccomp_process_block": "pass",
   "cgroup_v2_limits": "pass",
-  "sandbox_tests": {
+  "changed_scope": {
+    "junit_sha256": "d09caf304bc5d80d40c4335a2de1cad9547fe8e5484caca6350b7bc6a2c76434",
+    "passed": 301,
+    "skipped": 2,
     "status": "pass",
-    "tests": 183,
-    "junit_sha256": "b9b2dcf57f9a42fab117fdee14aac86d493b5e657e44164680d51d6c76c98311"
+    "tests": 303
   },
+  "fake_evolver": "pass",
+  "fake_llm_director": "pass",
+  "fake_media": "pass",
+  "fake_router": "pass",
   "functiongemma_real_dry_run": "pass",
-  "visual_worker_dry_run": "pass",
-  "tts_local_minimal": "blocked_model_not_selected_or_installed",
-  "social_image_deterministic": {"status":"pass","artifact":"sha256:195bf14cffdc1403b54d737cec698b695542c83fe37369da027c3b0c21d96bb6"},
-  "social_video_storyboard": {"status":"pass","artifact":"sha256:9d90ec829eb1be68f0bd905e73081fd8f874fdef8672b6de7b2035e2afa00c0d"},
-  "video_model": "not_loaded_optional_first_canary",
-  "evolver_micro": "pass_no_promotion_due_noise",
   "integration_dry_run": "pass",
   "integration_tests": {
+    "junit_sha256": "f63ceb6ba09c1fd057fbc7526d3e96d551e4f3fe4374a5c4beca71c04c84594e",
     "status": "pass",
-    "tests": 6,
-    "deselected_preexisting_failure": 1,
-    "junit_sha256": "907d31c3a401d0ec664db2b2d198defe7ccca8dafbee0dab502f341c625f7523"
+    "tests": 4
   },
-  "published": false
+  "published": false,
+  "sandbox_tests": {
+    "junit_sha256": "edfab9cad920bf1faf1ae4806ca9a5257c81a96fe85c11b4776bac9beead8101",
+    "skipped": 9,
+    "status": "pass",
+    "tests": 202
+  },
+  "seccomp_network_block": "pass",
+  "seccomp_process_block": "pass",
+  "static": "pass",
+  "tested_commit": "173443636519aba739385d10af2f9de9c447de6f",
+  "unit_new_arch": {
+    "junit_sha256": "33e37d57a14fbcb12f54ee25eafa33fc0667734684ba694ab4aa406715ccbda7",
+    "status": "pass",
+    "tests": 67
+  },
+  "v": 2,
+  "verified_at": "2026-08-28T06:18:19Z",
+  "visual_worker_dry_run": "pass"
 }
