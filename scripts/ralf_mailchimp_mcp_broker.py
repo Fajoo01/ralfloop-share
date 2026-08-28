@@ -11,6 +11,8 @@ import signal
 import socket
 import struct
 import subprocess
+import sys
+import tempfile
 import time
 
 
@@ -27,19 +29,39 @@ def _peer_uid(conn: socket.socket) -> int:
     return uid
 
 
-def _relay(
-    conn: socket.socket,
+def _start_child(
+    python_executable: str,
     command: str,
-    idle_timeout: float,
-) -> None:
-    process = subprocess.Popen(
-        [command],
+    child_stderr: object,
+) -> subprocess.Popen[bytes]:
+    return subprocess.Popen(
+        [python_executable, command],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=child_stderr,
         shell=False,
         start_new_session=True,
     )
+
+
+def _relay(
+    conn: socket.socket,
+    python_executable: str,
+    command: str,
+    idle_timeout: float,
+) -> None:
+    child_stderr = tempfile.TemporaryFile()
+    try:
+        process = _start_child(python_executable, command, child_stderr)
+    except OSError as exc:
+        child_stderr.close()
+        print(
+            "mailchimp_mcp_child_start_failed "
+            f"error_class={type(exc).__name__}",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise
 
     assert process.stdin is not None
     assert process.stdout is not None
@@ -110,6 +132,31 @@ def _relay(
                 process.kill()
                 process.wait(timeout=2)
 
+        if process.returncode not in (0, -signal.SIGTERM, -signal.SIGKILL):
+            child_stderr.seek(0, os.SEEK_END)
+            stderr_bytes = child_stderr.tell()
+            print(
+                "mailchimp_mcp_child_exit "
+                f"returncode={process.returncode} stderr_bytes={stderr_bytes}",
+                file=sys.stderr,
+                flush=True,
+            )
+        child_stderr.close()
+
+
+def _validated_executable(value: str) -> str:
+    path = Path(value)
+    if not path.is_absolute() or not path.is_file() or not os.access(path, os.X_OK):
+        raise argparse.ArgumentTypeError("must be an absolute executable file")
+    return str(path)
+
+
+def _validated_server_script(value: str) -> str:
+    path = Path(value)
+    if not path.is_absolute() or not path.is_file() or path.suffix != ".py":
+        raise argparse.ArgumentTypeError("must be an absolute Python script file")
+    return str(path)
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -126,6 +173,12 @@ def main() -> int:
     parser.add_argument(
         "--command",
         required=True,
+        type=_validated_server_script,
+    )
+    parser.add_argument(
+        "--python",
+        type=_validated_executable,
+        default=sys.executable,
     )
     parser.add_argument(
         "--idle-timeout",
@@ -169,6 +222,7 @@ def main() -> int:
 
                 _relay(
                     conn,
+                    args.python,
                     args.command,
                     max(1.0, args.idle_timeout),
                 )
