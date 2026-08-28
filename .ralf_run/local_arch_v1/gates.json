@@ -145,7 +145,7 @@
     "errors": 0,
     "failures": 64,
     "skipped": 17,
-    "tests": 2105
+    "tests": 2109
   },
   "deploy_allowed": true,
   "deploy_blockers": [],
@@ -161,13 +161,13 @@
   "port_19104_free": true,
   "preexisting_failures_only": true,
   "quality_gate_path": "preexisting_failures_only",
-  "ram_available_mb": 49260,
+  "ram_available_mb": 39743,
   "runtime_canary": "pass",
   "sandbox": true,
-  "scoped_test_count": 67,
+  "scoped_test_count": 98,
   "scoped_tests": true,
   "suite_exit_preexisting_same": true,
   "suite_report_complete": true,
-  "swap_free_mb": 3678,
+  "swap_free_mb": 3682,
   "v": 2
 }
