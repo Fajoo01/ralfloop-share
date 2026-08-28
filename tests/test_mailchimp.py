@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.mailchimp import (
+    ALL_TOOLS,
     MailchimpGateway,
     MailchimpGatewayError,
     READ_TOOLS,
@@ -25,7 +26,7 @@ def valid_tools():
         "offset": {"type": "integer", "minimum": 0, "maximum": 1000000},
     }
     resource = {"type": "string", "pattern": r"^[A-Za-z0-9_-]{1,128}$"}
-    return [
+    tools = [
         SimpleNamespace(
             name="mailchimp_ping",
             input_schema=schema(),
@@ -54,6 +55,15 @@ def valid_tools():
             "required": ["list_id", "subscriber_hash"],
         }),
     ]
+    protected = schema({
+        "approval_request_id": {"type": "string", "minLength": 1},
+        "execution_id": {"type": "string", "minLength": 1},
+    })
+    tools.extend([
+        SimpleNamespace(name="mailchimp_create_approved_campaign", input_schema=protected),
+        SimpleNamespace(name="mailchimp_send_approved_campaign", input_schema=protected),
+    ])
+    return tools
 
 
 class FakeSession:
@@ -75,12 +85,13 @@ class FakeSession:
         return self.result
 
 
-def test_discover_accepts_exact_read_only_contract():
+def test_discover_accepts_exact_read_and_protected_contract():
     gateway = MailchimpGateway(FakeSession())
 
     discovered = gateway.discover()
 
-    assert set(discovered) == READ_TOOLS
+    assert set(discovered) == ALL_TOOLS
+    assert len(READ_TOOLS) == 7
 
 
 def test_discover_fails_if_required_tool_missing():

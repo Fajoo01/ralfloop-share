@@ -87,10 +87,12 @@ class UnifiedAssistantCore:
         fastweb_portal: FastwebPortalService | None = None,
         whatsapp_read: WhatsAppReadService | None = None,
         mailchimp_gateway_factory: Callable[[], Any] | None = None,
+        mailchimp_campaign_artifact_provider: Callable[[str], Mapping[str, Any] | None] | None = None,
         whatsapp_compose: UnifiedWhatsAppComposeService | None = None,
         recipient_resolver: RecipientResolver | None = None,
         approval_executor: ApprovalBoundExecutor | None = None,
         whatsapp_approval_executor: ApprovalBoundExecutor | None = None,
+        mailchimp_approval_executor: ApprovalBoundExecutor | None = None,
         home_workflow: HomeWorkflow | None = None,
         dag_executor: UnifiedDAGExecutor | None = None,
         dag_input_provider: Callable[[str], Mapping[str, Any]] | None = None,
@@ -105,10 +107,12 @@ class UnifiedAssistantCore:
         self.fastweb_portal = fastweb_portal
         self.whatsapp_read = whatsapp_read
         self.mailchimp_gateway_factory = mailchimp_gateway_factory
+        self.mailchimp_campaign_artifact_provider = mailchimp_campaign_artifact_provider
         self.whatsapp_compose = whatsapp_compose
         self.recipient_resolver = recipient_resolver
         self.approval_executor = approval_executor
         self.whatsapp_approval_executor = whatsapp_approval_executor
+        self.mailchimp_approval_executor = mailchimp_approval_executor
         self.home_workflow = home_workflow
         self.dag_executor = dag_executor
         self.dag_input_provider = dag_input_provider
@@ -184,6 +188,8 @@ class UnifiedAssistantCore:
                 assignment,
                 plan.model_dump(mode="json"),
             )
+        if assignment.skill in {"mailchimp.campaign.create", "mailchimp.campaign.send"}:
+            return self._prepare_mailchimp_campaign(assignment, plan.model_dump(mode="json"))
         if assignment.skill in {"whatsapp.compose", "whatsapp.reply"}:
             return self._compose_whatsapp(
                 text, plan.model_dump(mode="json"),
@@ -198,6 +204,39 @@ class UnifiedAssistantCore:
             "planned" if not plan.requires_clarification else "clarification_required",
             "Piano validato." if not plan.requires_clarification else "Serve specificare obiettivo o dominio.",
             plan=plan.model_dump(mode="json"),
+        )
+
+    def _prepare_mailchimp_campaign(self, assignment, plan: dict[str, Any]) -> UnifiedAssistantResult:
+        if not self.flags.mailchimp_campaign_live:
+            return self._result(
+                "denied", "Mailchimp campaign workflow disabled; no provider mutation executed.",
+                plan=plan, writes=0, sends=0,
+            )
+        payload = (
+            self.mailchimp_campaign_artifact_provider(assignment.skill)
+            if self.mailchimp_campaign_artifact_provider is not None else None
+        )
+        if not isinstance(payload, Mapping):
+            return self._result(
+                "clarification_required",
+                "Serve un artifact Mailchimp verificato e completo; nessuna approval creata.",
+                plan=plan, writes=0, sends=0,
+            )
+        action = str(assignment.arguments.get("action") or "")
+        display = (
+            "Bozza campagna Mailchimp pronta: richiedere approval separata."
+            if action == "mailchimp_campaign_create"
+            else "Campagna Mailchimp verificata: richiedere nuova approval per send."
+        )
+        pending = self.conversation.stage(
+            domain="mailchimp", action=action, policy=PolicyClass.CONFIRM_WRITE,
+            payload=dict(payload), displayed_text=display,
+        )
+        return self._result(
+            "draft_pending_approval", display,
+            selected_skill=assignment.skill, pending_id=pending.pending_id,
+            draft_version=pending.version, draft_digest=pending.payload_digest,
+            writes=0, sends=0,
         )
 
     def _search_email(self, text: str, plan: dict[str, Any]) -> UnifiedAssistantResult:
@@ -968,6 +1007,30 @@ class UnifiedAssistantCore:
                     "Esito WhatsApp non verificato; retry automatico bloccato.", result=result,
                 )
             return self._result(str(result.get("status") or "failed"), "WhatsApp non inviato.", result=result)
+        if pending.domain == "mailchimp":
+            if not self.flags.mailchimp_campaign_live:
+                return self._result("disabled", "Mailchimp campaign workflow disabled.", writes=0, sends=0)
+            if not approval_matches(pending) or self.mailchimp_approval_executor is None:
+                return self._result(
+                    "approval_required", "Approval Mailchimp separata e hash-bound richiesta.",
+                    writes=0, sends=0,
+                )
+            result = self.mailchimp_approval_executor.execute(pending)
+            status = str(result.get("status") or "failed")
+            self._audit(
+                domain="mailchimp", intent=pending.action,
+                skill=("mailchimp.campaign.create" if pending.action == "mailchimp_campaign_create"
+                       else "mailchimp.campaign.send"),
+                policy=pending.policy, target=str(pending.payload.get("list_id") or ""),
+                verification=status, pending=pending,
+                tool="mailchimp.marketing.approval_bound", tool_result=status,
+            )
+            if status in {"executed", "already_executed"}:
+                self.conversation.clear("mailchimp")
+            elif status in {"CREATE_UNCERTAIN", "SEND_UNCERTAIN", "EXECUTION_UNCERTAIN"}:
+                self.conversation.clear("mailchimp")
+            return self._result(status, "Workflow Mailchimp completato." if status == "executed"
+                                else "Workflow Mailchimp non eseguito o non verificato.", result=result)
         if pending.domain == "home":
             prepared = self._home_prepared.get(pending.pending_id)
             if prepared is None and self.home_workflow is not None:

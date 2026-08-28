@@ -19,7 +19,11 @@ READ_TOOLS = frozenset({
     "mailchimp_list_tags",
     "mailchimp_list_member_tags",
 })
-ALL_TOOLS = READ_TOOLS
+PROTECTED_TOOLS = frozenset({
+    "mailchimp_create_approved_campaign",
+    "mailchimp_send_approved_campaign",
+})
+ALL_TOOLS = READ_TOOLS | PROTECTED_TOOLS
 
 FORBIDDEN_INPUTS = frozenset({
     "selector",
@@ -51,13 +55,13 @@ class MailchimpGateway:
         tools = self.session.list_tools()
         names = {tool.name for tool in tools}
 
-        missing = READ_TOOLS - names
+        missing = ALL_TOOLS - names
         if missing:
             raise MCPProtocolError(
                 "mailchimp_read_tools_missing:" + ",".join(sorted(missing))
             )
 
-        unexpected = names - READ_TOOLS
+        unexpected = names - ALL_TOOLS
         if unexpected:
             raise MCPProtocolError(
                 "mailchimp_unexpected_tool_exposed:" + ",".join(sorted(unexpected))
@@ -90,6 +94,14 @@ class MailchimpGateway:
             raise MailchimpGatewayError("mailchimp_read_tool_denied")
 
         return self._call(tool, arguments)
+
+    def invoke_approved(self, tool: str, **arguments: Any) -> Mapping[str, Any]:
+        if tool not in PROTECTED_TOOLS:
+            raise MailchimpGatewayError("mailchimp_protected_tool_denied")
+        payload = self._call(tool, arguments)
+        if payload.get("ok") is not True:
+            raise MailchimpGatewayError(str(payload.get("status") or "mailchimp_mutation_failed"))
+        return payload
 
     def _call(
         self,
@@ -152,12 +164,11 @@ class MailchimpGateway:
                 "mailchimp_result_not_object"
             )
 
-        for field in ("side_effects", "writes", "sends"):
-            value = payload.get(field, 0)
-            if value not in {0, None}:
-                raise MCPProtocolError(
-                    f"mailchimp_read_reported_{field}"
-                )
+        if tool in READ_TOOLS:
+            for field in ("side_effects", "writes", "sends"):
+                value = payload.get(field, 0)
+                if value not in {0, None}:
+                    raise MCPProtocolError(f"mailchimp_read_reported_{field}")
 
         return dict(payload)
 
@@ -214,10 +225,35 @@ class MailchimpMCPContext(
             )
 
 
+class MailchimpApprovedMCPWorkflow:
+    """Production workflow proxy; broker performs approval CAS and provider readback."""
+
+    def __init__(self, gateway_factory=MailchimpMCPContext.from_environment) -> None:
+        self.gateway_factory = gateway_factory
+
+    def execute_create(self, request_id: str, scope: Mapping[str, Any]) -> dict[str, Any]:
+        return self._execute("mailchimp_create_approved_campaign", request_id, scope)
+
+    def execute_send(self, request_id: str, scope: Mapping[str, Any]) -> dict[str, Any]:
+        return self._execute("mailchimp_send_approved_campaign", request_id, scope)
+
+    def _execute(self, tool: str, request_id: str, scope: Mapping[str, Any]) -> dict[str, Any]:
+        arguments = {
+            key: value for key, value in scope.items()
+            if key not in {"action", "version", "artifact_sha256", "body_sha256"}
+        }
+        arguments.update({
+            "approval_request_id": request_id,
+            "execution_id": str(scope["execution_id"]),
+        })
+        with self.gateway_factory() as gateway:
+            return dict(gateway.invoke_approved(tool, **arguments))
+
+
 __all__ = [
-    "ALL_TOOLS",
+    "ALL_TOOLS", "PROTECTED_TOOLS",
     "READ_TOOLS",
-    "MailchimpGateway",
+    "MailchimpGateway", "MailchimpApprovedMCPWorkflow",
     "MailchimpGatewayError",
     "MailchimpMCPContext",
 ]

@@ -149,6 +149,7 @@ class AssistantFeatureFlags(StrictModel):
     unified_assistant: bool = False
     email_assistant_live: bool = False
     whatsapp_assistant_live: bool = False
+    mailchimp_campaign_live: bool = False
     home_assistant_read_live: bool = False
     home_assistant_live: bool = False
     semantic_judge_enabled: bool = False
@@ -161,6 +162,7 @@ class AssistantFeatureFlags(StrictModel):
             unified_assistant=_env_bool("RALFLOOP_UNIFIED_ASSISTANT"),
             email_assistant_live=_env_bool("RALFLOOP_EMAIL_ASSISTANT_LIVE"),
             whatsapp_assistant_live=_env_bool("RALFLOOP_WHATSAPP_ASSISTANT_LIVE"),
+            mailchimp_campaign_live=_env_bool("RALFLOOP_MAILCHIMP_CAMPAIGN_LIVE"),
             home_assistant_read_live=_env_bool("RALFLOOP_HOME_ASSISTANT_READ_LIVE"),
             home_assistant_live=_env_bool("RALFLOOP_HOME_ASSISTANT_LIVE"),
             semantic_judge_enabled=_env_bool("RALFLOOP_SEMANTIC_JUDGE_ENABLED"),

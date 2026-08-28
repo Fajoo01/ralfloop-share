@@ -4,6 +4,8 @@ from __future__ import annotations
 """Read-only Mailchimp Marketing API MCP server for Ralfloop."""
 
 import base64
+import hashlib
+import html
 import json
 import os
 from pathlib import Path
@@ -20,6 +22,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.mcp_transport import MCP_PROTOCOL_VERSION
+from ralfloop_agent.domains.domain_approval import effective_approval_status, scope_digest
+from ralfloop_agent.domains.domain_approval_store import DomainApprovalStore
+from ralfloop_agent.unified_assistant.mailchimp_campaign import (
+    CREATE_ACTION, SEND_ACTION,
+    build_mailchimp_campaign_create_scope, build_mailchimp_campaign_send_scope,
+    campaign_fingerprint,
+)
 
 
 def _schema(
@@ -68,6 +77,12 @@ MEMBER_STATUS = {
     ],
 }
 
+DIGEST = {"type": "string", "pattern": r"^[a-f0-9]{64}$"}
+EXECUTION_ID = {"type": "string", "pattern": r"^mc(?:create|send)_[a-f0-9]{24}$"}
+REQUEST_ID = {"type": "string", "pattern": r"^apr_[A-Za-z0-9_-]{8,128}$"}
+SHORT_TEXT = {"type": "string", "minLength": 1, "maxLength": 255}
+BODY_TEXT = {"type": "string", "minLength": 1, "maxLength": 200000}
+
 
 TOOLS: dict[str, dict[str, Any]] = {
     "mailchimp_ping": _schema({}),
@@ -102,6 +117,28 @@ TOOLS: dict[str, dict[str, Any]] = {
         "list_id": RESOURCE_ID,
         "subscriber_hash": SUBSCRIBER_HASH,
     }, ("list_id", "subscriber_hash")),
+    "mailchimp_create_approved_campaign": _schema({
+        "approval_request_id": REQUEST_ID, "execution_id": EXECUTION_ID,
+        "draft_id": SHORT_TEXT, "draft_version": {"type": "integer", "minimum": 1, "maximum": 1000000},
+        "payload_digest": DIGEST, "source_draft_sha256": DIGEST,
+        "list_id": RESOURCE_ID, "subject": SHORT_TEXT, "from_name": SHORT_TEXT,
+        "reply_to": SHORT_TEXT, "preheader": {"type": "string", "maxLength": 255},
+        "body_text": BODY_TEXT, "cta_label": {"type": "string", "maxLength": 255},
+        "cta_target": {"type": "string", "maxLength": 2048},
+        "internal_title": {"type": "string", "maxLength": 255},
+        "provider_identity": SHORT_TEXT,
+    }, ("approval_request_id", "execution_id", "draft_id", "draft_version", "payload_digest",
+        "source_draft_sha256", "list_id", "subject", "from_name", "reply_to", "preheader",
+        "body_text", "cta_label", "cta_target", "internal_title", "provider_identity")),
+    "mailchimp_send_approved_campaign": _schema({
+        "approval_request_id": REQUEST_ID, "execution_id": EXECUTION_ID,
+        "campaign_id": RESOURCE_ID, "list_id": RESOURCE_ID,
+        "provider_campaign_sha256": DIGEST, "subject": SHORT_TEXT,
+        "from_name": SHORT_TEXT, "reply_to": SHORT_TEXT,
+        "content_sha256": DIGEST, "provider_identity": SHORT_TEXT,
+    }, ("approval_request_id", "execution_id", "campaign_id", "list_id",
+        "provider_campaign_sha256", "subject", "from_name", "reply_to",
+        "content_sha256", "provider_identity")),
 }
 
 
@@ -178,6 +215,9 @@ class MailchimpClient:
         path: str,
         *,
         query: Mapping[str, Any] | None = None,
+        method: str = "GET",
+        body: Mapping[str, Any] | None = None,
+        empty_ok: bool = False,
     ) -> dict[str, Any]:
         url = f"{self.base_url}/{path.lstrip('/')}"
 
@@ -194,16 +234,23 @@ class MailchimpClient:
             f"ralf:{self.api_key}".encode("utf-8")
         ).decode("ascii")
 
+        encoded_body = None if body is None else json.dumps(
+            body, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
         request = Request(
             url,
+            data=encoded_body,
             headers={
                 "Authorization": f"Basic {credentials}",
                 "Accept": "application/json",
                 "User-Agent": "ralfloop-mailchimp-mcp/1",
+                **({"Content-Type": "application/json"} if encoded_body is not None else {}),
             },
-            method="GET",
+            method=method,
         )
 
+        if empty_ok and not raw:
+            return {}
         try:
             with urlopen(
                 request,
@@ -260,6 +307,61 @@ class MailchimpClient:
             )
 
         return payload
+
+    @staticmethod
+    def _campaign_view(info: Mapping[str, Any], content: Mapping[str, Any]) -> dict[str, Any]:
+        settings = info.get("settings") if isinstance(info.get("settings"), Mapping) else {}
+        recipients = info.get("recipients") if isinstance(info.get("recipients"), Mapping) else {}
+        plain = str(content.get("plain_text") or "")
+        return {
+            "campaign_id": str(info.get("id") or ""),
+            "list_id": str(recipients.get("list_id") or ""),
+            "subject": str(settings.get("subject_line") or ""),
+            "from_name": str(settings.get("from_name") or ""),
+            "reply_to": str(settings.get("reply_to") or ""),
+            "content_sha256": hashlib.sha256(plain.encode()).hexdigest(),
+            "sent": str(info.get("status") or "") in {"sending", "sent"},
+            "provider_status": str(info.get("status") or ""),
+        }
+
+    def get_campaign(self, campaign_id: str) -> dict[str, Any]:
+        return self._campaign_view(
+            self._request(f"campaigns/{campaign_id}"),
+            self._request(f"campaigns/{campaign_id}/content"),
+        )
+
+    def create_campaign(self, scope: Mapping[str, Any]) -> dict[str, Any]:
+        created = self._request("campaigns", method="POST", body={
+            "type": "regular", "recipients": {"list_id": scope["list_id"]},
+            "settings": {
+                "subject_line": scope["subject"], "preview_text": scope["preheader"],
+                "title": scope["internal_title"], "from_name": scope["from_name"],
+                "reply_to": scope["reply_to"],
+            },
+        })
+        campaign_id = str(created.get("id") or "")
+        if not campaign_id:
+            raise MailchimpAPIError("MALFORMED_RESPONSE")
+        cta = ""
+        if scope.get("cta_label") and scope.get("cta_target"):
+            cta = '<p><a href="{}">{}</a></p>'.format(
+                html.escape(str(scope["cta_target"]), quote=True),
+                html.escape(str(scope["cta_label"])),
+            )
+        html_body = "<div><p>{}</p>{}</div>".format(
+            html.escape(str(scope["body_text"])).replace("\n", "<br>"), cta,
+        )
+        self._request(
+            f"campaigns/{campaign_id}/content", method="PUT",
+            body={"plain_text": scope["body_text"], "html": html_body},
+        )
+        return self.get_campaign(campaign_id)
+
+    def send_campaign(self, campaign_id: str) -> dict[str, Any]:
+        self._request(
+            f"campaigns/{campaign_id}/actions/send", method="POST", body={}, empty_ok=True,
+        )
+        return self.get_campaign(campaign_id)
 
     def ping(self) -> dict[str, Any]:
         payload = self._request("ping")
@@ -487,8 +589,10 @@ class MailchimpMCPServer:
     def __init__(
         self,
         client: MailchimpClient | None,
+        approval_store: DomainApprovalStore | None = None,
     ) -> None:
         self.client = client
+        self.approval_store = approval_store
 
     def list_tools(self) -> list[dict[str, Any]]:
         descriptions = {
@@ -506,6 +610,10 @@ class MailchimpMCPServer:
                 "List or search Mailchimp audience tags without modifying them.",
             "mailchimp_list_member_tags":
                 "List tags for one Mailchimp member without modifying them.",
+            "mailchimp_create_approved_campaign":
+                "Create one exact draft after an independently verified approval claim.",
+            "mailchimp_send_approved_campaign":
+                "Send one exact verified campaign after a separate approval claim.",
         }
 
         return [
@@ -537,6 +645,85 @@ class MailchimpMCPServer:
             return _error("AUTH_REQUIRED")
 
         try:
+            if name in {"mailchimp_create_approved_campaign", "mailchimp_send_approved_campaign"}:
+                if self.approval_store is None:
+                    return _error("APPROVAL_REQUIRED")
+                request_id = str(arguments["approval_request_id"])
+                action = CREATE_ACTION if name == "mailchimp_create_approved_campaign" else SEND_ACTION
+                material = {
+                    key: value for key, value in arguments.items()
+                    if key not in {"approval_request_id", "execution_id"}
+                }
+                scope = (
+                    build_mailchimp_campaign_create_scope(material)
+                    if action == CREATE_ACTION else build_mailchimp_campaign_send_scope(material)
+                )
+                row = self.approval_store.get_request(request_id)
+                if (
+                    row is None or row.get("action") != action
+                    or effective_approval_status(row) != "approved"
+                    or row.get("scope_digest") != scope_digest(scope)
+                    or arguments.get("execution_id") != scope.get("execution_id")
+                ):
+                    return _error("APPROVAL_INVALID")
+                try:
+                    if action == CREATE_ACTION:
+                        self.client._request(f"lists/{scope['list_id']}")
+                    else:
+                        before = self.client.get_campaign(str(scope["campaign_id"]))
+                        if (
+                            before.get("sent")
+                            or campaign_fingerprint(before) != scope["provider_campaign_sha256"]
+                            or any(before.get(key) != scope.get(key) for key in (
+                                "campaign_id", "list_id", "subject", "from_name", "reply_to", "content_sha256"
+                            ))
+                        ):
+                            self.approval_store.mark_stale(request_id, ["mailchimp_provider_campaign_changed"])
+                            return _error("DRAFT_CHANGED")
+                except MailchimpAPIError as exc:
+                    return _error(exc.status, http_status=exc.http_status, detail=exc.detail)
+                claim = self.approval_store.claim_execution(request_id, action=action)
+                if not claim.get("claimed"):
+                    return _error(str(claim.get("status") or "APPROVAL_INVALID"))
+                if action == CREATE_ACTION:
+                    try:
+                        observed = self.client.create_campaign(scope)
+                        expected = {
+                            "list_id": scope["list_id"], "subject": scope["subject"],
+                            "from_name": scope["from_name"], "reply_to": scope["reply_to"],
+                            "content_sha256": scope["body_sha256"], "sent": False,
+                        }
+                        if any(observed.get(key) != value for key, value in expected.items()):
+                            raise RuntimeError("create_postcondition_mismatch")
+                    except Exception:
+                        failed = {"status": "CREATE_UNCERTAIN", "created": False, "retry_allowed": False}
+                        self.approval_store.finish_claimed_execution(
+                            request_id, action=action, success=False, result=failed,
+                        )
+                        return _error("CREATE_UNCERTAIN")
+                    result = {"status": "executed", "state": "DRAFT", "created": True,
+                              "sent": False, **observed, "retry_allowed": False}
+                    self.approval_store.finish_claimed_execution(
+                        request_id, action=action, success=True, result=result,
+                    )
+                    return _mutation("create_approved_campaign", result, writes=2, sends=0)
+                try:
+                    observed = self.client.send_campaign(str(scope["campaign_id"]))
+                    if not observed.get("sent") or campaign_fingerprint(observed) != campaign_fingerprint(before):
+                        raise RuntimeError("send_postcondition_mismatch")
+                except Exception:
+                    failed = {"status": "SEND_UNCERTAIN", "sent": False, "retry_allowed": False}
+                    self.approval_store.finish_claimed_execution(
+                        request_id, action=action, success=False, result=failed,
+                    )
+                    return _error("SEND_UNCERTAIN")
+                result = {"status": "executed", "state": "SENT", "sent": True,
+                          **observed, "retry_allowed": False}
+                self.approval_store.finish_claimed_execution(
+                    request_id, action=action, success=True, result=result,
+                )
+                return _mutation("send_approved_campaign", result, writes=1, sends=1)
+
             if name == "mailchimp_ping":
                 payload = self.client.ping()
                 return _read(
@@ -680,6 +867,13 @@ def _read(
     }
 
 
+def _mutation(operation: str, payload: Mapping[str, Any], *, writes: int, sends: int) -> dict[str, Any]:
+    return {
+        "ok": True, "operation": operation, **dict(payload),
+        "side_effects": writes, "writes": writes, "sends": sends,
+    }
+
+
 def _error(
     code: str,
     *,
@@ -789,8 +983,13 @@ def _client_from_environment() -> MailchimpClient | None:
 
 
 def main() -> int:
+    approval_store = None
+    try:
+        approval_store = DomainApprovalStore()
+    except (OSError, ValueError):
+        approval_store = None
     server = MailchimpMCPServer(
-        _client_from_environment()
+        _client_from_environment(), approval_store=approval_store,
     )
 
     for line in sys.stdin:
