@@ -11,7 +11,9 @@ from ralfloop_agent.domains.domain_approval import DomainApprovalPolicy
 from ralfloop_agent.domains.domain_approval_store import DomainApprovalStore
 
 from .contracts import AssistantFeatureFlags
-from .conversation import CONFIRM_WORDS, PENDING_DOMAINS, SessionConversationAdapter
+from .conversation import (
+    CONFIRM_WORDS, PENDING_DOMAINS, SessionConversationAdapter, payload_matches,
+)
 from .core import UnifiedAssistantCore
 from .email import EmailWorkingMemoryBuilder
 from .email_pipeline import GenericEmailPipeline
@@ -66,7 +68,37 @@ def is_unified_telegram_request(text: str, context: Mapping[str, Any]) -> bool:
             _SUPPORTED.search(text)
             or _EMAIL_READ_SUPPORTED.search(text)
             or re.fullmatch(r"\s*(?:otp[\s:-]*)?[0-9]{6}\s*", text, re.I)
+            or (
+                _is_positive_confirmation(text)
+                and _has_single_approvable_pending(context)
+            )
         )
+    )
+
+
+def _has_single_approvable_pending(context: Mapping[str, Any]) -> bool:
+    """Route bare confirmations only for one existing, hash-valid pending."""
+
+    try:
+        session_id = _session_id(context)
+        store = SessionStore(os.getenv(
+            "RALFLOOP_UNIFIED_SESSION_DIR",
+            str(Path.home() / ".local" / "state" / "ralf" / "unified-sessions"),
+        ))
+        conversation = SessionConversationAdapter(store).load(session_id)
+    except (OSError, SessionStoreError, TypeError, ValueError):
+        return False
+    active = [
+        item for name in PENDING_DOMAINS
+        if (item := getattr(conversation.state.pending, name)) is not None
+        and item.expires_at > int(datetime.now(UTC).timestamp())
+    ]
+    return (
+        len(active) == 1
+        and active[0].domain in {"email", "whatsapp", "mailchimp"}
+        and active[0].policy.value in {"CONFIRM_WRITE", "PROTECTED"}
+        and bool(active[0].approval_ref)
+        and payload_matches(active[0])
     )
 
 

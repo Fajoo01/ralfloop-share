@@ -5,6 +5,45 @@ from ralfloop_agent.unified_assistant.core import EmailPipelineResult
 from ralfloop_agent.unified_assistant.email_search import GoogleWorkspaceEmailSearch
 from ralfloop_agent.unified_assistant.fastweb_portal import FastwebPortalResult
 from ralfloop_agent.unified_assistant.runtime import is_unified_telegram_request, unified_route_probe
+from ralfloop_agent.cli.session_store import SessionStore
+from ralfloop_agent.unified_assistant.contracts import PolicyClass
+from ralfloop_agent.unified_assistant.conversation import SessionConversationAdapter
+
+
+def _pending_session(monkeypatch, tmp_path, *domains):
+    root = tmp_path / "sessions"
+    monkeypatch.setenv("RALFLOOP_UNIFIED_SESSION_DIR", str(root))
+    store = SessionStore(root)
+    session_id = "telegram-22-11"
+    runtime._ensure_session(store, session_id)
+    adapter = SessionConversationAdapter(store)
+    conversation = adapter.load(session_id)
+    for domain in domains:
+        pending = conversation.stage(
+            domain=domain,
+            action=(
+                "mailchimp_campaign_create" if domain == "mailchimp"
+                else "send_email"
+            ),
+            policy=PolicyClass.CONFIRM_WRITE,
+            payload={"domain": domain, "content": "approved artifact"},
+            displayed_text="Approved artifact",
+        )
+        conversation.attach_approval_request(
+            domain=domain,
+            pending_id=pending.pending_id,
+            payload_digest=pending.payload_digest,
+            approval_ref="apr_ABCDEFGH" if domain == "mailchimp" else "apr_IJKLMNOP",
+            created_at=pending.created_at,
+            expires_at=pending.expires_at,
+        )
+    adapter.save(session_id, conversation)
+    return {
+        "source": "telegram_natural",
+        "telegram_user_id": 11,
+        "telegram_chat_id": 22,
+        "telegram_message_id": 1,
+    }
 
 
 def test_telegram_bridge_is_feature_flagged_and_legacy_first(monkeypatch):
@@ -22,6 +61,27 @@ def test_telegram_bridge_is_feature_flagged_and_legacy_first(monkeypatch):
     assert not is_unified_telegram_request("apri cancello", context)
     assert not is_unified_telegram_request("Quanto fa in soggiorno?", {"source": "api"})
     assert not is_unified_telegram_request("Quanto spazio libero abbiamo?", context)
+
+
+def test_bare_approval_routes_only_with_one_existing_mailchimp_pending(monkeypatch, tmp_path):
+    monkeypatch.setenv("RALFLOOP_UNIFIED_ASSISTANT", "1")
+    context = _pending_session(monkeypatch, tmp_path, "mailchimp")
+
+    assert is_unified_telegram_request("approvo", context) is True
+
+
+def test_bare_approval_without_pending_keeps_legacy_routing(monkeypatch, tmp_path):
+    monkeypatch.setenv("RALFLOOP_UNIFIED_ASSISTANT", "1")
+    context = _pending_session(monkeypatch, tmp_path)
+
+    assert is_unified_telegram_request("approvo", context) is False
+
+
+def test_bare_approval_with_multiple_pending_fails_closed(monkeypatch, tmp_path):
+    monkeypatch.setenv("RALFLOOP_UNIFIED_ASSISTANT", "1")
+    context = _pending_session(monkeypatch, tmp_path, "mailchimp", "email")
+
+    assert is_unified_telegram_request("approvo", context) is False
 
 
 def test_fastweb_read_is_unified_tool_backed_route(monkeypatch):

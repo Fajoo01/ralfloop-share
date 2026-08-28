@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from openshell_backend import app as backend
+from ralfloop_agent.cli.session_store import SessionStore
 from ralfloop_agent.unified_assistant import runtime
+from ralfloop_agent.unified_assistant.contracts import PolicyClass
+from ralfloop_agent.unified_assistant.conversation import SessionConversationAdapter
 
 
 def test_existing_tasks_run_routes_unified_before_generic_gpu_handoff(monkeypatch):
@@ -21,6 +24,42 @@ def test_existing_tasks_run_routes_unified_before_generic_gpu_handoff(monkeypatc
     result = backend.run_task(request)
 
     assert result["final_answer"] == "unified"
+    assert result["interaction_mode"] == "unified_assistant"
+
+
+def test_tasks_run_routes_bare_approval_for_exact_pending_session(monkeypatch, tmp_path):
+    monkeypatch.setenv("RALFLOOP_UNIFIED_ASSISTANT", "1")
+    monkeypatch.setenv("RALFLOOP_UNIFIED_SESSION_DIR", str(tmp_path / "sessions"))
+    store = SessionStore(tmp_path / "sessions")
+    runtime._ensure_session(store, "telegram-22-11")
+    adapter = SessionConversationAdapter(store)
+    conversation = adapter.load("telegram-22-11")
+    pending = conversation.stage(
+        domain="mailchimp", action="mailchimp_campaign_create",
+        policy=PolicyClass.CONFIRM_WRITE,
+        payload={"list_id": "audience_1", "subject": "Approved"},
+        displayed_text="Approved",
+    )
+    conversation.attach_approval_request(
+        domain="mailchimp", pending_id=pending.pending_id,
+        payload_digest=pending.payload_digest, approval_ref="apr_ABCDEFGH",
+        created_at=pending.created_at, expires_at=pending.expires_at,
+    )
+    adapter.save("telegram-22-11", conversation)
+    monkeypatch.setattr(runtime, "run_unified_telegram", lambda *_: {
+        "ok": True, "final_answer": "unified-confirmation",
+        "interaction_mode": "unified_assistant",
+    })
+
+    result = backend.run_task(backend.TaskRunRequest(
+        user_goal="approvo",
+        extra_context={
+            "source": "telegram_natural", "telegram_user_id": 11,
+            "telegram_chat_id": 22, "telegram_message_id": 2,
+        },
+    ))
+
+    assert result["final_answer"] == "unified-confirmation"
     assert result["interaction_mode"] == "unified_assistant"
 
 
