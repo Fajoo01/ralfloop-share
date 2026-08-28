@@ -16,6 +16,7 @@ ALLOWED_ACTIONS = {
     "dispatch_glm_artifact", "reply_email", "send_email",
     "whatsapp_send", "whatsapp_reply",
     "local_maintenance_apply", "repair_apply",
+    "mailchimp_campaign_create", "mailchimp_campaign_send",
 }
 FINAL_STATUSES = {"rejected", "expired", "stale", "consumed", "cancelled", "execution_failed", "executed"}
 

@@ -271,6 +271,22 @@ class UnifiedRegistryFacade:
             verification_method="read side_effects=0 + writes=0 + sends=0",
             source_registry=str(PROJECT_ROOT / "src" / "mailchimp.py"),
         ), UnifiedToolSpec(
+            id="mailchimp.marketing.approval_bound",
+            capabilities=(
+                "mailchimp.campaign.create.approved",
+                "mailchimp.campaign.send.approved",
+            ),
+            input_schema="exact canonical campaign scope + approval_request_id + execution_id",
+            output_schema="verified campaign state; no generic provider mutation",
+            classification=PolicyClass.CONFIRM_WRITE,
+            side_effect_class="confirmation_required",
+            availability="constrained:approval_and_provider_required",
+            health="shared DomainApprovalStore + atomic one-shot claim",
+            verification_method="scope digest + Telegram allowlist + provider readback",
+            source_registry=str(
+                PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "mailchimp_campaign.py"
+            ),
+        ), UnifiedToolSpec(
             id="home_assistant.adapter",
             capabilities=("home.state.read", "home.service.call"),
             input_schema="HomeCommand",

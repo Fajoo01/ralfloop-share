@@ -515,6 +515,71 @@ class DomainApprovalStore:
             "approval_status": "consumed", "execution_count": execution_count,
         }
 
+    def reconcile_confirmed_campaign_execution(
+        self, request_id: str, *, action: str, evidence: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Record Mailchimp GET evidence without inventing Gmail identifiers."""
+
+        campaign_id = str(evidence.get("campaign_id") or "")
+        fingerprint = str(evidence.get("provider_campaign_sha256") or "")
+        state = str(evidence.get("provider_state") or "")
+        if not campaign_id or len(fingerprint) != 64 or state not in {"draft", "sent"}:
+            return {"status": "invalid_reconciliation_evidence", "reconciled": False}
+        if action not in {"mailchimp_campaign_create", "mailchimp_campaign_send"}:
+            return {"status": "reconciliation_state_denied", "reconciled": False}
+        if action == "mailchimp_campaign_send" and state != "sent":
+            return {"status": "provider_state_unconfirmed", "reconciled": False}
+        with self.connect() as conn:
+            conn.execute("begin immediate")
+            row = conn.execute(
+                "select * from approval_requests where request_id = ?", (request_id,)
+            ).fetchone()
+            if not row:
+                conn.commit()
+                return {"status": "not_found", "reconciled": False}
+            old_status = str(row["status"])
+            if str(row["action"]) != action or old_status not in {
+                "executing", "execution_failed", "consumed",
+            }:
+                conn.commit()
+                return {"status": "reconciliation_state_denied", "reconciled": False}
+            if old_status == "consumed":
+                previous = conn.execute(
+                    "select result_json from approval_executions "
+                    "where request_id = ? and status = 'reconciled' order by execution_id desc limit 1",
+                    (request_id,),
+                ).fetchone()
+                conn.commit()
+                if previous and json.loads(previous["result_json"]) == {
+                    "status": "executed_reconciled", "action": action,
+                    "reconciled": True, **evidence,
+                }:
+                    return {"status": "already_reconciled", "reconciled": True,
+                            "approval_status": "consumed", "campaign_id": campaign_id}
+                return {"status": "reconciliation_state_denied", "reconciled": False}
+            recorded = {"status": "executed_reconciled", "action": action,
+                        "reconciled": True, **evidence}
+            timestamp = now_ts()
+            conn.execute(
+                "update approval_requests set status = 'consumed', "
+                "consumed_at = coalesce(consumed_at, ?) where request_id = ?",
+                (timestamp, request_id),
+            )
+            conn.execute(
+                "insert into approval_executions "
+                "(request_id, action, dry_run, status, created_at, result_json) "
+                "values (?, ?, 0, 'reconciled', ?, ?)",
+                (request_id, action, timestamp, _json(recorded)),
+            )
+            conn.commit()
+        self.audit(
+            "execution_reconciled_from_provider_evidence", request_id=request_id,
+            action=action, old_status=old_status, new_status="consumed",
+            result="reconciled", reason="mailchimp_provider_read_evidence",
+        )
+        return {"status": "reconciled", "reconciled": True,
+                "approval_status": "consumed", "campaign_id": campaign_id}
+
     def register_nonce(self, nonce: str) -> bool:
         digest = hash_value(nonce)
         with self.connect() as conn:

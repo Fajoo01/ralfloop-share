@@ -54,6 +54,14 @@ _MAILCHIMP_MUTATION_RE = re.compile(
     r"aggiungi|rimuovi|iscrivi|disiscrivi|subscribe|unsubscribe)\b",
     re.I,
 )
+_MAILCHIMP_CREATE_CAMPAIGN_RE = re.compile(
+    r"\b(?:crea|prepara)\b.*\bcampagna\b.*\bmailchimp\b|"
+    r"\bmailchimp\b.*\b(?:crea|prepara)\b.*\bcampagna\b", re.I,
+)
+_MAILCHIMP_SEND_CAMPAIGN_RE = re.compile(
+    r"\b(?:invia|send)\b.*\bcampagna\b.*\bmailchimp\b|"
+    r"\bmailchimp\b.*\b(?:invia|send)\b.*\bcampagna\b", re.I,
+)
 _MAILCHIMP_AUDIENCE_RE = re.compile(
     r"\b(?:audience|audiences|liste?|pubblico|contatti)\b",
     re.I,
@@ -148,6 +156,28 @@ class UnifiedPlanner:
             return self._fastweb_compare_plan(goal)
 
         if _MAILCHIMP_RE.search(goal):
+            if _MAILCHIMP_CREATE_CAMPAIGN_RE.search(goal):
+                return AssistantPlan(
+                    intent="mailchimp.campaign.create", domains=("mailchimp",),
+                    assignments=(self._assignment(
+                        domain="mailchimp", skill="mailchimp.campaign.create",
+                        objective=goal, input_refs=("user.goal", "artifact.mailchimp_campaign_draft"),
+                        output_ref="artifact.mailchimp_campaign_create_approval",
+                        policy=PolicyClass.CONFIRM_WRITE,
+                        arguments={"action": "mailchimp_campaign_create"},
+                    ),),
+                )
+            if _MAILCHIMP_SEND_CAMPAIGN_RE.search(goal):
+                return AssistantPlan(
+                    intent="mailchimp.campaign.send", domains=("mailchimp",),
+                    assignments=(self._assignment(
+                        domain="mailchimp", skill="mailchimp.campaign.send",
+                        objective=goal, input_refs=("user.goal", "artifact.mailchimp_campaign_verified"),
+                        output_ref="artifact.mailchimp_campaign_send_approval",
+                        policy=PolicyClass.CONFIRM_WRITE,
+                        arguments={"action": "mailchimp_campaign_send"},
+                    ),),
+                )
             if _MAILCHIMP_MUTATION_RE.search(goal):
                 return self._denied("mailchimp_mutation_not_available")
 
