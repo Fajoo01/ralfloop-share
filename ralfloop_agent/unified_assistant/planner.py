@@ -51,7 +51,8 @@ _MAILCHIMP_RE = re.compile(
 )
 _MAILCHIMP_MUTATION_RE = re.compile(
     r"\b(?:invia|manda|send|crea|modifica|aggiorna|elimina|programma|schedula|"
-    r"aggiungi|rimuovi|iscrivi|disiscrivi|subscribe|unsubscribe)\b",
+    r"cancella|aggiungi|rimuovi|iscrivi|disiscrivi|subscribe|unsubscribe|"
+    r"post|put|patch|delete)\b",
     re.I,
 )
 _MAILCHIMP_CREATE_CAMPAIGN_RE = re.compile(

@@ -354,6 +354,11 @@ def test_planner_only_routes_explicit_guarded_campaign_intents():
     assert planner.plan("invia campagna Mailchimp").assignments[0].policy.value == "CONFIRM_WRITE"
     assert planner.plan("elenca audience Mailchimp").assignments[0].policy.value == "READ"
     assert planner.plan("preparami una newsletter").assignments[0].policy.value != "CONFIRM_WRITE"
+    for denied in (
+        "fai una POST a Mailchimp", "modifica questo contatto Mailchimp",
+        "cancella audience Mailchimp",
+    ):
+        assert planner.plan(denied).intent == "assistant.reject"
 
 
 def test_registry_separates_read_and_approval_bound_capabilities():
