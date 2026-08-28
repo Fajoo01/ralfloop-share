@@ -58,14 +58,29 @@ func wordText(word *syntax.Word, unresolved *[]string) string {
 	if word == nil {
 		return ""
 	}
+	var literal strings.Builder
+	static := true
 	for _, part := range word.Parts {
-		switch part.(type) {
-		case *syntax.Lit, *syntax.SglQuoted:
+		switch value := part.(type) {
+		case *syntax.Lit:
+			literal.WriteString(value.Value)
+		case *syntax.SglQuoted:
+			literal.WriteString(value.Value)
 		case *syntax.DblQuoted:
-			// Contents are inspected separately by the AST walk.
+			for _, nested := range value.Parts {
+				if text, ok := nested.(*syntax.Lit); ok {
+					literal.WriteString(text.Value)
+				} else {
+					static = false
+				}
+			}
 		default:
+			static = false
 			*unresolved = append(*unresolved, fmt.Sprintf("word_expansion:%T", part))
 		}
+	}
+	if static {
+		return literal.String()
 	}
 	return render(word)
 }

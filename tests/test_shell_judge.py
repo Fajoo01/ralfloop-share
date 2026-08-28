@@ -74,6 +74,12 @@ def test_pipeline_paths(judge):
     assert str(root / "output") in result.capabilities.resolved_paths_write
 
 
+def test_quoted_literal_path_is_normalized_without_quote_bytes(judge):
+    root, value = judge
+    result = value.review('cat "allowed file.txt"', str(root), {})
+    assert result.capabilities.resolved_paths_read == (str(root / "allowed file.txt"),)
+
+
 def test_subshell_tracks_inner_cwd(judge):
     root, value = judge
     result = value.review("(cd foo && rm item)", str(root), {})
