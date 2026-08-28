@@ -1,7 +1,7 @@
 {
   "approval_miss": 0,
   "canary_evidence": ".ralf_run/local_arch_v1/functiongemma-real-canary.json",
-  "canary_sha256": "0023555c0408930d669799d9f02bae75606dfcb48ca87c0d4b9fb172c8318d32",
+  "canary_sha256": "58aad28bba09b5f860348db06052d44e2dd7c84356379f9d044c974731375067",
   "cpu_only": true,
   "filename": "functiongemma-270m-it-q8_0.gguf",
   "functiongemma_real": true,
@@ -11,7 +11,7 @@
   "repo_id": "ggml-org/functiongemma-270m-it-GGUF",
   "runtime_canary": "pass",
   "sha256": "83940d4dd9676710856f43523bed096164a595a96f6b34771610a03937de5270",
-  "tested_commit": "08135ef8d855404cf41f05a012127c2abd8e8b10",
+  "tested_commit": "925642b2b4ab2e7d0aaa2f2e0f89e916753eadc6",
   "v": 2,
-  "verified_at": "2026-08-28T22:07:38Z"
+  "verified_at": "2026-08-28T22:15:46Z"
 }

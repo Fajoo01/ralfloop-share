@@ -79,9 +79,9 @@
     "errors": 0,
     "failures": 64,
     "skipped": 17,
-    "tests": 2113
+    "tests": 2118
   },
-  "candidate_commit": "08135ef8d855404cf41f05a012127c2abd8e8b10",
+  "candidate_commit": "925642b2b4ab2e7d0aaa2f2e0f89e916753eadc6",
   "candidate_exit": "139",
   "candidate_failure_ids": [
     "tests.test_abc_formula_loop::test_formula_uses_merged_context",
@@ -150,7 +150,7 @@
     "tests.test_routing::test_patch_allowed_mode"
   ],
   "candidate_report_complete": true,
-  "candidate_report_sha256": "d6aa1a023f6381c7f1c5d56818a192a194e18e07b6a44758a6852c3e24725cc3",
+  "candidate_report_sha256": "eeb9c77d1d2af4fafc05c323b96ff023e753aa249b335b3a32e032ef77ca15d4",
   "new_failure_count": 0,
   "new_failures": [],
   "no_regression": true,
