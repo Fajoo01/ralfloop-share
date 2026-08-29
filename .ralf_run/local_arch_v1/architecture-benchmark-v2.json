@@ -4,10 +4,10 @@
     "GPU use is zero by design"
   ],
   "measured": {
-    "peak_rss_mb": 22.59765625,
-    "route_latency_p50_ms": 0.0634835,
-    "route_latency_p95_ms": 0.104169,
-    "wall_ms": 7.037792
+    "peak_rss_mb": 208.72265625,
+    "route_latency_p50_ms": 0.1110455,
+    "route_latency_p95_ms": 0.2192,
+    "wall_ms": 12.804721
   },
   "mode": "deterministic_control_plane_trace_replay",
   "profiles": {
@@ -83,7 +83,7 @@
     }
   },
   "requests": 100,
-  "tested_commit": "925642b2b4ab2e7d0aaa2f2e0f89e916753eadc6",
+  "tested_commit": "dd9f37602d5315f9b403afe01b40981dc835e7f7",
   "v": 1,
-  "verified_at": "2026-08-28T22:15:46Z"
+  "verified_at": "2026-08-29T06:12:58Z"
 }

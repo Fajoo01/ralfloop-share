@@ -1,17 +1,15 @@
 {
   "approval_miss": 0,
   "canary_evidence": ".ralf_run/local_arch_v1/functiongemma-real-canary.json",
-  "canary_sha256": "58aad28bba09b5f860348db06052d44e2dd7c84356379f9d044c974731375067",
+  "canary_sha256": "c249dcc015733b4dbd03170bf804482b32a5b7946f59d7e9b3be6498c4eca76c",
   "cpu_only": true,
-  "filename": "functiongemma-270m-it-q8_0.gguf",
   "functiongemma_real": true,
   "local_model_present": true,
   "model_path": "/home/sibilla-cumana/Dati/ralfloop-models/functiongemma-270m/functiongemma-270m-it-q8_0.gguf",
   "policy_bypass": 0,
-  "repo_id": "ggml-org/functiongemma-270m-it-GGUF",
   "runtime_canary": "pass",
   "sha256": "83940d4dd9676710856f43523bed096164a595a96f6b34771610a03937de5270",
-  "tested_commit": "925642b2b4ab2e7d0aaa2f2e0f89e916753eadc6",
+  "tested_commit": "dd9f37602d5315f9b403afe01b40981dc835e7f7",
   "v": 2,
-  "verified_at": "2026-08-28T22:15:46Z"
+  "verified_at": "2026-08-29T06:12:58Z"
 }
