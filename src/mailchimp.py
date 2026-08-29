@@ -239,9 +239,12 @@ class MailchimpApprovedMCPWorkflow:
         return self._execute("mailchimp_send_approved_campaign", request_id, scope)
 
     def _execute(self, tool: str, request_id: str, scope: Mapping[str, Any]) -> dict[str, Any]:
+        computed = {"action", "version", "artifact_sha256", "body_sha256"}
+        if tool == "mailchimp_create_approved_campaign":
+            computed.add("html_sha256")
         arguments = {
             key: value for key, value in scope.items()
-            if key not in {"action", "version", "artifact_sha256", "body_sha256"}
+            if key not in computed
         }
         arguments.update({
             "approval_request_id": request_id,

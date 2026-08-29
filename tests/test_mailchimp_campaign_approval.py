@@ -49,6 +49,7 @@ class FakeProvider:
             "from_name": scope["from_name"],
             "reply_to": scope["reply_to"],
             "content_sha256": scope["body_sha256"],
+            "html_sha256": scope["html_sha256"],
             "sent": False,
         }
         return {"campaign_id": campaign_id}
@@ -76,6 +77,7 @@ def create_payload():
         "reply_to": "info@example.invalid",
         "preheader": "Laboratorio gratuito",
         "body_text": "Testo approvato.",
+        "html_body": "<html><body><p>Testo approvato.</p></body></html>",
         "cta_label": "Scopri il progetto",
         "cta_target": "https://example.invalid/project",
         "internal_title": "Meet and Code 2026",
@@ -124,7 +126,7 @@ def prepared_send(store, provider):
 
 def test_create_scope_binds_every_material_field():
     baseline = build_mailchimp_campaign_create_scope(create_payload())
-    for field in ("list_id", "subject", "body_text", "cta_label", "cta_target"):
+    for field in ("list_id", "subject", "html_body", "body_text", "cta_label", "cta_target"):
         changed = create_payload()
         changed[field] += "-changed"
         assert build_mailchimp_campaign_create_scope(changed)["artifact_sha256"] != baseline["artifact_sha256"]
@@ -141,7 +143,7 @@ def test_no_approval_rejected_without_mutation(tmp_path):
     assert provider.create_calls == 0
 
 
-@pytest.mark.parametrize("field", ["list_id", "subject", "body_text", "cta_label", "cta_target"])
+@pytest.mark.parametrize("field", ["list_id", "subject", "html_body", "body_text", "cta_label", "cta_target"])
 def test_changed_create_scope_becomes_stale(tmp_path, field):
     store = store_for(tmp_path)
     original = build_mailchimp_campaign_create_scope(create_payload())
@@ -265,6 +267,18 @@ def test_provider_change_before_send_marks_stale(tmp_path):
     provider.campaigns["campaign_123"]["subject"] = "provider changed"
     result = MailchimpCampaignWorkflow(store, provider).execute_send(request_id, scope)
     assert result["status"] == "DRAFT_CHANGED"
+    assert provider.send_calls == 0
+
+
+def test_provider_html_change_before_send_marks_stale(tmp_path):
+    store = store_for(tmp_path)
+    provider = FakeProvider()
+    scope = prepared_send(store, provider)
+    request_id = approve(store, SEND_ACTION, scope)
+    provider.campaigns["campaign_123"]["html_sha256"] = "f" * 64
+    result = MailchimpCampaignWorkflow(store, provider).execute_send(request_id, scope)
+    assert result["status"] == "DRAFT_CHANGED"
+    assert store.get_request(request_id)["status"] == "stale"
     assert provider.send_calls == 0
 
 

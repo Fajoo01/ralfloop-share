@@ -34,6 +34,7 @@ class FakeClient:
             "campaign_id": "campaign_1", "list_id": scope["list_id"],
             "subject": scope["subject"], "from_name": scope["from_name"],
             "reply_to": scope["reply_to"], "content_sha256": scope["body_sha256"],
+            "html_sha256": scope["html_sha256"],
             "sent": False, "provider_status": "save",
         }
         return dict(self.campaign)
@@ -72,9 +73,12 @@ def approved(db, action, scope, message):
 
 
 def arguments(scope, request_id):
+    computed = {"action", "version", "artifact_sha256", "body_sha256"}
+    if scope["action"] == CREATE_ACTION:
+        computed.add("html_sha256")
     result = {
         key: value for key, value in scope.items()
-        if key not in {"action", "version", "artifact_sha256", "body_sha256"}
+        if key not in computed
     }
     result["approval_request_id"] = request_id
     result["execution_id"] = scope["execution_id"]
@@ -87,7 +91,8 @@ def create_scope():
         "source_draft_sha256": "2" * 64, "list_id": "audience_1",
         "subject": "Subject", "from_name": "TIREMM INNANZ APS",
         "reply_to": "info@example.invalid", "preheader": "Preview",
-        "body_text": "Body", "cta_label": "Details",
+        "body_text": "Body", "html_body": "<html><body>Body</body></html>",
+        "cta_label": "Details",
         "cta_target": "https://example.invalid", "internal_title": "Internal",
         "provider_identity": "mailchimp:test",
     })
@@ -106,6 +111,40 @@ def test_server_requires_approval_then_creates_draft_only(tmp_path):
     assert result["state"] == "DRAFT"
     assert (client.create_calls, client.send_calls) == (1, 0)
     assert db.get_request(request_id)["status"] == "consumed"
+
+
+def test_client_puts_exact_approved_html_and_plain_text():
+    class RecordingClient(SERVER.MailchimpClient):
+        def __init__(self):
+            super().__init__("fake-us1", "us1")
+            self.requests = []
+
+        def _request(self, path, **kwargs):
+            self.requests.append((path, kwargs))
+            if path == "campaigns":
+                return {"id": "campaign_1"}
+            if path.endswith("/content") and kwargs.get("method") == "PUT":
+                return {}
+            if path.endswith("/content"):
+                return {"html": create_scope()["html_body"], "plain_text": "Body"}
+            return {
+                "id": "campaign_1", "status": "save",
+                "recipients": {"list_id": "audience_1"},
+                "settings": {
+                    "subject_line": "Subject", "from_name": "TIREMM INNANZ APS",
+                    "reply_to": "info@example.invalid",
+                },
+            }
+
+    client = RecordingClient()
+    scope = create_scope()
+    observed = client.create_campaign(scope)
+    put = next(call for call in client.requests if call[1].get("method") == "PUT")
+    assert put == (
+        "campaigns/campaign_1/content",
+        {"method": "PUT", "body": {"plain_text": "Body", "html": scope["html_body"]}},
+    )
+    assert observed["html_sha256"] == scope["html_sha256"]
 
 
 def test_server_send_needs_new_exact_approval(tmp_path):

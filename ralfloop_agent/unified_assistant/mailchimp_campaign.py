@@ -41,6 +41,7 @@ def build_mailchimp_campaign_create_scope(payload: Mapping[str, Any]) -> dict[st
         "from_name": str(payload.get("from_name") or ""),
         "reply_to": str(payload.get("reply_to") or ""),
         "preheader": str(payload.get("preheader") or ""),
+        "html_body": str(payload.get("html_body") or ""),
         "body_text": str(payload.get("body_text") or ""),
         "cta_label": str(payload.get("cta_label") or ""),
         "cta_target": str(payload.get("cta_target") or ""),
@@ -49,14 +50,18 @@ def build_mailchimp_campaign_create_scope(payload: Mapping[str, Any]) -> dict[st
     }
     if not all(artifact[key] for key in (
         "draft_id", "payload_digest", "source_draft_sha256", "list_id", "subject",
-        "from_name", "reply_to", "body_text", "provider_identity",
+        "from_name", "reply_to", "html_body", "body_text", "provider_identity",
     )):
         raise ValueError("mailchimp_create_scope_incomplete")
     body_sha256 = _sha(artifact["body_text"])
-    artifact_sha256 = _canonical_digest({**artifact, "body_sha256": body_sha256})
+    html_sha256 = _sha(artifact["html_body"])
+    artifact_sha256 = _canonical_digest({
+        **artifact, "body_sha256": body_sha256, "html_sha256": html_sha256,
+    })
     return {
         **artifact,
         "body_sha256": body_sha256,
+        "html_sha256": html_sha256,
         "artifact_sha256": artifact_sha256,
         "execution_id": "mccreate_" + artifact_sha256[:24],
     }
@@ -73,6 +78,7 @@ def build_mailchimp_campaign_send_scope(payload: Mapping[str, Any]) -> dict[str,
         "from_name": str(payload.get("from_name") or ""),
         "reply_to": str(payload.get("reply_to") or ""),
         "content_sha256": str(payload.get("content_sha256") or ""),
+        "html_sha256": str(payload.get("html_sha256") or ""),
         "provider_identity": str(payload.get("provider_identity") or "mailchimp.marketing"),
     }
     if not all(artifact.values()):
@@ -101,6 +107,7 @@ def campaign_fingerprint(campaign: Mapping[str, Any]) -> str:
         "from_name": str(campaign.get("from_name") or ""),
         "reply_to": str(campaign.get("reply_to") or ""),
         "content_sha256": str(campaign.get("content_sha256") or ""),
+        "html_sha256": str(campaign.get("html_sha256") or ""),
     }
     return _canonical_digest(material)
 
@@ -131,7 +138,8 @@ class MailchimpCampaignWorkflow:
                 "campaign_id": campaign_id, "list_id": current_scope["list_id"],
                 "subject": current_scope["subject"], "from_name": current_scope["from_name"],
                 "reply_to": current_scope["reply_to"],
-                "content_sha256": current_scope["body_sha256"], "sent": False,
+                "content_sha256": current_scope["body_sha256"],
+                "html_sha256": current_scope["html_sha256"], "sent": False,
             }
             if not campaign_id or any(observed.get(k) != v for k, v in expected.items()):
                 raise RuntimeError("create_postcondition_mismatch")
@@ -163,7 +171,8 @@ class MailchimpCampaignWorkflow:
             bool(before.get("sent"))
             or campaign_fingerprint(before) != str(current_scope.get("provider_campaign_sha256"))
             or any(before.get(k) != current_scope.get(k) for k in (
-                "campaign_id", "list_id", "subject", "from_name", "reply_to", "content_sha256"
+                "campaign_id", "list_id", "subject", "from_name", "reply_to",
+                "content_sha256", "html_sha256"
             ))
         ):
             self.store.mark_stale(request_id, ["mailchimp_provider_campaign_changed"])
@@ -204,6 +213,7 @@ class MailchimpCampaignWorkflow:
                 approved.get("body_sha256") if action == CREATE_ACTION
                 else approved.get("content_sha256")
             ),
+            "html_sha256": approved.get("html_sha256"),
         }
         if (
             any(observed.get(key) != value for key, value in expected.items())

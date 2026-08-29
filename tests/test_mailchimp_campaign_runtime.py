@@ -25,6 +25,7 @@ class FakeProvider:
             "campaign_id": campaign_id, "list_id": scope["list_id"],
             "subject": scope["subject"], "from_name": scope["from_name"],
             "reply_to": scope["reply_to"], "content_sha256": scope["body_sha256"],
+            "html_sha256": scope["html_sha256"],
             "sent": False,
         }
         return {"campaign_id": campaign_id}
@@ -42,7 +43,8 @@ def draft():
         "source_draft_sha256": "4" * 64, "list_id": "audience_1",
         "subject": "Approved subject", "from_name": "TIREMM INNANZ APS",
         "reply_to": "info@example.invalid", "preheader": "Preview",
-        "body_text": "Approved body", "cta_label": "Details",
+        "body_text": "Approved body", "html_body": "<html><body>Approved body</body></html>",
+        "cta_label": "Details",
         "cta_target": "https://example.invalid/details", "internal_title": "Internal title",
         "provider_identity": "mailchimp:test",
     }

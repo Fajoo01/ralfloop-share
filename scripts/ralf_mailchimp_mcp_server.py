@@ -126,22 +126,23 @@ TOOLS: dict[str, dict[str, Any]] = {
         "payload_digest": DIGEST, "source_draft_sha256": DIGEST,
         "list_id": RESOURCE_ID, "subject": SHORT_TEXT, "from_name": SHORT_TEXT,
         "reply_to": SHORT_TEXT, "preheader": {"type": "string", "maxLength": 255},
+        "html_body": {"type": "string", "minLength": 1, "maxLength": 1000000},
         "body_text": BODY_TEXT, "cta_label": {"type": "string", "maxLength": 255},
         "cta_target": {"type": "string", "maxLength": 2048},
         "internal_title": {"type": "string", "maxLength": 255},
         "provider_identity": SHORT_TEXT,
     }, ("approval_request_id", "execution_id", "draft_id", "draft_version", "payload_digest",
         "source_draft_sha256", "list_id", "subject", "from_name", "reply_to", "preheader",
-        "body_text", "cta_label", "cta_target", "internal_title", "provider_identity")),
+        "html_body", "body_text", "cta_label", "cta_target", "internal_title", "provider_identity")),
     "mailchimp_send_approved_campaign": _schema({
         "approval_request_id": REQUEST_ID, "execution_id": EXECUTION_ID,
         "campaign_id": RESOURCE_ID, "list_id": RESOURCE_ID,
         "provider_campaign_sha256": DIGEST, "subject": SHORT_TEXT,
         "from_name": SHORT_TEXT, "reply_to": SHORT_TEXT,
-        "content_sha256": DIGEST, "provider_identity": SHORT_TEXT,
+        "content_sha256": DIGEST, "html_sha256": DIGEST, "provider_identity": SHORT_TEXT,
     }, ("approval_request_id", "execution_id", "campaign_id", "list_id",
         "provider_campaign_sha256", "subject", "from_name", "reply_to",
-        "content_sha256", "provider_identity")),
+        "content_sha256", "html_sha256", "provider_identity")),
 }
 
 
@@ -316,6 +317,7 @@ class MailchimpClient:
         settings = info.get("settings") if isinstance(info.get("settings"), Mapping) else {}
         recipients = info.get("recipients") if isinstance(info.get("recipients"), Mapping) else {}
         plain = str(content.get("plain_text") or "")
+        html_content = str(content.get("html") or "")
         return {
             "campaign_id": str(info.get("id") or ""),
             "list_id": str(recipients.get("list_id") or ""),
@@ -323,6 +325,7 @@ class MailchimpClient:
             "from_name": str(settings.get("from_name") or ""),
             "reply_to": str(settings.get("reply_to") or ""),
             "content_sha256": hashlib.sha256(plain.encode()).hexdigest(),
+            "html_sha256": hashlib.sha256(html_content.encode()).hexdigest(),
             "sent": str(info.get("status") or "") in {"sending", "sent"},
             "provider_status": str(info.get("status") or ""),
         }
@@ -373,18 +376,9 @@ class MailchimpClient:
         campaign_id = str(created.get("id") or "")
         if not campaign_id:
             raise MailchimpAPIError("MALFORMED_RESPONSE")
-        cta = ""
-        if scope.get("cta_label") and scope.get("cta_target"):
-            cta = '<p><a href="{}">{}</a></p>'.format(
-                html.escape(str(scope["cta_target"]), quote=True),
-                html.escape(str(scope["cta_label"])),
-            )
-        html_body = "<div><p>{}</p>{}</div>".format(
-            html.escape(str(scope["body_text"])).replace("\n", "<br>"), cta,
-        )
         self._request(
             f"campaigns/{campaign_id}/content", method="PUT",
-            body={"plain_text": scope["body_text"], "html": html_body},
+            body={"plain_text": scope["body_text"], "html": scope["html_body"]},
         )
         return self.get_campaign(campaign_id)
 
@@ -708,7 +702,8 @@ class MailchimpMCPServer:
                             before.get("sent")
                             or campaign_fingerprint(before) != scope["provider_campaign_sha256"]
                             or any(before.get(key) != scope.get(key) for key in (
-                                "campaign_id", "list_id", "subject", "from_name", "reply_to", "content_sha256"
+                                "campaign_id", "list_id", "subject", "from_name", "reply_to",
+                                "content_sha256", "html_sha256"
                             ))
                         ):
                             self.approval_store.mark_stale(request_id, ["mailchimp_provider_campaign_changed"])
@@ -724,7 +719,8 @@ class MailchimpMCPServer:
                         expected = {
                             "list_id": scope["list_id"], "subject": scope["subject"],
                             "from_name": scope["from_name"], "reply_to": scope["reply_to"],
-                            "content_sha256": scope["body_sha256"], "sent": False,
+                            "content_sha256": scope["body_sha256"],
+                            "html_sha256": scope["html_sha256"], "sent": False,
                         }
                         if any(observed.get(key) != value for key, value in expected.items()):
                             raise RuntimeError("create_postcondition_mismatch")
