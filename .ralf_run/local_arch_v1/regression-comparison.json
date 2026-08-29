@@ -1,9 +1,9 @@
 {
   "baseline": {
     "errors": 0,
-    "failures": 80,
+    "failures": 64,
     "skipped": 17,
-    "tests": 2140
+    "tests": 2179
   },
   "baseline_exit": "139",
   "baseline_failure_ids": [
@@ -18,13 +18,9 @@
     "tests.test_abc_formula_loop::test_structured_food_opening_removes_logistica_pura",
     "tests.test_abc_formula_loop::test_third_presence_with_no_affection_no_overnight_autonomy_is_small_delta",
     "tests.test_capability_runtime_integration::test_openshell_external_action_requires_confirmation_before_runtime",
-    "tests.test_cheshire_plugin_hook::test_hook_deterministic_handles_once",
-    "tests.test_cheshire_plugin_hook::test_hook_missing_domain",
     "tests.test_domain_capability_mapping::test_mapping_sources_verify_against_declared_checksums",
     "tests.test_first_real_bando_domain::test_registry_tracks_draft_without_active_route",
     "tests.test_llama_cpp_lifecycle_reaper::test_backend_shutdown_invokes_managed_child_reaper",
-    "tests.test_mcp_client_google::test_confirm_send_email",
-    "tests.test_mcp_client_google::test_confirm_send_email_when_draft_only_false",
     "tests.test_mcp_transport_real::test_real_broker_initialize_and_tools_list",
     "tests.test_ralf_gpu_handoff::test_magnolia_host_runner_loads_existing_safe_approval_configuration",
     "tests.test_recursive_mas_bounded_provenance::test_feature_math_and_telegram_invariants",
@@ -58,9 +54,6 @@
     "tests.test_recursive_mas_qwen3_micro_overfit::test_stagewise_surrogate_updates_planner_inner_and_outer12",
     "tests.test_recursive_mas_qwen3_solver_eval::test_feature_math_and_telegram_invariants",
     "tests.test_recursive_mas_qwen3_solver_protocol::test_feature_math_and_telegram_invariants",
-    "tests.test_recursive_mas_runtime::test_fallback_disabled_default_and_explicit_fallback",
-    "tests.test_recursive_mas_runtime::test_lock_concurrent_returns_busy_and_no_second_worker",
-    "tests.test_recursive_mas_runtime::test_popen_uses_shell_false",
     "tests.test_recursive_mas_tokenwise_inner::test_assistant_mask_includes_eos_and_excludes_prompt",
     "tests.test_recursive_mas_tokenwise_inner::test_fp32_adapter_optimizer",
     "tests.test_recursive_mas_tokenwise_inner::test_nearest_token_metric",
@@ -77,24 +70,15 @@
     "tests.test_recursive_mas_tokenwise_real::test_seen_unseen_metrics",
     "tests.test_recursive_mas_tokenwise_real::test_zero_gate_is_trainable",
     "tests.test_recursive_mas_tokenwise_real::test_zero_gated_residual_initialization_exact_identity",
-    "tests.test_routing::test_patch_allowed_mode",
-    "tests.test_routing_provenance_port::test_protected_components_are_not_modified",
-    "tests_scaffold.test_adapter_selection::test_build_adapter_can_select_openshell",
-    "tests_scaffold.test_adapter_selection::test_build_adapter_defaults_to_local",
-    "tests_scaffold.test_final_answer_http_fetch::test_final_answer_summarizes_ollama_models",
-    "tests_scaffold.test_list_dir_flow::test_workspace_listing_flow",
-    "tests_scaffold.test_list_dir_message::test_subdir_empty_message_mentions_directory",
-    "tests_scaffold.test_multi_file_execution_flow::test_multi_file_goal_runs_until_second_read",
-    "tests_scaffold.test_multi_file_final_answer::test_multi_file_final_answer_includes_all_read_contents",
-    "tests_scaffold.test_three_step_execution_flow::test_three_step_goal_executes_until_read_file"
+    "tests.test_routing::test_patch_allowed_mode"
   ],
   "baseline_report_complete": true,
-  "baseline_report_sha256": "6503683ff52dd49aa3e6d07a46df9ff35c24f24e93f22b4d69c25fd493cf5098",
+  "baseline_report_sha256": "49e315a2d959afe3f3ed40e75f3d5ec29cf4899b62c09fb6d818a0992c253bff",
   "candidate": {
     "errors": 0,
     "failures": 64,
     "skipped": 17,
-    "tests": 2179
+    "tests": 2182
   },
   "candidate_exit": "139",
   "candidate_failure_ids": [
@@ -164,30 +148,13 @@
     "tests.test_routing::test_patch_allowed_mode"
   ],
   "candidate_report_complete": true,
-  "candidate_report_sha256": "a8c3696459033d5cceb7e941108b96c8999e319f16f1e7bf42c29921832f8194",
+  "candidate_report_sha256": "784ed826c56c1abae666d332e6bf8f6acd8e030eee301c01858cc6b5847a9281",
   "new_failure_count": 0,
   "new_failures": [],
   "no_regression": true,
-  "resolved_failures": [
-    "tests.test_cheshire_plugin_hook::test_hook_deterministic_handles_once",
-    "tests.test_cheshire_plugin_hook::test_hook_missing_domain",
-    "tests.test_mcp_client_google::test_confirm_send_email",
-    "tests.test_mcp_client_google::test_confirm_send_email_when_draft_only_false",
-    "tests.test_recursive_mas_runtime::test_fallback_disabled_default_and_explicit_fallback",
-    "tests.test_recursive_mas_runtime::test_lock_concurrent_returns_busy_and_no_second_worker",
-    "tests.test_recursive_mas_runtime::test_popen_uses_shell_false",
-    "tests.test_routing_provenance_port::test_protected_components_are_not_modified",
-    "tests_scaffold.test_adapter_selection::test_build_adapter_can_select_openshell",
-    "tests_scaffold.test_adapter_selection::test_build_adapter_defaults_to_local",
-    "tests_scaffold.test_final_answer_http_fetch::test_final_answer_summarizes_ollama_models",
-    "tests_scaffold.test_list_dir_flow::test_workspace_listing_flow",
-    "tests_scaffold.test_list_dir_message::test_subdir_empty_message_mentions_directory",
-    "tests_scaffold.test_multi_file_execution_flow::test_multi_file_goal_runs_until_second_read",
-    "tests_scaffold.test_multi_file_final_answer::test_multi_file_final_answer_includes_all_read_contents",
-    "tests_scaffold.test_three_step_execution_flow::test_three_step_goal_executes_until_read_file"
-  ],
+  "resolved_failures": [],
   "suite_exit_preexisting_same": true,
   "suite_report_complete": true,
-  "tested_commit": "dd9f37602d5315f9b403afe01b40981dc835e7f7",
-  "verified_at": "2026-08-29T06:12:58Z"
+  "tested_commit": "2f1ad3182b0ae1a19c1d36b1502c32affed1f930",
+  "verified_at": "2026-08-29T10:56:03Z"
 }
