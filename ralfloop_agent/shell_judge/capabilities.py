@@ -155,6 +155,8 @@ def extract_capabilities(ast: Mapping[str, Any], *, cwd: str) -> ShellCapability
         unresolved = [item for item in unresolved if item != "word_expansion:*syntax.CmdSubst"]
     elif substitutions:
         unresolved.append("command_substitution")
+    if redirects and any(Path(argv[0]).name == "cd" for argv in commands if argv):
+        unresolved.append("redirect_after_cwd_change")
 
     first = commands[0] if commands else ()
     return ShellCapability(

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+from pathlib import Path
 from typing import Callable, Mapping
 
 from .contracts import ShellDecision, ShellReviewResult
@@ -27,10 +29,13 @@ class ShellReviewer:
             "deterministic_reason": result.deterministic_reason,
             "risk": result.risk,
             "capabilities": {
-                "commands": [list(value) for value in result.capabilities.commands],
-                "read_paths": list(result.capabilities.resolved_paths_read),
-                "write_paths": list(result.capabilities.resolved_paths_write),
-                "delete_paths": list(result.capabilities.resolved_paths_delete),
+                "commands": [
+                    {"executable": Path(value[0]).name, "argc": len(value)}
+                    for value in result.capabilities.commands if value
+                ],
+                "read_path_digests": [_digest(value) for value in result.capabilities.resolved_paths_read],
+                "write_path_digests": [_digest(value) for value in result.capabilities.resolved_paths_write],
+                "delete_path_digests": [_digest(value) for value in result.capabilities.resolved_paths_delete],
                 "unresolved": list(result.capabilities.unresolved_elements),
                 "destructive_level": result.capabilities.destructive_level.value,
             },
@@ -41,6 +46,10 @@ class ShellReviewer:
             correctness=str(raw.get("correctness") or "unknown"),
             rationale=str(raw.get("rationale") or ""),
         )
+
+
+def _digest(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 class MixtureShellReviewer:

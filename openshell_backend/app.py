@@ -20,14 +20,6 @@ BASE_DIR.mkdir(parents=True, exist_ok=True)
 
 AUDIT_LOG = BASE_DIR / "audit.jsonl"
 
-DESTRUCTIVE_PATTERNS = [
-    "rm -rf",
-    "mkfs",
-    "shutdown",
-    "reboot",
-    "dd ",
-]
-
 app = FastAPI(title="Ralfloop OpenShell Backend")
 
 
@@ -208,6 +200,36 @@ def check_command_allowed(command: str, cwd: str | Path | None = None) -> tuple[
     )
 
 
+def _shell_path_classes(root: Path, review: object) -> dict[str, int]:
+    groups = {
+        "read": review.capabilities.resolved_paths_read,
+        "write": review.capabilities.resolved_paths_write,
+        "delete": review.capabilities.resolved_paths_delete,
+    }
+    result: dict[str, int] = {}
+    root = root.resolve(strict=True)
+    protected = tuple(Path(value).resolve(strict=False) for value in (
+        "/boot", "/etc", "/usr", "/var/lib", "/home/sibilla-cumana/ralfloop-production",
+    ))
+    secret = tuple(Path(value).resolve(strict=False) for value in (
+        "/home/bandi/.config", "/home/sibilla-cumana/.config", "/run/credentials",
+    ))
+    for operation, paths in groups.items():
+        for raw in paths:
+            path = Path(raw)
+            if path == root or root in path.parents:
+                label = "sandbox"
+            elif any(path == value or value in path.parents for value in secret):
+                label = "secret"
+            elif any(path == value or value in path.parents for value in protected):
+                label = "protected"
+            else:
+                label = "external"
+            key = f"{operation}:{label}"
+            result[key] = result.get(key, 0) + 1
+    return result
+
+
 class SandboxCreateResponse(BaseModel):
     id: str
     root: str
@@ -301,14 +323,17 @@ def exec_in_sandbox(sid: str, payload: ExecRequest):
     review = review_shell_command(payload.command, cwd=root)
     allowed = review.decision in {ShellDecision.ALLOW, ShellDecision.ALLOW_READONLY}
     audit_fields = {
+        "event_id": str(uuid.uuid4()),
         "sandbox_id": sid,
         "command_digest": RalfShellJudge.command_digest(payload.command),
         "decision": review.decision.value,
         "reason": review.deterministic_reason,
+        "deterministic_reason": review.deterministic_reason,
         "destructive_level": review.capabilities.destructive_level.value,
         "read_paths": len(review.capabilities.resolved_paths_read),
         "write_paths": len(review.capabilities.resolved_paths_write),
         "delete_paths": len(review.capabilities.resolved_paths_delete),
+        "path_classes": _shell_path_classes(root, review),
         "reviewer_used": False,
         "execution_allowed": allowed,
     }
@@ -323,7 +348,7 @@ def exec_in_sandbox(sid: str, payload: ExecRequest):
     try:
         env = _safe_shell_environment()
         proc = subprocess.run(
-            ["/bin/bash", "-lc", payload.command],
+            ["/bin/bash", "--noprofile", "--norc", "-c", payload.command],
             cwd=root,
             capture_output=True,
             text=True,
@@ -332,9 +357,7 @@ def exec_in_sandbox(sid: str, payload: ExecRequest):
         )
         audit(
             "exec",
-            sandbox_id=sid,
-            command_digest=RalfShellJudge.command_digest(payload.command),
-            decision=review.decision.value,
+            **audit_fields,
             exit_code=proc.returncode,
             stdout_len=len(proc.stdout or ""),
             stderr_len=len(proc.stderr or ""),
@@ -346,13 +369,16 @@ def exec_in_sandbox(sid: str, payload: ExecRequest):
             "stderr": proc.stderr,
         }
     except subprocess.TimeoutExpired as e:
-        audit("exec_timeout", sandbox_id=sid, command=payload.command, timeout_sec=payload.timeout_sec)
+        audit("exec_timeout", **audit_fields, timeout_sec=payload.timeout_sec)
         return {
             "ok": False,
             "exit_code": 124,
             "stdout": e.stdout or "",
             "stderr": e.stderr or "command timed out",
         }
+    except Exception as exc:
+        audit("exec_exception", **audit_fields, error_class=type(exc).__name__)
+        raise
 
 
 @app.get("/audit")

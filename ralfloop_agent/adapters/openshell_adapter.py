@@ -186,7 +186,7 @@ class OpenShellAdapterStub:
 
         try:
             proc = subprocess.run(
-                ["/bin/bash", "-lc", command],
+                ["/bin/bash", "--noprofile", "--norc", "-c", command],
                 cwd=sandbox["root"],
                 capture_output=True,
                 text=True,

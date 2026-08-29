@@ -238,10 +238,9 @@ def _run_shell(command: str, root: Path, timeout_sec: int) -> tuple[int, str]:
         return 126, f"SHELL_JUDGE_{review.decision.value}:{review.deterministic_reason}"
     try:
         result = subprocess.run(
-            command,
+            ["/bin/bash", "--noprofile", "--norc", "-c", command],
             cwd=root,
-            shell=True,
-            executable="/bin/bash",
+            shell=False,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,

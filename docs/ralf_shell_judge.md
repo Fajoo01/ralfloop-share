@@ -11,6 +11,11 @@ protected/secret paths and excessively broad deletion are non-approvable `DENY`.
 The judge assumes installed executables and repository configuration are not malicious.
 It does not make external provider actions safe and does not replace sandboxing.
 
+Git readonly forms use canonical local key discovery through hardened `git config`.
+External diff/textconv/filter commands, aliases, includes, pagers, worktree config and
+relevant attributes force `REVIEW`. All inherited `GIT_*` variables are removed before
+execution. Bash runs with `--noprofile --norc` so startup files cannot bypass review.
+
 ## Decisions
 
 | Decision | Meaning |
