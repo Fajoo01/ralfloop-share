@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from src.router import route_task
+from ralfloop_agent.unified_assistant.email_search import is_email_search_request
 
 
 @dataclass(frozen=True)
@@ -16,6 +17,14 @@ class InteractionDecision:
 
 def classify_interaction(user_goal: str) -> InteractionDecision:
     route = route_task(user_goal)
+    if is_email_search_request(user_goal):
+        return InteractionDecision(
+            "agent",
+            "google_workspace.gmail.read_only",
+            route.mode,
+            False,
+            "deterministic_gmail_read_route",
+        )
     if route.mode == "read_only_system_inspection":
         return InteractionDecision(
             "agent",

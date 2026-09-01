@@ -93,6 +93,14 @@ def test_email_search_intent_variants_use_same_general_capability(case_text):
     assert "canone" in intent.concept_terms
 
 
+def test_email_search_understands_draft_sent_by_person():
+    intent = plan_email_search("guarda la bozza che ha mandato Giulia")
+
+    assert intent is not None
+    assert intent.organization == "Giulia"
+    assert "bozza" in intent.concept_terms
+
+
 def test_planner_routes_fastweb_to_tiremm_gmail_read_not_generic_chat():
     planner = UnifiedPlanner(UnifiedRegistryFacade())
 

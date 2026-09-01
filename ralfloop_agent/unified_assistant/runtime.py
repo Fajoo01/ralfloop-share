@@ -51,8 +51,8 @@ _SUPPORTED = re.compile(
 )
 
 _EMAIL_READ_SUPPORTED = re.compile(
-    r"\b(?:controlla|cerca|trova|verifica|abbiamo\s+ricevuto|ha\s+mai|ci\s+ha|ci\s+aveva)\b.*"
-    r"\b(?:mail|email|posta|scritto|comunicat[oaie]|comunicazioni|avvisat[oaie]|messaggi?|thread)\b",
+    r"\b(?:controlla|cerca|trova|verifica|guarda|leggi|abbiamo\s+ricevuto|ha\s+mai|ci\s+ha|ci\s+aveva)\b.*"
+    r"\b(?:mail|email|posta|bozz[ae]|scritto|comunicat[oaie]|comunicazioni|avvisat[oaie]|messaggi?|thread)\b",
     re.I,
 )
 
@@ -62,7 +62,7 @@ def is_unified_telegram_request(text: str, context: Mapping[str, Any]) -> bool:
     source = str(context.get("source") or "")
     return (
         flags.unified_assistant
-        and source.startswith("telegram_")
+        and (source.startswith("telegram_") or source == "ralf_terminal")
         and not _LEGACY.search(text.strip())
         and bool(
             _SUPPORTED.search(text)

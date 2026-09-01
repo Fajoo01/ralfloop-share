@@ -1281,7 +1281,10 @@ def _run_task_impl(req: TaskRunRequest):
     if req.mode == "route_only" or (req.extra_context or {}).get("route_only") is True:
         if (
             os.getenv("RALFLOOP_UNIFIED_ASSISTANT", "0") == "1"
-            and str((req.extra_context or {}).get("source") or "").startswith("telegram_")
+            and (
+                str((req.extra_context or {}).get("source") or "").startswith("telegram_")
+                or str((req.extra_context or {}).get("source") or "") == "ralf_terminal"
+            )
         ):
             try:
                 from ralfloop_agent.unified_assistant.runtime import unified_route_probe
@@ -1315,7 +1318,10 @@ def _run_task_impl(req: TaskRunRequest):
     # without executing providers, preserving Meowgram's two-step contract.
     unified_candidate = (
         os.getenv("RALFLOOP_UNIFIED_ASSISTANT", "0") == "1"
-        and str((req.extra_context or {}).get("source") or "").startswith("telegram_")
+        and (
+            str((req.extra_context or {}).get("source") or "").startswith("telegram_")
+            or str((req.extra_context or {}).get("source") or "") == "ralf_terminal"
+        )
     )
     if unified_candidate:
         try:

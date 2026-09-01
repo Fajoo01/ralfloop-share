@@ -500,7 +500,10 @@ def build_task_payload(
         terminal["capability"] = capability
     if not no_history and session.turns:
         terminal["conversation_history"] = session.compact()
-    return {"user_goal": message, "extra_context": {"terminal_client": terminal}}
+    return {
+        "user_goal": message,
+        "extra_context": {"source": "ralf_terminal", "terminal_client": terminal},
+    }
 
 
 def _provider_identity(config: ChatConfig, session: ChatSession) -> tuple[str | None, str | None]:

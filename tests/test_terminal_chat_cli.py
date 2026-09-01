@@ -120,6 +120,7 @@ def test_ask_naturally_escalates_read_only_request_to_task(tmp_path, monkeypatch
     assert rc == 0
     assert [kind for kind, _ in client.calls] == ["task"]
     payload = client.calls[0][1]
+    assert payload["extra_context"]["source"] == "ralf_terminal"
     terminal = payload["extra_context"]["terminal_client"]
     assert terminal["interaction_mode"] == "agent"
     assert terminal["capability"] == "read_only_system_inspection"

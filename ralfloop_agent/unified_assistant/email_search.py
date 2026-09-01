@@ -17,11 +17,11 @@ from src.mcp_transport import MCPClientSession, MCPError, UnixMCPTransport
 
 READ_ONLY_GMAIL_OPERATIONS = frozenset({"search", "read", "threads", "getThread"})
 _SEARCH_SIGNAL = re.compile(
-    r"\b(?:controlla|cerca|trova|verifica|abbiamo\s+ricevuto|ha\s+mai|ci\s+ha|ci\s+aveva)\b",
+    r"\b(?:controlla|cerca|trova|verifica|guarda|leggi|abbiamo\s+ricevuto|ha\s+mai|ci\s+ha|ci\s+aveva)\b",
     re.I,
 )
 _COMMUNICATION_SIGNAL = re.compile(
-    r"\b(?:mail|email|posta|scritto|comunicat[oaie]|comunicazioni|avvisat[oaie]|messaggi?|thread)\b",
+    r"\b(?:mail|email|posta|bozz[ae]|scritto|comunicat[oaie]|comunicazioni|avvisat[oaie]|messaggi?|thread)\b",
     re.I,
 )
 _ECONOMIC_CHANGE = (
@@ -477,6 +477,8 @@ def _temporal_scope(text: str, today: date) -> tuple[str, str, str, bool]:
 
 def _extract_organization(text: str) -> str:
     patterns = (
+        r"\b(?:bozza|mail|email|messaggio)\s+che\s+(?:ci\s+)?ha\s+(?:mandat[oa]|inviat[oa])\s+(.{1,120}?)(?=[?.!,]|$)",
+        r"\b(?:bozza|mail|email|messaggio)\s+(?:pi[uù]\s+recente\s+)?(?:mandat[oa]|inviat[oa])\s+da\s+(.{1,120}?)(?=[?.!,]|$)",
         r"\bse\s+(.{1,120}?)\s+(?:ci\s+)?(?:ha|aveva)\s+(?:mai\s+|gi[aà]\s+)?(?:comunicato|scritto|avvisato)",
         r"\bcomunicazion[ei]\s+(?:di|da)\s+(.{1,120}?)(?=\s+(?:su|sull?[aoe]?|relative|riguardo|per|nel|negli?)\b|[?.!,]|$)",
         r"\bmail\s+(?:di\s+|da\s+)?(.{1,120}?)(?=\s+(?:su|sull?[aoe]?|relative|riguardo|per|nel|negli?)\b|[?.!,]|$)",
