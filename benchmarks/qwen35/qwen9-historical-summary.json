@@ -1,0 +1,8 @@
+{
+  "source_glob": "/home/bandi/direct-test-*.json",
+  "model": "qwen3.5:9b",
+  "samples": 27,
+  "prefill_tps": {"median": 550.75, "min": 239.64, "max": 588.07},
+  "decode_tps": {"median": 12.13, "min": 2.04, "max": 12.80},
+  "warning": "historical production tasks; not the deterministic quality suite"
+}

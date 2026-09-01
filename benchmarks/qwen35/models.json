@@ -1,0 +1,24 @@
+{
+  "qwen35_q4_k_m": {
+    "source": "unsloth/Qwen3.5-35B-A3B-GGUF",
+    "file": "Qwen3.5-35B-A3B-Q4_K_M.gguf",
+    "bytes": 22016023168,
+    "sha256": "3b46d1066bc91cc2d613e3bc22ce691dd77e6f0d33c9060690d24ce6de494375",
+    "selected": true
+  },
+  "qwen35_q3_k_m": {
+    "bytes": 16356392960,
+    "selected": false,
+    "reason": "download only if Q4 performance or memory fails"
+  },
+  "qwen122_q3_k_m": {
+    "bytes": 56420881952,
+    "selected": false,
+    "reason": "phase 2; insufficient safe RAM margin"
+  },
+  "qwen122_q4_k_m": {
+    "bytes": 76536964608,
+    "selected": false,
+    "reason": "phase 2; exceeds physical RAM"
+  }
+}

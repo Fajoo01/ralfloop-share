@@ -1,0 +1,10 @@
+{
+  "elapsed_seconds": 1023.05,
+  "cpu_percent": 543,
+  "max_rss_kib": 32842272,
+  "major_page_faults": 23065,
+  "minor_page_faults": 3363917,
+  "filesystem_input_blocks": 44429296,
+  "swaps": 0,
+  "note": "llama-bench pp128,pp2048,pp8192,tg32; /usr/bin/time -v"
+}

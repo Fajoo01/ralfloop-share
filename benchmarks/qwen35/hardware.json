@@ -1,0 +1,38 @@
+{
+  "captured_at": "2026-09-01T00:00:00+02:00",
+  "host": "sibilla",
+  "cpu": {
+    "model": "Intel Xeon W-2133 @ 3.60GHz",
+    "cores": 6,
+    "threads": 12,
+    "numa_nodes": 1,
+    "governor": "powersave"
+  },
+  "memory": {
+    "total_gib": 62,
+    "available_gib_at_capture": 48,
+    "swap_gib": 8,
+    "transparent_hugepages": "madvise",
+    "explicit_hugepages": 0
+  },
+  "gpu": {
+    "model": "NVIDIA GeForce RTX 2070",
+    "vram_mib": 8192,
+    "driver": "535.309.01"
+  },
+  "storage": {
+    "models": "/home/sibilla-cumana/Dati",
+    "filesystem": "ext4",
+    "device": "Samsung SSD 990 PRO with Heatsink 2TB",
+    "free_tib_at_capture": 1.3,
+    "fio_read_only_rate_cap": {
+      "rate_bytes_per_second": 1073741824,
+      "sequential_1m_achieved_bytes_per_second": 1073527118,
+      "random_256k_achieved_bytes_per_second": 1073527118,
+      "random_256k_iops": 4095.18,
+      "random_256k_p50_microseconds": 132.096,
+      "runtime_seconds_each": 5,
+      "note": "lower bound; capped to limit production interference"
+    }
+  }
+}
