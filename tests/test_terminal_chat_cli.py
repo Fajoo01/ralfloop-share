@@ -123,6 +123,7 @@ def test_ask_naturally_escalates_read_only_request_to_task(tmp_path, monkeypatch
     assert payload["extra_context"]["source"] == "ralf_terminal"
     terminal = payload["extra_context"]["terminal_client"]
     assert terminal["interaction_mode"] == "agent"
+    assert terminal["session_id"]
     assert terminal["capability"] == "read_only_system_inspection"
     assert terminal["provider"] == "llama_cpp"
     assert terminal["provider_endpoint"] == "http://127.0.0.1:19091"

@@ -488,6 +488,7 @@ def build_task_payload(
         "approval_gate": "telegram_required_for_protected_actions",
         "auto_execute_protected_actions": False,
         "cwd": session.cwd,
+        "session_id": session.session_id,
         "interaction_mode": interaction_mode,
     }
     if provider:

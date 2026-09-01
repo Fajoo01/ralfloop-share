@@ -662,6 +662,12 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
 
 
 def _session_id(context: Mapping[str, Any]) -> str:
+    if str(context.get("source") or "") == "ralf_terminal":
+        terminal = context.get("terminal_client") or {}
+        value = str(terminal.get("session_id") or "").strip()
+        if not value:
+            raise ValueError("terminal_identity_required")
+        return f"terminal-{value}"[:128]
     chat = int(context.get("telegram_chat_id") or 0)
     user = int(context.get("telegram_user_id") or 0)
     if chat <= 0 or user <= 0:
