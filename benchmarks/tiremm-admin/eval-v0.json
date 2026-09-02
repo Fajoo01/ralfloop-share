@@ -1,0 +1,109 @@
+{
+  "cases": [
+    {
+      "case_id": "open_count",
+      "passed": true
+    },
+    {
+      "case_id": "done_excluded_from_open",
+      "passed": true
+    },
+    {
+      "case_id": "blocked_count",
+      "passed": true
+    },
+    {
+      "case_id": "blocked_arci",
+      "passed": true
+    },
+    {
+      "case_id": "waiting_tari",
+      "passed": true
+    },
+    {
+      "case_id": "overdue_reporting",
+      "passed": true
+    },
+    {
+      "case_id": "imminent_project",
+      "passed": true
+    },
+    {
+      "case_id": "done_not_overdue",
+      "passed": true
+    },
+    {
+      "case_id": "conflict_detected",
+      "passed": true
+    },
+    {
+      "case_id": "conflict_unresolved",
+      "passed": true
+    },
+    {
+      "case_id": "conflict_keeps_both",
+      "passed": true
+    },
+    {
+      "case_id": "conflict_needs_verification",
+      "passed": true
+    },
+    {
+      "case_id": "next_action_arci",
+      "passed": true
+    },
+    {
+      "case_id": "next_action_family",
+      "passed": true
+    },
+    {
+      "case_id": "document_retrieval",
+      "passed": true
+    },
+    {
+      "case_id": "communication_retrieval",
+      "passed": true
+    },
+    {
+      "case_id": "source_provenance",
+      "passed": true
+    },
+    {
+      "case_id": "source_ids_real",
+      "passed": true
+    },
+    {
+      "case_id": "latest_verified",
+      "passed": true
+    },
+    {
+      "case_id": "unknown_empty",
+      "passed": true
+    },
+    {
+      "case_id": "stale_tari",
+      "passed": true
+    },
+    {
+      "case_id": "not_stale_family",
+      "passed": true
+    },
+    {
+      "case_id": "blocker_source_bound",
+      "passed": true
+    },
+    {
+      "case_id": "no_next_action_empty",
+      "passed": true
+    },
+    {
+      "case_id": "six_fixture_practices",
+      "passed": true
+    }
+  ],
+  "pass_rate": 1.0,
+  "passed": 25,
+  "schema_version": 1,
+  "suite": "tiremm_admin_eval_v0",
+  "total": 25
+}

@@ -147,6 +147,7 @@ class AssistantPlan(StrictModel):
 
 class AssistantFeatureFlags(StrictModel):
     unified_assistant: bool = False
+    tiremm_admin: bool = False
     email_assistant_live: bool = False
     whatsapp_assistant_live: bool = False
     mailchimp_campaign_live: bool = False
@@ -160,6 +161,7 @@ class AssistantFeatureFlags(StrictModel):
     def from_env(cls) -> "AssistantFeatureFlags":
         return cls(
             unified_assistant=_env_bool("RALFLOOP_UNIFIED_ASSISTANT"),
+            tiremm_admin=_env_bool("RALFLOOP_TIREMM_ADMIN"),
             email_assistant_live=_env_bool("RALFLOOP_EMAIL_ASSISTANT_LIVE"),
             whatsapp_assistant_live=_env_bool("RALFLOOP_WHATSAPP_ASSISTANT_LIVE"),
             mailchimp_campaign_live=_env_bool("RALFLOOP_MAILCHIMP_CAMPAIGN_LIVE"),
