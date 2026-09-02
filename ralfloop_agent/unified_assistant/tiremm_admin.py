@@ -27,6 +27,8 @@ class SourceKind(StrEnum):
     CALENDAR = "calendar"
     ARCI = "arci"
     MAILCHIMP = "mailchimp"
+    JELLYFIN = "jellyfin"
+    RUNTSUITE = "runtsuite"
 
 
 class PracticeStatus(StrEnum):
@@ -52,6 +54,8 @@ class PracticeKind(StrEnum):
     FAMILY_COMMUNICATION = "family_communication"
     EVENT = "event"
     ARCI_MEMBERSHIP = "arci_membership"
+    DIGITAL_SERVICE = "digital_service"
+    RUNTSUITE = "runtsuite"
 
 
 class SourceRecord(AdminModel):

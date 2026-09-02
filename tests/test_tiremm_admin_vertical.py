@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from ralfloop_agent.unified_assistant.contracts import AssistantFeatureFlags
+from ralfloop_agent.unified_assistant.service_identity import JellyfinProvisioningConfig
 from ralfloop_agent.unified_assistant.tiremm_admin import (
     ActionProposal, PracticeStatus, SourceKind, TiremmAdminQueryAdapter, TiremmAdminSQLite,
     TiremmIngestionPipeline, reject_external_execution,
@@ -163,3 +164,9 @@ def test_feature_flag_is_disabled_by_default(monkeypatch):
     assert not AssistantFeatureFlags.from_env().tiremm_admin
     monkeypatch.setenv("RALFLOOP_TIREMM_ADMIN", "1")
     assert AssistantFeatureFlags.from_env().tiremm_admin
+    monkeypatch.delenv("RALFLOOP_JELLYFIN_PROVISIONING", raising=False)
+    assert JellyfinProvisioningConfig.from_env().mode == "off"
+    monkeypatch.setenv("RALFLOOP_JELLYFIN_PROVISIONING", "shadow")
+    assert JellyfinProvisioningConfig.from_env().mode == "shadow"
+    monkeypatch.setenv("RALFLOOP_JELLYFIN_PROVISIONING", "invalid")
+    assert JellyfinProvisioningConfig.from_env().mode == "off"

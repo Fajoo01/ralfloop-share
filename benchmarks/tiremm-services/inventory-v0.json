@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-09-02",
+  "jellyfin": {
+    "version": "10.11.6",
+    "runtime": "docker:jellyfin/jellyfin",
+    "users": 7,
+    "collection_folders": 3,
+    "plugins": ["Playback Reporting 17.0.0.0"],
+    "existing_user_provisioning_mcp": false
+  },
+  "arci_mcp": {
+    "individual_member_lookup": false,
+    "tools": [
+      "arci_read_club",
+      "arci_read_committee",
+      "arci_read_current_cards",
+      "arci_read_dashboard_alerts",
+      "arci_read_organization_profile",
+      "arci_read_regional"
+    ]
+  },
+  "legacy_csv": {
+    "snapshots": 4,
+    "newest_rows": 42,
+    "newest_stable_ids_present": 42,
+    "newest_status_counts": {"N": 9, "R": 33},
+    "contains_full_profile_fields": true
+  },
+  "runtsuite": {
+    "version": "0.1.0",
+    "members": 43,
+    "member_card_links": 41,
+    "member_account_links": 1,
+    "projects": 5,
+    "funding_calls": 1,
+    "meetings": 1,
+    "movements": 2407,
+    "individual_arci_mcp_integration": false
+  },
+  "file_removal_decision": "NO_GO_ARCI_MCP_INDIVIDUAL_IDENTITY_MISSING"
+}

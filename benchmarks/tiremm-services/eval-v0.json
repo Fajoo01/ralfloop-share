@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-09-02",
+  "profile": "test-shadow",
+  "service_identity_run": {
+    "selected_tests": 24,
+    "passed": 24,
+    "failed": 0
+  },
+  "integrated_run": {
+    "selected_tests": 96,
+    "passed": 96,
+    "failed": 0,
+    "duration_seconds": 1.77
+  },
+  "coverage": [
+    "arci_exact_identity_fail_closed",
+    "jellyfin_read_only_mcp",
+    "shadow_provisioning",
+    "idempotent_plan",
+    "legacy_exact_reconciliation",
+    "username_collision",
+    "malformed_source",
+    "runtsuite_explicit_read_capabilities",
+    "source_backed_tiremm_practice",
+    "execution_guard"
+  ],
+  "external_mutations": 0,
+  "production_deployed": false,
+  "real_reconciliation": "BLOCKED_ARCI_INDIVIDUAL_LOOKUP_UNAVAILABLE",
+  "legacy_file_removal": "NO_GO"
+}
