@@ -74,6 +74,10 @@ DEFAULT_RULES = (
     EventRule(event_types=("MEDIA_TICKET_CREATED", "MEDIA_LOW_QUALITY_DETECTED", "MEDIA_LANGUAGE_MISSING", "MEDIA_PROBE_FAILED"), decision=EventDecision.RUN_WORKFLOW, workflow="media.triage"),
     EventRule(event_types=("MEDIA_FIX_PROPOSED",), decision=EventDecision.UPDATE_PRACTICE, workflow="media.review_fix"),
     EventRule(event_types=("SOURCE_INCONSISTENCY", "PRACTICE_STALE"), decision=EventDecision.WAKE_AGENT),
+    EventRule(event_types=("PEC_MESSAGE_DISCOVERED", "RUNTS_MESSAGE_DISCOVERED", "RUNTS_ATTACHMENT_DISCOVERED", "RUNTS_AUTH_REQUIRED"), decision=EventDecision.STORE_ONLY),
+    EventRule(event_types=("PEC_RUNTS_NOTIFICATION",), decision=EventDecision.RUN_WORKFLOW, workflow="runts.correlate"),
+    EventRule(event_types=("RUNTS_PRACTICE_UPDATED",), decision=EventDecision.RUN_WORKFLOW, workflow="runts.review"),
+    EventRule(event_types=("RUNTS_ACTION_REQUIRED",), decision=EventDecision.WAKE_AGENT),
 )
 
 

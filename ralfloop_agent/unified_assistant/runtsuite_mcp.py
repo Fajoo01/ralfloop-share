@@ -15,6 +15,7 @@ TOOLS = {
     "runtsuite_list_member_cards": "list_member_cards",
     "runtsuite_list_member_account_links": "list_member_account_links",
     "runtsuite_list_review_queue": "list_review_queue",
+    "runtsuite_find_runts_practice": "find_runts_practice",
 }
 
 
@@ -25,8 +26,12 @@ class RuntsuiteMCPServer:
     def list_tools(self) -> list[dict[str, Any]]:
         rows = []
         for tool in TOOLS:
-            props = ({"external_member_id": {"type": "string", "minLength": 1, "maxLength": 240}} if tool == "runtsuite_get_member" else {})
-            required = ["external_member_id"] if props else []
+            if tool == "runtsuite_get_member":
+                props, required = {"external_member_id": {"type": "string", "minLength": 1, "maxLength": 240}}, ["external_member_id"]
+            elif tool == "runtsuite_find_runts_practice":
+                props, required = {"runts_practice_id": {"type": "string", "minLength": 1, "maxLength": 240}}, ["runts_practice_id"]
+            else:
+                props, required = {}, []
             rows.append(_tool(tool, f"Explicit read-only RUNTSuite capability: {tool}.", props, required))
         return rows
 
@@ -34,10 +39,11 @@ class RuntsuiteMCPServer:
         method = TOOLS.get(name)
         if not method:
             return _error("POLICY_DENIED")
-        if name == "runtsuite_get_member":
-            if set(arguments) != {"external_member_id"}:
+        if name in {"runtsuite_get_member", "runtsuite_find_runts_practice"}:
+            field = "external_member_id" if name == "runtsuite_get_member" else "runts_practice_id"
+            if set(arguments) != {field}:
                 return _error("POLICY_DENIED")
-            args = (str(arguments["external_member_id"]),)
+            args = (str(arguments[field]),)
         elif arguments:
             return _error("POLICY_DENIED")
         else:

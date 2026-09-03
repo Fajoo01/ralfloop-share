@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from typing import Any
 import urllib.error
 import urllib.request
@@ -14,6 +15,14 @@ class RuntsuiteMember(BaseModel):
     runtsuite_identity_id: str | None = None
     external_member_id: str | None = None
     active: bool | None = None
+
+
+class RuntsuitePracticeLink(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    status: str
+    runts_practice_id: str
+    review_ids: tuple[str, ...] = ()
+    content_hashes: tuple[str, ...] = ()
 
 
 class RuntsuiteReadOnlyAdapter:
@@ -63,6 +72,27 @@ class RuntsuiteReadOnlyAdapter:
     def list_member_account_links(self): return self._get("member_account_links")
     def list_review_queue(self): return self._get("review_queue")
 
+    def find_runts_practice(self, runts_practice_id: str) -> RuntsuitePracticeLink:
+        identity = runts_practice_id.strip()
+        if not identity or len(identity) > 240:
+            raise ValueError("runtsuite_practice_id_invalid")
+        rows = self.list_review_queue()
+        if not isinstance(rows, list):
+            raise RuntimeError("runtsuite_review_queue_malformed")
+        keys = ("runts_practice_id", "external_practice_id", "practice_id")
+        matches = [row for row in rows if isinstance(row, dict) and any(str(row.get(key) or "") == identity for key in keys)]
+        if not matches:
+            return RuntsuitePracticeLink(status="NOT_FOUND", runts_practice_id=identity)
+        review_ids, hashes = [], []
+        for row in matches:
+            native = row.get("review_id", row.get("id"))
+            if native is None:
+                raise RuntimeError("runtsuite_review_identity_missing")
+            review_ids.append(str(native))
+            hashes.append(hashlib.sha256(json.dumps(row, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest())
+        status = "FOUND" if len(matches) == 1 else "AMBIGUOUS"
+        return RuntsuitePracticeLink(status=status, runts_practice_id=identity, review_ids=tuple(review_ids), content_hashes=tuple(hashes))
+
     def _get(self, capability: str) -> Any:
         if capability not in self.ENDPOINTS:
             raise ValueError("runtsuite_capability_not_allowlisted")
@@ -77,4 +107,4 @@ class RuntsuiteReadOnlyAdapter:
             raise RuntimeError("runtsuite_source_unavailable") from exc
 
 
-__all__ = ["RuntsuiteMember", "RuntsuiteReadOnlyAdapter"]
+__all__ = ["RuntsuiteMember", "RuntsuitePracticeLink", "RuntsuiteReadOnlyAdapter"]

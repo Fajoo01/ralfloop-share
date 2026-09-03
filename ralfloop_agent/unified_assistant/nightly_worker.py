@@ -231,6 +231,10 @@ class NightlyEventSink:
         "MEDIA_PROBE_FAILED": (NightlyTaskType.MEDIA_QUALITY_TICKET, 7),
         "PRACTICE_STALE": (NightlyTaskType.PRACTICE_STALE, 4),
         "SOURCE_INCONSISTENCY": (NightlyTaskType.SOURCE_INCONSISTENCY, 9),
+        "PEC_RUNTS_NOTIFICATION": (NightlyTaskType.ADMIN_PRACTICE_UNRESOLVED, 3),
+        "RUNTS_PRACTICE_UPDATED": (NightlyTaskType.ADMIN_PRACTICE_UNRESOLVED, 5),
+        "RUNTS_ATTACHMENT_DISCOVERED": (NightlyTaskType.COMPLEX_DOCUMENT, 7),
+        "RUNTS_ACTION_REQUIRED": (NightlyTaskType.ADMIN_PRACTICE_UNRESOLVED, 2),
     }
 
     def __init__(self, queue: NightlyQueue) -> None:

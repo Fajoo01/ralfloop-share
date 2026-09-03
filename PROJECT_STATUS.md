@@ -2,7 +2,7 @@
 
 ## Current milestone
 
-Operational M1–Media development gates GREEN. Shared shadow composition now routes Bandi/Media events into persistent Nightly work. Production and external writes remain zero.
+Operational M1–Media gates remain GREEN. PEC/RUNTS operational vertical is active in shadow: live PEC read works; RUNTS is fail-closed at the SPID/CIE boundary. Production and external writes remain zero.
 
 ## Completed
 
@@ -23,6 +23,7 @@ Operational M1–Media development gates GREEN. Shared shadow composition now ro
 - Media Quality: PII-minimized ticket lifecycle, deterministic stream diagnosis, strict semantic MCP, non-executable fix proposals, complete library reconciliation and shared Event/Memory/Nightly flow. Evidence: `docs/media-quality-m13.md`.
 - Operational eval/observability/safety audit: `docs/operational-gates-m14.md`.
 - Shared local/shadow composition root: `docs/operational-runtime-m15.md`.
+- PEC/RUNTS vertical core: strict DTO/provenance, shared Event/Memory/Nightly routing, exact RUNTSuite correlation, eight semantic tools and live authenticated PEC invocation. Evidence: `docs/pec-runts-vertical.md`.
 
 ## Frozen commits
 
@@ -49,6 +50,7 @@ Operational M1–Media development gates GREEN. Shared shadow composition now ro
 - Post-hardening M7–Media relative regression selection: 180 passed; zero new failures.
 - Operational runtime integration: 2 passed; shared persistence/routing/model-free deterministic path verified.
 - Final M7–operational-runtime relative selection: 182 passed; zero new failures.
+- PEC/RUNTS targeted runtime/regression selection: 35 passed; live Bottazzi PEC smoke: 10 read/persisted, provenance hashes 10/10, writes 0.
 
 ## Eval
 
@@ -71,15 +73,16 @@ Operational M1–Media development gates GREEN. Shared shadow composition now ro
 - Media library scan is intentionally fail-closed when the authoritative total exceeds the explicit 1000-item safety bound.
 - `ffprobe` requires an operator-configured item-to-path resolver and filesystem-root allowlist; it is not wired to production paths.
 - Optional test dependencies are incomplete in project metadata (`PyYAML`, `beautifulsoup4`).
+- Aruba PEC paginator changes the browser page correctly but complete multi-page response capture is still fail-closed pending contract hardening.
 
 ## Blocked
 
 - Global suite remains historically red; tracked separately. Dependency set is not locked in project metadata.
-- No development milestone blocker. Live scheduling/source credentials remain intentionally unpromoted.
+- RUNTS authenticated REST/frontend contract is blocked at manual SPID/CIE phone authentication; semantic provider returns `RUNTS_AUTH_REQUIRED`.
 
 ## Next step
 
-- Explicit promotion decision required before configuring schedules, credentials, production media roots or execution providers.
+- Complete SPID/CIE in the existing Sibilla RUNTS tab; then capture sanitized authoritative read contracts and promote RUNTS READ only.
 
 ## Git status
 

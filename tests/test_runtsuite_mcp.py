@@ -1,4 +1,4 @@
-from ralfloop_agent.unified_assistant.runtsuite_adapter import RuntsuiteMember
+from ralfloop_agent.unified_assistant.runtsuite_adapter import RuntsuiteMember, RuntsuitePracticeLink
 from ralfloop_agent.unified_assistant.runtsuite_mcp import RuntsuiteMCPServer, TOOLS
 
 
@@ -12,6 +12,7 @@ class Fixture:
     def list_member_cards(self): return []
     def list_member_account_links(self): return []
     def list_review_queue(self): return []
+    def find_runts_practice(self, runts_practice_id): return RuntsuitePracticeLink(status="FOUND", runts_practice_id=runts_practice_id, review_ids=("review-7",), content_hashes=("1" * 64,))
 
 
 def test_runtsuite_mcp_exposes_only_observed_explicit_read_capabilities():
@@ -35,3 +36,8 @@ def test_runtsuite_write_and_generic_calls_are_denied():
     server = RuntsuiteMCPServer(Fixture())
     assert server.call("runtsuite_execute", {"anything": "x"})["isError"]
     assert server.call("runtsuite_list_projects", {"unexpected": True})["isError"]
+
+
+def test_runtsuite_exact_runts_practice_link_is_typed_and_pii_minimized():
+    result = RuntsuiteMCPServer(Fixture()).call("runtsuite_find_runts_practice", {"runts_practice_id": "runts-practice-1"})
+    assert result["structuredContent"]["result"] == {"status": "FOUND", "runts_practice_id": "runts-practice-1", "review_ids": ["review-7"], "content_hashes": ["1" * 64]}
