@@ -68,3 +68,20 @@ Current repository contains no verified complete ARCI write-route catalog. Known
 - Implement exact-ID reads first; DataTables paginator second; composed membership verification third.
 - Server `tools/list` must equal implemented provider methods, not consumer aspirations.
 - Contract, pagination, malformed response, outage, provenance, no-PII/no-write safety tests required.
+
+## M7-B1 implementation status
+
+Semantic point-read layer now exists in `arci_point_reads.py`. MCP advertises its five tools only when an authenticated fixed-method transport is injected; the current production entrypoint injects none and therefore preserves the previous surface.
+
+| Capability | REST route | Semantic service | MCP conditional | Fixture | Pagination | Provenance | Test class |
+|---|---|---:|---:|---:|---:|---:|---|
+| `arci_get_member` | `/users/{id}` | YES | YES | YES | n/a | YES | SANITIZED_FIXTURE |
+| `arci_get_card` | `/cards/{id}` | YES | YES | YES | n/a | YES | SANITIZED_FIXTURE |
+| `arci_list_member_cards` | exact member relation | YES | YES | YES | n/a | YES | SANITIZED_FIXTURE |
+| `arci_get_club` | `/clubs/{id}` | YES | YES | YES | n/a | YES | SANITIZED_FIXTURE |
+| `arci_verify_membership` | composed point reads | YES | YES | YES | n/a | YES | SANITIZED_FIXTURE |
+| `arci_list_members` | `/list_users/datatables` | NO | NO | NO | NO | NO | NONE |
+| `arci_list_cards` | `/cards/datatables` | NO | NO | NO | NO | NO | NONE |
+| `arci_list_pending_cards` | `/cards/datatables` | NO | NO | NO | NO | NO | NONE |
+
+`REAL_CONTRACT` remains false until an authenticated transport and sanitized captures are available. No mock result counts as real coverage. Complete-list tools remain absent (`INCOMPLETE_SOURCE` by capability absence). Writes remain zero.

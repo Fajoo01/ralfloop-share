@@ -2,7 +2,7 @@
 
 ## Current milestone
 
-M7-A ARCI audit complete. M7-B blocked on sanitized real REST/DataTables fixtures or authoritative response contracts.
+M7-A audit complete. M7-B1 semantic point-read core complete; authenticated runtime transport/REAL_CONTRACT pending. M7-B2 DataTables enumeration blocked on sanitized real fixtures or authoritative contracts.
 
 ## Completed
 
@@ -28,6 +28,7 @@ M7-A ARCI audit complete. M7-B blocked on sanitized real REST/DataTables fixture
 - Memory Service/MCP: 3 passed.
 - M6 targeted platform/Admin/identity regression: 78 passed.
 - Relative full-suite gate through M6: GREEN. Current 2195 passed/65 failed/17 skipped/exit 139; baseline `0242e79` 2183 passed/65 failed/17 skipped/exit 139. Exact 65-test failure sets equal; zero new regressions; twelve new passes. Evidence: `docs/full-suite-baseline.md`.
+- M7-B1 semantic point-read core implemented: five typed fixed-method capabilities, exact identity checks, raw/normalized card status, provenance, deterministic fail-closed membership policy. Targeted ARCI/identity suite: 49 passed. Runtime authenticated transport and `REAL_CONTRACT` fixture capture remain pending; current production entrypoint unchanged. M7-B2 DataTables enumeration remains disabled.
 
 ## Eval
 

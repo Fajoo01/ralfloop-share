@@ -14,6 +14,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from ralfloop_agent.unified_assistant.arci_portal import ArciPortalReadOnly
+from ralfloop_agent.unified_assistant.arci_point_reads import (
+    ArciPointReadError,
+    ArciPointReadService,
+)
 from src.arci import READ_TOOL
 from src.mcp_transport import MCP_PROTOCOL_VERSION
 
@@ -24,15 +28,31 @@ EMPTY_SCHEMA: dict[str, Any] = {
     "required": [],
     "additionalProperties": False,
 }
+ID_SCHEMA: dict[str, Any] = {
+    "type": "string", "minLength": 1, "maxLength": 240,
+    "pattern": r"^[A-Za-z0-9_.:-]+$",
+}
+POINT_TOOLS: dict[str, dict[str, Any]] = {
+    "arci_get_member": {"user_id": ID_SCHEMA},
+    "arci_get_card": {"card_id": ID_SCHEMA},
+    "arci_list_member_cards": {"user_id": ID_SCHEMA},
+    "arci_get_club": {"club_id": ID_SCHEMA},
+    "arci_verify_membership": {"user_id": ID_SCHEMA, "club_id": ID_SCHEMA},
+}
 TOOLS = {READ_TOOL: EMPTY_SCHEMA}
 
 
 class ArciMCPServer:
-    def __init__(self, provider: ArciPortalReadOnly) -> None:
+    def __init__(
+        self,
+        provider: ArciPortalReadOnly,
+        point_reads: ArciPointReadService | None = None,
+    ) -> None:
         self.provider = provider
+        self.point_reads = point_reads
 
     def list_tools(self) -> list[dict[str, Any]]:
-        return [{
+        tools = [{
             "name": READ_TOOL,
             "description": (
                 "Read PII-minimized ARCI organization facts and aggregate "
@@ -40,13 +60,44 @@ class ArciMCPServer:
             ),
             "inputSchema": dict(EMPTY_SCHEMA),
         }]
+        if self.point_reads is not None:
+            for name, properties in POINT_TOOLS.items():
+                tools.append({
+                    "name": name,
+                    "description": f"Semantic read-only ARCI capability: {name}.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": properties,
+                        "required": list(properties),
+                        "additionalProperties": False,
+                    },
+                })
+        return tools
 
     def call(
         self,
         name: str,
         arguments: Mapping[str, Any],
     ) -> dict[str, Any]:
-        if name != READ_TOOL or not isinstance(arguments, Mapping) or arguments:
+        if not isinstance(arguments, Mapping):
+            return _error("POLICY_DENIED")
+
+        if name in POINT_TOOLS:
+            if self.point_reads is None or set(arguments) != set(POINT_TOOLS[name]):
+                return _error("POLICY_DENIED")
+            try:
+                method = getattr(self.point_reads, name.removeprefix("arci_"))
+                result = method(**arguments)
+                data = result.model_dump(mode="json") if hasattr(result, "model_dump") else [
+                    row.model_dump(mode="json") for row in result
+                ]
+                return _success(name.removeprefix("arci_"), data)
+            except ArciPointReadError as exc:
+                return _error(exc.code.value)
+            except Exception:
+                return _error("SOURCE_UNAVAILABLE")
+
+        if name != READ_TOOL or arguments:
             return _error("POLICY_DENIED")
 
         try:
@@ -83,6 +134,22 @@ def _error(code: str) -> dict[str, Any]:
         "content": [{"type": "text", "text": code}],
         "structuredContent": payload,
         "isError": True,
+    }
+
+
+def _success(operation: str, data: Any) -> dict[str, Any]:
+    payload = {
+        "ok": True,
+        "operation": operation,
+        "data": data,
+        "side_effects": 0,
+        "writes": 0,
+        "sends": 0,
+    }
+    return {
+        "content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}],
+        "structuredContent": payload,
+        "isError": False,
     }
 
 
