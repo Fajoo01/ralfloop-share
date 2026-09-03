@@ -12,6 +12,7 @@ from ralfloop_agent.domains.source_discovery import SearchProvider
 
 from .contracts import StrictModel
 from .memory_service import MemoryDocument, MemoryService
+from .observability import OperationalMetrics
 from .platform import SourceRef
 
 
@@ -73,18 +74,26 @@ class WebResearchService:
     def __init__(
         self, search: SearchProvider, opener: ResearchOpenBackend,
         *, memory: MemoryService | None = None, max_sources: int = 100,
+        metrics: OperationalMetrics | None = None,
     ) -> None:
         self.search_backend = search
         self.opener = opener
         self.memory = memory
         self.max_sources = max_sources
+        self.metrics = metrics or OperationalMetrics()
         self._sources: dict[str, ResearchSource] = {}
 
     def search_web(self, query: str, *, limit: int = 10) -> tuple[ResearchSource, ...]:
         if not 1 <= limit <= 30 or not query.strip():
             raise ValueError("research_query_invalid")
+        self.metrics.increment("research_queries")
         output = []
-        for candidate in self.search_backend.search(query, limit=limit):
+        try:
+            candidates = self.search_backend.search(query, limit=limit)
+        except Exception:
+            self.metrics.increment("research_failures")
+            raise
+        for candidate in candidates:
             identity = _source_id(candidate.url)
             source = ResearchSource(
                 source_id=identity, url=candidate.url, title=candidate.title or candidate.url,
@@ -94,6 +103,7 @@ class WebResearchService:
             )
             self._remember(source)
             output.append(source)
+        self.metrics.increment("research_sources", len(output))
         return tuple(output)
 
     def find_authoritative_source(self, query: str, *, limit: int = 10) -> tuple[ResearchSource, ...]:
@@ -101,7 +111,11 @@ class WebResearchService:
 
     def open_source(self, source_id: str) -> ResearchSource:
         source = self._get(source_id)
-        opened = self.opener.open(str(source.url))
+        try:
+            opened = self.opener.open(str(source.url))
+        except Exception:
+            self.metrics.increment("research_failures")
+            raise
         if str(opened.url).rstrip("/") != str(source.url).rstrip("/"):
             raise ValueError("research_source_identity_changed")
         digest = hashlib.sha256(opened.text.encode()).hexdigest()

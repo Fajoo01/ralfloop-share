@@ -10,6 +10,7 @@ from pydantic import Field, model_validator
 
 from .contracts import StrictModel
 from .memory_service import MemoryEntity, MemoryEvent, MemoryService
+from .observability import OperationalMetrics
 from .platform import SourceRef
 
 
@@ -117,8 +118,9 @@ class BandoEligibility(StrictModel):
 
 
 class BandiService:
-    def __init__(self, memory: MemoryService) -> None:
+    def __init__(self, memory: MemoryService, *, metrics: OperationalMetrics | None = None) -> None:
         self.memory = memory
+        self.metrics = metrics or OperationalMetrics()
 
     def ingest(self, rows: Iterable[NormalizedBando]) -> tuple[MemoryEvent, ...]:
         emitted: list[MemoryEvent] = []
@@ -128,6 +130,7 @@ class BandiService:
             if previous and previous.content_hash == incoming.content_hash:
                 continue
             event_types = self._changes(previous, incoming)
+            self.metrics.increment("bandi_new" if previous is None else "bandi_changed")
             for event_type in event_types:
                 payload = {
                     "bando_id": incoming.entity_id, "event_type": event_type,
@@ -153,6 +156,7 @@ class BandiService:
     def poll(self, adapters: Iterable[SourceAdapter]) -> tuple[MemoryEvent, ...]:
         events = []
         for adapter in sorted(adapters, key=lambda row: row.source_priority):
+            self.metrics.increment("bandi_sources_polled")
             events.extend(self.ingest(adapter.fetch()))
         return tuple(events)
 
@@ -205,6 +209,14 @@ class BandiService:
         if unknown:
             return BandoEligibility(outcome=EligibilityOutcome.AMBIGUOUS, reasons=tuple(unknown), llm_review_required=True)
         return BandoEligibility(outcome=EligibilityOutcome.ELIGIBLE, reasons=("DETERMINISTIC_FILTER_PASS",))
+
+    def evaluate_observed(self, row: NormalizedBando, profile: TiremmEligibilityProfile, *, now: datetime) -> BandoEligibility:
+        result = self.evaluate(row, profile, now=now)
+        if result.outcome is EligibilityOutcome.INELIGIBLE:
+            self.metrics.increment("bandi_filtered")
+        if result.llm_review_required:
+            self.metrics.increment("bandi_llm_escalated")
+        return result
 
     @staticmethod
     def _changes(previous: NormalizedBando | None, current: NormalizedBando) -> tuple[str, ...]:

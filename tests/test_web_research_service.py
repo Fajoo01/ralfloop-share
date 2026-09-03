@@ -68,3 +68,22 @@ def test_research_mcp_has_six_semantic_tools_and_no_raw_url_open():
     assert server.call("research_open_source", {"source_id": source_id})["structuredContent"]["data"]["content_hash"]
     assert server.call("research_open_source", {"source_id": source_id, "url": "http://127.0.0.1"})["isError"]
     assert not any("raw" in name or "crawl" in name for name in TOOLS)
+
+
+def test_research_observability_counts_queries_sources_and_failures():
+    research = service()
+    research.search_web("query")
+    metrics = research.metrics.snapshot()
+    assert metrics["research_queries"] == 1
+    assert metrics["research_sources"] == 2
+
+    class FailedSearch:
+        def search(self, query, limit=10):
+            raise RuntimeError("offline")
+
+    failed = WebResearchService(FailedSearch(), FixtureOpener({}))
+    try:
+        failed.search_web("query")
+    except RuntimeError:
+        pass
+    assert failed.metrics.snapshot()["research_failures"] == 1

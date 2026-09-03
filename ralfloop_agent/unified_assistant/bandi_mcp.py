@@ -39,7 +39,7 @@ class BandiMCPServer:
                 rows = self.service.list_open(now=now, limit=int(arguments.get("limit", 100)))
                 data = {"items": [{
                     "bando": row.model_dump(mode="json"),
-                    "eligibility": self.service.evaluate(row, self.profile, now=now).model_dump(mode="json"),
+                    "eligibility": self.service.evaluate_observed(row, self.profile, now=now).model_dump(mode="json"),
                 } for row in rows]}
             else:
                 row = self.service.get(str(arguments["bando_id"]))

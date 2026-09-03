@@ -2,7 +2,7 @@
 
 ## Current milestone
 
-Media Quality development gate GREEN. Persistent tickets, deterministic Jellyfin metadata scans, complete-enumeration guard, shadow fix proposals and Event Router/Nightly integration are implemented. Production and external writes remain zero.
+Operational M1–Media development gates GREEN. Cross-domain eval, required observability counters and safety checks are complete. Production and external writes remain zero.
 
 ## Completed
 
@@ -21,6 +21,7 @@ Media Quality development gate GREEN. Persistent tickets, deterministic Jellyfin
 - M11: common deterministic Event Router for poller/webhook/scheduler/API/service/MCP events, shared Memory timeline, explicit workflow/wake gates and metrics. Evidence: `docs/event-router-m11.md`.
 - Nightly Worker: persistent/idempotent Memory queue, Europe/Rome execution window, deterministic-first routing, configurable model tiers, bounded escalation and usage audit. Evidence: `docs/nightly-worker-m12.md`.
 - Media Quality: PII-minimized ticket lifecycle, deterministic stream diagnosis, strict semantic MCP, non-executable fix proposals, complete library reconciliation and shared Event/Memory/Nightly flow. Evidence: `docs/media-quality-m13.md`.
+- Operational eval/observability/safety audit: `docs/operational-gates-m14.md`.
 
 ## Frozen commits
 
@@ -42,6 +43,8 @@ Media Quality development gate GREEN. Persistent tickets, deterministic Jellyfin
 - M11 Event Router + Memory suite: 8 passed.
 - Nightly Worker + Event Router + Memory suite: 13 passed.
 - Media Quality + Nightly/Event Router/Memory/Jellyfin/Capability suite: 32 passed.
+- Cross-domain observability/eval targeted gate: 33 passed.
+- Final M7–Media relative regression selection: 176 passed; zero new failures.
 
 ## Eval
 
@@ -73,10 +76,12 @@ Media Quality development gate GREEN. Persistent tickets, deterministic Jellyfin
 ## Next step
 
 - Complete cross-domain eval/observability/safety gate and keep all live execution disabled pending an explicit promotion decision.
+- Keep live execution disabled pending an explicit promotion decision; next engineering risk is fully paginated Jellyfin library enumeration plus fixed-argument `ffprobe` adapter.
 
 ## Git status
 
 - Branch: `codex/qwen35-runtime-research`.
 - Baseline: `0242e79`.
 - Remote target: `private`; `origin` is public legacy and must not receive project data.
-- Media Quality changes pending atomic commit and private push.
+- Nightly Worker: `8a41ac2`; Media Quality: `b8d3e89`; both pushed to `private`.
+- Operational observability completion pending atomic commit and private push.

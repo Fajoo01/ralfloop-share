@@ -98,7 +98,9 @@ def test_source_adapter_poll_order_is_deterministic(tmp_path):
             return ()
 
     with MemoryService(tmp_path / "memory.sqlite") as memory:
-        BandiService(memory).poll((Adapter("html", 5), Adapter("api", 1), Adapter("rss", 4)))
+        service = BandiService(memory)
+        service.poll((Adapter("html", 5), Adapter("api", 1), Adapter("rss", 4)))
+        assert service.metrics.snapshot()["bandi_sources_polled"] == 3
     assert calls == ["api", "rss", "html"]
 
 
@@ -116,3 +118,15 @@ def test_bandi_mcp_exposes_eight_semantic_source_backed_tools(tmp_path):
         assert found["eligibility"]["outcome"] == "ELIGIBLE"
         assert server.call("bandi_get_changes", {"bando_id": row.entity_id})["structuredContent"]["events"]
         assert server.call("bandi_get", {"bando_id": row.entity_id, "url": "x"})["isError"]
+
+
+def test_bandi_observability_counts_new_changed_filtered_and_escalated(tmp_path):
+    with MemoryService(tmp_path / "memory.sqlite") as memory:
+        service = BandiService(memory)
+        service.ingest((bando(),))
+        service.ingest((bando(title="Changed", last_seen=NOW + timedelta(hours=1)),))
+        service.evaluate_observed(bando(requirements=BandoRequirements(aps_allowed=False)), TiremmEligibilityProfile(), now=NOW)
+        service.evaluate_observed(bando(requirements=BandoRequirements(aps_allowed=None)), TiremmEligibilityProfile(), now=NOW)
+        metrics = service.metrics.snapshot()
+        assert metrics["bandi_new"] == metrics["bandi_changed"] == 1
+        assert metrics["bandi_filtered"] == metrics["bandi_llm_escalated"] == 1
