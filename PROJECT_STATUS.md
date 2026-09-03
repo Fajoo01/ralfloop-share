@@ -2,7 +2,7 @@
 
 ## Current milestone
 
-Nightly Worker development gate GREEN. Persistent queue, deterministic-first configurable model routing, bounded escalation and model-cost audit are integrated with Event Router and Memory. Next: Media Quality Ticket System.
+Media Quality development gate GREEN. Persistent tickets, deterministic Jellyfin metadata scans, complete-enumeration guard, shadow fix proposals and Event Router/Nightly integration are implemented. Production and external writes remain zero.
 
 ## Completed
 
@@ -20,6 +20,7 @@ Nightly Worker development gate GREEN. Persistent queue, deterministic-first con
 - M10: bounded Web Research service/MCP reusing secure open/search primitives, assigned source IDs, comparison, evidence extraction, claim verification and Memory persistence. Evidence: `docs/web-research-m10.md`.
 - M11: common deterministic Event Router for poller/webhook/scheduler/API/service/MCP events, shared Memory timeline, explicit workflow/wake gates and metrics. Evidence: `docs/event-router-m11.md`.
 - Nightly Worker: persistent/idempotent Memory queue, Europe/Rome execution window, deterministic-first routing, configurable model tiers, bounded escalation and usage audit. Evidence: `docs/nightly-worker-m12.md`.
+- Media Quality: PII-minimized ticket lifecycle, deterministic stream diagnosis, strict semantic MCP, non-executable fix proposals, complete library reconciliation and shared Event/Memory/Nightly flow. Evidence: `docs/media-quality-m13.md`.
 
 ## Frozen commits
 
@@ -40,6 +41,7 @@ Nightly Worker development gate GREEN. Persistent queue, deterministic-first con
 - M10 new + legacy Web Research/Bando research suite: 97 passed.
 - M11 Event Router + Memory suite: 8 passed.
 - Nightly Worker + Event Router + Memory suite: 13 passed.
+- Media Quality + Nightly/Event Router/Memory/Jellyfin/Capability suite: 32 passed.
 
 ## Eval
 
@@ -58,24 +60,23 @@ Nightly Worker development gate GREEN. Persistent queue, deterministic-first con
 ## Open risks
 
 - Existing registry schemas remain heterogeneous.
-- IdentityLink primary projection remains in-memory. Tiremm Admin now has optional Memory Service persistence, not wired into runtime.
-- ARCI individual member enumeration unavailable through current deployed MCP.
+- IdentityLink primary projection remains in-memory; workflow evidence is Memory-backed.
+- Media library scan is intentionally fail-closed above the bounded 100-item complete-reconciliation window; production catalog promotion needs paginated enumeration.
+- Media diagnosis currently uses Jellyfin stream metadata; a fixed-argument local `ffprobe` adapter is not yet installed.
 - Optional test dependencies are incomplete in project metadata (`PyYAML`, `beautifulsoup4`).
 
 ## Blocked
 
 - Global suite remains historically red; tracked separately. Dependency set is not locked in project metadata.
-- ARCI server/provider implements one aggregate tool; client advertises six expected tools and tests mock five. Do not promote mock coverage.
-- M7-B exact DTO/pagination implementation needs sanitized real fixtures or authoritative code; handoff route names alone are insufficient to invent schemas.
-- Live ARCI completeness/reconciliation requires read-only production connectivity; intentionally not used this run.
+- No operational milestone blocker. Live execution remains intentionally unpromoted.
 
 ## Next step
 
-- Implement Media Quality Ticket System with deterministic metadata diagnosis, non-executable fix proposals, shared Memory persistence and Event Router/Nightly integration.
+- Complete cross-domain eval/observability/safety gate and keep all live execution disabled pending an explicit promotion decision.
 
 ## Git status
 
 - Branch: `codex/qwen35-runtime-research`.
 - Baseline: `0242e79`.
 - Remote target: `private`; `origin` is public legacy and must not receive project data.
-- Nightly Worker changes pending atomic commit and private push.
+- Media Quality changes pending atomic commit and private push.

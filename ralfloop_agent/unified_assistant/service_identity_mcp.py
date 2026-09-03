@@ -185,6 +185,31 @@ class JellyfinReadOnlyClient:
                 ))
         return tuple(output)
 
+    def list_library_item_ids(self, library_id: str, *, user_id: str, limit: int) -> Mapping[str, Any]:
+        _safe_id(library_id); _safe_id(user_id)
+        if not 1 <= limit <= 100:
+            raise ValueError("jellyfin_limit_invalid")
+        raw = self._get_json(f"/Users/{user_id}/Items?ParentId={library_id}&Recursive=true&StartIndex=0&Limit={limit}")
+        if not isinstance(raw, Mapping) or not isinstance(raw.get("Items"), list) or not isinstance(raw.get("TotalRecordCount"), int):
+            raise RuntimeError("jellyfin_items_malformed")
+        ids = []
+        for item in raw["Items"]:
+            if not isinstance(item, Mapping) or not item.get("Id"):
+                raise RuntimeError("jellyfin_item_malformed")
+            ids.append(str(item["Id"]))
+        return {"ids": tuple(ids), "total": raw["TotalRecordCount"]}
+
+    def get_playback_context(self, item_id: str, *, user_id: str) -> Mapping[str, Any]:
+        _safe_id(item_id); _safe_id(user_id)
+        raw = self._get_json(f"/Items/{item_id}/PlaybackInfo?UserId={user_id}")
+        if not isinstance(raw, Mapping):
+            raise RuntimeError("jellyfin_playback_context_malformed")
+        return {
+            "item_id": item_id,
+            "media_source_count": len(raw.get("MediaSources") or []),
+            "play_session_id": str(raw["PlaySessionId"]) if raw.get("PlaySessionId") else None,
+        }
+
     def _get_json(self, path: str) -> Any:
         if not self.base_url or not self._api_token:
             raise RuntimeError("jellyfin_credentials_unavailable")

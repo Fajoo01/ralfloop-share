@@ -172,6 +172,8 @@ class NightlyWorker:
             self.queue.update(completed)
             if escalation_reason:
                 self.metrics.increment("nightly_escalations")
+                if completed.task_type is NightlyTaskType.MEDIA_QUALITY_TICKET:
+                    self.metrics.increment("media_escalated")
             self._event(completed, "NIGHTLY_JOB_COMPLETED", usage=result, escalation_reason=escalation_reason)
             return completed
         except Exception as exc:

@@ -110,3 +110,15 @@ def test_event_router_enqueues_nightly_job_without_waking_model_now(tmp_path):
         assert len(jobs) == 1
         assert jobs[0].task_type is NightlyTaskType.BANDO_CHANGED
         assert jobs[0].model_tier is None
+
+
+def test_media_hard_case_records_domain_escalation_metric(tmp_path):
+    with MemoryService(tmp_path / "memory.sqlite") as memory:
+        queue = NightlyQueue(memory)
+        queue.enqueue(NightlyTaskType.MEDIA_QUALITY_TICKET, {"ticket_id": "media.synthetic"}, source(), complexity=6, now=NIGHT)
+        qwen = Provider(ModelTier.QWEN35, resolved=False)
+        largest = Provider(ModelTier.LARGEST)
+        worker = NightlyWorker(queue, {ModelTier.QWEN35: qwen, ModelTier.LARGEST: largest})
+        result = worker.run_once(now=NIGHT)
+        assert result and result.model_tier is ModelTier.LARGEST
+        assert worker.metrics.snapshot()["media_escalated"] == 1
