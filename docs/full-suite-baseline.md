@@ -4,11 +4,11 @@ Date: 2026-09-03. Baseline: `0242e79`. Current: baseline plus Bottazzi M1-M5 unc
 
 ## Verdict
 
-`GREEN RELATIVE`: current introduces zero deterministic failures. Exact JUnit failure identity sets are equal (65/65). Current adds eight passing tests.
+`GREEN RELATIVE`: current through M6 introduces zero deterministic failures. Exact JUnit failure identity sets are equal (65/65). Current adds twelve passing tests.
 
 | Metric | CURRENT | BASELINE | DELTA |
 |---|---:|---:|---:|
-| passed | 2191 | 2183 | +8 |
+| passed | 2195 | 2183 | +12 |
 | failed | 65 | 65 | 0 |
 | skipped | 17 | 17 | 0 |
 | exit code | 139 | 139 | 0 |
@@ -132,6 +132,6 @@ tests.test_routing::test_patch_allowed_mode
 ## Evidence and limitations
 
 - JUnit comparison: `current_failures=65`, `baseline_failures=65`, set equality true, additions/removals empty.
-- Current has eight extra passing Bottazzi tests; total collected tests therefore differs by eight.
+- Current has twelve extra passing Bottazzi tests; total collected tests therefore differs by twelve.
 - JUnit/log artifacts were kept outside repository under `/tmp`; they are not project deliverables.
 - Historical failures were not modified. Stabilization belongs to a separate workstream.

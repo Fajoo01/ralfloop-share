@@ -12,7 +12,7 @@ from pydantic import Field
 
 from .contracts import Identifier, StrictModel
 from .platform import SourceRef
-from .tiremm_admin import Practice
+from .tiremm_admin import Practice, SourceRecord
 
 
 class MemoryEvent(StrictModel):
@@ -102,6 +102,24 @@ class MemoryService:
                 (practice.practice_id, practice.status, practice.updated_at.isoformat(), _json(payload)),
             )
 
+    def put_source_record(self, record: SourceRecord) -> bool:
+        payload = record.model_dump(mode="json")
+        existing = self.connection.execute("SELECT record_json FROM admin_sources WHERE evidence_id=?", (record.evidence_id,)).fetchone()
+        if existing:
+            if json.loads(existing["record_json"]) != payload:
+                raise ValueError("memory_source_conflict")
+            return False
+        with self.connection:
+            self.connection.execute(
+                "INSERT INTO admin_sources(evidence_id,source_kind,source_id,content_hash,record_json) VALUES(?,?,?,?,?)",
+                (record.evidence_id, record.source_kind, record.source_id, record.content_sha256, _json(payload)),
+            )
+        return True
+
+    def list_source_records(self) -> tuple[SourceRecord, ...]:
+        rows = self.connection.execute("SELECT record_json FROM admin_sources ORDER BY evidence_id").fetchall()
+        return tuple(SourceRecord.model_validate_json(row["record_json"]) for row in rows)
+
     def get_practice(self, practice_id: str) -> Practice | None:
         row = self.connection.execute("SELECT record_json FROM practices WHERE practice_id=?", (practice_id,)).fetchone()
         return Practice.model_validate_json(row["record_json"]) if row else None
@@ -142,6 +160,7 @@ class MemoryService:
         CREATE TABLE IF NOT EXISTS event_entities(event_id TEXT NOT NULL REFERENCES events(event_id),entity_ref TEXT NOT NULL,PRIMARY KEY(event_id,entity_ref));
         CREATE INDEX IF NOT EXISTS event_entities_ref ON event_entities(entity_ref);
         CREATE TABLE IF NOT EXISTS practices(practice_id TEXT PRIMARY KEY,status TEXT NOT NULL,updated_at TEXT NOT NULL,record_json TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS admin_sources(evidence_id TEXT PRIMARY KEY,source_kind TEXT NOT NULL,source_id TEXT NOT NULL,content_hash TEXT NOT NULL,record_json TEXT NOT NULL,UNIQUE(source_kind,source_id,content_hash));
         CREATE TABLE IF NOT EXISTS documents(document_id TEXT PRIMARY KEY,title TEXT NOT NULL,body TEXT NOT NULL,content_hash TEXT NOT NULL,source_json TEXT NOT NULL);
         CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(title,body,content=documents,content_rowid=rowid);
         CREATE TRIGGER IF NOT EXISTS documents_ai AFTER INSERT ON documents BEGIN INSERT INTO documents_fts(rowid,title,body) VALUES(new.rowid,new.title,new.body); END;

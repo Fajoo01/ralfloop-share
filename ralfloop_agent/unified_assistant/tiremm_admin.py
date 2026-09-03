@@ -9,11 +9,14 @@ import re
 import sqlite3
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Iterable, Literal
+from typing import TYPE_CHECKING, Any, Iterable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .contracts import MemoryItem, MemoryNamespace, MemoryProvenance, MemoryType, PolicyClass
+
+if TYPE_CHECKING:
+    from .memory_service import MemoryService
 
 
 class AdminModel(BaseModel):
@@ -596,6 +599,85 @@ class TiremmAdminQueryAdapter:
         )
 
 
+class TiremmAdminV2:
+    """Persistent orchestration over v1 validation and Memory Service storage."""
+
+    def __init__(self, memory: "MemoryService", store: TiremmAdminStore | None = None) -> None:
+        self.memory = memory
+        self.store = store or TiremmAdminStore()
+
+    @classmethod
+    def restore(cls, memory: "MemoryService") -> "TiremmAdminV2":
+        store = TiremmAdminStore()
+        store.ingest_snapshot(memory.list_source_records())
+        for practice in memory.list_practices():
+            store.project(practice)
+        return cls(memory, store)
+
+    def ingest_snapshot(self, records: Iterable[SourceRecord]) -> tuple[EvidenceRef, ...]:
+        rows = tuple(records)
+        added = self.store.ingest_snapshot(rows)
+        for record in rows:
+            self.memory.put_source_record(record)
+        return added
+
+    def project(self, practice: Practice) -> Practice:
+        from .memory_service import MemoryEvent
+        from .platform import SourceRef
+
+        self.store.project(practice)
+        projected = self.store.get_practice(practice.practice_id)
+        assert projected is not None
+        self.memory.put_practice(projected)
+        latest = self.store.latest_verified_update(projected.practice_id)
+        source = SourceRef(
+            system=latest.source_kind.value, native_id=latest.source_id,
+            locator=latest.location, observed_at=latest.observed_at.isoformat(),
+            content_hash=latest.content_sha256,
+        )
+        event = MemoryEvent.build(
+            event_id="event.practice-" + hashlib.sha256(f"{projected.practice_id}|{projected.updated_at.isoformat()}|{projected.model_dump_json()}".encode()).hexdigest()[:24],
+            type="PRACTICE_UPDATED", source="tiremm_admin", source_id=projected.practice_id,
+            occurred_at=projected.updated_at, observed_at=datetime.now(timezone.utc),
+            entity_refs=(projected.practice_id,), payload={
+                "practice_id": projected.practice_id, "status": projected.status,
+                "updated_at": projected.updated_at.isoformat(),
+            }, provenance=(source,),
+        )
+        self.memory.append_event(event)
+        return projected
+
+    def list_open_practices(self) -> tuple[Practice, ...]:
+        return self.store.list_open_practices()
+
+    def get_practice(self, practice_id: str) -> Practice | None:
+        return self.store.get_practice(practice_id)
+
+    def get_deadlines(self, *, now: datetime, within: timedelta | None = None) -> tuple[Practice, ...]:
+        return self.store.get_due_practices(now=now, within=within)
+
+    def get_blocked(self) -> tuple[Practice, ...]:
+        return self.store.blocked()
+
+    def get_waiting(self) -> tuple[Practice, ...]:
+        return self.store.waiting()
+
+    def get_next_actions(self) -> tuple[tuple[str, NextAction], ...]:
+        return self.store.get_next_actions()
+
+    def get_conflicts(self, practice_id: str) -> tuple[PracticeConflict, ...]:
+        return self.store.get_conflicts(practice_id)
+
+    def get_sources(self, practice_id: str) -> tuple[EvidenceRef, ...]:
+        return self.store.get_sources(practice_id)
+
+    def get_timeline(self, practice_id: str):
+        return self.memory.timeline(practice_id)
+
+    def prepare_action(self, proposal: ActionProposal) -> ActionProposal:
+        return self.store.validate_action_proposal(proposal)
+
+
 class TiremmAdminEvalResult(AdminModel):
     case_id: str
     passed: bool
@@ -631,7 +713,7 @@ __all__ = [
     "PracticeArtifact", "PracticeConflict", "PracticeKind", "PracticePriority",
     "PracticeStatus", "PracticeUpdateProposal", "RetrievalHit", "SourceKind",
     "SourceRecord", "SourcedFact", "TiremmAdminContext", "TiremmAdminQueryAdapter",
-    "TiremmAdminSQLite", "TiremmIngestionPipeline",
+    "TiremmAdminSQLite", "TiremmAdminV2", "TiremmIngestionPipeline",
     "TiremmAdminEvalCase", "TiremmAdminEvalResult", "TiremmAdminStore",
     "evaluate_admin", "reject_external_execution", "utc_now",
 ]

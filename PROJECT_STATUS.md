@@ -2,7 +2,7 @@
 
 ## Current milestone
 
-Milestone 6 — Tiremm Admin v2 integration.
+M6 complete. M7 ARCI MCP intentionally not started in this run.
 
 ## Completed
 
@@ -12,6 +12,7 @@ Milestone 6 — Tiremm Admin v2 integration.
 - M4 deterministic lexical/IDF retrieval core; permission, promotion, enabled and health filters; maximum 12 results; 104-case eval baseline.
 - M5 SQLite core: append-only deduplicated events, structured practice projection, FTS5 document search, mandatory provenance.
 - M5 semantic read-only Memory MCP: practice, open practices, timeline, document search.
+- M6 Tiremm Admin v2: v1-compatible validation, persistent sources/practices, event timeline, restart restore, ten semantic MCP capabilities.
 
 ## Frozen commits
 
@@ -24,7 +25,8 @@ Milestone 6 — Tiremm Admin v2 integration.
 - `tests/test_platform_capabilities.py`: 5 passed.
 - Targeted platform/Admin/identity regression: 74 passed.
 - Memory Service/MCP: 3 passed.
-- Relative full-suite gate: GREEN. Current 2191 passed/65 failed/17 skipped/exit 139; baseline `0242e79` 2183 passed/65 failed/17 skipped/exit 139. Exact 65-test failure sets equal; zero new regressions; eight new passes. Evidence: `docs/full-suite-baseline.md`.
+- M6 targeted platform/Admin/identity regression: 78 passed.
+- Relative full-suite gate through M6: GREEN. Current 2195 passed/65 failed/17 skipped/exit 139; baseline `0242e79` 2183 passed/65 failed/17 skipped/exit 139. Exact 65-test failure sets equal; zero new regressions; twelve new passes. Evidence: `docs/full-suite-baseline.md`.
 
 ## Eval
 
@@ -54,7 +56,7 @@ Milestone 6 — Tiremm Admin v2 integration.
 
 ## Next step
 
-- Split two atomic M1-M5 commits, then add production capability descriptors and wire Tiremm Admin v2 deterministic reads to Memory Service.
+- Commit M6. Next run: M7 ARCI MCP complete only after reviewing existing API/portal documentation and pagination constraints.
 
 ## Git status
 
