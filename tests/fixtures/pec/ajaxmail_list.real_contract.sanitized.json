@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "test_class": "REAL_CONTRACT",
+  "captured_at": "2026-09-03",
+  "writes": 0,
+  "content_captured": false,
+  "page": {
+    "origin": "https://webmail.pec.it",
+    "path": "/new/messages/INBOX"
+  },
+  "request": {
+    "method": "POST",
+    "path": "/newuismart/cgi-bin/ajaxmail",
+    "content_type": "application/x-www-form-urlencoded",
+    "fields": ["Act_Msgs", "Act_Msgs_Page_Nth", "CONTID", "C_Folder", "ID", "MSGLIST_FILTER", "NOREDO", "Page", "Tpl", "sort_field", "sort_order"],
+    "known_constants": {"Act_Msgs": "1", "Tpl": "mail_list"},
+    "credential_values_stored": false
+  },
+  "response": {
+    "status": 200,
+    "mime": "application/json",
+    "top_level_fields": ["accountContainerAlert", "accountContainerWarning", "accountLimit", "accountMaxSize", "accountMinFreeSpaceThreshold", "accountSize", "contid", "data", "dataUnread", "folderBase64Name", "msgNb", "newMsg", "pageInfo", "sortInfo", "status"],
+    "page_info_fields": ["itemCount", "itemOffsetEnd", "itemOffsetStart", "itemsPerPage", "nextPage", "page", "pageCount", "prevPage"],
+    "message_fields": ["attach", "contid", "date", "email", "folderName", "from", "fromList", "icoattach", "isAccettazioneMessage", "isAnomaliaMessage", "isCertificataMessage", "isConsegnaMessage", "isMancataMessage", "isUnread", "msgStatus", "objectFolder", "objectId", "objectPath", "rawdate", "replyTo", "size", "subject", "tags", "text", "to", "xmailbox", "xruid"],
+    "captured_page_count": 50
+  }
+}
