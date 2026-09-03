@@ -9,6 +9,7 @@ from typing import Iterable, Protocol
 from pydantic import Field, model_validator
 
 from .contracts import StrictModel
+from .event_router import EventOrigin, EventRouter, RoutedEvent
 from .memory_service import MemoryEntity, MemoryEvent, MemoryService
 from .observability import OperationalMetrics
 from .platform import SourceRef
@@ -118,9 +119,10 @@ class BandoEligibility(StrictModel):
 
 
 class BandiService:
-    def __init__(self, memory: MemoryService, *, metrics: OperationalMetrics | None = None) -> None:
+    def __init__(self, memory: MemoryService, *, metrics: OperationalMetrics | None = None, router: EventRouter | None = None) -> None:
         self.memory = memory
         self.metrics = metrics or OperationalMetrics()
+        self.router = router
 
     def ingest(self, rows: Iterable[NormalizedBando]) -> tuple[MemoryEvent, ...]:
         emitted: list[MemoryEvent] = []
@@ -144,7 +146,16 @@ class BandiService:
                     entity_refs=(incoming.entity_id,), payload=payload,
                     provenance=(incoming.source_ref,),
                 )
-                self.memory.append_event(event)
+                if self.router is None:
+                    self.memory.append_event(event)
+                else:
+                    self.router.route(RoutedEvent(
+                        event_id=event.event_id, event_type=event.type,
+                        origin=EventOrigin.POLLER, source=event.source,
+                        source_id=event.source_id, occurred_at=event.occurred_at,
+                        observed_at=event.observed_at, entity_refs=event.entity_refs,
+                        payload=event.payload, provenance=event.provenance,
+                    ))
                 emitted.append(event)
             self.memory.put_entity(MemoryEntity.build(
                 entity_id=incoming.entity_id, domain="bandi", entity_type="BANDO",

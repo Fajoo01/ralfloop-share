@@ -6,6 +6,7 @@ Date: 2026-09-03. Production unchanged.
 
 - M7–Media cross-domain relative regression after observability completion: 176 passed; zero new failures.
 - Post-pagination/`ffprobe` hardening selection: 180 passed; zero new failures.
+- Post-composition M7–operational-runtime selection: 182 passed; zero new failures.
 - Media deterministic eval: 7/7 scenarios pass (English-only audio, mislabeled Italian, low resolution, client-only complaint, missing subtitles, duplicate, provider failure).
 - Capability retrieval eval remains recall@3/task success 100%, hallucinated tools 0. Media query isolation selects ticket/scan/stream capabilities only.
 - Required counters now cover Event Router, Bandi polling/change/filter/escalation, Web Research query/source/failure, Nightly job/model/escalation/failure and Media ticket/detection/diagnosis/escalation/resolution.

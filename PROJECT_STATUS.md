@@ -2,7 +2,7 @@
 
 ## Current milestone
 
-Operational M1–Media development gates GREEN. Jellyfin library pagination and fixed-argument local `ffprobe` are now implemented fail-closed. Production and external writes remain zero.
+Operational M1–Media development gates GREEN. Shared shadow composition now routes Bandi/Media events into persistent Nightly work. Production and external writes remain zero.
 
 ## Completed
 
@@ -22,6 +22,7 @@ Operational M1–Media development gates GREEN. Jellyfin library pagination and 
 - Nightly Worker: persistent/idempotent Memory queue, Europe/Rome execution window, deterministic-first routing, configurable model tiers, bounded escalation and usage audit. Evidence: `docs/nightly-worker-m12.md`.
 - Media Quality: PII-minimized ticket lifecycle, deterministic stream diagnosis, strict semantic MCP, non-executable fix proposals, complete library reconciliation and shared Event/Memory/Nightly flow. Evidence: `docs/media-quality-m13.md`.
 - Operational eval/observability/safety audit: `docs/operational-gates-m14.md`.
+- Shared local/shadow composition root: `docs/operational-runtime-m15.md`.
 
 ## Frozen commits
 
@@ -46,6 +47,8 @@ Operational M1–Media development gates GREEN. Jellyfin library pagination and 
 - Cross-domain observability/eval targeted gate: 33 passed.
 - Final M7–Media relative regression selection: 176 passed; zero new failures.
 - Post-hardening M7–Media relative regression selection: 180 passed; zero new failures.
+- Operational runtime integration: 2 passed; shared persistence/routing/model-free deterministic path verified.
+- Final M7–operational-runtime relative selection: 182 passed; zero new failures.
 
 ## Eval
 
@@ -72,11 +75,11 @@ Operational M1–Media development gates GREEN. Jellyfin library pagination and 
 ## Blocked
 
 - Global suite remains historically red; tracked separately. Dependency set is not locked in project metadata.
-- No operational milestone blocker. Live execution remains intentionally unpromoted.
+- No development milestone blocker. Live scheduling/source credentials remain intentionally unpromoted.
 
 ## Next step
 
-- Keep live execution disabled pending an explicit promotion decision; configure production media roots/resolver only during a separate promotion.
+- Explicit promotion decision required before configuring schedules, credentials, production media roots or execution providers.
 
 ## Git status
 
@@ -86,3 +89,4 @@ Operational M1–Media development gates GREEN. Jellyfin library pagination and 
 - Nightly Worker: `8a41ac2`; Media Quality: `b8d3e89`; both pushed to `private`.
 - Operational observability: `d153c68`, pushed to `private`.
 - Media pagination/`ffprobe` hardening: commit containing this status.
+- Operational shadow composition: commit containing this status.
