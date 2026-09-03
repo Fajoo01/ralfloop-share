@@ -2,7 +2,7 @@
 
 ## Current milestone
 
-M11 development gate GREEN. Deterministic Event Router stores/deduplicates before routing, fail-closes disabled workflows/wakes/notifications and exposes operational counters. Next: Nightly Worker/heavy-model routing.
+Nightly Worker development gate GREEN. Persistent queue, deterministic-first configurable model routing, bounded escalation and model-cost audit are integrated with Event Router and Memory. Next: Media Quality Ticket System.
 
 ## Completed
 
@@ -19,6 +19,7 @@ M11 development gate GREEN. Deterministic Event Router stores/deduplicates befor
 - M9: operational Bandi service using shared Memory, normalized contract, change timeline, deterministic eligibility, source catalog and eight semantic MCP tools. Evidence: `docs/bandi-platform-m9.md`.
 - M10: bounded Web Research service/MCP reusing secure open/search primitives, assigned source IDs, comparison, evidence extraction, claim verification and Memory persistence. Evidence: `docs/web-research-m10.md`.
 - M11: common deterministic Event Router for poller/webhook/scheduler/API/service/MCP events, shared Memory timeline, explicit workflow/wake gates and metrics. Evidence: `docs/event-router-m11.md`.
+- Nightly Worker: persistent/idempotent Memory queue, Europe/Rome execution window, deterministic-first routing, configurable model tiers, bounded escalation and usage audit. Evidence: `docs/nightly-worker-m12.md`.
 
 ## Frozen commits
 
@@ -38,6 +39,7 @@ M11 development gate GREEN. Deterministic Event Router stores/deduplicates befor
 - M9 targeted Bandi/Memory suite: 10 passed; legacy Bandi regressions included in milestone gate.
 - M10 new + legacy Web Research/Bando research suite: 97 passed.
 - M11 Event Router + Memory suite: 8 passed.
+- Nightly Worker + Event Router + Memory suite: 13 passed.
 
 ## Eval
 
@@ -69,11 +71,11 @@ M11 development gate GREEN. Deterministic Event Router stores/deduplicates befor
 
 ## Next step
 
-- Acquire sanitized ARCI `/user`, `/users/{id}`, `/cards/{id}`, list and DataTables responses; then implement only verified typed READ capabilities. No M7 writes.
+- Implement Media Quality Ticket System with deterministic metadata diagnosis, non-executable fix proposals, shared Memory persistence and Event Router/Nightly integration.
 
 ## Git status
 
 - Branch: `codex/qwen35-runtime-research`.
 - Baseline: `0242e79`.
 - Remote target: `private`; `origin` is public legacy and must not receive project data.
-- Local uncommitted Bottazzi platform files present. No push.
+- Nightly Worker changes pending atomic commit and private push.
