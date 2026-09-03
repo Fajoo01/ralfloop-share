@@ -8,7 +8,9 @@ User report or Jellyfin metadata → PII-minimized idempotent ticket → determi
 
 Tickets and proposals use shared Memory entities. Event Router receives ticket, quality/language detection, fix proposal and verified-fix events; `NightlyEventSink` queues hard media cases without inline model wake. Duplicate item/type reports return the existing ticket.
 
-Deterministic rules inspect Jellyfin video/audio/subtitle metadata before any LLM: Italian track presence, subtitle presence/language, resolution and audio bitrate. Provider outage is `SOURCE_UNAVAILABLE`, never an ineligible/healthy result. Library scans return complete only when unique received IDs equal the authoritative total; otherwise `INCOMPLETE_SOURCE`.
+Deterministic rules inspect Jellyfin video/audio/subtitle metadata before any LLM: Italian track presence, subtitle presence/language, resolution and audio bitrate. Provider outage is `SOURCE_UNAVAILABLE`, never an ineligible/healthy result. Jellyfin library enumeration uses stable ordering, 100-row internal pages, duplicate/stall/total-change guards and a 1000-item safety bound. Library scans return complete only when unique received IDs equal the authoritative total; otherwise `INCOMPLETE_SOURCE`.
+
+`FFprobeMediaReader` is the optional local deep-probe adapter: fixed argv, no shell, configured filesystem-root allowlist, 30-second default timeout, bounded JSON output and no media path in its result. It normalizes streams/duration and flags invalid streams, missing language tags, unusual duration and empty probes before model escalation.
 
 ## Semantic MCP
 

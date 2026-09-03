@@ -52,7 +52,7 @@ class MediaQualityMCPServer:
                 "ticket_id": identity, "outcome": {"type": "string", "enum": ["RESOLVED", "DUPLICATE", "WONT_FIX"]},
             }, ["ticket_id", "outcome"]),
             _tool("media_scan_item", "Read Jellyfin stream metadata and run deterministic quality rules.", {"item_id": identity, "user_id": identity}, ["item_id", "user_id"]),
-            _tool("media_scan_library", "Bounded deterministic scan through an installed read-only catalog.", {"library_id": identity, "user_id": identity, "limit": {"type": "integer", "minimum": 1, "maximum": 100}}, ["library_id", "user_id"]),
+            _tool("media_scan_library", "Paginated deterministic scan; fails closed unless received unique IDs equal total.", {"library_id": identity, "user_id": identity, "limit": {"type": "integer", "minimum": 1, "maximum": 1000}}, ["library_id", "user_id"]),
             _tool("media_get_streams", "Read bounded Jellyfin media streams.", {"item_id": identity, "user_id": identity}, ["item_id", "user_id"]),
             _tool("media_get_playback_context", "Read playback context when a read-only catalog is installed.", {"item_id": identity, "user_id": identity}, ["item_id", "user_id"]),
         ]

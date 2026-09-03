@@ -10,6 +10,7 @@ from ralfloop_agent.unified_assistant.memory_service import MemoryService
 from ralfloop_agent.unified_assistant.nightly_worker import NightlyEventSink, NightlyQueue, NightlyTaskType
 from ralfloop_agent.unified_assistant.platform import SourceRef
 from ralfloop_agent.unified_assistant.platform import CapabilityRegistry
+from ralfloop_agent.unified_assistant.service_identity_mcp import JellyfinReadOnlyClient
 
 
 NOW = datetime(2026, 9, 3, tzinfo=timezone.utc)
@@ -135,3 +136,23 @@ def test_library_scan_requires_total_unique_reconciliation(tmp_path):
         result = complete.call("media_scan_library", {"library_id": "lib-1", "user_id": "user-1", "limit": 100})
         assert result["structuredContent"]["complete"]
         assert result["structuredContent"]["received"] == result["structuredContent"]["expected"] == 2
+
+
+def test_jellyfin_library_enumeration_paginates_and_reconciles_total():
+    class Client(JellyfinReadOnlyClient):
+        def __init__(self):
+            super().__init__("http://fixture.invalid", "synthetic")
+            self.starts = []
+
+        def _get_json(self, path):
+            from urllib.parse import parse_qs, urlsplit
+            query = parse_qs(urlsplit(path).query)
+            start, size = int(query["StartIndex"][0]), int(query["Limit"][0])
+            self.starts.append(start)
+            stop = min(start + size, 205)
+            return {"Items": [{"Id": f"item-{index}"} for index in range(start, stop)], "TotalRecordCount": 205}
+
+    client = Client()
+    listing = client.list_library_item_ids("library-1", user_id="user-1", limit=300)
+    assert len(listing["ids"]) == listing["total"] == 205
+    assert client.starts == [0, 100, 200]

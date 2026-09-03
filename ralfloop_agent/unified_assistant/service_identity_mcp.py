@@ -187,17 +187,38 @@ class JellyfinReadOnlyClient:
 
     def list_library_item_ids(self, library_id: str, *, user_id: str, limit: int) -> Mapping[str, Any]:
         _safe_id(library_id); _safe_id(user_id)
-        if not 1 <= limit <= 100:
+        if not 1 <= limit <= 1000:
             raise ValueError("jellyfin_limit_invalid")
-        raw = self._get_json(f"/Users/{user_id}/Items?ParentId={library_id}&Recursive=true&StartIndex=0&Limit={limit}")
-        if not isinstance(raw, Mapping) or not isinstance(raw.get("Items"), list) or not isinstance(raw.get("TotalRecordCount"), int):
-            raise RuntimeError("jellyfin_items_malformed")
-        ids = []
-        for item in raw["Items"]:
-            if not isinstance(item, Mapping) or not item.get("Id"):
-                raise RuntimeError("jellyfin_item_malformed")
-            ids.append(str(item["Id"]))
-        return {"ids": tuple(ids), "total": raw["TotalRecordCount"]}
+        ids: list[str] = []
+        total: int | None = None
+        page_size = min(100, limit)
+        while total is None or len(ids) < total:
+            if len(ids) >= limit:
+                break
+            size = min(page_size, limit - len(ids))
+            raw = self._get_json(
+                f"/Users/{user_id}/Items?ParentId={library_id}&Recursive=true"
+                f"&StartIndex={len(ids)}&Limit={size}&SortBy=SortName&SortOrder=Ascending"
+            )
+            if not isinstance(raw, Mapping) or not isinstance(raw.get("Items"), list) or not isinstance(raw.get("TotalRecordCount"), int):
+                raise RuntimeError("jellyfin_items_malformed")
+            page_total = raw["TotalRecordCount"]
+            if page_total < 0 or (total is not None and page_total != total):
+                raise RuntimeError("jellyfin_items_total_changed")
+            total = page_total
+            page_ids = []
+            for item in raw["Items"]:
+                if not isinstance(item, Mapping) or not item.get("Id"):
+                    raise RuntimeError("jellyfin_item_malformed")
+                page_ids.append(_safe_id(str(item["Id"])))
+            if len(page_ids) > size:
+                raise RuntimeError("jellyfin_items_page_oversized")
+            if len(page_ids) != len(set(page_ids)) or set(page_ids) & set(ids):
+                raise RuntimeError("jellyfin_items_duplicate_id")
+            if not page_ids and len(ids) < total:
+                raise RuntimeError("jellyfin_items_pagination_stalled")
+            ids.extend(page_ids)
+        return {"ids": tuple(ids), "total": total or 0}
 
     def get_playback_context(self, item_id: str, *, user_id: str) -> Mapping[str, Any]:
         _safe_id(item_id); _safe_id(user_id)

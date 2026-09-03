@@ -2,7 +2,7 @@
 
 ## Current milestone
 
-Operational M1–Media development gates GREEN. Cross-domain eval, required observability counters and safety checks are complete. Production and external writes remain zero.
+Operational M1–Media development gates GREEN. Jellyfin library pagination and fixed-argument local `ffprobe` are now implemented fail-closed. Production and external writes remain zero.
 
 ## Completed
 
@@ -45,6 +45,7 @@ Operational M1–Media development gates GREEN. Cross-domain eval, required obse
 - Media Quality + Nightly/Event Router/Memory/Jellyfin/Capability suite: 32 passed.
 - Cross-domain observability/eval targeted gate: 33 passed.
 - Final M7–Media relative regression selection: 176 passed; zero new failures.
+- Post-hardening M7–Media relative regression selection: 180 passed; zero new failures.
 
 ## Eval
 
@@ -64,8 +65,8 @@ Operational M1–Media development gates GREEN. Cross-domain eval, required obse
 
 - Existing registry schemas remain heterogeneous.
 - IdentityLink primary projection remains in-memory; workflow evidence is Memory-backed.
-- Media library scan is intentionally fail-closed above the bounded 100-item complete-reconciliation window; production catalog promotion needs paginated enumeration.
-- Media diagnosis currently uses Jellyfin stream metadata; a fixed-argument local `ffprobe` adapter is not yet installed.
+- Media library scan is intentionally fail-closed when the authoritative total exceeds the explicit 1000-item safety bound.
+- `ffprobe` requires an operator-configured item-to-path resolver and filesystem-root allowlist; it is not wired to production paths.
 - Optional test dependencies are incomplete in project metadata (`PyYAML`, `beautifulsoup4`).
 
 ## Blocked
@@ -75,8 +76,7 @@ Operational M1–Media development gates GREEN. Cross-domain eval, required obse
 
 ## Next step
 
-- Complete cross-domain eval/observability/safety gate and keep all live execution disabled pending an explicit promotion decision.
-- Keep live execution disabled pending an explicit promotion decision; next engineering risk is fully paginated Jellyfin library enumeration plus fixed-argument `ffprobe` adapter.
+- Keep live execution disabled pending an explicit promotion decision; configure production media roots/resolver only during a separate promotion.
 
 ## Git status
 
@@ -84,4 +84,5 @@ Operational M1–Media development gates GREEN. Cross-domain eval, required obse
 - Baseline: `0242e79`.
 - Remote target: `private`; `origin` is public legacy and must not receive project data.
 - Nightly Worker: `8a41ac2`; Media Quality: `b8d3e89`; both pushed to `private`.
-- Operational observability completion pending atomic commit and private push.
+- Operational observability: `d153c68`, pushed to `private`.
+- Media pagination/`ffprobe` hardening: commit containing this status.
