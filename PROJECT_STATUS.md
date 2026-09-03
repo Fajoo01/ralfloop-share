@@ -2,7 +2,7 @@
 
 ## Current milestone
 
-M6 complete. M7 ARCI MCP intentionally not started in this run.
+M7-A ARCI audit complete. M7-B blocked on sanitized real REST/DataTables fixtures or authoritative response contracts.
 
 ## Completed
 
@@ -13,6 +13,7 @@ M6 complete. M7 ARCI MCP intentionally not started in this run.
 - M5 SQLite core: append-only deduplicated events, structured practice projection, FTS5 document search, mandatory provenance.
 - M5 semantic read-only Memory MCP: practice, open practices, timeline, document search.
 - M6 Tiremm Admin v2: v1-compatible validation, persistent sources/practices, event timeline, restart restore, ten semantic MCP capabilities.
+- M7-A: ARCI coverage matrix, mock-vs-provider gap, identity/status/pagination/error/provenance/write inventory documented in `docs/arci-mcp-m7-audit.md`.
 
 ## Frozen commits
 
@@ -52,11 +53,13 @@ M6 complete. M7 ARCI MCP intentionally not started in this run.
 ## Blocked
 
 - Global suite remains historically red; tracked separately. Dependency set is not locked in project metadata.
+- ARCI server/provider implements one aggregate tool; client advertises six expected tools and tests mock five. Do not promote mock coverage.
+- M7-B exact DTO/pagination implementation needs sanitized real fixtures or authoritative code; handoff route names alone are insufficient to invent schemas.
 - Live ARCI completeness/reconciliation requires read-only production connectivity; intentionally not used this run.
 
 ## Next step
 
-- Commit M6. Next run: M7 ARCI MCP complete only after reviewing existing API/portal documentation and pagination constraints.
+- Acquire sanitized ARCI `/user`, `/users/{id}`, `/cards/{id}`, list and DataTables responses; then implement only verified typed READ capabilities. No M7 writes.
 
 ## Git status
 
