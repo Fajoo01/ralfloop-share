@@ -257,6 +257,57 @@ class JellyfinProvisioningService:
         raise PermissionError(f"jellyfin_provisioning_{self.mode}_execution_disabled")
 
 
+class MembershipVerifier(Protocol):
+    def verify_membership(self, user_id: str, club_id: str) -> ArciMemberVerification: ...
+
+
+class JellyfinIdentityReader(Protocol):
+    def list_users(self) -> tuple[JellyfinUserState, ...]: ...
+    def get_user(self, *, user_id: str | None = None, username: str | None = None) -> JellyfinUserState: ...
+
+
+class IdentityJellyfinShadowWorkflow:
+    """Exact native-ID orchestration. Never fuzzy-links or executes mutations."""
+
+    def __init__(
+        self, verifier: MembershipVerifier, jellyfin: JellyfinIdentityReader,
+        links: IdentityLinkStore, provisioning: JellyfinProvisioningService,
+    ) -> None:
+        self.verifier = verifier
+        self.jellyfin = jellyfin
+        self.links = links
+        self.provisioning = provisioning
+
+    def run(self, *, arci_member_id: str, club_id: str) -> ProvisioningPlan:
+        verification = self.verifier.verify_membership(arci_member_id, club_id)
+        link = self.links.by_arci(arci_member_id)
+        try:
+            if link and link.jellyfin_user_id:
+                current = self.jellyfin.get_user(user_id=link.jellyfin_user_id)
+            else:
+                self.jellyfin.list_users()  # health/completeness only; no fuzzy match
+                current = JellyfinUserState(available=True)
+        except Exception:
+            current = JellyfinUserState(available=False)
+        return self.provisioning.plan(
+            verification, current, identity_link=link,
+        )
+
+    def run_and_record(
+        self, *, arci_member_id: str, club_id: str, admin: object,
+        now: datetime,
+    ) -> tuple[ProvisioningPlan, object]:
+        plan = self.run(arci_member_id=arci_member_id, club_id=club_id)
+        records, practice = provisioning_plan_practice(plan, now=now)
+        ingest = getattr(admin, "ingest_snapshot", None)
+        project = getattr(admin, "project", None)
+        if not callable(ingest) or not callable(project):
+            raise TypeError("tiremm_admin_persistence_required")
+        ingest(records)
+        projected = project(practice)
+        return plan, projected
+
+
 class CurrentArciMcpMemberSource:
     """Truthful adapter: installed MCP has no individual member query."""
 
@@ -414,7 +465,7 @@ RUNTSUITE_PROPOSE_CAPABILITIES = ("write_preview",)
 
 __all__ = [
     "ArciMemberVerification", "CurrentArciMcpMemberSource", "CurrentJellyfinMcpUserSource",
-    "EligibilityDecision", "IdentityLink", "IdentityLinkStore", "JellyfinEligibilityPolicy",
+    "EligibilityDecision", "IdentityJellyfinShadowWorkflow", "IdentityLink", "IdentityLinkStore", "JellyfinEligibilityPolicy",
     "JellyfinExecutionGuard", "JellyfinMutation",
     "JellyfinProvisioningConfig", "JellyfinProvisioningService", "JellyfinUserState", "LegacyIdentity", "PlanAction",
     "ProvisioningPlan", "ProvisioningState", "RUNTSUITE_PROPOSE_CAPABILITIES",

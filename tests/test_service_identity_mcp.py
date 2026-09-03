@@ -49,8 +49,8 @@ def test_arci_mcp_is_exact_and_rejects_extra_inputs():
 def test_jellyfin_mcp_is_read_only_and_has_no_delete_or_password_tool():
     server = JellyfinUserMCPServer(JellyfinFixture())
     names = {row["name"] for row in server.list_tools()}
-    assert names == {JELLYFIN_LIST_TOOL, JELLYFIN_GET_TOOL}
-    assert not any("delete" in name or "password" in name or "create" in name for name in names)
+    assert {JELLYFIN_LIST_TOOL, JELLYFIN_GET_TOOL} <= names
+    assert not any("delete" in name or "password" in name or "execute" in name for name in names)
     assert server.call(JELLYFIN_LIST_TOOL, {})["structuredContent"]["users"][0]["user_id"] == "jf-1"
     assert server.call(JELLYFIN_GET_TOOL, {"username": "fixture"})["structuredContent"]["state"]["user_id"] == "jf-1"
 

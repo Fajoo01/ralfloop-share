@@ -2,7 +2,7 @@
 
 ## Current milestone
 
-M7 development gate GREEN. Point reads, authenticated fixed-route CDP transport, real DataTables contracts, complete pagination and pending-card enumeration implemented. Production promotion remains disabled.
+M8 development gate GREEN. ARCI exact identity flows into Jellyfin shadow planning, semantic MCP reads/proposals and persistent Tiremm Admin/Memory timeline. Production promotion remains disabled. Next: M9 Bandi Platform.
 
 ## Completed
 
@@ -15,6 +15,7 @@ M7 development gate GREEN. Point reads, authenticated fixed-route CDP transport,
 - M6 Tiremm Admin v2: v1-compatible validation, persistent sources/practices, event timeline, restart restore, ten semantic MCP capabilities.
 - M7-A: ARCI coverage matrix, mock-vs-provider gap, identity/status/pagination/error/provenance/write inventory documented in `docs/arci-mcp-m7-audit.md`.
 - M7-B2: live read-only DataTables contracts captured and sanitized; deterministic complete paginator and three conditional semantic MCP tools implemented. ARCI write inventory documented; execution remains zero.
+- M8: exact IdentityLink/Jellyfin shadow workflow, seven semantic reads, four non-executable proposals, legacy tool compatibility and Memory-backed practice timeline. Evidence: `docs/identity-jellyfin-m8.md`.
 
 ## Frozen commits
 
@@ -30,6 +31,7 @@ M7 development gate GREEN. Point reads, authenticated fixed-route CDP transport,
 - M6 targeted platform/Admin/identity regression: 78 passed.
 - Relative full-suite gate through M6: GREEN. Current 2195 passed/65 failed/17 skipped/exit 139; baseline `0242e79` 2183 passed/65 failed/17 skipped/exit 139. Exact 65-test failure sets equal; zero new regressions; twelve new passes. Evidence: `docs/full-suite-baseline.md`.
 - M7 combined targeted ARCI/identity suite: 59 passed. Live contract reconciliation: users 48/48; cards 50/50; `per_page=100`, `last_page=1`. Synthetic multi-page and failure-family coverage included. Production entrypoint unchanged.
+- M8 targeted identity/Jellyfin/Memory/Admin suite: 32 passed. Live read-only smoke: Jellyfin 10.11.6, health true, 7 users, 3 libraries, exact item/playback contracts verified; writes 0.
 
 ## Eval
 
