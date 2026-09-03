@@ -2,7 +2,7 @@
 
 ## Current milestone
 
-M10 development gate GREEN. Web Research is a bounded source-backed capability with six semantic MCP tools and Memory evidence persistence, not crawler/memory. Next: M11 Event Router.
+M11 development gate GREEN. Deterministic Event Router stores/deduplicates before routing, fail-closes disabled workflows/wakes/notifications and exposes operational counters. Next: Nightly Worker/heavy-model routing.
 
 ## Completed
 
@@ -18,6 +18,7 @@ M10 development gate GREEN. Web Research is a bounded source-backed capability w
 - M8: exact IdentityLink/Jellyfin shadow workflow, seven semantic reads, four non-executable proposals, legacy tool compatibility and Memory-backed practice timeline. Evidence: `docs/identity-jellyfin-m8.md`.
 - M9: operational Bandi service using shared Memory, normalized contract, change timeline, deterministic eligibility, source catalog and eight semantic MCP tools. Evidence: `docs/bandi-platform-m9.md`.
 - M10: bounded Web Research service/MCP reusing secure open/search primitives, assigned source IDs, comparison, evidence extraction, claim verification and Memory persistence. Evidence: `docs/web-research-m10.md`.
+- M11: common deterministic Event Router for poller/webhook/scheduler/API/service/MCP events, shared Memory timeline, explicit workflow/wake gates and metrics. Evidence: `docs/event-router-m11.md`.
 
 ## Frozen commits
 
@@ -36,6 +37,7 @@ M10 development gate GREEN. Web Research is a bounded source-backed capability w
 - M8 targeted identity/Jellyfin/Memory/Admin suite: 32 passed. Live read-only smoke: Jellyfin 10.11.6, health true, 7 users, 3 libraries, exact item/playback contracts verified; writes 0.
 - M9 targeted Bandi/Memory suite: 10 passed; legacy Bandi regressions included in milestone gate.
 - M10 new + legacy Web Research/Bando research suite: 97 passed.
+- M11 Event Router + Memory suite: 8 passed.
 
 ## Eval
 
