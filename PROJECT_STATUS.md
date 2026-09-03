@@ -2,7 +2,7 @@
 
 ## Current milestone
 
-M9 core development gate GREEN. Normalized Bandi persistence/events, deterministic eligibility, source-order adapter framework and semantic MCP implemented. Verified live source adapters remain disabled pending per-source contracts. Next: M10 Web Research MCP.
+M10 development gate GREEN. Web Research is a bounded source-backed capability with six semantic MCP tools and Memory evidence persistence, not crawler/memory. Next: M11 Event Router.
 
 ## Completed
 
@@ -17,6 +17,7 @@ M9 core development gate GREEN. Normalized Bandi persistence/events, determinist
 - M7-B2: live read-only DataTables contracts captured and sanitized; deterministic complete paginator and three conditional semantic MCP tools implemented. ARCI write inventory documented; execution remains zero.
 - M8: exact IdentityLink/Jellyfin shadow workflow, seven semantic reads, four non-executable proposals, legacy tool compatibility and Memory-backed practice timeline. Evidence: `docs/identity-jellyfin-m8.md`.
 - M9: operational Bandi service using shared Memory, normalized contract, change timeline, deterministic eligibility, source catalog and eight semantic MCP tools. Evidence: `docs/bandi-platform-m9.md`.
+- M10: bounded Web Research service/MCP reusing secure open/search primitives, assigned source IDs, comparison, evidence extraction, claim verification and Memory persistence. Evidence: `docs/web-research-m10.md`.
 
 ## Frozen commits
 
@@ -34,6 +35,7 @@ M9 core development gate GREEN. Normalized Bandi persistence/events, determinist
 - M7 combined targeted ARCI/identity suite: 59 passed. Live contract reconciliation: users 48/48; cards 50/50; `per_page=100`, `last_page=1`. Synthetic multi-page and failure-family coverage included. Production entrypoint unchanged.
 - M8 targeted identity/Jellyfin/Memory/Admin suite: 32 passed. Live read-only smoke: Jellyfin 10.11.6, health true, 7 users, 3 libraries, exact item/playback contracts verified; writes 0.
 - M9 targeted Bandi/Memory suite: 10 passed; legacy Bandi regressions included in milestone gate.
+- M10 new + legacy Web Research/Bando research suite: 97 passed.
 
 ## Eval
 
