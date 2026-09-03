@@ -45,6 +45,22 @@ class MemoryDocument(StrictModel):
         return cls(document_id=document_id, title=title, body=body, source=source, content_hash=hashlib.sha256(body.encode()).hexdigest())
 
 
+class MemoryEntity(StrictModel):
+    entity_id: str = Field(min_length=1, max_length=240)
+    domain: str = Field(pattern=r"^[a-z][a-z0-9_.-]{0,63}$")
+    entity_type: str = Field(pattern=r"^[A-Z][A-Z0-9_]{1,95}$")
+    status: str = Field(min_length=1, max_length=96)
+    updated_at: datetime
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    data: dict[str, Any]
+    provenance: tuple[SourceRef, ...] = Field(min_length=1, max_length=16)
+
+    @classmethod
+    def build(cls, *, entity_id: str, domain: str, entity_type: str, status: str, updated_at: datetime, data: dict[str, Any], provenance: tuple[SourceRef, ...]) -> "MemoryEntity":
+        digest = hashlib.sha256(_json(data).encode()).hexdigest()
+        return cls(entity_id=entity_id, domain=domain, entity_type=entity_type, status=status, updated_at=updated_at, content_hash=digest, data=data, provenance=provenance)
+
+
 class MemoryService:
     """Local authoritative projection. Raw external systems remain source authority."""
 
@@ -154,6 +170,40 @@ class MemoryService:
         ).fetchall()
         return tuple(MemoryDocument(document_id=row["document_id"], title=row["title"], body=row["body"], content_hash=row["content_hash"], source=SourceRef.model_validate_json(row["source_json"])) for row in rows)
 
+    def put_entity(self, entity: MemoryEntity) -> bool:
+        existing = self.connection.execute(
+            "SELECT content_hash,updated_at FROM memory_entities WHERE entity_id=?",
+            (entity.entity_id,),
+        ).fetchone()
+        if existing and existing["content_hash"] == entity.content_hash:
+            return False
+        if existing and datetime.fromisoformat(existing["updated_at"]) > entity.updated_at:
+            raise ValueError("memory_entity_stale")
+        with self.connection:
+            self.connection.execute(
+                "INSERT INTO memory_entities(entity_id,domain,entity_type,status,updated_at,content_hash,record_json) VALUES(?,?,?,?,?,?,?) ON CONFLICT(entity_id) DO UPDATE SET domain=excluded.domain,entity_type=excluded.entity_type,status=excluded.status,updated_at=excluded.updated_at,content_hash=excluded.content_hash,record_json=excluded.record_json",
+                (entity.entity_id, entity.domain, entity.entity_type, entity.status, entity.updated_at.isoformat(), entity.content_hash, entity.model_dump_json()),
+            )
+        return True
+
+    def get_entity(self, entity_id: str) -> MemoryEntity | None:
+        row = self.connection.execute(
+            "SELECT record_json FROM memory_entities WHERE entity_id=?", (entity_id,),
+        ).fetchone()
+        return MemoryEntity.model_validate_json(row["record_json"]) if row else None
+
+    def list_entities(self, *, domain: str, status: str | None = None, limit: int = 100) -> tuple[MemoryEntity, ...]:
+        _limit(limit)
+        sql = "SELECT record_json FROM memory_entities WHERE domain=?"
+        args: list[Any] = [domain]
+        if status is not None:
+            sql += " AND status=?"
+            args.append(status)
+        rows = self.connection.execute(
+            sql + " ORDER BY updated_at DESC,entity_id LIMIT ?", (*args, limit),
+        ).fetchall()
+        return tuple(MemoryEntity.model_validate_json(row["record_json"]) for row in rows)
+
     def _migrate(self) -> None:
         self.connection.executescript("""
         CREATE TABLE IF NOT EXISTS events(event_id TEXT PRIMARY KEY,event_type TEXT NOT NULL,source TEXT NOT NULL,source_id TEXT NOT NULL,occurred_at TEXT NOT NULL,observed_at TEXT NOT NULL,content_hash TEXT NOT NULL,record_json TEXT NOT NULL,UNIQUE(source,source_id,content_hash));
@@ -162,6 +212,8 @@ class MemoryService:
         CREATE TABLE IF NOT EXISTS practices(practice_id TEXT PRIMARY KEY,status TEXT NOT NULL,updated_at TEXT NOT NULL,record_json TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS admin_sources(evidence_id TEXT PRIMARY KEY,source_kind TEXT NOT NULL,source_id TEXT NOT NULL,content_hash TEXT NOT NULL,record_json TEXT NOT NULL,UNIQUE(source_kind,source_id,content_hash));
         CREATE TABLE IF NOT EXISTS documents(document_id TEXT PRIMARY KEY,title TEXT NOT NULL,body TEXT NOT NULL,content_hash TEXT NOT NULL,source_json TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS memory_entities(entity_id TEXT PRIMARY KEY,domain TEXT NOT NULL,entity_type TEXT NOT NULL,status TEXT NOT NULL,updated_at TEXT NOT NULL,content_hash TEXT NOT NULL,record_json TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS memory_entities_domain_status ON memory_entities(domain,status,updated_at);
         CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(title,body,content=documents,content_rowid=rowid);
         CREATE TRIGGER IF NOT EXISTS documents_ai AFTER INSERT ON documents BEGIN INSERT INTO documents_fts(rowid,title,body) VALUES(new.rowid,new.title,new.body); END;
         CREATE TRIGGER IF NOT EXISTS documents_ad AFTER DELETE ON documents BEGIN INSERT INTO documents_fts(documents_fts,rowid,title,body) VALUES('delete',old.rowid,old.title,old.body); END;
@@ -183,4 +235,4 @@ def _fts_query(value: str) -> str:
     return " AND ".join('"' + term.replace('"', '""') + '"' for term in terms)
 
 
-__all__ = ["MemoryDocument", "MemoryEvent", "MemoryService"]
+__all__ = ["MemoryDocument", "MemoryEntity", "MemoryEvent", "MemoryService"]

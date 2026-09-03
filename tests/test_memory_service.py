@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from ralfloop_agent.unified_assistant.memory_service import MemoryDocument, MemoryEvent, MemoryService
+from ralfloop_agent.unified_assistant.memory_service import MemoryDocument, MemoryEntity, MemoryEvent, MemoryService
 from ralfloop_agent.unified_assistant.platform import SourceRef
 
 
@@ -35,3 +35,18 @@ def test_document_fts_keeps_source_provenance_and_updates_index(tmp_path):
         assert service.search_documents("ottobre") == ()
         assert service.search_documents("novembre")[0].content_hash == changed.content_hash
         assert isinstance(service.search_documents('novembre OR "'), tuple)
+
+
+def test_generic_domain_entity_store_is_persistent_and_provenance_required(tmp_path):
+    entity = MemoryEntity.build(
+        entity_id="ticket.media-1", domain="media_quality", entity_type="MEDIA_TICKET",
+        status="OPEN", updated_at=NOW, data={"ticket_id": "ticket.media-1"},
+        provenance=(source("scanner-1"),),
+    )
+    path = tmp_path / "memory.sqlite"
+    with MemoryService(path) as service:
+        assert service.put_entity(entity) is True
+        assert service.put_entity(entity) is False
+    with MemoryService(path) as service:
+        assert service.get_entity(entity.entity_id) == entity
+        assert service.list_entities(domain="media_quality") == (entity,)
