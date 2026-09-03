@@ -1,0 +1,172 @@
+{
+  "captures": [
+    {
+      "headers": {
+        "accept": "application/json",
+        "content_type": "application/json",
+        "credential_headers_present": [
+          "authorization"
+        ]
+      },
+      "method": "POST",
+      "path": "/api/backoffice/cards/datatables",
+      "payload": {
+        "XDEBUG_SESSION_START": "eclipse",
+        "action": "read",
+        "club_id": "club-synthetic-001",
+        "committee_id": "committee-synthetic-001",
+        "conf": true,
+        "filters": [],
+        "has_consumer_movement": false,
+        "limit": null,
+        "need_hydra_sync": false,
+        "page": 1,
+        "regional_id": "regional-synthetic-001",
+        "search": null,
+        "sorts": []
+      },
+      "response": {
+        "aggregates": [],
+        "captured_row_count": 50,
+        "conf": {
+          "keys": [
+            "actions",
+            "adapter",
+            "casts",
+            "datatable",
+            "debug",
+            "fields",
+            "httpResource",
+            "initQuery",
+            "model",
+            "queryLog",
+            "resource",
+            "with",
+            "without"
+          ],
+          "present": true
+        },
+        "data": [
+          {
+            "club_name": "synthetic-club_name",
+            "cm_attachment_id": null,
+            "committee_name": "synthetic-committee_name",
+            "consumer_movement": false,
+            "created_at": "synthetic-created_at",
+            "delegate": false,
+            "email": "synthetic-email",
+            "enabled_at": null,
+            "full_name": "synthetic-full-name",
+            "has_subscription_receipt": false,
+            "hydra_error_automatic_managed": false,
+            "hydra_error_manually_managed": false,
+            "hydra_preregistration_closed": false,
+            "hydra_preregistration_failed": false,
+            "hydra_preregistration_id": null,
+            "id": "id-synthetic-001",
+            "number": "synthetic-number",
+            "order_payment_type": 10,
+            "order_status": 10,
+            "preregistration": true,
+            "regional_name": "synthetic-regional_name",
+            "status": 10,
+            "user_id": "user-synthetic-001",
+            "validity": null
+          },
+          {
+            "club_name": "synthetic-club_name",
+            "cm_attachment_id": null,
+            "committee_name": "synthetic-committee_name",
+            "consumer_movement": false,
+            "created_at": "synthetic-created_at",
+            "delegate": false,
+            "email": "synthetic-email",
+            "enabled_at": "synthetic-enabled_at",
+            "full_name": "synthetic-full-name",
+            "has_subscription_receipt": true,
+            "hydra_error_automatic_managed": false,
+            "hydra_error_manually_managed": false,
+            "hydra_preregistration_closed": true,
+            "hydra_preregistration_failed": false,
+            "hydra_preregistration_id": "hydra_preregistration-synthetic-001",
+            "id": "id-synthetic-002",
+            "number": "synthetic-number",
+            "order_payment_type": 10,
+            "order_status": 30,
+            "preregistration": true,
+            "regional_name": "synthetic-regional_name",
+            "status": 20,
+            "user_id": "user-synthetic-002",
+            "validity": "synthetic-validity"
+          },
+          {
+            "club_name": "synthetic-club_name",
+            "cm_attachment_id": null,
+            "committee_name": "synthetic-committee_name",
+            "consumer_movement": false,
+            "created_at": "synthetic-created_at",
+            "delegate": false,
+            "email": "synthetic-email",
+            "enabled_at": "synthetic-enabled_at",
+            "full_name": "synthetic-full-name",
+            "has_subscription_receipt": true,
+            "hydra_error_automatic_managed": false,
+            "hydra_error_manually_managed": false,
+            "hydra_preregistration_closed": true,
+            "hydra_preregistration_failed": false,
+            "hydra_preregistration_id": "hydra_preregistration-synthetic-002",
+            "id": "id-synthetic-003",
+            "number": "synthetic-number",
+            "order_payment_type": 30,
+            "order_status": 30,
+            "preregistration": true,
+            "regional_name": "synthetic-regional_name",
+            "status": 20,
+            "user_id": "user-synthetic-003",
+            "validity": "synthetic-validity"
+          }
+        ],
+        "links": {
+          "first": "https://api.arci-torino.weconstudio.it/synthetic-path",
+          "last": "https://api.arci-torino.weconstudio.it/synthetic-path",
+          "next": null,
+          "prev": null
+        },
+        "meta": {
+          "current_page": 1,
+          "from": 1,
+          "last_page": 1,
+          "links": [
+            {
+              "active": false,
+              "label": "&laquo; Precedente",
+              "url": null
+            },
+            {
+              "active": true,
+              "label": "1",
+              "url": "https://api.arci-torino.weconstudio.it/synthetic-path"
+            },
+            {
+              "active": false,
+              "label": "Successivo &raquo;",
+              "url": null
+            }
+          ],
+          "path": "https://api.arci-torino.weconstudio.it/synthetic-path",
+          "per_page": 100,
+          "to": 50,
+          "total": 50
+        }
+      },
+      "response_meta": {
+        "mime_type": "application/json",
+        "status": 200
+      },
+      "sanitized_content_hash": "4635cb48643472f3bccb79cf68fce38e46952e9f592c11443358899f65d508e9",
+      "test_class": "REAL_CONTRACT"
+    }
+  ],
+  "schema_version": 1,
+  "writes": 0
+}

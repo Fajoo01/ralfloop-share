@@ -84,4 +84,8 @@ Semantic point-read layer now exists in `arci_point_reads.py`. MCP advertises it
 | `arci_list_cards` | `/cards/datatables` | NO | NO | NO | NO | NO | NONE |
 | `arci_list_pending_cards` | `/cards/datatables` | NO | NO | NO | NO | NO | NONE |
 
-`REAL_CONTRACT` remains false until an authenticated transport and sanitized captures are available. No mock result counts as real coverage. Complete-list tools remain absent (`INCOMPLETE_SOURCE` by capability absence). Writes remain zero.
+Authenticated read-only capture on Sibilla established both live contracts. Requests are `POST application/json`, authorization-bearing, with `page`, `limit`, `filters`, `sorts`, `search` and scoped IDs. Responses use `data`, `meta` and `links`; `meta` includes `current_page`, `last_page`, `per_page`, `from`, `to`, `total`. Live snapshot reconciled users `48/48` and cards `50/50`, both one page at `per_page=100`.
+
+Sanitized bounded fixtures preserve request/envelope/row schema, types, nullability, status and native-ID relationships. Credential values and real PII/native IDs are absent. Test class is `REAL_CONTRACT`; mock-only semantic consumer tests remain classified as mock and do not count toward server coverage.
+
+`ArciDataTablesService` now supplies deterministic internal pagination, native-ID deduplication, repeated/empty-page guards, stable total reconciliation, maximum-page protection and malformed response detection. It enables `arci_list_members`, `arci_list_cards` and `arci_list_pending_card_requests` only when injected. `ArciAuthenticatedCdpTransport` implements fixed authenticated reads without exposing URL/method/header/token inputs. Production entrypoint remains unpromoted. Writes remain zero. Write inventory: `docs/arci-write-inventory.md`.

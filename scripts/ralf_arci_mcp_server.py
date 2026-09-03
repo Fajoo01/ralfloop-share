@@ -18,6 +18,10 @@ from ralfloop_agent.unified_assistant.arci_point_reads import (
     ArciPointReadError,
     ArciPointReadService,
 )
+from ralfloop_agent.unified_assistant.arci_datatables import (
+    ArciDataTablesService,
+    ArciListQuery,
+)
 from src.arci import READ_TOOL
 from src.mcp_transport import MCP_PROTOCOL_VERSION
 
@@ -39,6 +43,18 @@ POINT_TOOLS: dict[str, dict[str, Any]] = {
     "arci_get_club": {"club_id": ID_SCHEMA},
     "arci_verify_membership": {"user_id": ID_SCHEMA, "club_id": ID_SCHEMA},
 }
+LIST_PROPERTIES: dict[str, Any] = {
+    "club_id": ID_SCHEMA,
+    "committee_id": {**ID_SCHEMA, "type": ["string", "null"]},
+    "regional_id": {**ID_SCHEMA, "type": ["string", "null"]},
+    "validity": {"type": ["integer", "null"], "minimum": 2000, "maximum": 2200},
+    "search": {"type": ["string", "null"], "maxLength": 200},
+}
+COMPLETE_TOOLS = {
+    "arci_list_members": LIST_PROPERTIES,
+    "arci_list_cards": LIST_PROPERTIES,
+    "arci_list_pending_card_requests": LIST_PROPERTIES,
+}
 TOOLS = {READ_TOOL: EMPTY_SCHEMA}
 
 
@@ -47,9 +63,11 @@ class ArciMCPServer:
         self,
         provider: ArciPortalReadOnly,
         point_reads: ArciPointReadService | None = None,
+        datatables: ArciDataTablesService | None = None,
     ) -> None:
         self.provider = provider
         self.point_reads = point_reads
+        self.datatables = datatables
 
     def list_tools(self) -> list[dict[str, Any]]:
         tools = [{
@@ -70,6 +88,16 @@ class ArciMCPServer:
                         "properties": properties,
                         "required": list(properties),
                         "additionalProperties": False,
+                    },
+                })
+        if self.datatables is not None:
+            for name, properties in COMPLETE_TOOLS.items():
+                tools.append({
+                    "name": name,
+                    "description": f"Complete internally-paginated read-only ARCI capability: {name}.",
+                    "inputSchema": {
+                        "type": "object", "properties": properties,
+                        "required": ["club_id"], "additionalProperties": False,
                     },
                 })
         return tools
@@ -96,6 +124,18 @@ class ArciMCPServer:
                 return _error(exc.code.value)
             except Exception:
                 return _error("SOURCE_UNAVAILABLE")
+
+        if name in COMPLETE_TOOLS:
+            if self.datatables is None or not set(arguments) <= set(COMPLETE_TOOLS[name]) or "club_id" not in arguments:
+                return _error("POLICY_DENIED")
+            try:
+                query = ArciListQuery.model_validate(arguments)
+                method = getattr(self.datatables, name.removeprefix("arci_"))
+                return _success(name.removeprefix("arci_"), method(query).model_dump(mode="json"))
+            except ArciPointReadError as exc:
+                return _error(exc.code.value)
+            except Exception:
+                return _error("MALFORMED_RESPONSE")
 
         if name != READ_TOOL or arguments:
             return _error("POLICY_DENIED")
