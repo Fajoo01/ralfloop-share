@@ -16,6 +16,7 @@ TOOLS = {
     "pec_get_message": ({"message_id": _id()}, ["message_id"]),
     "pec_list_attachments": ({"message_id": _id()}, ["message_id"]),
     "pec_find_runts_notifications": ({"limit": {"type": "integer", "minimum": 1, "maximum": 100}}, []),
+    "pec_find_by_runts_reference": ({"runts_reference": _id(), "limit": {"type": "integer", "minimum": 1, "maximum": 100}}, ["runts_reference"]),
     "runts_sync_messages_practices": ({"limit": {"type": "integer", "minimum": 1, "maximum": 100}}, []),
     "runts_get_authoritative_for_pec": ({"pec_message_id": _id()}, ["pec_message_id"]),
     "runts_correlate_runtsuite": ({"practice_id": _id()}, ["practice_id"]),
@@ -46,6 +47,8 @@ class PecRuntsMCPServer:
                 data = {"attachments": _dump(self.service.get_pec(str(arguments["message_id"])).attachments)}
             elif name == "pec_find_runts_notifications":
                 data = {"messages": _dump(self.service.find_runts_notifications(limit=int(arguments.get("limit", 100))))}
+            elif name == "pec_find_by_runts_reference":
+                data = {"messages": _dump(self.service.find_pec_by_runts_reference(str(arguments["runts_reference"]), limit=int(arguments.get("limit", 100))))}
             elif name == "runts_sync_messages_practices":
                 data = {"items": _dump(self.service.sync_runts(limit=int(arguments.get("limit", 100))))}
             elif name == "runts_get_authoritative_for_pec":
@@ -66,7 +69,10 @@ class PecRuntsMCPServer:
             return _error("RUNTS_AUTH_REQUIRED", manual_action="Complete SPID/CIE authentication in the existing RUNTS browser tab; approve on phone if requested.")
         except ValueError:
             return _error("MALFORMED_RESPONSE")
-        except Exception:
+        except Exception as exc:
+            from .pec_browser_adapter import PecBrowserError
+            if isinstance(exc, PecBrowserError):
+                return _error(exc.status)
             return _error("SOURCE_UNAVAILABLE")
 
 
@@ -75,7 +81,8 @@ def capability_descriptors() -> tuple[CapabilityDescriptor, ...]:
         "pec_discover_messages": ("pec", "posta certificata", "nuovi messaggi", "ricevuto"),
         "pec_get_message": ("pec", "messaggio", "leggi", "comunicazione"),
         "pec_list_attachments": ("pec", "allegati", "documenti"),
-        "pec_find_runts_notifications": ("pec", "runts", "notifica", "registro terzo settore"),
+        "pec_find_runts_notifications": ("pec", "runts", "notifica", "notifiche", "trova", "collegate", "registro terzo settore"),
+        "pec_find_by_runts_reference": ("pec", "runts", "pratica", "comunicazione", "riferimento", "cerca"),
         "runts_sync_messages_practices": ("runts", "pratiche", "messaggi", "aggiorna"),
         "runts_get_authoritative_for_pec": ("runts", "pec", "autoritativo", "comunicazione ufficiale"),
         "runts_correlate_runtsuite": ("runts", "runtsuite", "pratica", "correla", "review queue"),

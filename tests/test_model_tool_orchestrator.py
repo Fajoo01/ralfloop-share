@@ -161,6 +161,18 @@ def test_invalid_tool_decision_is_not_executed(tmp_path: Path) -> None:
     assert called == []
 
 
+def test_schema_diagnostic_identifies_exact_extra_field_without_value(tmp_path: Path) -> None:
+    registry, _ = _registry(tmp_path)
+    provider = SequenceProvider([
+        '{"action":"respond","response":"No tool","tool_id":null,"arguments":{},"write":false}'
+    ])
+    result = ModelToolOrchestrator(provider, ModelToolManager(registry), registry).run("Ciao")
+    diagnostic = result.metadata["tool_decision_diagnostic"]
+    assert diagnostic["reason"] == "tool_decision_schema_invalid"
+    assert diagnostic["validation_errors"] == [{"field": "write", "type": "extra_forbidden"}]
+    assert "false" not in str(diagnostic)
+
+
 def test_capability_action_dispatches_deep_research_once(tmp_path: Path) -> None:
     registry = _deep_registry(tmp_path)
     provider = SequenceProvider(

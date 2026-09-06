@@ -2,7 +2,7 @@
 
 ## Current milestone
 
-Operational M1–Media gates remain GREEN. PEC/RUNTS operational vertical is active in shadow: live PEC read works; RUNTS is fail-closed at the SPID/CIE boundary. Production and external writes remain zero.
+Operational M1–Media preserved. PEC/RUNTS Telegram route is implemented in the development runtime; the production Telegram release has not been promoted. On 2026-09-06 the live PEC check reaches semantic MCP and returns AUTH_REQUIRED (no authenticated PEC tab). RUNTS transport remains incomplete. External writes remain zero.
 
 ## Completed
 
@@ -24,6 +24,7 @@ Operational M1–Media gates remain GREEN. PEC/RUNTS operational vertical is act
 - Operational eval/observability/safety audit: `docs/operational-gates-m14.md`.
 - Shared local/shadow composition root: `docs/operational-runtime-m15.md`.
 - PEC/RUNTS vertical core: strict DTO/provenance, shared Event/Memory/Nightly routing, exact RUNTSuite correlation, eight semantic tools and live authenticated PEC invocation. Evidence: `docs/pec-runts-vertical.md`.
+- Telegram PEC/RUNTS decision path: exact-reference pre-route, Capability Registry retrieval, strict decision and real semantic MCP invocation; generic model-tool catalog bypassed only for this typed intent. Evidence: `docs/telegram-pec-runts-decision.md`.
 
 ## Frozen commits
 
@@ -51,6 +52,9 @@ Operational M1–Media gates remain GREEN. PEC/RUNTS operational vertical is act
 - Operational runtime integration: 2 passed; shared persistence/routing/model-free deterministic path verified.
 - Final M7–operational-runtime relative selection: 182 passed; zero new failures.
 - PEC/RUNTS targeted runtime/regression selection: 35 passed; live Bottazzi PEC smoke: 10 read/persisted, provenance hashes 10/10, writes 0.
+- Telegram PEC/RUNTS regression and adjacent orchestrator/chat suite: 58 passed; exact failure phrase validates and invokes `pec_find_by_runts_reference`, writes 0.
+- 2026-09-06 relative targeted gate, same interpreter: detached `ac52bf4` 58 PASS; current selection plus Telegram regression 63 PASS, zero failures. This is not a new global-suite comparison.
+- Live development Telegram-runtime check: decision valid, `pec_find_by_runts_reference`, MCP invoked, `AUTH_REQUIRED`, writes 0. No real-message success or production Telegram acceptance claimed.
 
 ## Eval
 
@@ -78,7 +82,9 @@ Operational M1–Media gates remain GREEN. PEC/RUNTS operational vertical is act
 ## Blocked
 
 - Global suite remains historically red; tracked separately. Dependency set is not locked in project metadata.
-- RUNTS authenticated REST/frontend contract is blocked at manual SPID/CIE phone authentication; semantic provider returns `RUNTS_AUTH_REQUIRED`.
+- PEC requires an authenticated session or an officially provisioned IMAP application credential in a secret store. RUNTS browser tab exists, but complete READ transport is not yet verified.
+- Companion source recovered at `/home/bandi/work/android-companion`; no Android change/build/install yet. Sibilla has no adb available. Device handlers, QR handoff and Keystore authentication remain unverified.
+- Auth Broker/resume, new OTP integration and practice 2603942 documentary preparation are not complete.
 
 ## Next step
 

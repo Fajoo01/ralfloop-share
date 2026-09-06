@@ -67,6 +67,7 @@ def is_unified_telegram_request(text: str, context: Mapping[str, Any]) -> bool:
         and bool(
             _SUPPORTED.search(text)
             or _EMAIL_READ_SUPPORTED.search(text)
+            or _is_pec_runts_request(text)
             or re.fullmatch(r"\s*(?:otp[\s:-]*)?[0-9]{6}\s*", text, re.I)
             or (
                 _is_positive_confirmation(text)
@@ -107,6 +108,20 @@ def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any]
 
     if not is_unified_telegram_request(text, context):
         return None
+    if _is_pec_runts_request(text):
+        from .pec_runts_telegram import decision_for_telegram
+
+        decision = decision_for_telegram(text)
+        assert decision is not None
+        return {
+            "task_mode": "tool_backed_read", "mode": "tool_backed_read",
+            "interaction_class": "TOOL_BACKED_READ", "intent": "pec.runts_reference.read",
+            "arguments": decision.arguments.model_dump(), "domains": ["pec_runts"],
+            "skills_used": [decision.tool_id], "domain_skills": [decision.tool_id],
+            "mcp_used": ["pec_runts.mcp"], "mcp_connectors": ["pec_runts.mcp"],
+            "write_policy": "no_write", "evidence_first": True,
+            "requires_confirmation": False,
+        }
     if re.fullmatch(r"\s*(?:otp[\s:-]*)?[0-9]{6}\s*", text, re.I):
         return {
             "task_mode": "external_action", "mode": "external_action",
@@ -168,6 +183,14 @@ def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any]
 
 
 def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any]:
+    if _is_pec_runts_request(text):
+        from .pec_runts_telegram import execute_telegram_read
+
+        memory_path = Path(os.getenv(
+            "RALFLOOP_OPERATIONAL_MEMORY_PATH",
+            str(Path.home() / ".local" / "state" / "ralf" / "operational-memory.sqlite"),
+        ))
+        return execute_telegram_read(text, memory_path=memory_path)
     flags = AssistantFeatureFlags.from_env()
     session_id = _session_id(context)
     store = SessionStore(os.getenv(
@@ -694,6 +717,12 @@ def _ensure_session(store: SessionStore, session_id: str) -> None:
 def _is_positive_confirmation(text: str) -> bool:
     folded = " ".join(text.casefold().split()).strip(" .!?")
     return folded in CONFIRM_WORDS
+
+
+def _is_pec_runts_request(text: str) -> bool:
+    from .pec_runts_telegram import is_pec_runts_telegram
+
+    return is_pec_runts_telegram(text)
 
 
 __all__ = ["is_unified_telegram_request", "run_unified_telegram", "unified_route_probe"]

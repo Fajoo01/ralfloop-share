@@ -64,8 +64,9 @@ _CONTROL_VALUE_RE = re.compile(
 
 
 class ModelToolDecisionError(ValueError):
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, details: tuple[dict[str, str], ...] = ()) -> None:
         self.code = code
+        self.details = details
         super().__init__(code)
 
 
@@ -215,7 +216,12 @@ def _strict_decision(
     try:
         return ModelToolDecision.model_validate(normalized)
     except ValueError as exc:
-        raise ModelToolDecisionError("tool_decision_schema_invalid") from exc
+        errors = getattr(exc, "errors", lambda: ())()
+        details = tuple({
+            "field": ".".join(str(part) for part in row.get("loc", ())) or "$",
+            "type": str(row.get("type") or "validation_error"),
+        } for row in errors)
+        raise ModelToolDecisionError("tool_decision_schema_invalid", details=details) from exc
 
 
 def _looks_like_control_decision(text: str) -> bool:
@@ -254,7 +260,10 @@ def _decision_diagnostic(text: str, exc: ValueError) -> dict[str, Any]:
         arguments = payload.get("arguments")
         if isinstance(arguments, dict):
             redacted["argument_keys"] = sorted(str(key) for key in arguments)
-    return {"reason": reason, "redacted_payload": redacted}
+    output = {"reason": reason, "redacted_payload": redacted}
+    if isinstance(exc, ModelToolDecisionError) and exc.details:
+        output["validation_errors"] = list(exc.details)
+    return output
 
 
 def _ready_catalog(registry: ModelToolRegistry) -> list[dict[str, Any]]:

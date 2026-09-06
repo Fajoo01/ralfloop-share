@@ -1,6 +1,28 @@
 from ralfloop_agent.unified_assistant.pec_browser_adapter import PecAuthenticatedBrowserAdapter, PecBrowserError
 
 
+def test_cdp_call_preserves_interleaved_network_events():
+    import json
+    from ralfloop_agent.unified_assistant.pec_browser_adapter import PecAuthenticatedCdpTransport
+
+    event = {"method": "Network.requestWillBeSent", "params": {"requestId": "synthetic"}}
+    class Socket:
+        def __init__(self): self.rows = iter((event, {"id": 1, "result": {}}))
+        def send(self, value): pass
+        def recv(self): return json.dumps(next(self.rows))
+    transport = PecAuthenticatedCdpTransport()
+    transport._client = Socket()
+    assert transport._call(1, "Network.enable", {}) == {}
+    assert list(transport._events) == [event]
+
+
+def test_pec_auth_errors_are_not_generic_outages():
+    assert PecBrowserError("pec_auth_required").status == "AUTH_REQUIRED"
+    assert PecBrowserError("pec_session_expired").status == "SESSION_EXPIRED"
+    assert PecBrowserError("pec_page_timeout").status == "SOURCE_UNAVAILABLE"
+    assert PecBrowserError("pec_incomplete_source").status == "INCOMPLETE_SOURCE"
+
+
 def payload(page, total, ids):
     return {
         "pageInfo": {"page": page, "pageCount": 2, "itemCount": total},

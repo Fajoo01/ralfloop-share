@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import time
+from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Protocol
 from urllib.parse import urlparse
@@ -14,7 +15,18 @@ from .platform import SourceRef
 
 
 class PecBrowserError(RuntimeError):
-    pass
+    @property
+    def status(self) -> str:
+        code = str(self)
+        if code == "pec_auth_required":
+            return "AUTH_REQUIRED"
+        if code == "pec_session_expired":
+            return "SESSION_EXPIRED"
+        if any(part in code for part in ("incomplete", "repeated", "duplicate", "max_pages", "total_changed")):
+            return "INCOMPLETE_SOURCE"
+        if any(part in code for part in ("malformed", "shape_invalid", "_invalid")):
+            return "MALFORMED_RESPONSE"
+        return "SOURCE_UNAVAILABLE"
 
 
 class PecPageTransport(Protocol):
@@ -36,6 +48,7 @@ class PecAuthenticatedCdpTransport:
             raise ValueError("pec_cdp_endpoint_must_be_loopback")
         self.endpoint, self.timeout_s = endpoint.rstrip("/"), timeout_s
         self._client = None
+        self._events = deque()
 
     def first_page(self) -> dict[str, Any]:
         self.close()
@@ -63,6 +76,7 @@ class PecAuthenticatedCdpTransport:
             raise
 
     def close(self) -> None:
+        self._events.clear()
         if self._client is not None:
             self._client.close()
             self._client = None
@@ -74,6 +88,8 @@ class PecAuthenticatedCdpTransport:
         except Exception as exc:
             raise PecBrowserError("pec_cdp_inventory_unavailable") from exc
         matches = [row for row in rows if row.get("type") == "page" and urlparse(str(row.get("url") or "")).hostname == self.HOST and urlparse(str(row.get("url") or "")).path.startswith(self.PAGE_PREFIX)]
+        if not matches:
+            raise PecBrowserError("pec_auth_required")
         if len(matches) != 1:
             raise PecBrowserError("pec_authenticated_page_unresolved")
         return matches[0]
@@ -87,6 +103,8 @@ class PecAuthenticatedCdpTransport:
                 if row.get("error"):
                     raise PecBrowserError("pec_cdp_call_failed")
                 return row.get("result", {})
+            if "method" in row:
+                self._events.append(row)
 
     def _wait_page(self) -> dict[str, Any]:
         assert self._client is not None
@@ -94,11 +112,14 @@ class PecAuthenticatedCdpTransport:
         requests: set[str] = set()
         while time.monotonic() < deadline:
             try:
-                row = json.loads(self._client.recv())
+                row = self._events.popleft() if self._events else json.loads(self._client.recv())
             except Exception:
                 continue
             params = row.get("params", {})
             request_id = str(params.get("requestId") or "")
+            if row.get("method") == "Network.responseReceived" and request_id in requests:
+                if params.get("response", {}).get("status") == 401:
+                    raise PecBrowserError("pec_session_expired")
             if row.get("method") == "Network.requestWillBeSent":
                 request = params.get("request", {})
                 if (
@@ -114,6 +135,8 @@ class PecAuthenticatedCdpTransport:
                     raise PecBrowserError("pec_response_malformed") from exc
                 if isinstance(value, dict) and isinstance(value.get("data"), list) and isinstance(value.get("pageInfo"), dict):
                     return value
+        # Recheck the actual browser boundary before classifying a network timeout.
+        self._page()
         raise PecBrowserError("pec_page_timeout")
 
 

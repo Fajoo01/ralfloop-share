@@ -172,6 +172,12 @@ class PecRuntsService:
     def find_runts_notifications(self, *, limit: int = 100) -> tuple[PecMessage, ...]:
         return tuple(row for row in self.discover_pec(limit=limit) if row.runts_reference)
 
+    def find_pec_by_runts_reference(self, runts_reference: str, *, limit: int = 100) -> tuple[PecMessage, ...]:
+        identity = runts_reference.strip()
+        if not identity or len(identity) > 240:
+            raise ValueError("runts_reference_invalid")
+        return tuple(row for row in self.discover_pec(limit=limit) if row.runts_reference == identity)
+
     def sync_runts(self, *, limit: int = 100) -> tuple[RuntsMessage | RuntsPractice, ...]:
         try:
             rows: tuple[RuntsMessage | RuntsPractice, ...] = (*self.runts.list_messages(limit=_limit(limit)), *self.runts.list_practices(limit=_limit(limit)))
