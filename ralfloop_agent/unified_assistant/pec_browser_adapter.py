@@ -59,7 +59,7 @@ class PecAuthenticatedCdpTransport:
         except Exception as exc:
             raise PecBrowserError("pec_cdp_unavailable") from exc
         self._call(1, "Network.enable", {"maxTotalBufferSize": 20_000_000, "maxResourceBufferSize": 10_000_000})
-        self._call(2, "Page.reload", {"ignoreCache": False})
+        self._call(2, "Page.navigate", {"url": "https://webmail.pec.it/new/messages/INBOX?mail_pnum=1"})
         return self._wait_page()
 
     def next_page(self) -> dict[str, Any] | None:
@@ -150,6 +150,19 @@ class PecAuthenticatedBrowserAdapter:
     def list_messages(self, *, limit: int) -> tuple[PecMessage, ...]:
         if not 1 <= limit <= 100:
             raise ValueError("pec_limit_invalid")
+        return self._enumerate()[:limit]
+
+    def find_by_runts_reference(self, reference: str, *, limit: int) -> tuple[PecMessage, ...]:
+        if not re.fullmatch(r"[A-Za-z0-9_.:@/-]{1,240}", reference) or not 1 <= limit <= 100:
+            raise ValueError("pec_reference_invalid")
+        pattern = re.compile(r"(?<![A-Za-z0-9])" + re.escape(reference) + r"(?![A-Za-z0-9])")
+        rows = tuple(row for row in self._enumerate() if pattern.search(row.subject + "\n" + row.body)
+                     and "runts" in (row.subject + "\n" + row.body).casefold())
+        if len(rows) > limit:
+            raise PecBrowserError("pec_incomplete_source")
+        return rows
+
+    def _enumerate(self) -> tuple[PecMessage, ...]:
         payload = self.transport.first_page()
         rows: list[PecMessage] = []
         seen_ids: set[str] = set()
@@ -173,16 +186,16 @@ class PecAuthenticatedBrowserAdapter:
                 seen_ids.add(message.native_id)
                 self._cache[message.native_id] = message
                 rows.append(message)
-            if len(rows) >= expected_total or len(rows) >= limit:
+            if len(rows) >= expected_total:
                 break
             payload = self.transport.next_page()
             if payload is None:
                 raise PecBrowserError("pec_incomplete_source")
         else:
             raise PecBrowserError("pec_max_pages_exceeded")
-        if expected_total is not None and len(rows) < min(expected_total, limit):
+        if expected_total is not None and len(rows) != expected_total:
             raise PecBrowserError("pec_incomplete_source")
-        return tuple(rows[:limit])
+        return tuple(rows)
 
     def get_message(self, native_id: str) -> PecMessage:
         if native_id not in self._cache:

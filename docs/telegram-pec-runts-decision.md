@@ -35,3 +35,22 @@ The CDP transport previously discarded network events received while waiting for
 Live development runtime acceptance returned decisionValid=true, selectedCapability=pec_find_by_runts_reference, mcpInvoked=true, AUTH_REQUIRED, writes=0. The authenticated PEC tab was absent at that check. Production Telegram has not been changed or accepted. Relative targeted baseline ac52bf4: 58 PASS; current plus new Telegram tests: 63 PASS. No global rerun claimed.
 
 Official Aruba documentation supports dedicated mail-client passwords with two-factor authentication: https://guide.pec.it/gestione-account-pec/password/programmi-di-posta.aspx . Account-specific provisioning remains required; no secret was read or generated.
+
+## Authenticated bandi session — live READ checkpoint
+
+Verified Chrome owned by OS user `bandi`, using `browser-bandi-profile` and loopback CDP port 9236. This session is on the development host (hostname sibilla-cumana); session ownership must not be confused with the hostname. Existing transport reaches it directly: no remote cookie bridge, no duplicate provider, no additional login. No cookie/token values were exported.
+
+The transport resets INBOX to page one using a fixed read navigation. Enumeration reconciled 50 + 50 + 11 = 111 unique messages. Search previously stopped at the result limit; it now reconciles the entire inbox before exact-reference filtering. Too many matches or missing pages fail closed. Opening message detail/changing unread state is not used.
+
+Exact user phrase, development Telegram runtime with `RALFLOOP_UNIFIED_ASSISTANT=1`:
+
+- route: `tool_backed_read`;
+- registry candidates: `pec_find_by_runts_reference`, `runts_get_authoritative_for_pec`, `runts_correlate_runtsuite`;
+- strict decision valid; selected `pec_find_by_runts_reference`; real MCP invocation;
+- live READ success; 3 matching PEC notifications; WRITE 0;
+- temporary Memory persistence exercised; test evidence database removed automatically;
+- this is not an actual Telegram ingress or production deployment acceptance.
+
+RUNTS live adapter also reconciled 11 practices with exactly one native ID 2603942. Message enumeration returned one message/one attachment, without an explicit practice association. No authoritative contents are attributed to that practice yet.
+
+Regression: current targeted/adjacent suite including RUNTS work-in-progress tests 69 PASS. Identical common selection on baseline ac52bf4: 55 PASS, current: 56 PASS, zero failures in either. Common files: test_pec_runts, test_model_tool_orchestrator, test_chat_api, test_operational_runtime, test_platform_capabilities. Global historical suite not rerun. New tests cover matches after the former 100-item window, incomplete-source absence, and result overflow. No production service, APK or WRITE setting changed.

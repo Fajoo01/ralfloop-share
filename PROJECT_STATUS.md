@@ -77,18 +77,19 @@ Operational M1–Media preserved. PEC/RUNTS Telegram route is implemented in the
 - Media library scan is intentionally fail-closed when the authoritative total exceeds the explicit 1000-item safety bound.
 - `ffprobe` requires an operator-configured item-to-path resolver and filesystem-root allowlist; it is not wired to production paths.
 - Optional test dependencies are incomplete in project metadata (`PyYAML`, `beautifulsoup4`).
-- Aruba PEC paginator changes the browser page correctly but complete multi-page response capture is still fail-closed pending contract hardening.
+- Aruba PEC INBOX live enumeration verified: 111 unique messages over three pages; reference search runs after complete reconciliation, not after the first 100 records.
 
 ## Blocked
 
 - Global suite remains historically red; tracked separately. Dependency set is not locked in project metadata.
-- PEC requires an authenticated session or an officially provisioned IMAP application credential in a secret store. RUNTS browser tab exists, but complete READ transport is not yet verified.
+- PEC authenticated session belongs to `bandi`, available through existing loopback CDP 9236 on the development host. Exact Telegram phrase executed locally through semantic MCP: 3 PEC matches, READ success, WRITE 0. Production Telegram deployment/acceptance not performed.
+- RUNTS development adapter enumerated 11 practices, including native ID 2603942; one message/one attachment observed, but message has no explicit practice link. Authoritative correlation and attachment download remain unproven.
 - Companion source recovered at `/home/bandi/work/android-companion`; no Android change/build/install yet. Sibilla has no adb available. Device handlers, QR handoff and Keystore authentication remain unverified.
 - Auth Broker/resume, new OTP integration and practice 2603942 documentary preparation are not complete.
 
 ## Next step
 
-- Complete SPID/CIE in the existing Sibilla RUNTS tab; then capture sanitized authoritative read contracts and promote RUNTS READ only.
+- Continue authenticated RUNTS read correlation from the existing browser session; do not request another Aruba login. Prove authoritative practice/message relationship before documentary preparation.
 
 ## Git status
 

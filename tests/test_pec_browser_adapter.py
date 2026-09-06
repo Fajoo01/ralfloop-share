@@ -73,3 +73,32 @@ def test_duplicate_native_ids_fail_closed():
         assert False
     except PecBrowserError as exc:
         assert str(exc) == "pec_duplicate_message_id"
+
+
+def test_reference_search_enumerates_past_result_limit_and_matches_exactly():
+    # MOCK: the match is beyond the former 100-message retrieval window.
+    first = payload(1, 102, [f"other-{i}" for i in range(100)])
+    last = payload(2, 102, ["26039420", "2603942"])
+    transport = Transport([first, last])
+    adapter = PecAuthenticatedBrowserAdapter(transport)
+    rows = adapter.find_by_runts_reference("2603942", limit=1)
+    assert [row.native_id for row in rows] == ["2603942"]
+    assert transport.index == 1
+    assert rows[0].source.content_hash
+
+
+def test_reference_search_never_reports_absence_from_incomplete_source():
+    import pytest
+    adapter = PecAuthenticatedBrowserAdapter(Transport([payload(1, 101, [f"p-{i}" for i in range(100)])]))
+    with pytest.raises(PecBrowserError, match="pec_incomplete_source"):
+        adapter.find_by_runts_reference("2603942", limit=100)
+
+
+def test_reference_search_fails_closed_when_matches_exceed_limit():
+    import pytest
+    page = payload(1, 2, ["p-1", "p-2"])
+    for row in page["data"]:
+        row["subject"] = "RUNTS pratica n. 2603942"
+    adapter = PecAuthenticatedBrowserAdapter(Transport([page]))
+    with pytest.raises(PecBrowserError, match="pec_incomplete_source"):
+        adapter.find_by_runts_reference("2603942", limit=1)

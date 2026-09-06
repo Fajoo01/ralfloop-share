@@ -176,6 +176,12 @@ class PecRuntsService:
         identity = runts_reference.strip()
         if not identity or len(identity) > 240:
             raise ValueError("runts_reference_invalid")
+        search = getattr(self.pec, "find_by_runts_reference", None)
+        if search is not None:
+            rows = search(identity, limit=_limit(limit))
+            for row in rows:
+                self._put_pec(row)
+            return rows
         return tuple(row for row in self.discover_pec(limit=limit) if row.runts_reference == identity)
 
     def sync_runts(self, *, limit: int = 100) -> tuple[RuntsMessage | RuntsPractice, ...]:
