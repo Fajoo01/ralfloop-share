@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Mapping
 
 from .pec_runts import AuthorityStatus, PecRuntsService, RuntsAuthRequired
@@ -20,6 +21,7 @@ TOOLS = {
     "runts_sync_messages_practices": ({"limit": {"type": "integer", "minimum": 1, "maximum": 100}}, []),
     "runts_get_authoritative_for_pec": ({"pec_message_id": _id()}, ["pec_message_id"]),
     "runts_correlate_runtsuite": ({"practice_id": _id()}, ["practice_id"]),
+    "runts_prepare_document_review": ({"practice_id": _id(), "message_id": _id(), "document_id": _id()}, ["practice_id", "message_id", "document_id"]),
     "runts_prepare_action": ({"practice_id": _id(), "action": {"type": "string", "pattern": r"^[A-Z][A-Z0-9_]{1,95}$"}, "reason": {"type": "string", "minLength": 1, "maxLength": 1000}}, ["practice_id", "action", "reason"]),
 }
 
@@ -58,6 +60,10 @@ class PecRuntsMCPServer:
                 data = {"authority": result.model_dump(mode="json")}
             elif name == "runts_correlate_runtsuite":
                 data = {"correlation": self.service.correlate_runtsuite(str(arguments["practice_id"])).model_dump(mode="json")}
+            elif name == "runts_prepare_document_review":
+                if any(not isinstance(arguments[key], str) or not re.fullmatch(r"[A-Za-z0-9_.:@/-]{1,240}", arguments[key]) for key in required):
+                    return _error("POLICY_DENIED")
+                data = {"proposal": self.service.prepare_document_review(arguments["practice_id"], arguments["message_id"], arguments["document_id"]).model_dump(mode="json")}
             else:
                 practice = self.service.runts.get_practice(str(arguments["practice_id"]))
                 if practice.native_id != str(arguments["practice_id"]):
@@ -86,11 +92,12 @@ def capability_descriptors() -> tuple[CapabilityDescriptor, ...]:
         "runts_sync_messages_practices": ("runts", "pratiche", "messaggi", "aggiorna"),
         "runts_get_authoritative_for_pec": ("runts", "pec", "autoritativo", "comunicazione ufficiale"),
         "runts_correlate_runtsuite": ("runts", "runtsuite", "pratica", "correla", "review queue"),
+        "runts_prepare_document_review": ("runts", "prepara", "revisione", "documento", "bilancio", "modello d", "riconciliazione"),
         "runts_prepare_action": ("runts", "prepara", "azione", "risposta", "documento"),
     }
     rows = []
     for name, (schema, required) in TOOLS.items():
-        permission = CapabilityPermission.PROPOSE if name == "runts_prepare_action" else CapabilityPermission.READ
+        permission = CapabilityPermission.PROPOSE if name in {"runts_prepare_action", "runts_prepare_document_review"} else CapabilityPermission.READ
         rows.append(CapabilityDescriptor(capability_id=name, server_id="pec_runts.mcp", domain="pec_runts", name=name, description=_description(name), keywords=keyword_map[name], input_schema={"type": "object", "properties": schema, "required": required, "additionalProperties": False}, permission=permission, approval_required=permission is CapabilityPermission.PROPOSE, source_system="pec" if name.startswith("pec_") else "runts", version="1", promotion=PromotionState.SHADOW, enabled=True, health="authenticated_read_or_auth_boundary"))
     return tuple(rows)
 

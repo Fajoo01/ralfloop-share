@@ -225,6 +225,17 @@ class PecRuntsService:
         self._put_runts(practice)
         return self.runtsuite.find_runts_practice(practice_id)
 
+    def prepare_document_review(self, practice_id: str, message_id: str, document_id: str):
+        from .runts_document_prepare import prepare_document_review
+        item = self.memory.get_entity(document_id)
+        if item is None or item.entity_type != "RUNTS_DOCUMENT_REVIEW_INPUT":
+            raise ValueError("document_review_input_required")
+        if item.data.get("practice_id") != practice_id or item.data.get("message_id") != message_id:
+            raise ValueError("document_review_identity_mismatch")
+        return prepare_document_review(self.memory, practice_id=practice_id, message_id=message_id,
+            document=SourceRef.model_validate(item.data["document"]), provenance=item.provenance,
+            blockers=tuple(item.data["blockers"]))
+
     def _put_pec(self, row: PecMessage) -> None:
         entity_id = "pec." + hashlib.sha256(row.native_id.encode()).hexdigest()[:32]
         fresh = self.memory.put_entity(MemoryEntity.build(entity_id=entity_id, domain="pec", entity_type="PEC_MESSAGE", status="UNREAD" if row.unread else "SEEN", updated_at=row.observed_at, data=row.model_dump(mode="json"), provenance=(row.source,)))
