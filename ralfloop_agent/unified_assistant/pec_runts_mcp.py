@@ -13,6 +13,7 @@ def _id() -> dict[str, Any]:
 
 
 TOOLS = {
+    "runts_prepare_practice_response": ({"practice_id": _id()}, ["practice_id"]),
     "pec_discover_messages": ({"limit": {"type": "integer", "minimum": 1, "maximum": 100}}, []),
     "pec_get_message": ({"message_id": _id()}, ["message_id"]),
     "pec_list_attachments": ({"message_id": _id()}, ["message_id"]),
@@ -41,7 +42,10 @@ class PecRuntsMCPServer:
         if not set(arguments) <= set(properties) or not set(required) <= set(arguments):
             return _error("POLICY_DENIED")
         try:
-            if name == "pec_discover_messages":
+            if name == "runts_prepare_practice_response":
+                if not isinstance(arguments["practice_id"],str) or not re.fullmatch(r"[A-Za-z0-9_.:@/-]{1,240}",arguments["practice_id"]):return _error("POLICY_DENIED")
+                data={"proposal":self.service.prepare_practice_response(arguments["practice_id"]).model_dump(mode="json")}
+            elif name == "pec_discover_messages":
                 data = {"messages": _dump(self.service.discover_pec(limit=int(arguments.get("limit", 100))))}
             elif name == "pec_get_message":
                 data = {"message": self.service.get_pec(str(arguments["message_id"])).model_dump(mode="json")}
@@ -73,8 +77,8 @@ class PecRuntsMCPServer:
             return _result(data)
         except RuntsAuthRequired:
             return _error("RUNTS_AUTH_REQUIRED", manual_action="Complete SPID/CIE authentication in the existing RUNTS browser tab; approve on phone if requested.")
-        except ValueError:
-            return _error("MALFORMED_RESPONSE")
+        except ValueError as exc:
+            return _error(str(exc) if str(exc) in {"STALE_PROPOSAL","RUNTS_PREPARE_NOT_CONFIGURED","APPROVED_TOTAL_CONFLICT","GOLDEN_SEMANTIC_CONFLICT"} else "MALFORMED_RESPONSE")
         except Exception as exc:
             from .pec_browser_adapter import PecBrowserError
             if isinstance(exc, PecBrowserError):
@@ -84,6 +88,7 @@ class PecRuntsMCPServer:
 
 def capability_descriptors() -> tuple[CapabilityDescriptor, ...]:
     keyword_map = {
+        "runts_prepare_practice_response": ("runts", "controlla", "pratica", "prepara la risposta", "modello d corretto", "approvazione", "mostrami tutto"),
         "pec_discover_messages": ("pec", "posta certificata", "nuovi messaggi", "ricevuto"),
         "pec_get_message": ("pec", "messaggio", "leggi", "comunicazione"),
         "pec_list_attachments": ("pec", "allegati", "documenti"),
@@ -97,7 +102,7 @@ def capability_descriptors() -> tuple[CapabilityDescriptor, ...]:
     }
     rows = []
     for name, (schema, required) in TOOLS.items():
-        permission = CapabilityPermission.PROPOSE if name in {"runts_prepare_action", "runts_prepare_document_review"} else CapabilityPermission.READ
+        permission = CapabilityPermission.PROPOSE if name in {"runts_prepare_action", "runts_prepare_document_review", "runts_prepare_practice_response"} else CapabilityPermission.READ
         rows.append(CapabilityDescriptor(capability_id=name, server_id="pec_runts.mcp", domain="pec_runts", name=name, description=_description(name), keywords=keyword_map[name], input_schema={"type": "object", "properties": schema, "required": required, "additionalProperties": False}, permission=permission, approval_required=permission is CapabilityPermission.PROPOSE, source_system="pec" if name.startswith("pec_") else "runts", version="1", promotion=PromotionState.SHADOW, enabled=True, health="authenticated_read_or_auth_boundary"))
     return tuple(rows)
 

@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "test_class": "SANITIZED_FIXTURE",
+  "contract_origin": "REAL_CONTRACT",
+  "captured_at": "2026-09-03",
+  "writes": 0,
+  "content_synthetic": true,
+  "practices": {
+    "retCode": 0,
+    "retMessage": null,
+    "success": true,
+    "detailRetCode": null,
+    "totalElements": 1,
+    "totalPages": 1,
+    "listaIstanze": [{
+      "idIstanza": 10001,
+      "cistanza": "SYNTHETIC-PRACTICE-1",
+      "dtOraIns": "2026-09-01T08:00:00Z",
+      "dtOraMod": "2026-09-02T09:00:00Z",
+      "adempimento": {"cadempimento": "SYNTHETIC", "descrizione": "Synthetic compliance"},
+      "decoStato": {"codice": "SYNTHETIC_STATUS", "descrizione": "Synthetic status"}
+    }]
+  },
+  "messages": {
+    "_read_context": {"practice_id": "10001", "locator": "https://ista.scrivaniapa.infocamere.it/api/v1/messaggio/10001"},
+    "retCode": 0,
+    "retMessage": null,
+    "success": true,
+    "detailRetCode": null,
+    "totalElements": 1,
+    "totalPages": 1,
+    "flgMessaggio": "S",
+    "listaMessaggi": [{
+      "idMessaggio": 20001,
+      "corpo": "Synthetic authoritative content",
+      "dtOraIns": 1788336000000,
+      "dtOraMod": 1788336000000,
+      "nota": "Synthetic note",
+      "oggetto": "Synthetic RUNTS message",
+      "messaggioDocumentos": [{
+        "idMessaggioDocumento": 30001,
+        "idStorage": "synthetic-storage-1",
+        "nomeFile": "synthetic-document.pdf",
+        "decoTipo": null
+      }]
+    }]
+  }
+}

@@ -153,8 +153,22 @@ class RuntsAuthBoundaryProvider:
 
 
 class PecRuntsService:
-    def __init__(self, memory: MemoryService, pec: PecReadProvider, runts: RuntsReadProvider, *, runtsuite: RuntsuitePracticeProvider | None = None, router: EventRouter | None = None) -> None:
+    def __init__(self, memory: MemoryService, pec: PecReadProvider, runts: RuntsReadProvider, *, runtsuite: RuntsuitePracticeProvider | None = None, router: EventRouter | None = None, response_preparer=None) -> None:
         self.memory, self.pec, self.runts, self.runtsuite, self.router = memory, pec, runts, runtsuite, router
+        self.response_preparer=response_preparer
+
+    def prepare_practice_response(self, practice_id):
+        if self.response_preparer is None:raise ValueError("RUNTS_PREPARE_NOT_CONFIGURED")
+        practice=self.runts.get_practice(practice_id)
+        if practice.native_id!=practice_id:raise ValueError("practice_identity_mismatch")
+        messages=self.runts.list_messages(practice_id=practice_id,limit=100)
+        if not messages or any(m.practice_id!=practice_id for m in messages):raise ValueError("authoritative_practice_messages_required")
+        detailed=tuple(self.runts.get_message(m.native_id) for m in messages)
+        if {(m.native_id,m.content_hash) for m in detailed}!={(m.native_id,m.content_hash) for m in messages}:
+            raise ValueError("STALE_PROPOSAL")
+        self._put_runts(practice)
+        for m in detailed:self._put_runts(m)
+        return self.response_preparer(practice,detailed,self.memory)
 
     def discover_pec(self, *, limit: int = 100) -> tuple[PecMessage, ...]:
         rows = self.pec.list_messages(limit=_limit(limit))
@@ -226,7 +240,7 @@ class PecRuntsService:
         return self.runtsuite.find_runts_practice(practice_id)
 
     def prepare_document_review(self, practice_id: str, message_id: str, document_id: str):
-        from .runts_document_prepare import prepare_document_review, DocumentReviewContext
+        from .runts_document_prepare import prepare_document_review, DocumentReviewContext, FinalDocumentValidation
         item = self.memory.get_entity(document_id)
         if item is None or item.entity_type != "RUNTS_DOCUMENT_REVIEW_INPUT":
             raise ValueError("document_review_input_required")
@@ -235,7 +249,8 @@ class PecRuntsService:
         return prepare_document_review(self.memory, practice_id=practice_id, message_id=message_id,
             document=SourceRef.model_validate(item.data["document"]), provenance=item.provenance,
             blockers=tuple(item.data["blockers"]),
-            review_context=DocumentReviewContext.model_validate(item.data["review_context"]) if item.data.get("review_context") else None)
+            review_context=DocumentReviewContext.model_validate(item.data["review_context"]) if item.data.get("review_context") else None,
+            final_validation=FinalDocumentValidation.model_validate(item.data["final_validation"]) if item.data.get("final_validation") else None)
 
     def _put_pec(self, row: PecMessage) -> None:
         entity_id = "pec." + hashlib.sha256(row.native_id.encode()).hexdigest()[:32]

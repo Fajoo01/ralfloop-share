@@ -113,6 +113,11 @@ def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any]
 
         decision = decision_for_telegram(text)
         assert decision is not None
+        if decision.tool_id=="runts_prepare_practice_response":
+            return {"task_mode":"tool_backed_prepare","mode":"tool_backed_prepare","interaction_class":"TOOL_BACKED_PREPARE",
+                "intent":"runts.practice.response.prepare","arguments":decision.arguments.model_dump(),"domains":["pec_runts"],
+                "skills_used":[decision.tool_id],"domain_skills":[decision.tool_id],"mcp_used":["pec_runts.mcp"],
+                "mcp_connectors":["pec_runts.mcp"],"write_policy":"no_write","evidence_first":True,"requires_confirmation":False}
         return {
             "task_mode": "tool_backed_read", "mode": "tool_backed_read",
             "interaction_class": "TOOL_BACKED_READ", "intent": "pec.runts_reference.read",

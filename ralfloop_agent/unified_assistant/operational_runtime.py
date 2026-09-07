@@ -28,6 +28,7 @@ class BottazziOperationalRuntime:
         pec_provider: PecReadProvider | None = None,
         runts_provider: RuntsReadProvider | None = None,
         runtsuite_provider: RuntsuiteReadOnlyAdapter | None = None,
+        runts_response_preparer=None,
     ) -> None:
         self.metrics = OperationalMetrics()
         self.memory = MemoryService(memory_path)
@@ -51,7 +52,7 @@ class BottazziOperationalRuntime:
             self.nightly_queue, providers or {},
             deterministic_handlers=deterministic_handlers, metrics=self.metrics,
         )
-        self.pec_runts = PecRuntsService(self.memory, pec_provider, runts_provider, runtsuite=runtsuite_provider, router=self.events) if pec_provider and runts_provider else None
+        self.pec_runts = PecRuntsService(self.memory, pec_provider, runts_provider, runtsuite=runtsuite_provider, router=self.events, response_preparer=runts_response_preparer) if pec_provider and runts_provider else None
         self.pec_runts_mcp = PecRuntsMCPServer(self.pec_runts) if self.pec_runts else None
         self.pec_runts_capabilities = CapabilityRegistry(capability_descriptors())
 

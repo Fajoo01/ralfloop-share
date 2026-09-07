@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import os
 from pathlib import Path
 from typing import Any, Literal, Mapping
 
@@ -33,7 +34,27 @@ class PecRuntsToolDecision(BaseModel):
     arguments: PecRuntsDecisionArguments
 
 
-def decision_for_telegram(text: str) -> PecRuntsToolDecision | None:
+class RuntsResponseArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    practice_id: str = Field(pattern=r"^[A-Za-z0-9_.:@/-]{1,240}$")
+
+
+class RuntsResponseDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    action: Literal["tool"] = "tool"
+    response: None = None
+    tool_id: Literal["runts_prepare_practice_response"]
+    arguments: RuntsResponseArguments
+
+
+def decision_for_telegram(text: str) -> PecRuntsToolDecision | RuntsResponseDecision | None:
+    refs=re.findall(r"\bpratica\s+RUNTS\s+([A-Za-z0-9_.:/-]+)",text,re.I)
+    if refs and re.search(r"\bprepara\b",text,re.I) and re.search(r"\brisposta\b",text,re.I):
+        if len(set(refs))!=1:raise ValueError("ambiguous_practice_reference")
+        candidates=CapabilityRegistry(capability_descriptors()).retrieve(text,domains=("pec_runts",),allowed_permissions=(CapabilityPermission.PROPOSE,),limit=3)
+        compatible=[c for c in candidates if c.input_schema.get("required")==["practice_id"]]
+        if len(compatible)!=1:raise ValueError("runts_prepare_capability_unresolved")
+        return RuntsResponseDecision(tool_id=compatible[0].capability_id,arguments=RuntsResponseArguments(practice_id=refs[0]))
     match = PEC_RUNTS_REFERENCE.search(" ".join(text.split()))
     if not match:
         return None
@@ -55,10 +76,14 @@ def execute_telegram_read(
     memory_path: str | Path,
     pec_provider: PecReadProvider | None = None,
     runts_provider: RuntsReadProvider | None = None,
+    runts_response_preparer=None,
 ) -> dict[str, Any]:
     decision = decision_for_telegram(text)
     if decision is None:
         raise ValueError("pec_runts_telegram_not_applicable")
+    if isinstance(decision,RuntsResponseDecision):
+        return execute_telegram_prepare(text,memory_path=memory_path,pec_provider=pec_provider,
+            runts_provider=runts_provider,response_preparer=runts_response_preparer)
     transport = None
     if pec_provider is None:
         transport = PecAuthenticatedCdpTransport()
@@ -101,6 +126,45 @@ def execute_telegram_read(
 
 def is_pec_runts_telegram(text: str) -> bool:
     return decision_for_telegram(text) is not None
+
+
+def execute_telegram_prepare(text, *, memory_path, pec_provider=None, runts_provider=None, response_preparer=None):
+    decision=decision_for_telegram(text)
+    if not isinstance(decision,RuntsResponseDecision):raise ValueError("runts_prepare_not_applicable")
+    transports=[]
+    if response_preparer is None and os.getenv("BOTTAZZI_RUNTS_PREPARE_BINDING"):
+        from .runts_response_prepare import RuntsPrepareBinding, RuntsSuiteResponsePreparer
+        response_preparer=RuntsSuiteResponsePreparer(RuntsPrepareBinding.model_validate_json(Path(os.environ["BOTTAZZI_RUNTS_PREPARE_BINDING"]).read_text()))
+    if runts_provider is None and response_preparer is not None:
+        # Existing authenticated READ adapter; never a generic browser executor.
+        # Its separate release must be promoted along with a production binding.
+        from .runts_browser_adapter import RuntsAuthenticatedBrowserAdapter, RuntsAuthenticatedCdpTransport
+        runts_provider=RuntsAuthenticatedBrowserAdapter(RuntsAuthenticatedCdpTransport())
+    if pec_provider is None:
+        transport=PecAuthenticatedCdpTransport();transports.append(transport)
+        pec_provider=PecAuthenticatedBrowserAdapter(transport)
+    try:
+        with BottazziOperationalRuntime(memory_path,pec_provider=pec_provider,runts_provider=runts_provider or RuntsAuthBoundaryProvider(),runts_response_preparer=response_preparer) as runtime:
+            pec=runtime.invoke_pec_runts("cerca PEC riferimento pratica RUNTS",{"runts_reference":decision.arguments.practice_id,"limit":100})
+            # A PEC notification is optional; RUNTS remains authoritative.
+            result=runtime.invoke_pec_runts(text,decision.arguments.model_dump())
+            proposal=(result.get("structuredContent") or {}).get("proposal")
+            ok=bool(proposal) and not result.get("isError")
+            answer=(proposal["proposed_reply"]+"\nStato: "+proposal["status"]+". Nessun invio eseguito." if ok else "Preparazione non completata: "+result.get("structuredContent",{}).get("status","SOURCE_UNAVAILABLE"))
+            if ok:
+                answer+="\nPDF: "+proposal["review_context"]["pdf_path"]+"\nSHA256: "+proposal["sha256"]
+                if pec.get("isError"):
+                    answer+="\nPEC non disponibile in questa verifica; utilizzata la comunicazione RUNTS autoritativa."
+            return {"ok":ok,"response":answer,"final_answer":answer,"interaction_mode":"unified_assistant",
+                # Administrative review is not an executable pending confirmation.
+                # Legacy Meowgram hides the full answer when approval_required is true.
+                "capability":decision.tool_id,"tools_executed":True,"approval_required":False,"human_review_required":ok,
+                "metadata":{"tool_decision_valid":True,"selected_capability":result.get("selectedCapability"),
+                    "mcp_invoked":True,"writes":0,"proposal":proposal,"pec_status":pec.get("structuredContent",{}).get("status","READ"),
+                    "mcp_calls":[pec.get("selectedCapability"),result.get("selectedCapability")],"deployment_state":"TESTED_WORKING_TREE"},
+                "artifacts":list(proposal["attachments"]) if ok else [],"audit_summary":["RUNTS_PREPARE_STOP_BEFORE_WRITE"]}
+    finally:
+        for transport in transports:transport.close()
 
 
 __all__ = ["PecRuntsToolDecision", "decision_for_telegram", "execute_telegram_read", "is_pec_runts_telegram"]
