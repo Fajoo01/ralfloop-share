@@ -3,6 +3,7 @@ from collections import defaultdict
 from datetime import date
 from decimal import Decimal
 from itertools import combinations
+import re
 from .runts_accounting import version
 
 
@@ -16,7 +17,11 @@ def duplicate_groups(imports, *, owner_evidence=()):
     for key, rows in groups.items():
         if len(rows)<2:continue
         rows=sorted(rows,key=lambda r:(r["imported_at"],r["import_id"]))
-        proven={e["account_id"] for e in owner_evidence if e.get("source_hash")==key[0] and e.get("source_ref") and e["account_id"] in {r["account_id"] for r in rows}}
+        proven={e["account_id"] for e in owner_evidence if e.get("source_hash")==key[0]
+            and e.get("source_ref") and e.get("mapping_ref")
+            and re.fullmatch(r"[a-f0-9]{64}", e.get("source_instrument_hash", ""))
+            and e["source_instrument_hash"] == e.get("account_instrument_hash")
+            and e["account_id"] in {r["account_id"] for r in rows}}
         owner=next(iter(proven)) if len(proven)==1 else None
         output.append({"group_id":"duplicate."+version(key)[:24],"import_ids":[r["import_id"] for r in rows],
             "account_ids":[r["account_id"] for r in rows],"original_import_id":rows[0]["import_id"],
@@ -28,6 +33,35 @@ def duplicate_groups(imports, *, owner_evidence=()):
             "projected_source_delta":str(sum((Decimal(str(r[1])) for r in rows[0]["ledger_rows"]),Decimal(0))),
             "projection_occurrences":1})
     return output
+
+
+def reconcile_statement(rows, *, source_ref):
+    """Reconcile one ordered source, including every intermediate balance.
+
+    Input amounts are canonical decimal strings, not locale-formatted numbers.
+    This proves the instrument balance, NOT its ownership by a ledger account.
+    """
+    result = {"opening":None,"movement_delta":None,"closing":None,"residual":None,
+              "evidence_sources":[source_ref] if source_ref else [],
+              "status":"MISSING_BALANCE_EVIDENCE","row_count":len(rows)}
+    if not rows or not source_ref or any(r.get("balance") is None or r.get("amount") is None for r in rows):
+        return result
+    amounts = [Decimal(str(r["amount"])) for r in rows]
+    balances = [Decimal(str(r["balance"])) for r in rows]
+    if not all(x.is_finite() for x in (*amounts,*balances)):
+        raise ValueError("statement_amount_invalid")
+    opening = balances[0] - amounts[0]
+    running = opening
+    conflicts = []
+    for index,(amount,balance) in enumerate(zip(amounts,balances)):
+        running += amount
+        if running != balance:conflicts.append(index)
+    delta = sum(amounts,Decimal(0))
+    return {**result,"opening":str(opening),"movement_delta":str(delta),
+            "closing":str(balances[-1]),"residual":str(running-balances[-1]),
+            "conflicting_row_indexes":conflicts,
+            "opening_derivation":"first_source_balance_minus_first_source_movement",
+            "status":"ACCOUNT_BALANCE_CONFLICT" if conflicts else "RECONCILED"}
 
 
 def match_reimbursement(advances, movements, accounts, *, reimbursement_date, window_days=7, max_parts=2):

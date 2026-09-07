@@ -25,9 +25,34 @@ def test_duplicate_requires_all_three_fingerprints_and_owner_requires_evidence()
     for field,changed in [("source_hash","b"*64),("raw_rows",[{"different":True}]),("ledger_rows",[("2025-01-02","-210.28")])]:
         a,b=source(1,10),source(2,20);b[field]=changed
         assert duplicate_groups([a,b])==[]
-    evidence={"source_hash":"a"*64,"account_id":20,"source_ref":"synthetic://statement-account-link"}
+    evidence={"source_hash":"a"*64,"account_id":20,"source_ref":"synthetic://statement-account-link",
+              "mapping_ref":"synthetic://account-register","source_instrument_hash":"c"*64,"account_instrument_hash":"c"*64}
     g=duplicate_groups([source(1,10),source(2,20)],owner_evidence=[evidence])[0]
     assert g["preferred_owner"]==20 and g["status"]=="VERIFIED_OWNER"
+
+
+def test_owner_needs_exact_instrument_and_mapping_not_just_a_source_reference():
+    evidence={"source_hash":"a"*64,"account_id":20,"source_ref":"synthetic://statement"}
+    assert duplicate_groups([source(1,10),source(2,20)],owner_evidence=[evidence])[0]["preferred_owner"] is None
+    evidence.update(mapping_ref="synthetic://mapping",source_instrument_hash="c"*64,account_instrument_hash="d"*64)
+    assert duplicate_groups([source(1,10),source(2,20)],owner_evidence=[evidence])[0]["preferred_owner"] is None
+    evidence["account_instrument_hash"]="c"*64
+    conflicting={**evidence,"account_id":10}
+    result=duplicate_groups([source(1,10),source(2,20)],owner_evidence=[evidence,conflicting])[0]
+    assert result["status"]=="BLOCKED_REVIEW" and result["preferred_owner"] is None
+
+
+def test_statement_balances_reconcile_independently_and_never_cancel_errors():
+    from ralfloop_agent.unified_assistant.runts_financial import reconcile_statement
+    for amount,balance,opening in [("-210.28","0.07","210.35"),("4.04","5.25","1.21")]:
+        r=reconcile_statement([{"amount":amount,"balance":balance}],source_ref="synthetic://statement")
+        assert r["status"]=="RECONCILED" and Decimal(r["opening"])==Decimal(opening)
+    rows=[{"amount":"1","balance":"2"},{"amount":"2","balance":"9"},{"amount":"3","balance":"7"}]
+    r=reconcile_statement(rows,source_ref="synthetic://statement")
+    assert r["residual"]=="0" and r["status"]=="ACCOUNT_BALANCE_CONFLICT"
+    assert r["conflicting_row_indexes"]==[1]
+    assert reconcile_statement([],source_ref="synthetic://cash")["status"]=="MISSING_BALANCE_EVIDENCE"
+    assert reconcile_statement(rows,source_ref=None)["status"]=="MISSING_BALANCE_EVIDENCE"
 
 
 ACCOUNTS={1:{"is_operational_for_association":True},9:{"is_operational_for_association":False}}

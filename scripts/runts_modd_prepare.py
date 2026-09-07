@@ -31,6 +31,8 @@ def main():
     parser.add_argument("--approved-expense", required=True)
     parser.add_argument("--approved-surplus", required=True)
     parser.add_argument("--approved-closing", required=True)
+    parser.add_argument("--existing-review-pdf", type=Path)
+    parser.add_argument("--existing-review-pdf-sha256")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     if args.output.resolve().is_relative_to(root):
@@ -45,6 +47,7 @@ def main():
     from weasyprint import HTML
 
     db_path = args.suite / "runts_suite.db"
+    db_hash_before = hashlib.sha256(db_path.read_bytes()).hexdigest()
     uri = db_path.resolve().as_uri() + "?mode=ro"
     connection = sqlite3.connect(uri, uri=True)
     connection.row_factory = sqlite3.Row
@@ -143,7 +146,14 @@ def main():
         checks = validate_reimbursement_group(advances,[movement_by_id[i] for i in ids if i in movement_by_id],accounts)
         recorded_dates={decision_by_id[a["movement_id"]]["reimbursement_date"] for a in advances}
         recovery=match_reimbursement(advances,records,accounts,reimbursement_date=next(iter(recorded_dates))) if len(recorded_dates)==1 else {"status":"REIMBURSEMENT_LINK_UNVERIFIED","pairings":[]}
-        reimbursements.append({"advance_ids":[m["movement_id"] for m in advances],"recorded_settlement_ids":ids,"recorded_reference_validation":checks,**recovery})
+        reimbursements.append({"advance_ids":[m["movement_id"] for m in advances],"recorded_settlement_ids":ids,"recorded_reference_validation":checks,**recovery,
+            "advances":[{"advance_movement_id":m["movement_id"],
+                "economic_category":decision_by_id[m["movement_id"]]["existing_accounting_classification"],
+                "advance_type":m["movement_kind"],"amount":str(-money(m["importo_signed"])),
+                "advance_date":m["data_movimento"],
+                "recorded_reimbursement_date":decision_by_id[m["movement_id"]]["reimbursement_date"],
+                "candidate_settlement_ids":sorted({i for p in recovery["pairings"] for i in (*p["outgoing_ids"],*p["incoming_ids"])}),
+                "evidence":m.get("source_ref"),"match_status":recovery["status"]} for m in advances]})
     verified_settlement_ids = {i for r in reimbursements if r["status"]=="VERIFIED_LINK" for p in r["pairings"] for i in (*p["outgoing_ids"],*p["incoming_ids"])}
     projected_rows = project_management_rows(projection_decisions,verified_settlement_ids=verified_settlement_ids)
     approved_totals=assert_approved_totals(projected_rows,{"totale_entrate_mappate":args.approved_income,"totale_uscite_mappate":args.approved_expense})
@@ -177,14 +187,26 @@ def main():
         if evidence:
             result=reconcile_account(group["group_id"],opening=evidence["opening"],movements=[{"account_id":group["group_id"],"importo_signed":group["projected_source_delta"]}],closing=evidence["closing"])
             reconciled_accounts.append({**result,"instrument":"libretto","owner":group["preferred_owner"],"source_hash":group["source_hash"],"source_occurrences":1})
+    from ralfloop_agent.unified_assistant.runts_review_evidence import financial_source_audit
+    documentary_audit = financial_source_audit(connection,args.suite,args.year,accounts,projection_decisions)
+    for account in documentary_audit["account_scopes"]:
+        if account["account"] == "cash":
+            account["opening"] = str(opening_cash)
+            account["evidence_sources"].append({"snapshot_year":args.year-1,"snapshot_sha256":hashlib.sha256(snapshot_row[0].encode()).hexdigest()})
+    db_hash_after = hashlib.sha256(db_path.read_bytes()).hexdigest()
+    if db_hash_after != db_hash_before:
+        raise ValueError("production_database_changed")
     report = {"year":args.year, "summary":draft["summary"], "bridge":bridge,
+        "documentary_audit":documentary_audit,
+        "production_db_before":db_hash_before,"production_db_after":db_hash_after,
         "cash_unadjusted":str(cash), "bank_unadjusted":str(bank),
         "savings_statement_evidence":savings,
         "excluded_items":excluded, "unmapped_items":unmapped, "personal_advance_items":[{k:r[k] for k in ("movement_id","account_id","importo_signed","movement_kind")} for r in personal],
         "existing_decisions":decisions, "reimbursement_links":reimbursements,
         "projected_management_rows":projected_rows,
         "approved_totals":approved_totals,
-        "duplicate_financial_sources":duplicate_sources,"account_reconciliation":reconciled_accounts,
+        "duplicate_financial_sources":duplicate_sources,"ledger_account_reconciliation":reconciled_accounts,
+        "account_reconciliation":documentary_audit["account_scopes"] + [a for a in reconciled_accounts if a.get("instrument")=="libretto"],
         "legacy_unmapped_resolution":[decision_by_id[r["movement_id"]] for r in unmapped],
         "existing_decisions_preserved":True,"financial_reconciliation_complete":False, "writes":0,
         "snapshot_sha256":hashlib.sha256(snapshot_row[0].encode()).hexdigest(),
@@ -209,7 +231,13 @@ def main():
     html = Environment(loader=FileSystemLoader(overlay / "templates"),undefined=StrictUndefined,autoescape=True).get_template("runts_mod_d_pdf.html").render(**ctx)
     (args.output / "modello_d_review.html").write_text(html)
     pdf_path = args.output / "modello_d_review.pdf"
-    HTML(string=html, base_url=str(args.suite)).write_pdf(pdf_path)
+    if args.existing_review_pdf:
+        existing = args.existing_review_pdf.read_bytes()
+        if hashlib.sha256(existing).hexdigest() != args.existing_review_pdf_sha256:
+            raise ValueError("existing_review_pdf_hash_mismatch")
+        pdf_path.write_bytes(existing)
+    else:
+        HTML(string=html, base_url=str(args.suite)).write_pdf(pdf_path)
     pdf = pdf_path.read_bytes()
     extracted = subprocess.run(["pdftotext", "-", "-"],input=pdf,capture_output=True,check=True).stdout.decode()
     if "BOZZA NON DEPOSITABILE" not in extracted or "draft_db" in extracted or "approved_pdf" in extracted:
@@ -229,17 +257,28 @@ def main():
     from ralfloop_agent.unified_assistant.operational_runtime import BottazziOperationalRuntime
     from ralfloop_agent.unified_assistant.pec_browser_adapter import PecAuthenticatedBrowserAdapter, PecAuthenticatedCdpTransport
     from ralfloop_agent.unified_assistant.pec_runts import RuntsAuthBoundaryProvider
-    from ralfloop_agent.unified_assistant.runts_document_prepare import DocumentReviewProposal
+    from ralfloop_agent.unified_assistant.runts_document_prepare import DocumentReviewProposal, DocumentReviewContext
+    account_context = [{k:a[k] for k in ("account","opening","movement_delta","closing","residual","status")} | {"evidence_refs":[sources[2].model_dump(mode="json")]} for a in documentary_audit["account_scopes"]]
+    for a in reconciled_accounts:
+        if a.get("instrument") == "libretto":
+            account_context.append({"account":"savings_source_owner_unverified","opening":a["opening"],"movement_delta":a["movement_delta"],"closing":a["closing"],"residual":a["residual"],"status":a["status"],"evidence_refs":[sources[2].model_dump(mode="json")]})
+    context = DocumentReviewContext.model_validate({"pdf_path":str(pdf_path),
+        "approved_figures":{"income":args.approved_income,"expense":args.approved_expense,"surplus":args.approved_surplus,"closing":args.approved_closing},
+        "account_reconciliation":account_context,"evidence_refs":[s.model_dump(mode="json") for s in sources],
+        "generator_version":hashlib.sha256((overlay / "app/services/runts_modd_builder.py").read_bytes()+(overlay / "templates/runts_mod_d_pdf.html").read_bytes()).hexdigest(),
+        "production_db_before":db_hash_before,"production_db_after":db_hash_after})
     # Providers are composed but PREPARE uses persisted evidence only: no network call.
     with BottazziOperationalRuntime(args.output / "memory.sqlite", pec_provider=PecAuthenticatedBrowserAdapter(PecAuthenticatedCdpTransport()), runts_provider=RuntsAuthBoundaryProvider()) as runtime:
         memory = runtime.memory
         memory.put_document(MemoryDocument.build(document_id=document.native_id,title="Modello D review",body=extracted,source=document))
-        memory.put_entity(MemoryEntity.build(entity_id=document.native_id,domain="runts",entity_type="RUNTS_DOCUMENT_REVIEW_INPUT",status="BLOCKED_REVIEW",updated_at=datetime.now(timezone.utc),data={"practice_id":args.practice_id,"message_id":args.message_id,"document":document.model_dump(mode="json"),"blockers":blockers},provenance=sources))
+        memory.put_entity(MemoryEntity.build(entity_id=document.native_id,domain="runts",entity_type="RUNTS_DOCUMENT_REVIEW_INPUT",status="BLOCKED_REVIEW",updated_at=datetime.now(timezone.utc),data={"practice_id":args.practice_id,"message_id":args.message_id,"document":document.model_dump(mode="json"),"blockers":blockers,"review_context":context.model_dump(mode="json")},provenance=sources))
         result = runtime.invoke_pec_runts("runts prepara revisione documento bilancio modello d riconciliazione",{"practice_id":args.practice_id,"message_id":args.message_id,"document_id":document.native_id})
         if result.get("isError") or result.get("selectedCapability") != "runts_prepare_document_review":
             raise ValueError("semantic_prepare_failed")
         proposal = DocumentReviewProposal.model_validate(result["structuredContent"]["proposal"])
     (args.output / "proposal.json").write_text(proposal.model_dump_json(indent=2))
+    if hashlib.sha256(db_path.read_bytes()).hexdigest() != db_hash_before:
+        raise ValueError("production_database_changed")
     print(json.dumps({"status":proposal.status,"bridge":bridge,"approved_totals":approved_totals,"pdf_sha256":document.content_hash,"corrections":built["corrections"],"blockers":blockers,"writes":0}))
 
 

@@ -92,7 +92,9 @@ Operational M1–Media preserved. PEC/RUNTS Telegram route is implemented in the
 
 ## Next step
 
-- Recover financial source ownership, exact repayment pairing and independent bank/cash balances, without reopening existing expense classifications. Resolve capital/tax presentation from prior supporting decisions. No production promotion, upload or send.
+- Documentary gate after `7bfc135`: BLOCKED_REVIEW confirmed, not ready for approval. Source header/current aliases/backup aliases do not prove import 22/23 ownership. Original PayPal CSV reconciles 782/782 raw rows and all intermediate balances (1.21 + 4.04 = 5.25), but account assignment remains unproven. Account 2 is a wallet, not cash; bank source delta is +857.00, independent closing absent. Cash opening 23.47 is preserved; cash delta/closing remain unknown. F24 2393 stays PDC_TASSE/CE5; detail needed for presentation. Conflicting local workbook figures are not used to alter the approved 2025 figures. See `docs/runts-documentary-gate.md` for the single residual blocker list.
+- Enriched typed PREPARE dossier includes approved figures, independent account evidence, generator and production DB hashes, RUNTS MESSAGGISTICA, and stale checks. Previous review PDF reused byte-for-byte, not promoted or regenerated as final. Targeted/adjacent gate: 94 PASS, zero new failures; production DB hash unchanged; WRITE 0. Pre-existing untracked RUNTS browser work preserved separately.
+- Obtain the missing instrument-to-account evidence, exact reimbursement evidence, independent bank/cash balances and F24/capital presentation support. No reclassification, production promotion, upload or send.
 
 ## Git status
 
