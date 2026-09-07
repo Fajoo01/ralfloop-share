@@ -2,7 +2,7 @@
 
 ## Current milestone
 
-Operational M1–Media preserved. PEC/RUNTS Telegram route is implemented in the development runtime; the production Telegram release has not been promoted. On 2026-09-06 the live PEC check reaches semantic MCP and returns AUTH_REQUIRED (no authenticated PEC tab). RUNTS transport remains incomplete. External writes remain zero.
+Operational M1–Media preserved. RUNTS source hierarchy and exercise-scoped human decisions are now structured/versioned in Memory, not free-text prompt memory. The user resolved presentation and economic ownership for the approved 2025 Model D. Production remains READ/PREPARE without an operational RUNTS write executor; no deployment performed. See `docs/runts-source-decisions.md`. Historical checkpoints below remain evidence of earlier states, not current blockers after explicit decisions.
 
 ## Completed
 
