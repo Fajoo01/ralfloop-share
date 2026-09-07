@@ -18,7 +18,7 @@ import subprocess
 import sys
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--suite", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -33,7 +33,11 @@ def main():
     parser.add_argument("--approved-closing", required=True)
     parser.add_argument("--existing-review-pdf", type=Path)
     parser.add_argument("--existing-review-pdf-sha256")
-    args = parser.parse_args()
+    parser.add_argument("--decision-plan", type=Path)
+    parser.add_argument("--golden-pdf", type=Path)
+    parser.add_argument("--golden-sha256")
+    args = parser.parse_args(argv)
+    plan = None
     root = Path(__file__).resolve().parents[1]
     if args.output.resolve().is_relative_to(root):
         raise ValueError("private_artifacts_must_be_outside_repository")
@@ -155,6 +159,18 @@ def main():
                 "candidate_settlement_ids":sorted({i for p in recovery["pairings"] for i in (*p["outgoing_ids"],*p["incoming_ids"])}),
                 "evidence":m.get("source_ref"),"match_status":recovery["status"]} for m in advances]})
     verified_settlement_ids = {i for r in reimbursements if r["status"]=="VERIFIED_LINK" for p in r["pairings"] for i in (*p["outgoing_ids"],*p["incoming_ids"])}
+    classification_diff=[]
+    if args.decision_plan:
+        from ralfloop_agent.unified_assistant.runts_modeld_plan import ModelDPlan, apply_presentations
+        plan=ModelDPlan.model_validate_json(args.decision_plan.read_text())
+        for fact in plan.facts:
+            if fact.source.locator.startswith("/"):
+                path=Path(fact.source.locator)
+                if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest()!=fact.source.content_hash:
+                    raise ValueError("decision_source_hash_mismatch")
+        if (plan.practice_id,plan.message_id,plan.exercise)!=(args.practice_id,args.message_id,args.year):
+            raise ValueError("decision_scope_mismatch")
+        projection_decisions,classification_diff=apply_presentations(plan,projection_decisions,records)
     projected_rows = project_management_rows(projection_decisions,verified_settlement_ids=verified_settlement_ids)
     approved_totals=assert_approved_totals(projected_rows,{"totale_entrate_mappate":args.approved_income,"totale_uscite_mappate":args.approved_expense})
     if money(approved_totals["surplus"])!=money(args.approved_surplus) or money(bridge["closing"])!=money(args.approved_closing):
@@ -199,6 +215,7 @@ def main():
     report = {"year":args.year, "summary":draft["summary"], "bridge":bridge,
         "documentary_audit":documentary_audit,
         "production_db_before":db_hash_before,"production_db_after":db_hash_after,
+        "classification_diff":classification_diff,"decision_plan":plan.model_dump(mode="json") if plan else None,
         "cash_unadjusted":str(cash), "bank_unadjusted":str(bank),
         "savings_statement_evidence":savings,
         "excluded_items":excluded, "unmapped_items":unmapped, "personal_advance_items":[{k:r[k] for k in ("movement_id","account_id","importo_signed","movement_kind")} for r in personal],
@@ -228,6 +245,11 @@ def main():
         "capital_taxes":unknown,"capital_result":unknown,"overall":unknown,
         "cassa_finale":cash,"banca_finale":bank,"cash_bank_verified":False,"cassa_finale_precedente":opening_cash,"banca_finale_precedente":opening_bank,
         "figurative":{k:unknown for k in ("cost_a","cost_b","cost_total","income_a","income_b","income_total")},"ready_to_file":False}
+    if plan:
+        from ralfloop_agent.unified_assistant.runts_modeld_plan import final_context, pdf_semantics
+        ctx=final_context(plan,built,ctx)
+        if money(ctx["cassa_finale"])+money(ctx["banca_finale"])!=money(args.approved_closing):
+            raise ValueError("APPROVED_TOTAL_CONFLICT")
     html = Environment(loader=FileSystemLoader(overlay / "templates"),undefined=StrictUndefined,autoescape=True).get_template("runts_mod_d_pdf.html").render(**ctx)
     (args.output / "modello_d_review.html").write_text(html)
     pdf_path = args.output / "modello_d_review.pdf"
@@ -240,8 +262,18 @@ def main():
         HTML(string=html, base_url=str(args.suite)).write_pdf(pdf_path)
     pdf = pdf_path.read_bytes()
     extracted = subprocess.run(["pdftotext", "-", "-"],input=pdf,capture_output=True,check=True).stdout.decode()
-    if "BOZZA NON DEPOSITABILE" not in extracted or "draft_db" in extracted or "approved_pdf" in extracted:
+    if (not plan and "BOZZA NON DEPOSITABILE" not in extracted) or "draft_db" in extracted or "approved_pdf" in extracted:
         raise ValueError("review_pdf_validation_failed")
+    semantic_hash=None
+    if plan:
+        if not args.golden_pdf or hashlib.sha256(args.golden_pdf.read_bytes()).hexdigest()!=args.golden_sha256:
+            raise ValueError("golden_source_hash_mismatch")
+        golden_text=subprocess.run(["pdftotext","-layout",str(args.golden_pdf),"-"],capture_output=True,check=True).stdout.decode()
+        candidate_text=subprocess.run(["pdftotext","-layout",str(pdf_path),"-"],capture_output=True,check=True).stdout.decode()
+        identity=plan.fact("IDENTITY","entity").value
+        if pdf_semantics(candidate_text)!=pdf_semantics(golden_text) or any(v not in " ".join(candidate_text.split()) or v not in " ".join(golden_text.split()) for v in identity.values()):
+            raise ValueError("GOLDEN_SEMANTIC_CONFLICT")
+        semantic_hash=version(pdf_semantics(candidate_text))
     now = datetime.now(timezone.utc).isoformat()
     document = SourceRef(system="runtsuite",native_id="document.mod_d.review."+hashlib.sha256(pdf).hexdigest()[:24],locator=str(pdf_path),observed_at=now,content_hash=hashlib.sha256(pdf).hexdigest())
     sources = (SourceRef(system="runts",native_id=args.message_id,locator="https://ista.scrivaniapa.infocamere.it/api/v1/messaggio/"+args.practice_id,observed_at=now,content_hash=args.message_hash),
@@ -254,6 +286,11 @@ def main():
     if any(g["status"]=="BLOCKED_REVIEW" for g in duplicate_sources):blockers.append("DUPLICATE_SOURCE_OWNER_UNVERIFIED")
     if any(r["status"]!="RECONCILED" for r in reconciled_accounts):blockers.append("ACCOUNT_BALANCE_EVIDENCE_REQUIRED")
     if not bridge["arithmetic_reconciled"]:blockers.append("RECONCILIATION_RESIDUAL")
+    audit_gaps=[]
+    if plan:
+        if any(g["projection_occurrences"]!=1 for g in duplicate_sources):raise ValueError("duplicate_projection_conflict")
+        audit_gaps=[b for b in blockers if b in {"REIMBURSEMENT_LINK_UNVERIFIED","DUPLICATE_SOURCE_OWNER_UNVERIFIED","ACCOUNT_BALANCE_EVIDENCE_REQUIRED"}]
+        blockers=[b for b in blockers if b not in {*audit_gaps,"CAPITAL_AND_TAX_PRESENTATION_REVIEW_REQUIRED"}]
     from ralfloop_agent.unified_assistant.operational_runtime import BottazziOperationalRuntime
     from ralfloop_agent.unified_assistant.pec_browser_adapter import PecAuthenticatedBrowserAdapter, PecAuthenticatedCdpTransport
     from ralfloop_agent.unified_assistant.pec_runts import RuntsAuthBoundaryProvider
@@ -270,8 +307,19 @@ def main():
     # Providers are composed but PREPARE uses persisted evidence only: no network call.
     with BottazziOperationalRuntime(args.output / "memory.sqlite", pec_provider=PecAuthenticatedBrowserAdapter(PecAuthenticatedCdpTransport()), runts_provider=RuntsAuthBoundaryProvider()) as runtime:
         memory = runtime.memory
+        validation=None
+        if plan:
+            plan.persist(memory)
+            for gap in audit_gaps:
+                memory.put_entity(MemoryEntity.build(entity_id="runts.audit."+version((args.practice_id,args.year,gap))[:32],
+                    domain="runts",entity_type="AUDIT_GAP",status="AUDIT_INFORMATION_GAP",updated_at=datetime.now(timezone.utc),
+                    data={"practice_id":args.practice_id,"exercise":args.year,"code":gap,"affects_approved_model_d":False},provenance=sources))
+            from ralfloop_agent.unified_assistant.runts_document_prepare import FinalDocumentValidation
+            validation=FinalDocumentValidation(exercise=args.year,artifact_sha256=document.content_hash,
+                semantic_sha256=semantic_hash,golden_semantic_sha256=semantic_hash,
+                decision_refs=tuple(f.source for f in plan.facts),audit_gaps=tuple(audit_gaps),classification_diff=tuple(classification_diff))
         memory.put_document(MemoryDocument.build(document_id=document.native_id,title="Modello D review",body=extracted,source=document))
-        memory.put_entity(MemoryEntity.build(entity_id=document.native_id,domain="runts",entity_type="RUNTS_DOCUMENT_REVIEW_INPUT",status="BLOCKED_REVIEW",updated_at=datetime.now(timezone.utc),data={"practice_id":args.practice_id,"message_id":args.message_id,"document":document.model_dump(mode="json"),"blockers":blockers,"review_context":context.model_dump(mode="json")},provenance=sources))
+        memory.put_entity(MemoryEntity.build(entity_id=document.native_id,domain="runts",entity_type="RUNTS_DOCUMENT_REVIEW_INPUT",status="BLOCKED_REVIEW",updated_at=datetime.now(timezone.utc),data={"practice_id":args.practice_id,"message_id":args.message_id,"document":document.model_dump(mode="json"),"blockers":blockers,"review_context":context.model_dump(mode="json"),"final_validation":validation.model_dump(mode="json") if validation else None},provenance=sources))
         result = runtime.invoke_pec_runts("runts prepara revisione documento bilancio modello d riconciliazione",{"practice_id":args.practice_id,"message_id":args.message_id,"document_id":document.native_id})
         if result.get("isError") or result.get("selectedCapability") != "runts_prepare_document_review":
             raise ValueError("semantic_prepare_failed")
@@ -280,6 +328,7 @@ def main():
     if hashlib.sha256(db_path.read_bytes()).hexdigest() != db_hash_before:
         raise ValueError("production_database_changed")
     print(json.dumps({"status":proposal.status,"bridge":bridge,"approved_totals":approved_totals,"pdf_sha256":document.content_hash,"corrections":built["corrections"],"blockers":blockers,"writes":0}))
+    return proposal
 
 
 if __name__ == "__main__":

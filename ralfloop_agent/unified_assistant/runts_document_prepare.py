@@ -59,6 +59,22 @@ class DocumentReviewContext(StrictModel):
         return self
 
 
+class FinalDocumentValidation(StrictModel):
+    exercise: int
+    artifact_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    semantic_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    golden_semantic_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    decision_refs: tuple[SourceRef, ...] = Field(min_length=1)
+    audit_gaps: tuple[Literal["REIMBURSEMENT_LINK_UNVERIFIED","DUPLICATE_SOURCE_OWNER_UNVERIFIED","ACCOUNT_BALANCE_EVIDENCE_REQUIRED"], ...] = ()
+    classification_diff: tuple[dict[str, str | int], ...] = ()
+
+    @model_validator(mode="after")
+    def golden_match(self):
+        if self.semantic_sha256!=self.golden_semantic_sha256 or any(not s.content_hash for s in self.decision_refs):
+            raise ValueError("GOLDEN_SEMANTIC_CONFLICT")
+        return self
+
+
 class DocumentReviewProposal(StrictModel):
     proposal_id: str
     practice_id: str = Field(min_length=1)
@@ -72,11 +88,18 @@ class DocumentReviewProposal(StrictModel):
     preconditions: tuple[str, ...]
     postconditions: tuple[str, ...]
     blockers: tuple[str, ...]
-    status: Literal["BLOCKED_REVIEW"] = "BLOCKED_REVIEW"
+    status: Literal["BLOCKED_REVIEW","READY_FOR_HUMAN_APPROVAL"] = "BLOCKED_REVIEW"
     executable: Literal[False] = False
     channel: Literal["RUNTS MESSAGGISTICA"] = "RUNTS MESSAGGISTICA"
     review_context: DocumentReviewContext | None = None
     writes: Literal[0] = 0
+    final_validation: FinalDocumentValidation | None = None
+
+    @model_validator(mode="after")
+    def ready_requires_evidence(self):
+        if self.status=="READY_FOR_HUMAN_APPROVAL" and (self.blockers or not self.review_context or not self.final_validation or self.final_validation.artifact_sha256!=self.sha256):
+            raise ValueError("final_document_evidence_required")
+        return self
 
 
 def cash_bridge(*, opening, management, excluded, unmapped, noncash_management, closing):
@@ -96,25 +119,28 @@ def cash_bridge(*, opening, management, excluded, unmapped, noncash_management, 
 def prepare_document_review(memory: MemoryService, *, practice_id: str, message_id: str,
                             document: SourceRef, provenance: tuple[SourceRef, ...],
                             blockers: tuple[str, ...],
-                            review_context: DocumentReviewContext | None = None) -> DocumentReviewProposal:
+                            review_context: DocumentReviewContext | None = None,
+                            final_validation: FinalDocumentValidation | None = None) -> DocumentReviewProposal:
     if not document.content_hash or not any(s.system == "runts" and s.native_id == message_id for s in provenance):
         raise ValueError("authoritative_document_provenance_required")
     # This capability only prepares review drafts; it can never promote a filing.
-    blockers = tuple(dict.fromkeys((*blockers, "FINAL_DOCUMENT_REVIEW_REQUIRED")))
+    blockers = tuple(dict.fromkeys((*blockers, *(("FINAL_DOCUMENT_REVIEW_REQUIRED",) if final_validation is None else ()))))
     provenance = tuple(s for s in provenance if s.native_id != document.native_id) + (document,)
     context_json = review_context.model_dump_json() if review_context else ""
     if review_context and review_context.pdf_path != document.locator:
         raise ValueError("review_document_path_mismatch")
-    digest = hashlib.sha256(f"{practice_id}|{message_id}|{document.content_hash}|{blockers}|{context_json}".encode()).hexdigest()
+    validation_json=final_validation.model_dump_json() if final_validation else ""
+    digest = hashlib.sha256(f"{practice_id}|{message_id}|{document.content_hash}|{blockers}|{context_json}|{validation_json}".encode()).hexdigest()
     proposal = DocumentReviewProposal(
         proposal_id="proposal.runts.document." + digest[:24], practice_id=practice_id,
         authoritative_message_id=message_id, document_id=document.native_id,
         sha256=document.content_hash, action_required="REVIEW_CORRECTED_BALANCE_BEFORE_MESSAGE_REPLY",
-        proposed_reply="Bozza: in riscontro alla comunicazione dell'Ufficio, si propone la trasmissione del rendiconto per cassa rettificato tramite la messaggistica della pratica esistente. Non inviare finché le verifiche contabili e documentali non sono concluse.",
+        proposed_reply=("In riscontro alla comunicazione dell'Ufficio, si allega per approvazione il rendiconto per cassa conforme al Modello D, completo delle sezioni richieste. La rettifica riguarda la presentazione, mantenendo invariati i valori approvati. Risposta da trasmettere tramite MESSAGGISTICA della pratica esistente, senza aprire un nuovo deposito." if final_validation else "Bozza: in riscontro alla comunicazione dell'Ufficio, si propone la trasmissione del rendiconto per cassa rettificato tramite la messaggistica della pratica esistente. Non inviare finché le verifiche contabili e documentali non sono concluse."),
         attachments=(document,), provenance=provenance,
         preconditions=("authoritative_message_reread", "accounting_classifications_verified", "cash_bank_reconciled", "ministerial_structure_validated", "document_hash_unchanged", "production_db_hash_unchanged", "generator_version_unchanged", "approved_totals_unchanged", "official_runts_session_valid", "explicit_submission_authorization_required"),
         postconditions=("same_practice_message_reply_verified", "attachment_hash_verified", "no_new_deposit", "audit_and_memory_updated"),
-        blockers=blockers, review_context=review_context,
+        blockers=blockers, review_context=review_context, final_validation=final_validation,
+        status="READY_FOR_HUMAN_APPROVAL" if final_validation and not blockers else "BLOCKED_REVIEW",
     )
     memory.put_entity(MemoryEntity.build(entity_id=proposal.proposal_id, domain="runts",
         entity_type="RUNTS_DOCUMENT_PROPOSAL", status=proposal.status,
