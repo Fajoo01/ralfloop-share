@@ -102,3 +102,65 @@ def test_reference_search_fails_closed_when_matches_exceed_limit():
     adapter = PecAuthenticatedBrowserAdapter(Transport([page]))
     with pytest.raises(PecBrowserError, match="pec_incomplete_source"):
         adapter.find_by_runts_reference("2603942", limit=1)
+
+
+def test_idpr_runts_reference_is_extracted():
+    page = {
+        "pageInfo": {
+            "page": 1,
+            "pageCount": 1,
+            "itemCount": 1,
+        },
+        "data": [{
+            "objectId": "241",
+            "subject": (
+                "POSTA CERTIFICATA: "
+                "[RUNTS Ufficio Lombardia] "
+                "[CF 97826900157] "
+                "[IDPR 2603942] "
+                "Ricevuto nuovo messaggio"
+            ),
+            "email": "synthetic@example.invalid",
+            "rawdate": "2026-09-03T09:04:52Z",
+            "text": "Synthetic RUNTS notification",
+            "isUnread": False,
+            "isCertificataMessage": True,
+            "attach": [],
+        }],
+    }
+
+    adapter = PecAuthenticatedBrowserAdapter(
+        Transport([page])
+    )
+
+    row = adapter.list_messages(limit=1)[0]
+
+    assert row.runts_reference == "2603942"
+
+
+def test_plain_runts_notification_word_is_not_a_reference():
+    page = {
+        "pageInfo": {
+            "page": 1,
+            "pageCount": 1,
+            "itemCount": 1,
+        },
+        "data": [{
+            "objectId": "negative-1",
+            "subject": "Generic message",
+            "email": "synthetic@example.invalid",
+            "rawdate": "2026-09-03T09:04:52Z",
+            "text": "Synthetic RUNTS notification",
+            "isUnread": False,
+            "isCertificataMessage": True,
+            "attach": [],
+        }],
+    }
+
+    adapter = PecAuthenticatedBrowserAdapter(
+        Transport([page])
+    )
+
+    row = adapter.list_messages(limit=1)[0]
+
+    assert row.runts_reference is None

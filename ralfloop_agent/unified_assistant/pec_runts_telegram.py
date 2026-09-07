@@ -85,9 +85,23 @@ def execute_telegram_read(
         return execute_telegram_prepare(text,memory_path=memory_path,pec_provider=pec_provider,
             runts_provider=runts_provider,response_preparer=runts_response_preparer)
     transport = None
+    managed_pec_provider = None
     if pec_provider is None:
-        transport = PecAuthenticatedCdpTransport()
-        pec_provider = PecAuthenticatedBrowserAdapter(transport)
+        from .pec_provider_factory import (
+            build_default_pec_provider,
+            imap_environment_present,
+        )
+        if (
+            imap_environment_present()
+            or os.getenv("BOTTAZZI_PEC_READ_PROVIDER", "").strip()
+        ):
+            managed_pec_provider = build_default_pec_provider()
+            pec_provider = managed_pec_provider
+        else:
+            # Preserve the existing browser path exactly when
+            # IMAP has not yet been configured.
+            transport = PecAuthenticatedCdpTransport()
+            pec_provider = PecAuthenticatedBrowserAdapter(transport)
     try:
         with BottazziOperationalRuntime(
             memory_path, pec_provider=pec_provider,
@@ -122,6 +136,10 @@ def execute_telegram_read(
     finally:
         if transport is not None:
             transport.close()
+        if managed_pec_provider is not None:
+            close = getattr(managed_pec_provider, "close", None)
+            if close is not None:
+                close()
 
 
 def is_pec_runts_telegram(text: str) -> bool:
@@ -132,6 +150,7 @@ def execute_telegram_prepare(text, *, memory_path, pec_provider=None, runts_prov
     decision=decision_for_telegram(text)
     if not isinstance(decision,RuntsResponseDecision):raise ValueError("runts_prepare_not_applicable")
     transports=[]
+    managed_pec_providers=[]
     if response_preparer is None and os.getenv("BOTTAZZI_RUNTS_PREPARE_BINDING"):
         from .runts_response_prepare import RuntsPrepareBinding, RuntsSuiteResponsePreparer
         response_preparer=RuntsSuiteResponsePreparer(RuntsPrepareBinding.model_validate_json(Path(os.environ["BOTTAZZI_RUNTS_PREPARE_BINDING"]).read_text()))
@@ -141,8 +160,19 @@ def execute_telegram_prepare(text, *, memory_path, pec_provider=None, runts_prov
         from .runts_browser_adapter import RuntsAuthenticatedBrowserAdapter, RuntsAuthenticatedCdpTransport
         runts_provider=RuntsAuthenticatedBrowserAdapter(RuntsAuthenticatedCdpTransport())
     if pec_provider is None:
-        transport=PecAuthenticatedCdpTransport();transports.append(transport)
-        pec_provider=PecAuthenticatedBrowserAdapter(transport)
+        from .pec_provider_factory import (
+            build_default_pec_provider,
+            imap_environment_present,
+        )
+        if (
+            imap_environment_present()
+            or os.getenv("BOTTAZZI_PEC_READ_PROVIDER", "").strip()
+        ):
+            pec_provider=build_default_pec_provider()
+            managed_pec_providers.append(pec_provider)
+        else:
+            transport=PecAuthenticatedCdpTransport();transports.append(transport)
+            pec_provider=PecAuthenticatedBrowserAdapter(transport)
     try:
         with BottazziOperationalRuntime(memory_path,pec_provider=pec_provider,runts_provider=runts_provider or RuntsAuthBoundaryProvider(),runts_response_preparer=response_preparer) as runtime:
             pec=runtime.invoke_pec_runts("cerca PEC riferimento pratica RUNTS",{"runts_reference":decision.arguments.practice_id,"limit":100})
@@ -165,6 +195,9 @@ def execute_telegram_prepare(text, *, memory_path, pec_provider=None, runts_prov
                 "artifacts":list(proposal["attachments"]) if ok else [],"audit_summary":["RUNTS_PREPARE_STOP_BEFORE_WRITE"]}
     finally:
         for transport in transports:transport.close()
+        for provider in managed_pec_providers:
+            close=getattr(provider,"close",None)
+            if close is not None:close()
 
 
 __all__ = ["PecRuntsToolDecision", "decision_for_telegram", "execute_telegram_read", "is_pec_runts_telegram"]

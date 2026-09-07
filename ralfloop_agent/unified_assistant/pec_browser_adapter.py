@@ -233,13 +233,36 @@ def _attachments(value: Any):
 
 
 def _runts_reference(text: str) -> str | None:
-    patterns = (r"(?:idComunicazione|communicationId|messageId)[=/ :]([A-Za-z0-9_.:-]{3,240})", r"(?:RUNTS|pratica)\s*(?:n\.?|id|#)\s*([A-Za-z0-9_.:/-]{3,240})")
+    patterns = (
+        # Formato reale delle notifiche RUNTS:
+        # [IDPR 2603942]
+        r"\bIDPR\s*[:=#]?\s*([A-Za-z0-9_.:/-]{3,240})",
+
+        # Identificativi espliciti eventualmente presenti nei link/body.
+        r"\b(?:idComunicazione|communicationId|messageId)"
+        r"\s*[=/ :]\s*([A-Za-z0-9_.:-]{3,240})",
+
+        # Forme: RUNTS pratica n. 2603942
+        #        pratica n. 2603942
+        #        RUNTS id 2603942
+        # Il marker 'n' DEVE essere seguito da spazio:
+        # così 'RUNTS notification' non diventa 'otification'.
+        r"\b(?:RUNTS|pratica)\s+"
+        r"(?:pratica\s+)?"
+        r"(?:(?:n(?:\.|°|º)?|id)\s+|#\s*)"
+        r"([A-Za-z0-9_.:/-]{3,240})",
+
+        # Forma breve numerica: RUNTS 2603942.
+        # Solo cifre per non interpretare parole come 'notification'.
+        r"\bRUNTS\s+([0-9]{3,240})\b",
+    )
+
     for pattern in patterns:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
             return match.group(1)
-    return None
 
+    return None
 
 def _timestamp(value: Any) -> datetime:
     if isinstance(value, (int, float)):
