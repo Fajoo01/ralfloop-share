@@ -99,6 +99,12 @@ class MemoryService:
             raise ValueError("memory_event_conflict") from None
         return True
 
+    def get_event(self, event_id: str) -> MemoryEvent | None:
+        row = self.connection.execute(
+            "SELECT record_json FROM events WHERE event_id=?", (event_id,),
+        ).fetchone()
+        return MemoryEvent.model_validate_json(row[0]) if row else None
+
     def timeline(self, entity_ref: str, *, limit: int = 100) -> tuple[MemoryEvent, ...]:
         _limit(limit)
         rows = self.connection.execute(

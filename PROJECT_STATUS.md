@@ -2,7 +2,7 @@
 
 ## Current milestone
 
-Operational M1–Media preserved. RUNTS source hierarchy and exercise-scoped human decisions are now structured/versioned in Memory, not free-text prompt memory. The user resolved presentation and economic ownership for the approved 2025 Model D. Production remains READ/PREPARE without an operational RUNTS write executor; no deployment performed. See `docs/runts-source-decisions.md`. Historical checkpoints below remain evidence of earlier states, not current blockers after explicit decisions.
+Operational M1–Media preserved. RUNTS decisions are structured/versioned in Memory. Production release `44c8fd09dfb732bf5835c12bef3821981a3139a1` includes the guarded RUNTS write executor and hash-bound Telegram approval (`Approvo <practice_id>`). During the 2026-09-07 ingress investigation WRITE was disabled in the actual process; the same release was restarted for this safety flag only. No code deployment, commit, push or RUNTS write was performed. Persistent-observation fix is working-tree only: see `docs/runts-telegram-persistent-ingress.md`. Historical checkpoints below describe earlier states, not current blockers.
 
 ## Completed
 

@@ -1,0 +1,19 @@
+--- a/src/meowgram/bot.py
++++ b/src/meowgram/bot.py
+@@ -200,7 +200,16 @@
+     def _format_ralfloop_natural_response(self, data: dict) -> str:
+         approval_required = bool(data.get("approval_required"))
+-        if approval_required:
++        metadata = dict(data.get("metadata") or {})
++        runts_review = (
++            data.get("ok") is True
++            and data.get("capability") == "runts_prepare_practice_response"
++            and data.get("human_review_required") is True
++            and metadata.get("pending_domain") == "runts"
++            and metadata.get("pending_action") == "runts_practice_reply"
++            and metadata.get("writes") == 0
++        )
++        if approval_required and not runts_review:
+             request_id = data.get("pending_confirmation_id")
+             suffix = f" ID: {request_id}." if request_id else ""
+             return f"Serve conferma esplicita prima dell'azione protetta.{suffix}"

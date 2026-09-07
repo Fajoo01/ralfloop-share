@@ -865,6 +865,8 @@ def _stage_runts_prepare_for_approval(
         + "."
         + "\nOggetto: "
         + str(payload["subject"])
+        + "\nMessaggio proposto (testo vincolato all'approvazione):\n"
+        + str(payload["body"])
         + "\nAllegato: "
         + str(payload["pdf_name"])
         + "\nSHA256: "

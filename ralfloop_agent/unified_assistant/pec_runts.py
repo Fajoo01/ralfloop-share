@@ -286,6 +286,31 @@ class PecRuntsService:
         payload = {"event_type": kind, **payload}
         identity = event_id(source.system, source_id, kind, payload)
         routed = RoutedEvent(event_id=identity, event_type=kind, origin=EventOrigin.API_WATCHER, source=source.system, source_id=source_id, occurred_at=when, observed_at=when, entity_refs=refs, payload=payload, provenance=(source,))
+        # Discovery is an observation of a source revision, not a new event
+        # every time the browser reads it. Preserve the first observation;
+        # do not relax MemoryService's immutable-event conflict checks.
+        previous = self.memory.get_event(identity)
+        def same_revision(previous):
+            candidate = routed.memory_event()
+            old = previous.model_dump(mode="json")
+            new = candidate.model_dump(mode="json")
+            for record in (old, new):
+                for key in ("event_id", "occurred_at", "observed_at"):
+                    record.pop(key)
+                for ref in record["provenance"]:
+                    ref.pop("observed_at", None)
+            return old == new
+
+        if previous and same_revision(previous):
+            return
+        # Keep legacy identities readable, but distinguish changed source
+        # evidence. A revised message must never be mistaken for a replay.
+        revision = {**payload, "source_revision": source.model_dump(mode="json", exclude={"observed_at"})}
+        identity = event_id(source.system, source_id, kind, revision)
+        routed = routed.model_copy(update={"event_id": identity, "payload": revision})
+        previous = self.memory.get_event(identity)
+        if previous and same_revision(previous):
+            return
         if self.router:
             self.router.route(routed)
         else:

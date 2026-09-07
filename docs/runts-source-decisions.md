@@ -1,6 +1,9 @@
 # RUNTS source hierarchy and versioned decisions
 
-Operational scope: READ/PREPARE only. No source database mutation or deployment.
+This intervention is READ/PREPARE only. Production release `44c8fd0` already
+contains a guarded WRITE executor and hash-bound Telegram approval; WRITE is
+disabled in the running process. No source database mutation or code deployment.
+See `runts-telegram-persistent-ingress.md` for current ingress findings.
 
 `DecisionFact` separates fact type, subject, practice, exercise, source reference,
 source hash, observation time, authority level, version, conflicts and revocation.
