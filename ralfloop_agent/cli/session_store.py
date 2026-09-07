@@ -46,7 +46,7 @@ ALLOWED_RECORD_KEYS = {
 
 ASSISTANT_STATE_KEYS = {"schema_version", "last_intent", "last_entities", "pending"}
 PENDING_STATE_KEYS = {
-    "email", "whatsapp", "mailchimp", "home", "infrastructure", "bandi", "clarification",
+    "email", "whatsapp", "mailchimp", "runts", "home", "infrastructure", "bandi", "clarification",
 }
 PENDING_ACTION_KEYS = {
     "pending_id",

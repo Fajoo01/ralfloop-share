@@ -10,7 +10,7 @@ from ralfloop_agent.cli.session_store import SessionStore, SessionStoreError
 from ralfloop_agent.domains.domain_approval import DomainApprovalPolicy
 from ralfloop_agent.domains.domain_approval_store import DomainApprovalStore
 
-from .contracts import AssistantFeatureFlags
+from .contracts import AssistantFeatureFlags, PolicyClass
 from .conversation import (
     CONFIRM_WORDS, PENDING_DOMAINS, SessionConversationAdapter, payload_matches,
 )
@@ -35,6 +35,19 @@ from .whatsapp_compose import EmailBackedWhatsAppDraftPipeline, UnifiedWhatsAppC
 from .whatsapp_mcp_adapter import WhatsAppMCPReadOnly
 from .whatsapp_send import (
     UnifiedWhatsAppApprovalCoordinator, UnifiedWhatsAppApprovalExecutor,
+)
+from .runts_write import (
+    RUNTS_REPLY_ACTION,
+    RuntsApprovedReplyExecutor,
+    UnifiedRuntsApprovalCoordinator,
+    build_runts_pending_payload,
+)
+from .runts_browser_adapter import (
+    RuntsAuthenticatedBrowserAdapter,
+    RuntsAuthenticatedCdpTransport,
+)
+from .runts_browser_write import (
+    RuntsAuthenticatedCdpWriteTransport,
 )
 from src.mailchimp import MailchimpApprovedMCPWorkflow, MailchimpMCPContext
 from src.whatsapp import WhatsAppMCPContext
@@ -68,6 +81,7 @@ def is_unified_telegram_request(text: str, context: Mapping[str, Any]) -> bool:
             _SUPPORTED.search(text)
             or _EMAIL_READ_SUPPORTED.search(text)
             or _is_pec_runts_request(text)
+            or _is_explicit_runts_approval(text, context)
             or re.fullmatch(r"\s*(?:otp[\s:-]*)?[0-9]{6}\s*", text, re.I)
             or (
                 _is_positive_confirmation(text)
@@ -188,6 +202,12 @@ def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any]
 
 
 def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any]:
+    if _is_explicit_runts_approval(text, context):
+        return _execute_explicit_runts_approval(
+            text,
+            context,
+        )
+
     if _is_pec_runts_request(text):
         from .pec_runts_telegram import execute_telegram_read
 
@@ -195,7 +215,30 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
             "RALFLOOP_OPERATIONAL_MEMORY_PATH",
             str(Path.home() / ".local" / "state" / "ralf" / "operational-memory.sqlite"),
         ))
-        return execute_telegram_read(text, memory_path=memory_path)
+
+        result = execute_telegram_read(
+            text,
+            memory_path=memory_path,
+        )
+
+        if (
+            result.get("capability")
+            == "runts_prepare_practice_response"
+            and result.get("ok")
+            and isinstance(
+                result.get("metadata", {}).get(
+                    "proposal"
+                ),
+                Mapping,
+            )
+        ):
+            return _stage_runts_prepare_for_approval(
+                result,
+                context,
+            )
+
+        return result
+
     flags = AssistantFeatureFlags.from_env()
     session_id = _session_id(context)
     store = SessionStore(os.getenv(
@@ -686,6 +729,608 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
         "metadata": {"status": result.status, **result.data},
         "artifacts": artifacts,
         "audit_summary": [f"unified_assistant::{result.status}"],
+    }
+
+
+
+_RUNTS_EXPLICIT_APPROVAL = re.compile(
+    r"^\s*approvo\s+risposta\s+runts\s+(?P<practice>[0-9]{1,24})\s*[.!]?\s*$",
+    re.I,
+)
+
+
+def _session_store() -> SessionStore:
+    return SessionStore(os.getenv(
+        "RALFLOOP_UNIFIED_SESSION_DIR",
+        str(
+            Path.home()
+            / ".local"
+            / "state"
+            / "ralf"
+            / "unified-sessions"
+        ),
+    ))
+
+
+def _runts_reader():
+    return RuntsAuthenticatedBrowserAdapter(
+        RuntsAuthenticatedCdpTransport()
+    )
+
+
+def _runts_writer():
+    return RuntsAuthenticatedCdpWriteTransport()
+
+
+def _is_explicit_runts_approval(
+    text: str,
+    context: Mapping[str, Any],
+) -> bool:
+    match = _RUNTS_EXPLICIT_APPROVAL.fullmatch(
+        text
+    )
+
+    if match is None:
+        return False
+
+    try:
+        session_id = _session_id(context)
+        conversation = SessionConversationAdapter(
+            _session_store()
+        ).load(session_id)
+
+    except (
+        OSError,
+        SessionStoreError,
+        TypeError,
+        ValueError,
+    ):
+        return False
+
+    pending = conversation.state.pending.runts
+
+    if (
+        pending is None
+        or pending.action != RUNTS_REPLY_ACTION
+        or pending.expires_at
+        <= int(datetime.now(UTC).timestamp())
+        or not payload_matches(pending)
+    ):
+        return False
+
+    return (
+        str(
+            pending.payload.get(
+                "practice_id"
+            )
+            or ""
+        )
+        == match.group("practice")
+    )
+
+
+def _stage_runts_prepare_for_approval(
+    result: Mapping[str, Any],
+    context: Mapping[str, Any],
+) -> dict[str, Any]:
+    session_id = _session_id(context)
+
+    store = _session_store()
+    _ensure_session(store, session_id)
+
+    adapter = SessionConversationAdapter(store)
+    conversation = adapter.load(session_id)
+
+    metadata = dict(
+        result.get("metadata") or {}
+    )
+
+    proposal = metadata.get("proposal")
+
+    if not isinstance(proposal, Mapping):
+        return dict(result)
+
+    practice_status = str(
+        metadata.get("practice_status")
+        or ""
+    )
+
+    if not practice_status:
+        failed = dict(result)
+        failed["ok"] = False
+        failed["approval_required"] = False
+        failed["response"] = (
+            "PREPARE RUNTS completato, ma lo stato "
+            "autoritativo della pratica non è stato "
+            "congelato. Nessun WRITE eseguito."
+        )
+        failed["final_answer"] = failed["response"]
+        return failed
+
+    payload = build_runts_pending_payload(
+        proposal,
+        expected_practice_status=practice_status,
+    )
+
+    practice_id = str(
+        payload["practice_id"]
+    )
+
+    display = (
+        str(result.get("response") or "")
+        + "\n\n"
+        + "Azione proposta: risposta nella "
+          "MESSAGGISTICA della pratica "
+        + practice_id
+        + "."
+        + "\nOggetto: "
+        + str(payload["subject"])
+        + "\nAllegato: "
+        + str(payload["pdf_name"])
+        + "\nSHA256: "
+        + str(payload["pdf_sha256"])
+        + "\nTipo documento: BILANCIO "
+          "D'ESERCIZIO (B00)"
+        + "\n\nPer approvare esattamente questa "
+          "azione scrivi:"
+        + "\nApprovo risposta RUNTS "
+        + practice_id
+    )
+
+    previous = conversation.state.pending.runts
+
+    pending = conversation.stage(
+        domain="runts",
+        action=RUNTS_REPLY_ACTION,
+        policy=PolicyClass.CONFIRM_WRITE,
+        payload=payload,
+        displayed_text=display,
+    )
+
+    policy = DomainApprovalPolicy.from_env()
+
+    approval_transition = {
+        "status": "approval_gate_disabled"
+    }
+
+    if policy.enabled:
+        approval_store = DomainApprovalStore(
+            policy=policy
+        )
+
+        coordinator = UnifiedRuntsApprovalCoordinator(
+            approval_store,
+            policy=policy,
+        )
+
+        if (
+            previous is not None
+            and previous.approval_ref
+        ):
+            coordinator.cancel(previous)
+
+        approval_transition = coordinator.request(
+            pending,
+            requested_by=(
+                "unified:" + session_id
+            ),
+        )
+
+        if (
+            approval_transition.get("status")
+            == "pending"
+        ):
+            pending = (
+                conversation
+                .attach_approval_request(
+                    domain="runts",
+                    pending_id=pending.pending_id,
+                    payload_digest=(
+                        pending.payload_digest
+                    ),
+                    approval_ref=str(
+                        approval_transition[
+                            "request_id"
+                        ]
+                    ),
+                    created_at=int(
+                        approval_transition[
+                            "created_at"
+                        ]
+                    ),
+                    expires_at=int(
+                        approval_transition[
+                            "expires_at"
+                        ]
+                    ),
+                )
+            )
+
+    adapter.save(
+        session_id,
+        conversation,
+    )
+
+    output = dict(result)
+
+    output.update({
+        "response": display,
+        "final_answer": display,
+        "approval_required": True,
+        "human_review_required": True,
+        "pending_confirmation_id":
+            pending.pending_id,
+    })
+
+    output_metadata = dict(
+        output.get("metadata") or {}
+    )
+
+    output_metadata.update({
+        "pending_domain": "runts",
+        "pending_action":
+            RUNTS_REPLY_ACTION,
+        "pending_id":
+            pending.pending_id,
+        "pending_digest":
+            pending.payload_digest,
+        "approval_request_id":
+            pending.approval_ref,
+        "approval_transition":
+            dict(approval_transition),
+        "writes": 0,
+    })
+
+    output["metadata"] = output_metadata
+
+    output["audit_summary"] = [
+        *list(
+            output.get(
+                "audit_summary"
+            )
+            or ()
+        ),
+        "RUNTS_PENDING_APPROVAL_CREATED",
+    ]
+
+    return output
+
+
+def _execute_explicit_runts_approval(
+    text: str,
+    context: Mapping[str, Any],
+) -> dict[str, Any]:
+    match = _RUNTS_EXPLICIT_APPROVAL.fullmatch(
+        text
+    )
+
+    if match is None:
+        raise ValueError(
+            "runts_explicit_approval_required"
+        )
+
+    session_id = _session_id(context)
+
+    session_store = _session_store()
+    _ensure_session(
+        session_store,
+        session_id,
+    )
+
+    adapter = SessionConversationAdapter(
+        session_store
+    )
+
+    conversation = adapter.load(
+        session_id
+    )
+
+    active = [
+        item
+        for name in PENDING_DOMAINS
+        if (
+            item := getattr(
+                conversation.state.pending,
+                name,
+            )
+        )
+        is not None
+    ]
+
+    if (
+        len(active) != 1
+        or active[0].domain != "runts"
+    ):
+        return {
+            "ok": False,
+            "interaction_mode":
+                "unified_assistant",
+            "capability":
+                "runts_practice_reply",
+            "tools_executed": False,
+            "response":
+                "Approvazione RUNTS ambigua o "
+                "non più disponibile.",
+            "final_answer":
+                "Approvazione RUNTS ambigua o "
+                "non più disponibile.",
+            "approval_required": True,
+            "metadata": {
+                "status":
+                    "clarification_required",
+                "writes": 0,
+            },
+            "artifacts": [],
+            "audit_summary": [
+                "RUNTS_APPROVAL_NOT_RESOLVED"
+            ],
+        }
+
+    pending = active[0]
+
+    if (
+        str(
+            pending.payload.get(
+                "practice_id"
+            )
+            or ""
+        )
+        != match.group("practice")
+    ):
+        return {
+            "ok": False,
+            "interaction_mode":
+                "unified_assistant",
+            "capability":
+                "runts_practice_reply",
+            "tools_executed": False,
+            "response":
+                "La pratica indicata non "
+                "corrisponde all'azione RUNTS "
+                "in attesa.",
+            "final_answer":
+                "La pratica indicata non "
+                "corrisponde all'azione RUNTS "
+                "in attesa.",
+            "approval_required": True,
+            "metadata": {
+                "status":
+                    "practice_mismatch",
+                "writes": 0,
+            },
+            "artifacts": [],
+            "audit_summary": [
+                "RUNTS_APPROVAL_PRACTICE_MISMATCH"
+            ],
+        }
+
+    policy = DomainApprovalPolicy.from_env()
+
+    if not policy.enabled:
+        return {
+            "ok": False,
+            "interaction_mode":
+                "unified_assistant",
+            "capability":
+                "runts_practice_reply",
+            "tools_executed": False,
+            "response":
+                "Gate di approvazione Telegram "
+                "non abilitato; nessun WRITE "
+                "RUNTS eseguito.",
+            "final_answer":
+                "Gate di approvazione Telegram "
+                "non abilitato; nessun WRITE "
+                "RUNTS eseguito.",
+            "approval_required": True,
+            "metadata": {
+                "status":
+                    "approval_gate_disabled",
+                "writes": 0,
+            },
+            "artifacts": [],
+            "audit_summary": [
+                "RUNTS_APPROVAL_GATE_DISABLED"
+            ],
+        }
+
+    approval_store = DomainApprovalStore(
+        policy=policy
+    )
+
+    coordinator = UnifiedRuntsApprovalCoordinator(
+        approval_store,
+        policy=policy,
+    )
+
+    transition = coordinator.approve(
+        pending,
+        telegram_user_id=int(
+            context.get(
+                "telegram_user_id"
+            )
+            or 0
+        ),
+        telegram_chat_id=int(
+            context.get(
+                "telegram_chat_id"
+            )
+            or 0
+        ),
+        telegram_message_id=int(
+            context.get(
+                "telegram_message_id"
+            )
+            or 0
+        ),
+        chat_type=str(
+            context.get(
+                "telegram_chat_type"
+            )
+            or "private"
+        ),
+    )
+
+    if transition.get("status") not in {
+        "approved",
+        "already_approved",
+    }:
+        adapter.save(
+            session_id,
+            conversation,
+        )
+
+        status = str(
+            transition.get("status")
+            or "approval_failed"
+        )
+
+        answer = (
+            "Approvazione RUNTS non accettata: "
+            + status
+            + ". Nessun WRITE eseguito."
+        )
+
+        return {
+            "ok": False,
+            "interaction_mode":
+                "unified_assistant",
+            "capability":
+                "runts_practice_reply",
+            "tools_executed": True,
+            "response": answer,
+            "final_answer": answer,
+            "approval_required": True,
+            "metadata": {
+                "status": status,
+                "approval_transition":
+                    dict(transition),
+                "writes": 0,
+            },
+            "artifacts": [],
+            "audit_summary": [
+                "RUNTS_APPROVAL_REJECTED"
+            ],
+        }
+
+    pending = conversation.bind_approval(
+        domain="runts",
+        pending_id=pending.pending_id,
+        payload_digest=pending.payload_digest,
+        approval_ref=str(
+            pending.approval_ref
+        ),
+    )
+
+    executor = RuntsApprovedReplyExecutor(
+        store=approval_store,
+        reader_factory=_runts_reader,
+        writer_factory=_runts_writer,
+    )
+
+    execution = executor.execute(
+        pending
+    )
+
+    status = str(
+        execution.get("status")
+        or "failed"
+    )
+
+    terminal = {
+        "EXECUTED_VERIFIED",
+        "already_executed",
+        "EXECUTION_UNCERTAIN",
+        "FAILED_AFTER_PARTIAL_WRITE",
+    }
+
+    if status in terminal:
+        conversation.clear("runts")
+
+    adapter.save(
+        session_id,
+        conversation,
+    )
+
+    if status == "runts_write_disabled":
+        answer = (
+            "Approvazione RUNTS registrata e "
+            "hash-bound. Il WRITE è disabilitato "
+            "da BOTTAZZI_RUNTS_WRITE_ENABLED=0: "
+            "nessun invio eseguito."
+        )
+
+    elif status == "EXECUTED_VERIFIED":
+        answer = (
+            "Risposta RUNTS inviata e verificata "
+            "nella pratica "
+            + str(
+                pending.payload[
+                    "practice_id"
+                ]
+            )
+            + "."
+        )
+
+    elif status == "already_executed":
+        answer = (
+            "La risposta RUNTS risulta già "
+            "eseguita; nessun secondo invio."
+        )
+
+    elif status == "EXECUTION_UNCERTAIN":
+        answer = (
+            "Esito RUNTS non certo. Retry "
+            "automatico bloccato."
+        )
+
+    elif status == "FAILED_AFTER_PARTIAL_WRITE":
+        answer = (
+            "RUNTS ha registrato una scrittura "
+            "parziale; retry automatico bloccato."
+        )
+
+    else:
+        answer = (
+            "Risposta RUNTS non eseguita. Stato: "
+            + status
+            + "."
+        )
+
+    return {
+        "ok": status in {
+            "runts_write_disabled",
+            "EXECUTED_VERIFIED",
+            "already_executed",
+        },
+        "interaction_mode":
+            "unified_assistant",
+        "capability":
+            "runts_practice_reply",
+        "tools_executed": True,
+        "response": answer,
+        "final_answer": answer,
+        "approval_required":
+            status == "runts_write_disabled",
+        "metadata": {
+            "status": status,
+            "approval_transition":
+                dict(transition),
+            "execution":
+                dict(execution),
+            "writes":
+                int(
+                    execution.get(
+                        "writes"
+                    )
+                    or 0
+                ),
+        },
+        "artifacts": [],
+        "audit_summary": [
+            "RUNTS_APPROVAL_BOUND_EXECUTION::"
+            + status
+        ],
     }
 
 

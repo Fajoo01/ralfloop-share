@@ -180,6 +180,12 @@ def execute_telegram_prepare(text, *, memory_path, pec_provider=None, runts_prov
             result=runtime.invoke_pec_runts(text,decision.arguments.model_dump())
             proposal=(result.get("structuredContent") or {}).get("proposal")
             ok=bool(proposal) and not result.get("isError")
+            practice_status = (
+                runts_provider.get_practice(
+                    decision.arguments.practice_id
+                ).status_raw
+                if ok else ""
+            )
             answer=(proposal["proposed_reply"]+"\nStato: "+proposal["status"]+". Nessun invio eseguito." if ok else "Preparazione non completata: "+result.get("structuredContent",{}).get("status","SOURCE_UNAVAILABLE"))
             if ok:
                 answer+="\nPDF: "+proposal["review_context"]["pdf_path"]+"\nSHA256: "+proposal["sha256"]
@@ -191,6 +197,7 @@ def execute_telegram_prepare(text, *, memory_path, pec_provider=None, runts_prov
                 "capability":decision.tool_id,"tools_executed":True,"approval_required":False,"human_review_required":ok,
                 "metadata":{"tool_decision_valid":True,"selected_capability":result.get("selectedCapability"),
                     "mcp_invoked":True,"writes":0,"proposal":proposal,"pec_status":pec.get("structuredContent",{}).get("status","READ"),
+                    "practice_status":practice_status,
                     "mcp_calls":[pec.get("selectedCapability"),result.get("selectedCapability")],"deployment_state":"TESTED_WORKING_TREE"},
                 "artifacts":list(proposal["attachments"]) if ok else [],"audit_summary":["RUNTS_PREPARE_STOP_BEFORE_WRITE"]}
     finally:
