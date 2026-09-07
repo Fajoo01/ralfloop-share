@@ -85,13 +85,14 @@ Operational M1–Media preserved. PEC/RUNTS Telegram route is implemented in the
 - PEC authenticated session belongs to `bandi`, available through existing loopback CDP 9236 on the development host. Exact Telegram phrase executed locally through semantic MCP: 3 PEC matches, READ success, WRITE 0. Production Telegram deployment/acceptance not performed.
 - RUNTS authority proven for practice 2603942: message 523278 through observed `/api/v1/messaggio/2603942` (frontend parameter `idIstanza`). Official Model D attachment downloaded; binary SHA256 matches local file. Browser adapter/fixture work remains uncommitted and is preserved separately.
 - Modello D checkpoint PARTIAL: development overlay corrects exact-label A6/A7 expense aliases and missing layout sections; running Suite unchanged. Real-data bridge explains 272.22 with zero arithmetic residual, but accounting classification remains unverified. Private review PDF and source/hash-bound `BLOCKED_REVIEW` ActionProposal generated through runtime/retrieval/MCP/Memory; no final filing claimed. See `docs/runts-modello-d-reconciliation.md`.
-- Source statement exposes a cash/savings classification conflict: imported savings opening 210.35, closing 0.07, versus cash opening 23.47 applied by the legacy generator. Excluded items, debit 2488 and personal advances 2544/2576 require evidence-based classification before filing.
+- Existing decisions recovered and preserved: 2488 is legacy personal debt; 2544/2576 remain ARCI affiliation + member_advance. No reclassification required. Parent 2248's apparent missing mapping was superseded by mapped splits. Source-backed reimbursement links remain unverified; historical note IDs are inconsistent.
+- 2026-09-07 financial projection: imports 22/23 have identical source/raw/financial-ledger fingerprints. One owner-neutral source unit now reconciles 210.35 - 210.28 = 0.07 exactly once. Source ownership and independent bank/cash balances remain unproven. Approved income/expense/surplus/closing are explicitly checked and unchanged; private PDF/proposal regenerated, BLOCKED_REVIEW, WRITE 0. Details: `docs/runts-financial-projection.md`.
 - Companion source recovered at `/home/bandi/work/android-companion`; no Android change/build/install yet. Sibilla has no adb available. Device handlers, QR handoff and Keystore authentication remain unverified.
 - Auth Broker/resume, new OTP integration and practice 2603942 documentary preparation are not complete.
 
 ## Next step
 
-- Resolve accounting classifications and opening-balance allocation from source evidence. Validate final Model D before proposing submission. No production promotion, upload or send; no new Aruba login needed.
+- Recover financial source ownership, exact repayment pairing and independent bank/cash balances, without reopening existing expense classifications. Resolve capital/tax presentation from prior supporting decisions. No production promotion, upload or send.
 
 ## Git status
 

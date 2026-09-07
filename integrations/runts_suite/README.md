@@ -28,6 +28,13 @@ function, reads the prior-year approved snapshot directly (avoiding the legacy
 GET helper that calls `_ensure_table`), renders private review artifacts, and
 invokes `runts_prepare_document_review` via Bottazzi runtime/retrieval/MCP/Memory.
 
+The runner now requires explicit `--approved-income`, `--approved-expense`,
+`--approved-surplus` and `--approved-closing`; changes fail before rendering.
+Existing manual/split decisions are projected independently of payment kind and
+financial account. Exact duplicate financial sources are represented once without
+inventing account ownership; repayment pairing requires source identity, not merely
+matching amounts. See `docs/runts-financial-projection.md`.
+
 Outputs must be outside this repository. The generated PDF is a **review draft**,
 not an approved ministerial filing. The semantic proposal remains `BLOCKED_REVIEW`
 and `executable=false`. There is no submission executor in this integration.
