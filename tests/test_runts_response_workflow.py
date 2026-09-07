@@ -283,7 +283,7 @@ def test_runtime_runts_approval_reaches_executor_but_write_flag_blocks(
     )
 
     approved = runtime.run_unified_telegram(
-        "Approvo risposta RUNTS 2603942",
+        "Approvo 2603942",
         {
             **prepare_context,
             "telegram_message_id": 1002,

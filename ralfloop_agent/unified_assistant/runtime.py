@@ -734,7 +734,7 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
 
 
 _RUNTS_EXPLICIT_APPROVAL = re.compile(
-    r"^\s*approvo\s+risposta\s+runts\s+(?P<practice>[0-9]{1,24})\s*[.!]?\s*$",
+    r"^\s*approvo\s+(?P<practice>[0-9]{1,24})\s*[.!]?\s*$",
     re.I,
 )
 
