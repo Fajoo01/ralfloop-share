@@ -873,7 +873,7 @@ def _stage_runts_prepare_for_approval(
           "D'ESERCIZIO (B00)"
         + "\n\nPer approvare esattamente questa "
           "azione scrivi:"
-        + "\nApprovo risposta RUNTS "
+        + "\nApprovo "
         + practice_id
     )
 
