@@ -282,11 +282,23 @@ def test_runtime_runts_approval_reaches_executor_but_write_flag_blocks(
         ]
     )
 
+    mismatch = runtime.run_unified_telegram(
+        "Approvo 9999999",
+        {
+            **prepare_context,
+            "telegram_message_id": 1002,
+        },
+    )
+
+    assert mismatch["ok"] is False
+    assert mismatch["metadata"]["status"] == "practice_mismatch"
+    assert mismatch["metadata"]["writes"] == 0
+
     approved = runtime.run_unified_telegram(
         "Approvo 2603942",
         {
             **prepare_context,
-            "telegram_message_id": 1002,
+            "telegram_message_id": 1003,
         },
     )
 

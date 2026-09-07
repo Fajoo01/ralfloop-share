@@ -324,20 +324,32 @@ def render_telegram_request(request: DomainApprovalRequest) -> str:
                     "- accettazione trattamento dati",
                 ]
             )
-    lines.extend(
-        [
-            "",
-            "Per approvare:",
-            f"rl:approve {request.request_id} {request.scope_digest_short}",
-            "Oppure rispondi a questo messaggio con: approvo",
-            "",
-            "Per rifiutare:",
-            f"rl:reject {request.request_id} {request.scope_digest_short} MOTIVO",
-            "Oppure rispondi a questo messaggio con: rifiuto MOTIVO",
-            "",
-            "L'approvazione autorizza solo questo scope e non esegue automaticamente l'azione.",
-        ]
-    )
+    if request.action == "runts_practice_reply":
+        practice_id = str(request.scope.get("practice_id") or "").strip()
+        lines.extend(
+            [
+                "",
+                "Per approvare dal flusso RUNTS:",
+                f"Approvo {practice_id}" if practice_id else "Approvo <practice_id>",
+                "",
+                "L'approvazione RUNTS richiede pratica e scope hash-bound.",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "",
+                "Per approvare:",
+                f"rl:approve {request.request_id} {request.scope_digest_short}",
+                "Oppure rispondi a questo messaggio con: approvo",
+                "",
+                "Per rifiutare:",
+                f"rl:reject {request.request_id} {request.scope_digest_short} MOTIVO",
+                "Oppure rispondi a questo messaggio con: rifiuto MOTIVO",
+                "",
+                "L'approvazione autorizza solo questo scope e non esegue automaticamente l'azione.",
+            ]
+        )
     return "\n".join(lines)
 
 

@@ -76,6 +76,24 @@ def handle_decision_request(
         store.audit(auth["status"], request_id=request_id, result=auth["status"])
         return auth
     payload = json.loads(body.decode("utf-8"))
+    if str(payload.get("decision") or "") == "approve":
+        row = store.get_request(request_id)
+        if row and row.get("action") == "runts_practice_reply":
+            store.audit(
+                "domain_specific_approval_required",
+                request_id=request_id,
+                action="runts_practice_reply",
+                result="domain_specific_approval_required",
+                reason="RUNTS approval requires the practice-bound unified Telegram flow",
+            )
+            return {
+                "status": "domain_specific_approval_required",
+                "request_id": request_id,
+                "execution_allowed": False,
+                "auto_execute": False,
+                "writes": 0,
+                "reason": "RUNTS approval requires: Approvo <practice_id>",
+            }
     decision = DomainApprovalDecision(
         request_id=request_id,
         decision=str(payload.get("decision") or ""),
