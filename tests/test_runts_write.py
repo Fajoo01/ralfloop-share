@@ -23,6 +23,9 @@ from ralfloop_agent.unified_assistant.runts_write import (
     UnifiedRuntsApprovalCoordinator,
     build_runts_reply_approval_scope,
 )
+from ralfloop_agent.unified_assistant.runts_browser_write import (
+    RuntsBrowserWriteError,
+)
 from ralfloop_agent.unified_assistant.contracts import PolicyClass
 
 
@@ -131,6 +134,28 @@ class Writer:
             "writes": 2,
             "upload_document_id": "att-1",
         }
+
+
+class FailingWriter(Writer):
+    def __init__(
+        self,
+        state,
+        *,
+        phase,
+        writes,
+    ):
+        super().__init__(state)
+        self.phase = phase
+        self.writes = writes
+
+    def execute(self, scope):
+        self.state["execute"] += 1
+
+        raise RuntsBrowserWriteError(
+            "runts_provider_write_timeout",
+            phase=self.phase,
+            writes=self.writes,
+        )
 
 
 def policy(tmp_path):
@@ -360,3 +385,84 @@ def test_runts_pdf_drift_fails_before_write(
 
     assert result["writes"] == 0
     assert calls["execute"] == 0
+
+def test_runts_upload_wait_timeout_reports_zero_confirmed_writes(
+    tmp_path,
+):
+    store, pending = approve(tmp_path)
+
+    state = {
+        "preflight": 0,
+        "execute": 0,
+        "sent": False,
+    }
+
+    executor = RuntsApprovedReplyExecutor(
+        store=store,
+        reader_factory=lambda: Reader(),
+        writer_factory=lambda: FailingWriter(
+            state,
+            phase="upload_wait",
+            writes=0,
+        ),
+        write_enabled=True,
+    )
+
+    result = executor.execute(pending)
+
+    assert result["status"] == "EXECUTION_UNCERTAIN"
+    assert result["executed"] is False
+    assert result["retry_allowed"] is False
+
+    assert result["writes"] == 0
+    assert result["phase"] == "upload_wait"
+    assert result["reason"] == (
+        "runts_provider_write_timeout"
+    )
+    assert result["error_type"] == (
+        "RuntsBrowserWriteError"
+    )
+
+    assert state["preflight"] == 1
+    assert state["execute"] == 1
+
+
+def test_runts_send_wait_timeout_reports_one_confirmed_write(
+    tmp_path,
+):
+    store, pending = approve(tmp_path)
+
+    state = {
+        "preflight": 0,
+        "execute": 0,
+        "sent": False,
+    }
+
+    executor = RuntsApprovedReplyExecutor(
+        store=store,
+        reader_factory=lambda: Reader(),
+        writer_factory=lambda: FailingWriter(
+            state,
+            phase="send_wait",
+            writes=1,
+        ),
+        write_enabled=True,
+    )
+
+    result = executor.execute(pending)
+
+    assert result["status"] == "EXECUTION_UNCERTAIN"
+    assert result["executed"] is False
+    assert result["retry_allowed"] is False
+
+    assert result["writes"] == 1
+    assert result["phase"] == "send_wait"
+    assert result["reason"] == (
+        "runts_provider_write_timeout"
+    )
+    assert result["error_type"] == (
+        "RuntsBrowserWriteError"
+    )
+
+    assert state["preflight"] == 1
+    assert state["execute"] == 1

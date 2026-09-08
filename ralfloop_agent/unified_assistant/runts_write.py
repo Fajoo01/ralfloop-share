@@ -756,9 +756,33 @@ class RuntsApprovedReplyExecutor:
                 uncertain = {
                     "status": "EXECUTION_UNCERTAIN",
                     "executed": False,
-                    "writes": 1,
+                    "writes": int(
+                        getattr(
+                            exc,
+                            "writes",
+                            0,
+                        )
+                        or 0
+                    ),
                     "retry_allowed": False,
-                    "reason": type(exc).__name__,
+                    "reason": (
+                        str(
+                            getattr(
+                                exc,
+                                "reason",
+                                "",
+                            )
+                        ).strip()
+                        or type(exc).__name__
+                    )[:240],
+                    "error_type":
+                        type(exc).__name__,
+                    "phase":
+                        getattr(
+                            exc,
+                            "phase",
+                            None,
+                        ),
                 }
 
                 self.store.finish_claimed_execution(
@@ -846,9 +870,33 @@ class RuntsApprovedReplyExecutor:
                 uncertain = {
                     "status": "EXECUTION_UNCERTAIN",
                     "executed": False,
-                    "writes": 1,
+                    "writes": int(
+                        getattr(
+                            exc,
+                            "writes",
+                            0,
+                        )
+                        or 0
+                    ),
                     "retry_allowed": False,
-                    "reason": type(exc).__name__,
+                    "reason": (
+                        str(
+                            getattr(
+                                exc,
+                                "reason",
+                                "",
+                            )
+                        ).strip()
+                        or type(exc).__name__
+                    )[:240],
+                    "error_type":
+                        type(exc).__name__,
+                    "phase":
+                        getattr(
+                            exc,
+                            "phase",
+                            None,
+                        ),
                 }
 
                 self.store.finish_claimed_execution(

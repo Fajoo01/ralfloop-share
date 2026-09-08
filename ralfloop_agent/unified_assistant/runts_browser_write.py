@@ -11,7 +11,17 @@ from urllib.request import urlopen
 
 
 class RuntsBrowserWriteError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        reason: str,
+        *,
+        phase: str | None = None,
+        writes: int = 0,
+    ) -> None:
+        self.reason = str(reason)
+        self.phase = phase
+        self.writes = max(0, int(writes))
+        super().__init__(self.reason)
 
 
 class RuntsAuthenticatedCdpWriteTransport:
@@ -233,6 +243,11 @@ class RuntsAuthenticatedCdpWriteTransport:
         events = deque()
         counter = 0
 
+        # Diagnostic state. "writes" counts only provider
+        # mutations confirmed by a successful HTTP response.
+        phase = "connect"
+        writes = 0
+
         def call(method, params=None):
             nonlocal counter
 
@@ -272,12 +287,16 @@ class RuntsAuthenticatedCdpWriteTransport:
                     events.append(row)
 
         try:
+            phase = "network_enable"
+
             call("Network.enable", {
                 "maxTotalBufferSize": 30_000_000,
                 "maxResourceBufferSize": 15_000_000,
             })
 
             # Recheck immediately before first mutation.
+            phase = "preflight"
+
             snap = self._snapshot(
                 call,
                 str(scope["practice_id"]),
@@ -293,6 +312,99 @@ class RuntsAuthenticatedCdpWriteTransport:
                     "runts_execute_preflight_changed"
                 )
 
+            # Open the attachment modal exactly as the user
+            # does. The B00 bootstrap-select lives in this modal
+            # and must be active before selecting the document type.
+            phase = "attachment_modal"
+
+            attachment_modal = self._evaluate_value(
+                call,
+                r"""
+                (async () => {
+                  const visible = el =>
+                    !!(
+                      el &&
+                      (
+                        el.offsetWidth ||
+                        el.offsetHeight ||
+                        el.getClientRects().length
+                      )
+                    );
+
+                  const normalize = value =>
+                    String(value || '')
+                      .replace(/\s+/g, ' ')
+                      .trim()
+                      .toLowerCase();
+
+                  const modal =
+                    document.querySelector(
+                      '#modaleAggiungiAllegato'
+                    );
+
+                  if (visible(modal)) {
+                    return {
+                      ok:true,
+                      alreadyOpen:true
+                    };
+                  }
+
+                  const buttons =
+                    Array.from(
+                      document.querySelectorAll('button')
+                    ).filter(
+                      button =>
+                        visible(button)
+                        && normalize(
+                          button.innerText
+                          || button.textContent
+                        ) === 'carica allegato'
+                    );
+
+                  if (buttons.length !== 1) {
+                    return {
+                      ok:false,
+                      reason:
+                        'attachment_button_ambiguous',
+                      count:buttons.length
+                    };
+                  }
+
+                  buttons[0].click();
+
+                  // Bootstrap's fade transition is asynchronous.
+                  // Poll the actual modal state instead of relying
+                  // on a fixed animation delay.
+                  const deadline =
+                    performance.now() + 2000;
+
+                  while (
+                    !visible(modal)
+                    && performance.now() < deadline
+                  ) {
+                    await new Promise(
+                      resolve => setTimeout(resolve, 50)
+                    );
+                  }
+
+                  return {
+                    ok:visible(modal),
+                    alreadyOpen:false
+                  };
+                })()
+                """,
+            )
+
+            if not (
+                isinstance(attachment_modal, dict)
+                and attachment_modal.get("ok") is True
+            ):
+                raise RuntsBrowserWriteError(
+                    "runts_attachment_modal_unavailable"
+                )
+
+            phase = "select_b00"
+
             self._fill_message_and_select_b00(
                 call,
                 str(scope["subject"]),
@@ -302,6 +414,8 @@ class RuntsAuthenticatedCdpWriteTransport:
             # ------------------------------------------------
             # MUTATION 1: official Angular fileProgress()
             # ------------------------------------------------
+
+            phase = "upload_input"
 
             document = call(
                 "DOM.getDocument",
@@ -340,6 +454,8 @@ class RuntsAuthenticatedCdpWriteTransport:
             )
 
             # Explicitly fire the Angular change handler.
+            phase = "upload_dispatch"
+
             call(
                 "Runtime.evaluate",
                 {
@@ -364,6 +480,8 @@ class RuntsAuthenticatedCdpWriteTransport:
                 },
             )
 
+            phase = "upload_wait"
+
             upload = self._wait_post(
                 ws,
                 call,
@@ -375,6 +493,11 @@ class RuntsAuthenticatedCdpWriteTransport:
                     + str(scope["practice_id"])
                 ),
             )
+
+            # _wait_post returned a successful provider
+            # response: mutation 1 is now confirmed.
+            writes = 1
+            phase = "upload_validate"
 
             self._validate_upload(
                 upload,
@@ -406,6 +529,8 @@ class RuntsAuthenticatedCdpWriteTransport:
             # ------------------------------------------------
             # Open final confirmation modal.
             # ------------------------------------------------
+
+            phase = "send_click"
 
             opened = self._evaluate_value(
                 call,
@@ -456,6 +581,8 @@ class RuntsAuthenticatedCdpWriteTransport:
 
             time.sleep(0.25)
 
+            phase = "confirm_click"
+
             confirmed = self._evaluate_value(
                 call,
                 r"""
@@ -470,9 +597,11 @@ class RuntsAuthenticatedCdpWriteTransport:
                   const buttons =
                     Array.from(
                       document.querySelectorAll(
-                        '.modal.show button,'
-                        + '.modal.show input[type=button],'
-                        + '.modal.show input[type=submit]'
+                        '#modaleConfermaInvio.show button,'
+                        + '#modaleConfermaInvio.show '
+                        + 'input[type=button],'
+                        + '#modaleConfermaInvio.show '
+                        + 'input[type=submit]'
                       )
                     )
                     .filter(el => {
@@ -518,6 +647,8 @@ class RuntsAuthenticatedCdpWriteTransport:
             # MUTATION 2: send()
             # ------------------------------------------------
 
+            phase = "send_wait"
+
             submitted = self._wait_post(
                 ws,
                 call,
@@ -530,6 +661,10 @@ class RuntsAuthenticatedCdpWriteTransport:
                     + "/pec"
                 ),
             )
+
+            # Final provider POST returned successfully.
+            writes = 2
+            phase = "submit_validate"
 
             self._validate_submit(
                 submitted,
@@ -556,6 +691,27 @@ class RuntsAuthenticatedCdpWriteTransport:
                         )
                     ),
             }
+
+        except RuntsBrowserWriteError as exc:
+            # Preserve the original narrow error reason while
+            # attaching the phase and confirmed mutation count.
+            if exc.phase is None:
+                exc.phase = phase
+
+            if exc.writes < writes:
+                exc.writes = writes
+
+            raise
+
+        except Exception as exc:
+            # Preserve phase/count without persisting arbitrary
+            # third-party exception text, which may contain
+            # URLs, headers or session details.
+            raise RuntsBrowserWriteError(
+                type(exc).__name__,
+                phase=phase,
+                writes=writes,
+            ) from exc
 
         finally:
             ws.close()
@@ -915,25 +1071,139 @@ class RuntsAuthenticatedCdpWriteTransport:
                 %s
               );
 
-              select.selectedIndex =
-                matches[0][1];
+              // bootstrap-select is the real UI control.
+              // Interact with it as the user does instead of
+              // mutating selectedIndex behind Angular's back.
+              const wrapper =
+                select.closest('.bootstrap-select');
 
-              select.dispatchEvent(
-                new Event(
-                  'change',
-                  {bubbles:true}
-                )
-              );
+              if (!wrapper) {
+                return {
+                  ok:false,
+                  reason:'b00_bootstrap_missing'
+                };
+              }
 
-              return {
-                ok:true,
-                selected:
-                  String(
-                    select.options[
-                      select.selectedIndex
-                    ].textContent || ''
-                  ).trim()
-              };
+              const toggle =
+                wrapper.querySelector(
+                  'button.dropdown-toggle[data-id="tipoDoc"]'
+                );
+
+              if (!toggle) {
+                return {
+                  ok:false,
+                  reason:'b00_bootstrap_toggle_missing'
+                };
+              }
+
+              const normalize = value =>
+                String(value || '')
+                  .replace(/\\s+/g, ' ')
+                  .trim();
+
+              const expected =
+                "BILANCIO D'ESERCIZIO (B00)";
+
+              // Open bootstrap-select first. It may rebuild the
+              // dropdown option nodes while opening, so the B00
+              // node MUST be queried only after the menu is open.
+              toggle.click();
+
+              return new Promise(resolve => {
+                setTimeout(() => {
+                  const uiMatches =
+                    Array.from(
+                      wrapper.querySelectorAll(
+                        '.dropdown-menu.show '
+                        + 'a[role="option"]'
+                      )
+                    ).filter(
+                      el =>
+                        normalize(
+                          el.innerText
+                          || el.textContent
+                        ) === expected
+                    );
+
+                  if (uiMatches.length !== 1) {
+                    resolve({
+                      ok:false,
+                      reason:
+                        'b00_bootstrap_option_ambiguous',
+                      count:uiMatches.length
+                    });
+                    return;
+                  }
+
+                  // Click the live option node generated by
+                  // bootstrap-select.
+                  uiMatches[0].click();
+
+                  setTimeout(() => {
+                    const selectedOption =
+                      select.selectedIndex >= 0
+                        ? select.options[
+                            select.selectedIndex
+                          ]
+                        : null;
+
+                    const selected =
+                      normalize(
+                        selectedOption
+                          ? selectedOption.textContent
+                          : ''
+                      );
+
+                    // Read visible button text first. data-title
+                    // can represent the placeholder before the
+                    // bootstrap state has settled.
+                    const bootstrapTitle =
+                      normalize(
+                        toggle.innerText
+                        || toggle.textContent
+                        || toggle.getAttribute(
+                          'data-title'
+                        )
+                      );
+
+                    // Re-query selected UI state after the click;
+                    // do not rely on the node captured before it.
+                    const selectedUi =
+                      Array.from(
+                        wrapper.querySelectorAll(
+                          'a[role="option"].selected,'
+                          + 'a[role="option"]'
+                          + '[aria-selected="true"]'
+                        )
+                      ).filter(
+                        el =>
+                          normalize(
+                            el.innerText
+                            || el.textContent
+                          ) === expected
+                      );
+
+                    const uiSelected =
+                      selectedUi.length === 1;
+
+                    const ok =
+                      selected === expected
+                      && bootstrapTitle === expected
+                      && uiSelected;
+
+                    resolve({
+                      ok,
+                      selected,
+                      bootstrapTitle,
+                      uiSelected,
+                      reason:
+                        ok
+                          ? null
+                          : 'b00_bootstrap_binding_failed'
+                    });
+                  }, 300);
+                }, 150);
+              });
             })()
             """
             % (
