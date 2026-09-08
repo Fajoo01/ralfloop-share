@@ -26,5 +26,12 @@ def test_runts_review_formatter_patch_preserves_approval_and_other_domains(tmp_p
                "capability": "runts_prepare_practice_response", "response": "Oggetto/body/PDF/SHA256/B00\nApprovo 2603942",
                "metadata": {"pending_domain": "runts", "pending_action": "runts_practice_reply", "writes": 0}}
     assert render(None, payload) == payload["response"]
+    runts_result = {
+        "ok": True, "approval_required": True,
+        "capability": "runts_practice_reply",
+        "response": "Approvazione RUNTS non accettata: expired.",
+        "metadata": {"status": "expired", "writes": 0},
+    }
+    assert render(None, runts_result) == runts_result["response"]
     assert payload["approval_required"] is True
     assert render(None, {**payload, "capability": "other"}).startswith("Serve conferma esplicita")

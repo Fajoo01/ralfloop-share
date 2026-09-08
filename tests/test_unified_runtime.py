@@ -23,17 +23,24 @@ def _pending_session(monkeypatch, tmp_path, *domains):
             domain=domain,
             action=(
                 "mailchimp_campaign_create" if domain == "mailchimp"
+                else "runts_practice_reply" if domain == "runts"
                 else "send_email"
             ),
             policy=PolicyClass.CONFIRM_WRITE,
-            payload={"domain": domain, "content": "approved artifact"},
+            payload=(
+                {"practice_id": "2603942", "content": "approved artifact"}
+                if domain == "runts"
+                else {"domain": domain, "content": "approved artifact"}
+            ),
             displayed_text="Approved artifact",
         )
         conversation.attach_approval_request(
             domain=domain,
             pending_id=pending.pending_id,
             payload_digest=pending.payload_digest,
-            approval_ref="apr_ABCDEFGH" if domain == "mailchimp" else "apr_IJKLMNOP",
+            approval_ref=("apr_ABCDEFGH" if domain == "mailchimp"
+                          else "apr_RUNTS123" if domain == "runts"
+                          else "apr_IJKLMNOP"),
             created_at=pending.created_at,
             expires_at=pending.expires_at,
         )
@@ -82,6 +89,86 @@ def test_bare_approval_with_multiple_pending_fails_closed(monkeypatch, tmp_path)
     context = _pending_session(monkeypatch, tmp_path, "mailchimp", "email")
 
     assert is_unified_telegram_request("approvo", context) is False
+
+
+def test_explicit_runts_precedes_legacy_and_has_no_double_confirmation(monkeypatch, tmp_path):
+    monkeypatch.setenv("RALFLOOP_UNIFIED_ASSISTANT", "1")
+    context = _pending_session(monkeypatch, tmp_path, "runts")
+
+    assert runtime._RUNTS_EXPLICIT_APPROVAL.fullmatch("Approvo 2603942")
+    assert runtime._is_explicit_runts_approval("Approvo 2603942", context) is True
+    assert is_unified_telegram_request("Approvo 2603942", context) is True
+    route = unified_route_probe("Approvo 2603942", context)
+    assert route["intent"] == "runts.practice.reply.approve"
+    assert route["task_mode"] == "external_action"
+    assert route["requires_confirmation"] is False
+    for text in ("approvo", "ok", "sì", "si", "confermo"):
+        assert runtime._RUNTS_EXPLICIT_APPROVAL.fullmatch(text) is None
+
+
+def _expire_pending(context, domain):
+    adapter = SessionConversationAdapter(runtime._session_store())
+    conversation = adapter.load("telegram-22-11")
+    item = getattr(conversation.state.pending, domain).model_copy(update={"expires_at": 0})
+    pending = conversation.state.pending.model_copy(update={domain: item})
+    conversation.state = conversation.state.model_copy(update={"pending": pending})
+    adapter.save("telegram-22-11", conversation)
+
+
+def test_expired_other_domain_does_not_ambiguous_active_runts(monkeypatch, tmp_path):
+    monkeypatch.setenv("RALFLOOP_UNIFIED_ASSISTANT", "1")
+    monkeypatch.setenv("RALFLOOP_ENABLE_TELEGRAM_APPROVAL_GATE", "1")
+    monkeypatch.setenv("RALFLOOP_TELEGRAM_APPROVAL_DB", str(tmp_path / "approval.sqlite"))
+    context = _pending_session(monkeypatch, tmp_path, "mailchimp", "runts")
+    _expire_pending(context, "mailchimp")
+
+    result = runtime._execute_explicit_runts_approval("Approvo 2603942", context)
+    assert result["metadata"]["status"] == "approval_request_missing"
+    assert result["metadata"]["writes"] == 0
+
+
+def test_active_other_domain_keeps_runts_approval_ambiguous(monkeypatch, tmp_path):
+    monkeypatch.setenv("RALFLOOP_UNIFIED_ASSISTANT", "1")
+    context = _pending_session(monkeypatch, tmp_path, "mailchimp", "runts")
+
+    result = runtime._execute_explicit_runts_approval("Approvo 2603942", context)
+    assert result["metadata"]["status"] == "clarification_required"
+    assert result["metadata"]["writes"] == 0
+
+
+def test_expired_runts_is_not_approvable(monkeypatch, tmp_path):
+    monkeypatch.setenv("RALFLOOP_UNIFIED_ASSISTANT", "1")
+    context = _pending_session(monkeypatch, tmp_path, "runts")
+    _expire_pending(context, "runts")
+
+    assert runtime._is_explicit_runts_approval("Approvo 2603942", context) is False
+    result = runtime._execute_explicit_runts_approval("Approvo 2603942", context)
+    assert result["metadata"]["status"] == "clarification_required"
+    assert result["metadata"]["writes"] == 0
+
+
+def test_expired_other_pending_does_not_ambiguate_active_runts(monkeypatch, tmp_path):
+    monkeypatch.setenv("RALFLOOP_UNIFIED_ASSISTANT", "1")
+    context = _pending_session(monkeypatch, tmp_path, "mailchimp", "runts")
+    adapter = SessionConversationAdapter(SessionStore(tmp_path / "sessions"))
+    conversation = adapter.load("telegram-22-11")
+    expired = conversation.state.pending.mailchimp.model_copy(update={"expires_at": 0})
+    conversation.state = conversation.state.model_copy(update={
+        "pending": conversation.state.pending.model_copy(update={"mailchimp": expired})
+    })
+    adapter.save("telegram-22-11", conversation)
+
+    assert runtime._is_explicit_runts_approval("Approvo 2603942", context) is True
+    assert is_unified_telegram_request("Approvo 2603942", context) is True
+
+
+def test_active_other_pending_keeps_runts_approval_ambiguous(monkeypatch, tmp_path):
+    monkeypatch.setenv("RALFLOOP_UNIFIED_ASSISTANT", "1")
+    context = _pending_session(monkeypatch, tmp_path, "mailchimp", "runts")
+    assert runtime._is_explicit_runts_approval("Approvo 2603942", context) is True
+    result = runtime.run_unified_telegram("Approvo 2603942", context)
+    assert result["metadata"]["status"] == "clarification_required"
+    assert result["metadata"]["writes"] == 0
 
 
 def test_fastweb_read_is_unified_tool_backed_route(monkeypatch):

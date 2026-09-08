@@ -73,15 +73,16 @@ _EMAIL_READ_SUPPORTED = re.compile(
 def is_unified_telegram_request(text: str, context: Mapping[str, Any]) -> bool:
     flags = AssistantFeatureFlags.from_env()
     source = str(context.get("source") or "")
+    explicit_runts = _is_explicit_runts_approval(text, context)
     return (
         flags.unified_assistant
         and (source.startswith("telegram_") or source == "ralf_terminal")
-        and not _LEGACY.search(text.strip())
+        and (explicit_runts or not _LEGACY.search(text.strip()))
         and bool(
             _SUPPORTED.search(text)
             or _EMAIL_READ_SUPPORTED.search(text)
             or _is_pec_runts_request(text)
-            or _is_explicit_runts_approval(text, context)
+            or explicit_runts
             or re.fullmatch(r"\s*(?:otp[\s:-]*)?[0-9]{6}\s*", text, re.I)
             or (
                 _is_positive_confirmation(text)
@@ -122,6 +123,19 @@ def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any]
 
     if not is_unified_telegram_request(text, context):
         return None
+    if _is_explicit_runts_approval(text, context):
+        practice_id = _RUNTS_EXPLICIT_APPROVAL.fullmatch(text).group("practice")
+        return {
+            "task_mode": "external_action", "mode": "external_action",
+            "interaction_class": "EXTERNAL_ACTION",
+            "intent": "runts.practice.reply.approve",
+            "arguments": {"practice_id": practice_id}, "domains": ["runts"],
+            "skills_used": ["runts.practice.reply.approve"],
+            "domain_skills": ["runts.practice.reply.approve"],
+            "mcp_used": [], "mcp_connectors": [],
+            "write_policy": "policy_gated", "evidence_first": True,
+            "requires_confirmation": False,
+        }
     if _is_pec_runts_request(text):
         from .pec_runts_telegram import decision_for_telegram
 
@@ -1027,6 +1041,7 @@ def _execute_explicit_runts_approval(
         session_id
     )
 
+    now = int(datetime.now(UTC).timestamp())
     active = [
         item
         for name in PENDING_DOMAINS
@@ -1037,6 +1052,8 @@ def _execute_explicit_runts_approval(
             )
         )
         is not None
+        and item.expires_at > now
+        and payload_matches(item)
     ]
 
     if (
