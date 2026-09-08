@@ -252,14 +252,17 @@ def main(argv=None):
             raise ValueError("APPROVED_TOTAL_CONFLICT")
     html = Environment(loader=FileSystemLoader(overlay / "templates"),undefined=StrictUndefined,autoescape=True).get_template("runts_mod_d_pdf.html").render(**ctx)
     (args.output / "modello_d_review.html").write_text(html)
+    source_pdf_path = args.output / "modello_d_source.pdf"
     pdf_path = args.output / "modello_d_review.pdf"
     if args.existing_review_pdf:
         existing = args.existing_review_pdf.read_bytes()
         if hashlib.sha256(existing).hexdigest() != args.existing_review_pdf_sha256:
             raise ValueError("existing_review_pdf_hash_mismatch")
-        pdf_path.write_bytes(existing)
+        source_pdf_path.write_bytes(existing)
     else:
-        HTML(string=html, base_url=str(args.suite)).write_pdf(pdf_path)
+        HTML(string=html, base_url=str(args.suite)).write_pdf(source_pdf_path)
+    from ralfloop_agent.unified_assistant.runts_upload_pdf import prepare_runts_upload_pdf
+    prepare_runts_upload_pdf(source_pdf_path, pdf_path)
     pdf = pdf_path.read_bytes()
     extracted = subprocess.run(["pdftotext", "-", "-"],input=pdf,capture_output=True,check=True).stdout.decode()
     if (not plan and "BOZZA NON DEPOSITABILE" not in extracted) or "draft_db" in extracted or "approved_pdf" in extracted:

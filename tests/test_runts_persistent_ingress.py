@@ -21,6 +21,11 @@ TEXT = "Controlla la pratica RUNTS 2603942 e prepara la risposta con il Modello 
 
 
 def test_meowgram_http_prepare_reobserves_persistent_sources_and_stages(tmp_path, monkeypatch):
+    # This is an ingress contract fixture, not a PDF. Real validation is covered
+    # independently in test_runts_upload_pdf; preserve the fake boundary here.
+    from ralfloop_agent.unified_assistant import runts_upload_pdf
+    monkeypatch.setattr(runts_upload_pdf, "validate_pdfa", lambda path: None)
+    monkeypatch.setattr(runts_upload_pdf, "verify_browser_readable", lambda _path, digest=None: digest)
     for key, value in {
         "RALFLOOP_UNIFIED_ASSISTANT": "1",
         "BOTTAZZI_RUNTS_WRITE_ENABLED": "0",

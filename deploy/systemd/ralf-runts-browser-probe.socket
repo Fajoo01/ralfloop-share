@@ -1,0 +1,12 @@
+[Unit]
+Description=Ralf RUNTS browser file probe socket
+
+[Socket]
+ListenStream=/run/ralf-runts-browser-probe/probe.sock
+SocketUser=bandi
+SocketGroup=sibilla-cumana
+SocketMode=0660
+DirectoryMode=0750
+
+[Install]
+WantedBy=sockets.target

@@ -130,6 +130,11 @@ def prepare_document_review(memory: MemoryService, *, practice_id: str, message_
     if review_context and review_context.pdf_path != document.locator:
         raise ValueError("review_document_path_mismatch")
     validation_json=final_validation.model_dump_json() if final_validation else ""
+    if final_validation and not blockers:
+        from .runts_upload_pdf import verify_runts_upload_pdf
+        if review_context is None:
+            raise ValueError("final_document_evidence_required")
+        verify_runts_upload_pdf(review_context.pdf_path, document.content_hash)
     digest = hashlib.sha256(f"{practice_id}|{message_id}|{document.content_hash}|{blockers}|{context_json}|{validation_json}".encode()).hexdigest()
     proposal = DocumentReviewProposal(
         proposal_id="proposal.runts.document." + digest[:24], practice_id=practice_id,

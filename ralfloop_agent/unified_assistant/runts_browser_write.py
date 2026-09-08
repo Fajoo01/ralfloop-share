@@ -793,6 +793,11 @@ class RuntsAuthenticatedCdpWriteTransport:
                 "runts_pdf_shape_invalid"
             )
 
+        # Read-only defense for old/stale scopes too: never convert or repair
+        # the approved artifact here, and reject before opening CDP/network.
+        from .runts_upload_pdf import verify_runts_upload_pdf
+        verify_runts_upload_pdf(path, str(scope.get("pdf_sha256") or ""))
+
     def _page(self) -> dict[str, Any]:
         try:
             with urlopen(

@@ -136,6 +136,9 @@ def build_runts_pending_payload(
     if actual != pdf_sha256:
         raise ValueError("runts_pdf_hash_mismatch")
 
+    from .runts_upload_pdf import verify_runts_upload_pdf
+    verify_runts_upload_pdf(path, pdf_sha256)
+
     authoritative_hash = _message_hash_from_proposal(
         proposal
     )

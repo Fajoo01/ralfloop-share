@@ -1,0 +1,25 @@
+[Unit]
+Description=Ralf RUNTS browser-user PDF read probe
+Requires=ralf-runts-browser-probe.socket
+After=ralf-runts-browser-probe.socket
+
+[Service]
+Type=simple
+User=bandi
+Group=bandi
+Environment=PYTHONPATH=/home/sibilla-cumana/ralfloop-production/current
+Environment=BOTTAZZI_RUNTS_UPLOAD_ROOT=/home/bandi/.local/share/bottazzi/runts
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python -m ralfloop_agent.unified_assistant.runts_browser_probe --socket-activation
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
