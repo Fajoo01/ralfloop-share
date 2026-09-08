@@ -223,3 +223,43 @@ def test_writer_checks_final_before_network(tmp_path, monkeypatch):
     with pytest.raises(pdf.RuntsUploadPdfError):
         writer.preflight(payload)
     assert seen == [(final, payload["pdf_sha256"])]
+
+
+
+def test_acl_default_entries_are_parsed_correctly(monkeypatch):
+    monkeypatch.setattr(
+        pdf.pwd,
+        "getpwuid",
+        lambda _uid: SimpleNamespace(pw_name="sibilla-cumana"),
+    )
+    acl = """\
+user::rwx
+user:sibilla-cumana:rwx
+mask::rwx
+other::---
+default:user::rwx
+default:user:sibilla-cumana:rwx
+default:group::---
+default:mask::rwx
+default:other::---
+"""
+    # Unnamed default:user:: and the authorized preparer entry are valid.
+    pdf._assert_acl_has_no_other_named_users(acl, 12345)
+
+
+def test_acl_default_foreign_named_user_is_rejected(monkeypatch):
+    monkeypatch.setattr(
+        pdf.pwd,
+        "getpwuid",
+        lambda _uid: SimpleNamespace(pw_name="sibilla-cumana"),
+    )
+    acl = """\
+user::rwx
+default:user:other-admin:rwx
+default:mask::rwx
+"""
+    with pytest.raises(
+        pdf.RuntsUploadPdfError,
+        match="runts_browser_path_untraversable",
+    ):
+        pdf._assert_acl_has_no_other_named_users(acl, 12345)

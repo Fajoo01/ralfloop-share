@@ -102,14 +102,23 @@ def ensure_runts_browser_readable(path):
 
 
 def _assert_acl_has_no_other_named_users(acl: str, owner_uid: int) -> None:
-    """Mask changes are safe only for the owner and the one browser grant."""
+    """Mask changes are safe only for the preparer/browser principals."""
     owner = pwd.getpwuid(owner_uid).pw_name
+    allowed = {"bandi", owner}
+
     for line in acl.splitlines():
-        if line.startswith(("user:", "default:user:")):
+        if line.startswith("user:"):
             parts = line.split(":")
-            name = parts[1] if len(parts) > 2 else ""
-            if name and name not in {"bandi", owner}:
-                raise RuntsUploadPdfError("runts_browser_path_untraversable")
+            name = parts[1] if len(parts) >= 3 else ""
+        elif line.startswith("default:user:"):
+            parts = line.split(":")
+            # default:user:<name>:<perms>
+            name = parts[2] if len(parts) >= 4 else ""
+        else:
+            continue
+
+        if name and name not in allowed:
+            raise RuntsUploadPdfError("runts_browser_path_untraversable")
 
 
 def verify_runts_upload_pdf(path, expected_sha256):
