@@ -89,19 +89,27 @@ def ensure_runts_browser_readable(path):
         if (parent == Path("/") or stat.st_uid != uid
                 or stat.st_uid == browser_uid or stat.st_mode & 0o001):
             continue
-        # An existing extended ACL can contain masked-out permissions. Letting
-        # setfacl recompute its mask could inadvertently enable those rights.
         acl = _run(["getfacl", "-cp", str(parent)], "runts_browser_path_untraversable").decode()
-        if any(line.startswith("mask:") for line in acl.splitlines()):
-            # Existing ACLs are not repaired automatically; the final real probe
-            # establishes whether they already allow the browser through.
-            continue
-        _run(["setfacl", "-m", "u:bandi:--x", str(parent)],
+        _assert_acl_has_no_other_named_users(acl, os.getuid())
+        # Set an explicit minimum mask. `-n` prevents setfacl from widening an
+        # inherited mask and thus unrelated named entries.
+        _run(["setfacl", "-n", "-m", "m::--x,u:bandi:--x", str(parent)],
              "runts_browser_path_untraversable")
     file_acl = _run(["getfacl", "-cp", str(path)], "runts_browser_file_unreadable").decode()
-    if not any(line.startswith("mask:") for line in file_acl.splitlines()):
-        _run(["setfacl", "-m", "u:bandi:r--", str(path)], "runts_browser_file_unreadable")
+    _assert_acl_has_no_other_named_users(file_acl, os.getuid())
+    _run(["setfacl", "-n", "-m", "m::r--,u:bandi:r--", str(path)], "runts_browser_file_unreadable")
     return verify_browser_readable(path, hashlib.sha256(path.read_bytes()).hexdigest())
+
+
+def _assert_acl_has_no_other_named_users(acl: str, owner_uid: int) -> None:
+    """Mask changes are safe only for the owner and the one browser grant."""
+    owner = pwd.getpwuid(owner_uid).pw_name
+    for line in acl.splitlines():
+        if line.startswith(("user:", "default:user:")):
+            parts = line.split(":")
+            name = parts[1] if len(parts) > 2 else ""
+            if name and name not in {"bandi", owner}:
+                raise RuntsUploadPdfError("runts_browser_path_untraversable")
 
 
 def verify_runts_upload_pdf(path, expected_sha256):

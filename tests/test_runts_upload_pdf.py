@@ -154,9 +154,18 @@ def test_private_prepare_acl_is_minimal(tmp_path, monkeypatch):
     monkeypatch.setattr(pdf, "_run", run)
     monkeypatch.setattr(pdf, "verify_browser_readable", lambda *_: "verified")
     assert pdf.ensure_runts_browser_readable(path) == "verified"
-    assert ["setfacl", "-m", "u:bandi:--x", str(directory)] in commands
-    assert ["setfacl", "-m", "u:bandi:r--", str(path)] in commands
+    assert ["setfacl", "-n", "-m", "m::--x,u:bandi:--x", str(directory)] in commands
+    assert ["setfacl", "-n", "-m", "m::r--,u:bandi:r--", str(path)] in commands
     assert all("777" not in str(command) for command in commands)
+
+
+def test_acl_mask_never_changes_unrelated_named_user(tmp_path, monkeypatch):
+    directory = tmp_path / "private"; directory.mkdir()
+    path = directory / "final.pdf"; path.write_bytes(b"x")
+    monkeypatch.setattr(pdf.pwd, "getpwnam", lambda _: SimpleNamespace(pw_uid=99999))
+    monkeypatch.setattr(pdf, "_run", lambda args, code: b"user::rwx\nuser:other-admin:rwx\nmask::---\n")
+    with pytest.raises(pdf.RuntsUploadPdfError, match="path_untraversable"):
+        pdf.ensure_runts_browser_readable(path)
 
 
 def test_approval_readonly_no_conversion(tmp_path, monkeypatch):
