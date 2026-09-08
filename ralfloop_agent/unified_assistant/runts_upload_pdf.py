@@ -16,7 +16,7 @@ class RuntsUploadPdfError(ValueError):
 
 
 VERAPDF_VERSION = "1.30.2"
-PROBE_SOCKET = "/run/ralf-runts-browser-probe/probe.sock"
+PROBE_SOCKET = "/run/ralf-runts-browser-probe.sock"
 
 
 def _pdfa_part():

@@ -84,7 +84,8 @@ drops UID/GID/supplementary groups in the subprocess. Other UIDs fail explicitly
 `runts_browser_identity_probe_unavailable`.
 
 `ralf-runts-browser-probe.socket` / `.service` are the narrow browser-user
-boundary. The socket is `0660 bandi:sibilla-cumana`; the service runs as `bandi`.
+boundary. The socket is `/run/ralf-runts-browser-probe.sock`, mode `0660`, owner
+`bandi:sibilla-cumana`; the service runs as `bandi`.
 It receives exactly JSON `{path,expected_sha256}` and permits only regular files
 below the canonical RUNTS root, rejects symlinks/traversal/oversize input, opens and
 hashes as `bandi`, and returns only `{readable,sha256,size,error_code}`. It has no
