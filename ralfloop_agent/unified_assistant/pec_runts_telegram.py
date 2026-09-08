@@ -19,6 +19,29 @@ PEC_RUNTS_REFERENCE = re.compile(
     re.IGNORECASE,
 )
 
+PEC_GENERIC_READ = re.compile(
+    r"\b(?:cosa\s+dice|controlla|leggi|guarda|verifica|"
+    r"ci\s+sono|cerca|trova)\b.*\bpec\b"
+    r"|\bpec\b.*\b(?:appena\s+arrivat[ao]|ultima|ultime|"
+    r"pi[uù]\s+recente|nuov[ae]|leggi|controlla|guarda)\b",
+    re.IGNORECASE,
+)
+
+
+class PecInboxArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    limit: int = Field(default=1, ge=1, le=100)
+
+
+class PecInboxDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["tool"] = "tool"
+    response: None = None
+    tool_id: Literal["pec_discover_messages"] = "pec_discover_messages"
+    arguments: PecInboxArguments = Field(default_factory=PecInboxArguments)
+    mode: Literal["latest", "unread", "search"] = "latest"
+    search_term: str | None = Field(default=None, max_length=240)
+
 
 class PecRuntsDecisionArguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -47,26 +70,150 @@ class RuntsResponseDecision(BaseModel):
     arguments: RuntsResponseArguments
 
 
-def decision_for_telegram(text: str) -> PecRuntsToolDecision | RuntsResponseDecision | None:
-    refs=re.findall(r"\bpratica\s+RUNTS\s+([A-Za-z0-9_.:/-]+)",text,re.I)
-    if refs and re.search(r"\bprepara\b",text,re.I) and re.search(r"\brisposta\b",text,re.I):
-        if len(set(refs))!=1:raise ValueError("ambiguous_practice_reference")
-        candidates=CapabilityRegistry(capability_descriptors()).retrieve(text,domains=("pec_runts",),allowed_permissions=(CapabilityPermission.PROPOSE,),limit=3)
-        compatible=[c for c in candidates if c.input_schema.get("required")==["practice_id"]]
-        if len(compatible)!=1:raise ValueError("runts_prepare_capability_unresolved")
-        return RuntsResponseDecision(tool_id=compatible[0].capability_id,arguments=RuntsResponseArguments(practice_id=refs[0]))
-    match = PEC_RUNTS_REFERENCE.search(" ".join(text.split()))
-    if not match:
-        return None
-    candidates = CapabilityRegistry(capability_descriptors()).retrieve(
-        text, domains=("pec_runts",), allowed_permissions=(CapabilityPermission.READ,), limit=3,
+def decision_for_telegram(
+    text: str,
+) -> PecInboxDecision | PecRuntsToolDecision | RuntsResponseDecision | None:
+    normalized = " ".join(text.split())
+
+    refs = re.findall(
+        r"\bpratica\s+RUNTS\s+([A-Za-z0-9_.:/-]+)",
+        text,
+        re.I,
     )
-    compatible = [row for row in candidates if "runts_reference" in row.input_schema.get("required", ())]
-    if len(compatible) != 1:
-        raise ValueError("pec_runts_capability_unresolved")
-    return PecRuntsToolDecision(
-        action="tool", tool_id=compatible[0].capability_id,
-        arguments=PecRuntsDecisionArguments(runts_reference=match.group("reference")),
+    if (
+        refs
+        and re.search(r"\bprepara\b", text, re.I)
+        and re.search(r"\brisposta\b", text, re.I)
+    ):
+        if len(set(refs)) != 1:
+            raise ValueError("ambiguous_practice_reference")
+        candidates = CapabilityRegistry(capability_descriptors()).retrieve(
+            text,
+            domains=("pec_runts",),
+            allowed_permissions=(CapabilityPermission.PROPOSE,),
+            limit=3,
+        )
+        compatible = [
+            c
+            for c in candidates
+            if c.input_schema.get("required") == ["practice_id"]
+        ]
+        if len(compatible) != 1:
+            raise ValueError("runts_prepare_capability_unresolved")
+        return RuntsResponseDecision(
+            tool_id=compatible[0].capability_id,
+            arguments=RuntsResponseArguments(practice_id=refs[0]),
+        )
+
+    match = PEC_RUNTS_REFERENCE.search(normalized)
+    if match:
+        candidates = CapabilityRegistry(capability_descriptors()).retrieve(
+            text,
+            domains=("pec_runts",),
+            allowed_permissions=(CapabilityPermission.READ,),
+            limit=3,
+        )
+        compatible = [
+            row
+            for row in candidates
+            if "runts_reference"
+            in row.input_schema.get("required", ())
+        ]
+        if len(compatible) != 1:
+            raise ValueError("pec_runts_capability_unresolved")
+        return PecRuntsToolDecision(
+            action="tool",
+            tool_id=compatible[0].capability_id,
+            arguments=PecRuntsDecisionArguments(
+                runts_reference=match.group("reference")
+            ),
+        )
+
+    if PEC_GENERIC_READ.search(normalized):
+        if re.search(
+            r"\b(?:nuov[ae]|non\s+lett[ae])\s+pec\b"
+            r"|\bpec\b.*\b(?:nuov[ae]|non\s+lett[ae])\b",
+            normalized,
+            re.I,
+        ):
+            return PecInboxDecision(
+                arguments=PecInboxArguments(limit=100),
+                mode="unread",
+            )
+
+        search_match = re.search(
+            r"\bpec\s+(?:di|da)\s+(.+?)(?:\?|!|$)",
+            normalized,
+            re.I,
+        )
+        if search_match:
+            search_term = search_match.group(1).strip(" .?!")
+            if search_term:
+                return PecInboxDecision(
+                    arguments=PecInboxArguments(limit=100),
+                    mode="search",
+                    search_term=search_term,
+                )
+
+        return PecInboxDecision(
+            arguments=PecInboxArguments(limit=1),
+            mode="latest",
+        )
+
+    return None
+
+
+def _format_pec_message(message: Mapping[str, Any]) -> str:
+    sender = str(message.get("sender") or "non disponibile")
+    subject = str(message.get("subject") or "non disponibile")
+    received_at = str(message.get("received_at") or "non disponibile")
+
+    body = " ".join(str(message.get("body") or "").split())
+    if len(body) > 1800:
+        body = body[:1800].rstrip() + "…"
+    if not body:
+        body = "corpo non disponibile"
+
+    attachments = list(message.get("attachments") or ())
+    names = [
+        str(item.get("filename") or item.get("attachment_id") or "allegato")
+        for item in attachments
+        if isinstance(item, Mapping)
+    ]
+
+    deadline_sentences = []
+    original_body = str(message.get("body") or "")
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", original_body):
+        clean = " ".join(sentence.split())
+        folded = clean.casefold()
+        if clean and any(
+            token in folded
+            for token in (
+                "scaden",
+                "entro ",
+                "termine",
+                "quanto prima",
+                "giorni dalla",
+                "giorni dal",
+            )
+        ):
+            deadline_sentences.append(clean)
+        if len(deadline_sentences) >= 3:
+            break
+
+    deadlines = (
+        " ".join(deadline_sentences)
+        if deadline_sentences
+        else "Nessuna scadenza esplicita individuata."
+    )
+
+    return (
+        f"Mittente: {sender}\n"
+        f"Oggetto: {subject}\n"
+        f"Data/ora: {received_at}\n"
+        f"Cosa comunica: {body}\n"
+        f"Scadenze/azioni: {deadlines}\n"
+        f"Allegati: {', '.join(names) if names else 'nessuno'}"
     )
 
 
@@ -107,15 +254,93 @@ def execute_telegram_read(
             memory_path, pec_provider=pec_provider,
             runts_provider=runts_provider or RuntsAuthBoundaryProvider(),
         ) as runtime:
-            result = runtime.invoke_pec_runts(text, decision.arguments.model_dump())
+            query = (
+                "pec posta certificata nuovi messaggi ricevuti"
+                if isinstance(decision, PecInboxDecision)
+                else text
+            )
+            result = runtime.invoke_pec_runts(
+                query,
+                decision.arguments.model_dump(),
+            )
         payload = dict(result.get("structuredContent") or {})
         messages = list(payload.get("messages") or ())
+
         if result.get("isError"):
-            answer = f"Ricerca PEC non completata: {payload.get('status', 'SOURCE_UNAVAILABLE')}."
+            answer = (
+                "Ricerca PEC non completata: "
+                f"{payload.get('status', 'SOURCE_UNAVAILABLE')}. "
+                "Nessuna operazione di scrittura eseguita."
+            )
+        elif isinstance(decision, PecInboxDecision):
+            if decision.mode == "latest":
+                if not messages:
+                    answer = "Non risultano PEC nella casella."
+                else:
+                    answer = (
+                        "Ultima PEC ricevuta:\n"
+                        + _format_pec_message(messages[0])
+                    )
+                    messages = messages[:1]
+
+            elif decision.mode == "unread":
+                unread = [
+                    row
+                    for row in messages
+                    if row.get("unread") is True
+                ]
+                if not unread:
+                    answer = "Non risultano nuove PEC non lette."
+                    messages = []
+                else:
+                    answer = (
+                        f"Risultano {len(unread)} PEC non lette. "
+                        "La più recente è:\n"
+                        + _format_pec_message(unread[0])
+                    )
+                    messages = unread
+
+            else:
+                term = (decision.search_term or "").casefold()
+                matches = [
+                    row
+                    for row in messages
+                    if term
+                    and term
+                    in (
+                        str(row.get("sender") or "")
+                        + "\n"
+                        + str(row.get("subject") or "")
+                        + "\n"
+                        + str(row.get("body") or "")
+                    ).casefold()
+                ]
+
+                if not matches:
+                    answer = (
+                        "Non ho trovato una PEC corrispondente a "
+                        f"{decision.search_term!r}."
+                    )
+                    messages = []
+                else:
+                    answer = (
+                        f"Trovate {len(matches)} PEC corrispondenti. "
+                        "La più recente è:\n"
+                        + _format_pec_message(matches[0])
+                    )
+                    messages = matches
+
         elif messages:
-            answer = f"Trovate {len(messages)} comunicazioni PEC con riferimento RUNTS esatto {decision.arguments.runts_reference}."
+            answer = (
+                f"Trovate {len(messages)} comunicazioni PEC con "
+                f"riferimento RUNTS esatto "
+                f"{decision.arguments.runts_reference}."
+            )
         else:
-            answer = f"Nessuna comunicazione PEC con riferimento RUNTS esatto {decision.arguments.runts_reference}."
+            answer = (
+                "Nessuna comunicazione PEC con riferimento RUNTS esatto "
+                f"{decision.arguments.runts_reference}."
+            )
         return {
             "ok": not bool(result.get("isError")),
             "interaction_mode": "unified_assistant",
@@ -207,4 +432,10 @@ def execute_telegram_prepare(text, *, memory_path, pec_provider=None, runts_prov
             if close is not None:close()
 
 
-__all__ = ["PecRuntsToolDecision", "decision_for_telegram", "execute_telegram_read", "is_pec_runts_telegram"]
+__all__ = [
+    "PecInboxDecision",
+    "PecRuntsToolDecision",
+    "decision_for_telegram",
+    "execute_telegram_read",
+    "is_pec_runts_telegram",
+]

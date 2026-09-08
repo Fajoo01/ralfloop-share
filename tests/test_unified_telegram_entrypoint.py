@@ -98,3 +98,78 @@ def test_fastweb_route_only_avoids_meowgram_generic_orchestrate(monkeypatch):
     assert route["skills_used"] == ["email.search"]
     assert route["mcp_used"] == ["google_workspace.gmail"]
     assert route["task_mode"] != "check_only"
+
+
+
+def test_generic_pec_read_enters_unified_runtime_not_generic_failure_loop(monkeypatch):
+    monkeypatch.setenv("RALFLOOP_UNIFIED_ASSISTANT", "1")
+
+    seen = {}
+
+    def fake_run_unified(text, context):
+        seen["text"] = text
+        seen["source"] = context.get("source")
+        return {
+            "ok": True,
+            "final_answer": "PEC_UNIFIED_READ_OK",
+            "response": "PEC_UNIFIED_READ_OK",
+            "interaction_mode": "unified_assistant",
+            "capability": "pec_discover_messages",
+            "approval_required": False,
+            "metadata": {
+                "mcp_invoked": True,
+                "selected_capability": "pec_discover_messages",
+                "writes": 0,
+            },
+        }
+
+    monkeypatch.setattr(runtime, "run_unified_telegram", fake_run_unified)
+
+    request = backend.TaskRunRequest(
+        user_goal="Cosa dice la PEC che è appena arrivata?",
+        extra_context={
+            "source": "telegram_natural",
+            "telegram_user_id": 1,
+            "telegram_chat_id": 1,
+            "telegram_message_id": 99,
+        },
+    )
+
+    result = backend.run_task(request)
+
+    assert seen == {
+        "text": "Cosa dice la PEC che è appena arrivata?",
+        "source": "telegram_natural",
+    }
+    assert result["ok"] is True
+    assert result["final_answer"] == "PEC_UNIFIED_READ_OK"
+    assert result["interaction_mode"] == "unified_assistant"
+    assert result["capability"] == "pec_discover_messages"
+    assert result["metadata"]["writes"] == 0
+    assert result.get("stop_reason") != "repeated_failure"
+
+
+def test_generic_pec_route_only_exposes_inbox_read_metadata(monkeypatch):
+    monkeypatch.setenv("RALFLOOP_UNIFIED_ASSISTANT", "1")
+
+    result = backend.run_task(
+        backend.TaskRunRequest(
+            user_goal="Cosa dice la PEC che è appena arrivata?",
+            mode="route_only",
+            extra_context={
+                "source": "telegram_natural",
+                "telegram_user_id": 1,
+                "telegram_chat_id": 1,
+                "telegram_message_id": 100,
+            },
+        )
+    )
+
+    route = result["capability_route"]
+    assert result["stop_reason"] == "route_only"
+    assert route["task_mode"] == "tool_backed_read"
+    assert route["intent"] == "pec.inbox.read"
+    assert route["skills_used"] == ["pec_discover_messages"]
+    assert route["mcp_used"] == ["pec_runts.mcp"]
+    assert route["write_policy"] == "no_write"
+    assert route["requires_confirmation"] is False
