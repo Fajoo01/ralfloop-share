@@ -208,7 +208,7 @@
       "id": "general_assistant",
       "aliases": ["assistente", "generale"],
       "description": "Safe fallback routing and clarification without implicit side effects.",
-      "supported_skills": ["assistant.clarify"],
+      "supported_skills": ["assistant.clarify", "meteo.read", "atm.route"],
       "allowed_memory_namespaces": ["general_preferences"],
       "context_builder": "ralfloop_agent.unified_assistant.planner.UnifiedPlanner",
       "policy": "READ or clarification",
@@ -244,5 +244,7 @@
   ,
     {"id":"mailchimp.read","domains":["mailchimp"],"required_arguments":["operation"],"required_capabilities":["mailchimp.ping","mailchimp.audiences.read","mailchimp.campaigns.read","mailchimp.campaign_content.read","mailchimp.members.read","mailchimp.segments.read","mailchimp.tags.read","mailchimp.member_tags.read"],"classification":"READ","workflow":"ralfloop_agent.unified_assistant.core.UnifiedAssistantCore._read_mailchimp","verification_method":"strict MCP schema + side_effects=0 + writes=0 + sends=0","status":"ready"},
     {"id":"mailchimp.campaign.create","domains":["mailchimp"],"required_arguments":["action"],"required_capabilities":["mailchimp.campaign.create.approved"],"classification":"CONFIRM_WRITE","workflow":"ralfloop_agent.unified_assistant.mailchimp_campaign.MailchimpCampaignWorkflow.execute_create","verification_method":"separate scope approval + CAS + campaign readback","status":"ready"},
-    {"id":"mailchimp.campaign.send","domains":["mailchimp"],"required_arguments":["action"],"required_capabilities":["mailchimp.campaign.send.approved"],"classification":"CONFIRM_WRITE","workflow":"ralfloop_agent.unified_assistant.mailchimp_campaign.MailchimpCampaignWorkflow.execute_send","verification_method":"separate scope approval + provider fingerprint + CAS + sent readback","status":"ready"}]
+    {"id":"mailchimp.campaign.send","domains":["mailchimp"],"required_arguments":["action"],"required_capabilities":["mailchimp.campaign.send.approved"],"classification":"CONFIRM_WRITE","workflow":"ralfloop_agent.unified_assistant.mailchimp_campaign.MailchimpCampaignWorkflow.execute_send","verification_method":"separate scope approval + provider fingerprint + CAS + sent readback","status":"ready"},
+    {"id":"meteo.read","domains":["general_assistant"],"required_arguments":["objective"],"required_capabilities":["meteo.current","meteo.radar","meteo.geocode"],"classification":"READ","workflow":"ralfloop_agent.unified_assistant.meteo_mcp_adapter.MeteoMCPReadOnly","verification_method":"strict MCP discovery + Telegram GPS/address provenance + side_effects=0","status":"ready"},
+    {"id":"atm.route","domains":["general_assistant"],"required_arguments":["objective"],"required_capabilities":["atm.route","atm.route.named","atm.geocode"],"classification":"READ","workflow":"ralfloop_agent.unified_assistant.atm_mcp_adapter.ATMMCPReadOnly","verification_method":"strict MCP discovery + Telegram GPS/named-origin provenance + side_effects=0","status":"ready"}]
 }

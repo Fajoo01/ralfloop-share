@@ -27,6 +27,8 @@ from .fastweb_portal import FastwebPortalReadOnly
 from .home import HomeEntityRegistry, HomeWorkflow
 from .home_provider import HomeAssistantProviderError, HomeAssistantRESTBackend
 from .memory import MemoryRouter, tiremm_profile_items
+from .atm_mcp_adapter import ATMMCPReadOnly
+from .meteo_mcp_adapter import MeteoMCPReadOnly
 from .planner import UnifiedPlanner
 from .recipient import GoogleWorkspaceRecipientResolver
 from .registry import DEFAULT_HOME_ENTITIES, UnifiedRegistryFacade
@@ -59,7 +61,8 @@ _SUPPORTED = re.compile(
     r"manda\s+(?:una\s+)?(?:mail|email)|rispondi\s+(?:a|alla\s+mail(?:\s+di)?)|accendi|spegni|apri|chiudi|"
     r"imposta|metti|porta|abbassala|alzala|temperatura|quanto\s+fa|fa\s+caldo|"
     r"fa\s+freddo|rendila|cambiala|aggiungi|modifica|ok|invia|mandala|va\s+bene|annulla|"
-    r"fastweb|myfastpage|whatsapp|wapp|mailchimp)\b",
+    r"fastweb|myfastpage|whatsapp|wapp|mailchimp|meteo|weather|previsioni|piove|pioggia|"
+    r"temporale|radar|precipitazioni|vento)\b",
     re.I,
 )
 
@@ -177,6 +180,8 @@ def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any]
         or "fastweb.portal.read" in skills
         or "whatsapp.read" in skills
         or "mailchimp.read" in skills
+        or "meteo.read" in skills
+        or "atm.route" in skills
     ):
         task_mode = "tool_backed_read"
         interaction_class = "TOOL_BACKED_READ"
@@ -189,6 +194,10 @@ def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any]
             connectors.append("whatsapp.web.mcp")
         if "mailchimp.read" in skills:
             connectors.append("mailchimp.marketing")
+        if "meteo.read" in skills:
+            connectors.append("meteo.radar.mcp")
+        if "atm.route" in skills:
+            connectors.append("atm.route.mcp")
     elif all(item.policy.value == "READ" for item in plan.assignments):
         task_mode = "tool_backed_read"
         interaction_class = "TOOL_BACKED_READ"
@@ -275,6 +284,8 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
     whatsapp_gateway_factory = WhatsAppMCPContext.from_environment
     whatsapp_read = WhatsAppMCPReadOnly(whatsapp_gateway_factory)
     mailchimp_gateway_factory = MailchimpMCPContext.from_environment
+    meteo_read = MeteoMCPReadOnly(context)
+    atm_read = ATMMCPReadOnly(context)
     home_workflow = None
     if flags.home_assistant_read_live or flags.home_assistant_live:
         try:
@@ -366,6 +377,8 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
         fastweb_portal=fastweb_portal,
         whatsapp_read=whatsapp_read,
         mailchimp_gateway_factory=mailchimp_gateway_factory,
+        meteo_read=meteo_read,
+        atm_read=atm_read,
         mailchimp_campaign_artifact_provider=lambda skill: (
             context.get("mailchimp_campaign_draft")
             if skill == "mailchimp.campaign.create"
@@ -695,6 +708,41 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
             "evidence_refs": list(portal.get("provenance") or ()),
             "content_role": "data",
             "side_effects": 0,
+        })
+    elif result.data.get("selected_skill") == "atm.route":
+        atm = result.data.get("atm") or {}
+        artifacts.append({
+            "artifact_type": "atm_route_result",
+            "version": 1,
+            "status": result.status,
+            "tool": result.data.get("atm_tool"),
+            "destination": atm.get("destination"),
+            "duration_min": atm.get("duration_min"),
+            "walking_m": atm.get("walking_m"),
+            "lines": atm.get("lines"),
+            "destination_eta": atm.get("destination_eta"),
+            "location_source": result.data.get("location_source"),
+            "source": atm.get("source"),
+            "content_role": "data",
+            "side_effects": 0,
+        })
+    elif result.data.get("selected_skill") == "meteo.read":
+        meteo = result.data.get("meteo") or {}
+        artifacts.append({
+            "artifact_type": "meteo_read_result",
+            "version": 1,
+            "status": result.status,
+            "tool": result.data.get("meteo_tool"),
+            "location": meteo.get("location"),
+            "location_source": result.data.get("location_source"),
+            "current": meteo.get("current"),
+            "next_hours": list(meteo.get("next_hours") or ()),
+            "radar_url": meteo.get("radar_url"),
+            "content_role": "data",
+            "persistent_memory_writes": 0,
+            "side_effects": 0,
+            "writes": 0,
+            "sends": 0,
         })
     elif result.data.get("selected_skill") == "mailchimp.read":
         mailchimp = result.data.get("mailchimp") or {}

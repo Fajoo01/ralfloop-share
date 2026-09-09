@@ -27,6 +27,23 @@ _CODE_RE = re.compile(r"\b(?:codice|repository|repo|bug|debug|test|stacktrace)\b
 _DOCUMENT_RE = re.compile(r"\b(?:pdf|document[oi]|allegat[oi]|estrai)\b", re.I)
 _RESEARCH_RE = re.compile(r"\b(?:ricerca|cerca\s+sul\s+web|fonti|deep\s+research)\b", re.I)
 _MEDIA_RE = re.compile(r"\b(?:video|audio|immagine|locandina|ffmpeg|sottotitol[oi])\b", re.I)
+_ATM_RE = re.compile(
+    r"\b(?:atm|giromilano|mezzi\s+pubblici|trasporto\s+pubblico)\b"
+    r"|\bcome\s+(?:arrivo|vado|posso\s+andare)\b"
+    r"|\bportami\s+(?:a|al|alla|all['’]|in)\b"
+    r"|\bmezzi\s+(?:per|verso)\b"
+    r"|\bpercorso\s+(?:atm|con\s+i\s+mezzi)\b",
+    re.I,
+)
+
+_METEO_RE = re.compile(
+    r"\b(?:meteo|weather|previsioni(?:\s+meteo)?|piove|piover[àa]|pioggia|"
+    r"precipitazioni?|temporale|temporali|radar|vento|raffiche|"
+    r"che\s+tempo\s+fa|tempo\s+fa)\b"
+    r"|\btemperatura\s+(?:a|in|per)\s+",
+    re.I,
+)
+
 _BYPASS_RE = re.compile(r"\b(?:ignore previous|ignora (?:le )?regole|bypass|esegui shell)\b", re.I)
 _FASTWEB_RE = re.compile(r"\b(?:fastweb|myfastpage)\b", re.I)
 _FASTWEB_MUTATION_RE = re.compile(
@@ -270,6 +287,20 @@ class UnifiedPlanner:
                     objective="Reject policy or capability bypass.", input_refs=("user.goal",),
                     output_ref="artifact.safe_rejection", policy=PolicyClass.DENY,
                 ),),
+            )
+        if _METEO_RE.search(goal):
+            return self._single(
+                goal,
+                "general_assistant",
+                "meteo.read",
+                PolicyClass.READ,
+            )
+        if _ATM_RE.search(goal):
+            return self._single(
+                goal,
+                "general_assistant",
+                "atm.route",
+                PolicyClass.READ,
             )
         if _HOME_RE.search(goal):
             skill = "home.read" if re.search(r"\b(?:temperatura|fa\s+caldo|fa\s+freddo|stato|quanto)\b", goal, re.I) and not re.search(r"\b(?:accendi|spegni|apri|chiudi|imposta|metti|porta)\b", goal, re.I) else "home.control"

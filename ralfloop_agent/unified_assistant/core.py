@@ -61,6 +61,14 @@ class WhatsAppReadService(Protocol):
     def read(self, request: str, *, allowed_namespaces: tuple[str, ...]) -> WhatsAppReadResult: ...
 
 
+class MeteoReadService(Protocol):
+    def read(self, request: str) -> Mapping[str, Any]: ...
+
+
+class ATMReadService(Protocol):
+    def read(self, request: str) -> Mapping[str, Any]: ...
+
+
 class ApprovalBoundExecutor(Protocol):
     def execute(self, pending: PendingAction) -> dict[str, Any]: ...
 
@@ -87,6 +95,8 @@ class UnifiedAssistantCore:
         fastweb_portal: FastwebPortalService | None = None,
         whatsapp_read: WhatsAppReadService | None = None,
         mailchimp_gateway_factory: Callable[[], Any] | None = None,
+        meteo_read: MeteoReadService | None = None,
+        atm_read: ATMReadService | None = None,
         mailchimp_campaign_artifact_provider: Callable[[str], Mapping[str, Any] | None] | None = None,
         whatsapp_compose: UnifiedWhatsAppComposeService | None = None,
         recipient_resolver: RecipientResolver | None = None,
@@ -107,6 +117,8 @@ class UnifiedAssistantCore:
         self.fastweb_portal = fastweb_portal
         self.whatsapp_read = whatsapp_read
         self.mailchimp_gateway_factory = mailchimp_gateway_factory
+        self.meteo_read = meteo_read
+        self.atm_read = atm_read
         self.mailchimp_campaign_artifact_provider = mailchimp_campaign_artifact_provider
         self.whatsapp_compose = whatsapp_compose
         self.recipient_resolver = recipient_resolver
@@ -183,6 +195,16 @@ class UnifiedAssistantCore:
             return self._read_fastweb(plan.model_dump(mode="json"))
         if assignment.skill == "whatsapp.read":
             return self._read_whatsapp(text, assignment.domain, plan.model_dump(mode="json"))
+        if assignment.skill == "atm.route":
+            return self._read_atm(
+                text,
+                plan.model_dump(mode="json"),
+            )
+        if assignment.skill == "meteo.read":
+            return self._read_meteo(
+                text,
+                plan.model_dump(mode="json"),
+            )
         if assignment.skill == "mailchimp.read":
             return self._read_mailchimp(
                 assignment,
@@ -383,6 +405,131 @@ class UnifiedAssistantCore:
             memory_trace=self._memory_trace(domain),
             persistent_memory_writes=0,
             side_effects=0,
+        )
+
+    def _read_atm(
+        self,
+        text: str,
+        plan: dict[str, Any],
+    ) -> UnifiedAssistantResult:
+        if self.atm_read is None:
+            return self._result(
+                "unavailable",
+                "ATM MCP non disponibile.",
+                plan=plan,
+                selected_skill="atm.route",
+                tools_executed=False,
+                side_effects=0,
+            )
+
+        result = dict(self.atm_read.read(text))
+        raw_status = str(result.get("status") or "ERROR")
+
+        if result.get("ok"):
+            status = "completed"
+        elif raw_status in {"LOCATION_REQUIRED", "DESTINATION_REQUIRED"}:
+            status = "clarification_required"
+        else:
+            status = "unavailable"
+
+        payload = dict(result.get("payload") or {})
+        destination = payload.get("destination") or {}
+
+        if isinstance(destination, Mapping):
+            target = str(
+                destination.get("label")
+                or destination.get("name")
+                or "ATM"
+            )
+        else:
+            target = "ATM"
+
+        self._audit(
+            domain="general_assistant",
+            intent="atm.route",
+            skill="atm.route",
+            policy=PolicyClass.READ,
+            target=target,
+            verification=raw_status,
+            tool_result=raw_status,
+            tool="atm.route.mcp",
+            memory_namespaces=(),
+        )
+
+        return self._result(
+            status,
+            str(result.get("response") or "Percorso ATM non disponibile."),
+            plan=plan,
+            interaction_class="TOOL_BACKED_READ",
+            selected_skill="atm.route",
+            tool_selected="atm.route.mcp",
+            atm_tool=result.get("tool"),
+            policy=PolicyClass.READ.value,
+            tools_executed=bool(result.get("read_operations")),
+            connector_operations=list(result.get("read_operations") or ()),
+            atm=payload,
+            location_source=result.get("location_source"),
+            side_effects=0,
+            writes=0,
+            sends=0,
+        )
+
+
+    def _read_meteo(
+        self,
+        text: str,
+        plan: dict[str, Any],
+    ) -> UnifiedAssistantResult:
+        if self.meteo_read is None:
+            return self._result(
+                "unavailable",
+                "Meteo MCP non disponibile.",
+                plan=plan,
+                selected_skill="meteo.read",
+                tools_executed=False,
+                side_effects=0,
+            )
+
+        result = dict(self.meteo_read.read(text))
+        raw_status = str(result.get("status") or "ERROR")
+
+        if result.get("ok"):
+            status = "completed"
+        elif raw_status == "LOCATION_REQUIRED":
+            status = "clarification_required"
+        else:
+            status = "unavailable"
+
+        payload = dict(result.get("payload") or {})
+
+        self._audit(
+            domain="general_assistant",
+            intent="meteo.read",
+            skill="meteo.read",
+            policy=PolicyClass.READ,
+            target=str(payload.get("location") or "weather"),
+            verification=raw_status,
+            tool_result=raw_status,
+            tool="meteo.radar.mcp",
+            memory_namespaces=(),
+        )
+
+        return self._result(
+            status,
+            str(result.get("response") or "Meteo non disponibile."),
+            plan=plan,
+            interaction_class="TOOL_BACKED_READ",
+            selected_skill="meteo.read",
+            tool_selected="meteo.radar.mcp",
+            meteo_tool=result.get("tool"),
+            policy=PolicyClass.READ.value,
+            tools_executed=bool(result.get("read_operations")),
+            connector_operations=list(result.get("read_operations") or ()),
+            meteo=payload,
+            location_source=result.get("location_source"),
+            side_effects=0,
+            writes=0,
+            sends=0,
         )
 
     def _read_mailchimp(

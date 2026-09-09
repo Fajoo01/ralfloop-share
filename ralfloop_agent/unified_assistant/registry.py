@@ -197,6 +197,7 @@ class UnifiedRegistryFacade:
         )
         whatsapp_socket = Path("/run/ralf-whatsapp-mcp/mcp.sock")
         mailchimp_socket = Path("/run/ralf-mailchimp-mcp/mcp.sock")
+        meteo_socket = Path("/run/ralf-meteo-mcp/mcp.sock")
         rows = [UnifiedToolSpec(
             id="google_workspace.gmail.read_only",
             capabilities=("google_workspace.gmail.search", "google_workspace.gmail.read", "google_workspace.gmail.thread"),
@@ -271,6 +272,54 @@ class UnifiedRegistryFacade:
             health="Unix MCP broker + strict tool discovery",
             verification_method="read side_effects=0 + writes=0 + sends=0",
             source_registry=str(PROJECT_ROOT / "src" / "mailchimp.py"),
+        ), UnifiedToolSpec(
+            id="atm.route.mcp",
+            capabilities=(
+                "atm.route",
+                "atm.route.named",
+                "atm.geocode",
+            ),
+            input_schema="Telegram GPS coordinates or named origin plus destination",
+            output_schema="verified ATM route summary / ETA / lines",
+            classification=PolicyClass.READ,
+            side_effect_class="none",
+            availability=(
+                "available"
+                if _observable_path_exists(Path("/run/ralf-atm-mcp/mcp.sock"))
+                else "constrained:broker_unavailable"
+            ),
+            health="Unix MCP broker + strict tool discovery",
+            verification_method="read-only ATM routing; side_effects=0",
+            source_registry=str(
+                PROJECT_ROOT
+                / "ralfloop_agent"
+                / "unified_assistant"
+                / "atm_mcp_adapter.py"
+            ),
+        ), UnifiedToolSpec(
+            id="meteo.radar.mcp",
+            capabilities=(
+                "meteo.current",
+                "meteo.radar",
+                "meteo.geocode",
+            ),
+            input_schema="Telegram GPS coordinates or written address",
+            output_schema="verified current weather / forecast / radar URL",
+            classification=PolicyClass.READ,
+            side_effect_class="none",
+            availability=(
+                "available"
+                if _observable_path_exists(meteo_socket)
+                else "constrained:broker_unavailable"
+            ),
+            health="Unix MCP broker + strict tool discovery",
+            verification_method="read-only weather/radar; side_effects=0",
+            source_registry=str(
+                PROJECT_ROOT
+                / "ralfloop_agent"
+                / "unified_assistant"
+                / "meteo_mcp_adapter.py"
+            ),
         ), UnifiedToolSpec(
             id="mailchimp.marketing.approval_bound",
             capabilities=(
