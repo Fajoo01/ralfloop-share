@@ -62,7 +62,10 @@ _SUPPORTED = re.compile(
     r"imposta|metti|porta|abbassala|alzala|temperatura|quanto\s+fa|fa\s+caldo|"
     r"fa\s+freddo|rendila|cambiala|aggiungi|modifica|ok|invia|mandala|va\s+bene|annulla|"
     r"fastweb|myfastpage|whatsapp|wapp|mailchimp|meteo|weather|previsioni|piove|pioggia|"
-    r"temporale|radar|precipitazioni|vento)\b",
+    r"temporale|radar|precipitazioni|vento|atm|giromilano|"
+    r"mezzi\s+pubblici|trasporto\s+pubblico|portami|"
+    r"come\s+(?:arrivo|vado|posso\s+andare)|"
+    r"mezzi\s+(?:per|verso)|percorso\s+(?:atm|con\s+i\s+mezzi))\b",
     re.I,
 )
 

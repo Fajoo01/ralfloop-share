@@ -72,37 +72,152 @@ def _number(value: Any, digits: int = 1) -> str:
         return "?"
 
 
+def _as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _precipitation_mm(item: Mapping[str, Any]) -> float:
+    values = (
+        item.get("precipitation_mm"),
+        item.get("precipitation"),
+        item.get("rain_mm"),
+        item.get("rain"),
+        item.get("showers_mm"),
+        item.get("showers"),
+    )
+    return max((_as_float(value) for value in values if value is not None), default=0.0)
+
+
+def _clock_phrase(value: str) -> str:
+    clock = value[11:16] if len(value) >= 16 else value
+    if clock == "00:00":
+        return "verso mezzanotte"
+
+    try:
+        hour = int(clock[:2])
+    except (TypeError, ValueError):
+        return f"verso le {clock}"
+
+    if hour == 1:
+        return "verso l'1"
+    return f"verso le {hour}"
+
+
+def _daypart(value: str) -> str:
+    try:
+        hour = int(value[11:13])
+    except (TypeError, ValueError):
+        return "nelle ore successive"
+
+    if 0 <= hour < 6:
+        return "durante la notte"
+    if hour < 12:
+        return "in mattinata"
+    if hour < 18:
+        return "nel pomeriggio"
+    return "in serata"
+
+
 def _render_current(payload: Mapping[str, Any]) -> str:
     current = dict(payload.get("current") or {})
-    location = str(payload.get("location") or "posizione indicata")
+    current_time = str(current.get("time") or "")
+    temperature = current.get("temperature_2m")
+    apparent = current.get("apparent_temperature")
+    wind = _as_float(current.get("wind_speed_10m"))
 
-    lines = [
-        f"Meteo per {location}.",
-        (
-            f"Adesso: {_number(current.get('temperature_2m'))} °C"
-            f" (percepita {_number(current.get('apparent_temperature'))} °C), "
-            f"precipitazioni {_number(current.get('precipitation'))} mm, "
-            f"vento {_number(current.get('wind_speed_10m'))} km/h."
-        ),
+    current_rain = max(
+        _as_float(current.get("precipitation")),
+        _as_float(current.get("rain")),
+        _as_float(current.get("showers")),
+    )
+
+    location = str(payload.get("location") or "").strip()
+    coordinates = bool(
+        re.fullmatch(
+            r"\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?\s*",
+            location,
+        )
+    )
+
+    if coordinates or not location:
+        where = "qui"
+    else:
+        where = f"a {location}"
+
+    if current_rain >= 10:
+        rain_now = "sta piovendo molto forte"
+    elif current_rain >= 4:
+        rain_now = "sta piovendo forte"
+    elif current_rain >= 1:
+        rain_now = "sta piovendo moderatamente"
+    elif current_rain >= 0.2:
+        rain_now = "sta piovendo debolmente"
+    else:
+        rain_now = "non piove"
+
+    first = f"Adesso {where} {rain_now}"
+
+    if temperature is not None:
+        first += f" e ci sono circa {round(_as_float(temperature))} °C"
+    first += "."
+
+    lines = [first]
+
+    if (
+        temperature is not None
+        and apparent is not None
+        and abs(_as_float(apparent) - _as_float(temperature)) >= 4
+    ):
+        lines.append(
+            f"La temperatura percepita è di circa {round(_as_float(apparent))} °C."
+        )
+
+    future = []
+    for item in payload.get("next_hours") or ():
+        if not isinstance(item, Mapping):
+            continue
+        when = str(item.get("time") or "")
+        if current_time and when and when <= current_time:
+            continue
+        future.append(item)
+
+    wet = [
+        item
+        for item in future
+        if _precipitation_mm(item) >= 0.2
     ]
 
-    future = list(payload.get("next_hours") or ())
-    if future:
-        rows = []
-        for item in future[:6]:
-            when = str(item.get("time") or "")
-            clock = when[11:16] if len(when) >= 16 else when
-            prob = item.get("precipitation_probability")
-            mm = item.get("precipitation_mm")
-            rows.append(
-                f"{clock}: {prob if prob is not None else '?'}%, "
-                f"{_number(mm)} mm"
+    if current_rain < 0.2:
+        if wet:
+            first_wet = wet[0]
+            when = str(first_wet.get("time") or "")
+            lines.append(f"La pioggia è prevista {_clock_phrase(when)}.")
+        elif future:
+            lines.append(
+                "Nelle prossime ore non sono previste piogge significative."
             )
-        lines.append("Prossime ore: " + "; ".join(rows) + ".")
 
-    radar = payload.get("radar_url")
-    if radar:
-        lines.append(f"Radar: {radar}")
+    if wet:
+        strongest = max(wet, key=_precipitation_mm)
+        strongest_mm = _precipitation_mm(strongest)
+        strongest_when = str(strongest.get("time") or "")
+
+        if strongest_mm >= 10:
+            lines.append(
+                f"Sono previste precipitazioni molto forti "
+                f"{_daypart(strongest_when)}."
+            )
+        elif strongest_mm >= 4:
+            lines.append(
+                f"Le precipitazioni potrebbero diventare forti "
+                f"{_daypart(strongest_when)}."
+            )
+
+    if wind >= 30:
+        lines.append(f"Vento sostenuto, circa {round(wind)} km/h.")
 
     return "\n".join(lines)
 
