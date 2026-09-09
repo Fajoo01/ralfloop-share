@@ -1,11 +1,10 @@
 {
   "baseline": {
     "errors": 0,
-    "failures": 66,
+    "failures": 65,
     "skipped": 21,
-    "tests": 2472
+    "tests": 2488
   },
-  "baseline_commit": "611bbf4d0ce103d8fd1dd948758e990d52aad330",
   "baseline_exit": "139",
   "baseline_failure_ids": [
     "tests.test_abc_formula_loop::test_formula_uses_merged_context",
@@ -24,7 +23,6 @@
     "tests.test_llama_cpp_lifecycle_reaper::test_backend_shutdown_invokes_managed_child_reaper",
     "tests.test_mcp_transport_real::test_real_broker_initialize_and_tools_list",
     "tests.test_meowgram_runts_review_patch::test_runts_review_formatter_patch_preserves_approval_and_other_domains",
-    "tests.test_portal_backend::test_backend_registers_portal_routes",
     "tests.test_ralf_gpu_handoff::test_magnolia_host_runner_loads_existing_safe_approval_configuration",
     "tests.test_recursive_mas_bounded_provenance::test_feature_math_and_telegram_invariants",
     "tests.test_recursive_mas_domain_forensics::test_adapter_modifies_hidden_state_with_finite_statistics",
@@ -76,14 +74,13 @@
     "tests.test_routing::test_patch_allowed_mode"
   ],
   "baseline_report_complete": true,
-  "baseline_report_sha256": "20c329700a70eee14692880dbe98b0ffdaff9c162246502b6f1a067afbf0c327",
+  "baseline_report_sha256": "60d170eacdb92f80e87d53b7ce343fcffecdc4c128ce4765213948ff9ee68e4e",
   "candidate": {
     "errors": 0,
-    "failures": 66,
+    "failures": 65,
     "skipped": 21,
-    "tests": 2483
+    "tests": 2488
   },
-  "candidate_commit": "5ec06f87b7e0a8594e34db3217608a921092496a",
   "candidate_exit": "139",
   "candidate_failure_ids": [
     "tests.test_abc_formula_loop::test_formula_uses_merged_context",
@@ -102,7 +99,6 @@
     "tests.test_llama_cpp_lifecycle_reaper::test_backend_shutdown_invokes_managed_child_reaper",
     "tests.test_mcp_transport_real::test_real_broker_initialize_and_tools_list",
     "tests.test_meowgram_runts_review_patch::test_runts_review_formatter_patch_preserves_approval_and_other_domains",
-    "tests.test_portal_backend::test_backend_registers_portal_routes",
     "tests.test_ralf_gpu_handoff::test_magnolia_host_runner_loads_existing_safe_approval_configuration",
     "tests.test_recursive_mas_bounded_provenance::test_feature_math_and_telegram_invariants",
     "tests.test_recursive_mas_domain_forensics::test_adapter_modifies_hidden_state_with_finite_statistics",
@@ -154,14 +150,13 @@
     "tests.test_routing::test_patch_allowed_mode"
   ],
   "candidate_report_complete": true,
-  "candidate_report_sha256": "04721f32b27b5811894ae335bf26abd88bbc0fe7b8f8925f97286caf306f49d3",
+  "candidate_report_sha256": "594ac8ca1aafc401b50d2d4fa9a25c8e95c9320a882454ba8ad07ea84d3e0290",
   "new_failure_count": 0,
   "new_failures": [],
   "no_regression": true,
   "resolved_failures": [],
   "suite_exit_preexisting_same": true,
   "suite_report_complete": true,
-  "tested_commit": "5ec06f87b7e0a8594e34db3217608a921092496a",
-  "v": 2,
-  "verified_at": "2026-09-08T17:28:55Z"
+  "tested_commit": "9bfa54a3ce46838f1fa873a55eb99db449752319",
+  "verified_at": "2026-09-09T18:33:51Z"
 }
