@@ -22,3 +22,4 @@ build/
 *.db
 *.log
 .DS_Store
+/tools/atm_router/atm-router

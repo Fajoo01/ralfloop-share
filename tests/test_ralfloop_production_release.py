@@ -50,3 +50,63 @@ def test_cli_direct_publish_is_forbidden_before_build(tmp_path):
         ])
 
     assert not (tmp_path / "releases").exists()
+
+
+def test_release_builds_atm_router_from_committed_sources(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    git(repo, "init")
+    git(repo, "config", "user.email", "test@example.invalid")
+    git(repo, "config", "user.name", "Test")
+
+    source = repo / "tools" / "atm_router"
+    source.mkdir(parents=True)
+
+    (source / "atm_router.h").write_text(
+        "#ifndef ATM_ROUTER_H\n"
+        "#define ATM_ROUTER_H\n"
+        "#endif\n",
+        encoding="utf-8",
+    )
+
+    (source / "atm_router.c").write_text(
+        '#include <stdio.h>\n'
+        'int main(void) { puts("atm-router-test"); return 0; }\n',
+        encoding="utf-8",
+    )
+
+    (source / "Makefile").write_text(
+        "CC ?= cc\n"
+        "CFLAGS ?= -O2 -std=c11 -Wall -Wextra -Werror -pedantic\n"
+        "\n"
+        "atm-router: atm_router.c atm_router.h\n"
+        "\t$(CC) $(CFLAGS) -o $@ atm_router.c\n",
+        encoding="utf-8",
+    )
+
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "atm router sources")
+
+    builder = load_builder()
+    result = builder.build_release(
+        repo,
+        output_root=tmp_path / "releases",
+    )
+
+    release = Path(result["release_dir"])
+    binary = release / "tools" / "atm_router" / "atm-router"
+
+    assert binary.is_file()
+    assert binary.stat().st_mode & 0o111
+
+    assert subprocess.check_output(
+        [str(binary)],
+        text=True,
+    ).strip() == "atm-router-test"
+
+    manifest = (
+        release / "MANIFEST.sha256"
+    ).read_text(encoding="utf-8")
+
+    assert "tools/atm_router/atm-router" in manifest

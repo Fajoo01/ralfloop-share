@@ -41,6 +41,7 @@ def build_release(
         with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as bundle:
             bundle.extractall(temporary, filter="data")
         _build_shell_parser(temporary)
+        _build_atm_router(temporary)
         metadata = {
             "schema_version": 1,
             "commit": commit_sha,
@@ -95,6 +96,33 @@ def _build_shell_parser(root: Path) -> None:
         cwd=source, check=True, shell=False,
         env={**os.environ, "CGO_ENABLED": "0"},
     )
+    destination.chmod(0o555)
+
+
+def _build_atm_router(root: Path) -> None:
+    source = root / "tools" / "atm_router"
+    c_source = source / "atm_router.c"
+    header = source / "atm_router.h"
+
+    # Release storiche o repository che non contengono il router ATM
+    # devono continuare a essere costruibili.
+    if not c_source.is_file() or not header.is_file():
+        return
+
+    makefile = source / "Makefile"
+    if not makefile.is_file():
+        raise RuntimeError("atm_router_makefile_missing")
+
+    subprocess.run(
+        ["make", "-C", str(source), "atm-router"],
+        check=True,
+        shell=False,
+    )
+
+    destination = source / "atm-router"
+    if not destination.is_file():
+        raise RuntimeError("atm_router_binary_missing_after_build")
+
     destination.chmod(0o555)
 
 
