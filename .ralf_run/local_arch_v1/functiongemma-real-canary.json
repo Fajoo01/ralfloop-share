@@ -9,12 +9,12 @@
       "metrics": {
         "approval_miss": 0,
         "completion_tokens": 18,
-        "decode_ms": 252.733,
+        "decode_ms": 391.834,
         "fallback_reason": null,
         "policy_bypass": 0,
-        "prompt_ms": 194.549,
+        "prompt_ms": 183.088,
         "prompt_tokens": 671,
-        "tokens_per_second": 71.22140757241833,
+        "tokens_per_second": 45.93782060770632,
         "valid_compact_route": true,
         "valid_native_call": true
       },
@@ -38,12 +38,12 @@
       "metrics": {
         "approval_miss": 0,
         "completion_tokens": 16,
-        "decode_ms": 215.56,
+        "decode_ms": 291.705,
         "fallback_reason": null,
         "policy_bypass": 0,
-        "prompt_ms": 153.176,
+        "prompt_ms": 207.381,
         "prompt_tokens": 814,
-        "tokens_per_second": 74.2252737056968,
+        "tokens_per_second": 54.84993400867315,
         "valid_compact_route": true,
         "valid_native_call": true
       },
@@ -67,12 +67,12 @@
       "metrics": {
         "approval_miss": 0,
         "completion_tokens": 18,
-        "decode_ms": 244.114,
+        "decode_ms": 317.122,
         "fallback_reason": null,
         "policy_bypass": 0,
-        "prompt_ms": 142.622,
+        "prompt_ms": 161.32,
         "prompt_tokens": 664,
-        "tokens_per_second": 73.73604135772631,
+        "tokens_per_second": 56.76048965382408,
         "valid_compact_route": true,
         "valid_native_call": true
       },
@@ -101,12 +101,12 @@
       "metrics": {
         "approval_miss": 0,
         "completion_tokens": 17,
-        "decode_ms": 228.657,
+        "decode_ms": 337.605,
         "fallback_reason": null,
         "policy_bypass": 0,
-        "prompt_ms": 105.12,
+        "prompt_ms": 132.193,
         "prompt_tokens": 511,
-        "tokens_per_second": 74.34716627962406,
+        "tokens_per_second": 50.354704462315425,
         "valid_compact_route": true,
         "valid_native_call": true
       },
@@ -126,8 +126,8 @@
   "model_sha256": "83940d4dd9676710856f43523bed096164a595a96f6b34771610a03937de5270",
   "pass": true,
   "side_effects": false,
-  "startup_ms": 1359.29,
-  "tested_commit": "2fc2ba86a6b45a79c01cc53e5dc31a73c1334dd7",
+  "startup_ms": 1539.676,
+  "tested_commit": "caabe2eaae5f0bd0e0a73c36f96b55da8a121cb5",
   "v": 1,
-  "verified_at": "2026-09-10T13:04:07Z"
+  "verified_at": "2026-09-10T13:56:23Z"
 }

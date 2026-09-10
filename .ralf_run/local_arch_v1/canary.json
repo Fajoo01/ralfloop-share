@@ -2,9 +2,9 @@
   "bwrap_real_c": "pass",
   "cgroup_v2_limits": "pass",
   "changed_scope": {
-    "junit_sha256": "d28f690329b71e57baced87f278aef0796a7bba6352e1ea49dfb4cb57abe1a7f",
+    "junit_sha256": "b3cb27ceb6b7b33e5a215cf1fa955701eaca11d3c70d0bbac7621de02afd8cd9",
     "status": "pass",
-    "tests": 101
+    "tests": 66
   },
   "fake_evolver": "pass",
   "fake_llm_director": "pass",
@@ -13,7 +13,7 @@
   "functiongemma_real_dry_run": "pass",
   "integration_dry_run": "pass",
   "local_arch_tests": {
-    "junit_sha256": "6607820c440c3c8c122d12a5ec2b9d2b6ac90932518a1d68a6ed172c1c43b747",
+    "junit_sha256": "1188d0848c93b7d8f62c6ecb44b5e38e0f11493818b9ef0d47590d44d0f9d800",
     "skipped": 9,
     "status": "pass",
     "tests": 134
@@ -22,13 +22,13 @@
   "seccomp_network_block": "pass",
   "seccomp_process_block": "pass",
   "static": "pass",
-  "tested_commit": "2fc2ba86a6b45a79c01cc53e5dc31a73c1334dd7",
+  "tested_commit": "caabe2eaae5f0bd0e0a73c36f96b55da8a121cb5",
   "unit_new_arch": {
-    "junit_sha256": "4742e0a675236abeb0a106022dad13494d0be6c942bd7f3a6903e32a30ebc52e",
+    "junit_sha256": "6ee36b6d3e27c3fba655fce3a6a4ce93837ef096cbee912bff284b8179ba107a",
     "status": "pass",
-    "tests": 64
+    "tests": 66
   },
   "v": 2,
-  "verified_at": "2026-09-10T13:04:07Z",
+  "verified_at": "2026-09-10T13:56:23Z",
   "visual_worker_dry_run": "pass"
 }

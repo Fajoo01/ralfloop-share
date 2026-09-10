@@ -3,7 +3,7 @@
     "errors": 0,
     "failures": 64,
     "skipped": 21,
-    "tests": 2488
+    "tests": 2552
   },
   "baseline_exit": "139",
   "baseline_failure_ids": [
@@ -73,12 +73,12 @@
     "tests.test_routing::test_patch_allowed_mode"
   ],
   "baseline_report_complete": true,
-  "baseline_report_sha256": "c593704bcffd5646634df6230987f9966c149c6b0c53fd6193cc59be4cd00c21",
+  "baseline_report_sha256": "779fe8685ebfca5aa055068b2697a5b536c7fd45476e3a83b5c411c11c113d18",
   "candidate": {
     "errors": 0,
     "failures": 64,
     "skipped": 21,
-    "tests": 2552
+    "tests": 2554
   },
   "candidate_exit": "139",
   "candidate_failure_ids": [
@@ -148,13 +148,13 @@
     "tests.test_routing::test_patch_allowed_mode"
   ],
   "candidate_report_complete": true,
-  "candidate_report_sha256": "2f57bb697b2040224586d49302b9160d5daf3f03bbb64dee4280c4fc2a83460b",
+  "candidate_report_sha256": "2d2a043e73fc284b95d5988c7b92bb80bba4677712b5ca3b711b8d35cd9257e3",
   "new_failure_count": 0,
   "new_failures": [],
   "no_regression": true,
   "resolved_failures": [],
   "suite_exit_preexisting_same": true,
   "suite_report_complete": true,
-  "tested_commit": "2fc2ba86a6b45a79c01cc53e5dc31a73c1334dd7",
-  "verified_at": "2026-09-10T13:04:07Z"
+  "tested_commit": "caabe2eaae5f0bd0e0a73c36f96b55da8a121cb5",
+  "verified_at": "2026-09-10T13:56:23Z"
 }

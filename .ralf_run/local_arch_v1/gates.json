@@ -71,7 +71,7 @@
     "errors": 0,
     "failures": 64,
     "skipped": 21,
-    "tests": 2488
+    "tests": 2552
   },
   "benchmark_minimum": true,
   "candidate_exit": "139",
@@ -145,7 +145,7 @@
     "errors": 0,
     "failures": 64,
     "skipped": 21,
-    "tests": 2552
+    "tests": 2554
   },
   "deploy_allowed": true,
   "deploy_blockers": [],
@@ -161,10 +161,10 @@
   "port_19104_free": true,
   "preexisting_failures_only": true,
   "quality_gate_path": "preexisting_failures_only",
-  "ram_available_mb": 39321,
+  "ram_available_mb": 37672,
   "runtime_canary": "pass",
   "sandbox": true,
-  "scoped_test_count": 64,
+  "scoped_test_count": 66,
   "scoped_tests": true,
   "suite_exit_preexisting_same": true,
   "suite_report_complete": true,
