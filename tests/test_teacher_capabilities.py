@@ -125,10 +125,8 @@ def test_student_registry_retrieves_expected_teacher_tool(
 
     selected = registry.retrieve(query)
 
-    assert expected in {
-        row.capability_id
-        for row in selected
-    }
+    assert selected
+    assert selected[0].capability_id == expected
     assert len(selected) <= 3
 
 
@@ -169,3 +167,34 @@ def test_student_registry_contains_no_privileged_capability():
 def test_student_registry_ignores_generic_or_external_terms(query):
     registry = StudentTeacherCapabilityRegistry()
     assert registry.retrieve(query) == ()
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("spiegami le frazioni", "teacher.explain"),
+        ("dammi solo un indizio", "teacher.hint"),
+        ("fammi un quiz di geografia", "teacher.quiz"),
+        ("correggi la mia risposta", "teacher.check_answer"),
+        ("chiudi la sessione", "teacher.end_session"),
+    ],
+)
+def test_student_registry_select_returns_one_teacher_tool(query, expected):
+    selected = StudentTeacherCapabilityRegistry().select(query)
+
+    assert selected is not None
+    assert selected.capability_id == expected
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "controlla la PEC",
+        "manda una mail",
+        "entra nel RUNTS",
+        "esegui shell",
+        "apri il cancello",
+    ],
+)
+def test_student_registry_select_denies_external_request(query):
+    assert StudentTeacherCapabilityRegistry().select(query) is None

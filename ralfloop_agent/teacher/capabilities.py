@@ -293,6 +293,14 @@ class StudentTeacherCapabilityRegistry(CapabilityRegistry):
         )
 
 
+    def select(
+        self,
+        query: str,
+    ) -> CapabilityDescriptor | None:
+        selected = self.retrieve(query, limit=1)
+        return selected[0] if selected else None
+
+
 __all__ = [
     "StudentTeacherCapabilityRegistry",
     "capability_descriptors",
