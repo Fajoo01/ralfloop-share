@@ -2,9 +2,9 @@
   "bwrap_real_c": "pass",
   "cgroup_v2_limits": "pass",
   "changed_scope": {
-    "junit_sha256": "0ae6a300cc6fd45195f87254af4b82e385fd4e2a5ddf0dff31f037bc96fed095",
+    "junit_sha256": "70754b6427afd0a3a6f855c6287f9bdc0451111911851d7a2f25f7951f5c437f",
     "status": "pass",
-    "tests": 110
+    "tests": 8
   },
   "fake_evolver": "pass",
   "fake_llm_director": "pass",
@@ -22,13 +22,13 @@
   "seccomp_network_block": "pass",
   "seccomp_process_block": "pass",
   "static": "pass",
-  "tested_commit": "b8f86a2a983b06b565d3f45185d89a138ae528de",
+  "tested_commit": "42037de6e4916dad5d79310855ba07f7ce25c6a2",
   "unit_new_arch": {
-    "junit_sha256": "6e84ab7c04ac0f60ea0bfc716a718faf3e6ef41901ae8f802f596e7f03e4e47f",
+    "junit_sha256": "045c0a8642337d7535328de1054c3b51c443083c1debdbc3c8c8c63305b7ac10",
     "status": "pass",
-    "tests": 73
+    "tests": 74
   },
   "v": 2,
-  "verified_at": "2026-09-10T14:55:59Z",
+  "verified_at": "2026-09-10T15:49:02Z",
   "visual_worker_dry_run": "pass"
 }
