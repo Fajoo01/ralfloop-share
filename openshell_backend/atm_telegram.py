@@ -2736,8 +2736,10 @@ def _local_atm_realtime_route(
             str(stop.get("stop_id") or "")
         )
 
-    if not observations:
-        return None
+    # Anche in assenza di realtime di superficie la
+    # metropolitana deve poter competere tramite GTFS.
+    # Le osservazioni, quando presenti, restano necessarie per
+    # validare le prime salite di superficie.
 
     def observation_key(
         observation: dict[str, Any],
@@ -2842,6 +2844,121 @@ def _local_atm_realtime_route(
 
     candidate_routes: list[dict[str, Any]] = []
 
+    # Le linee metro vengono valutate separatamente dai
+    # candidati di superficie. La prima salita è vincolata
+    # esplicitamente alla linea metro, quindi i live di
+    # superficie non possono oscurarla.
+    #
+    # Per eventuali salite successive continuiamo comunque a
+    # interrogare ATM e a passare il realtime disponibile.
+    for subway_route in ("M1", "M2", "M3", "M4", "M5"):
+        allowed_keys: set[
+            tuple[str, str, str]
+        ] = set()
+
+        candidate_route: dict[str, Any] | None = None
+
+        for _round in range(4):
+            route_time, live_args = build_live_args(
+                allowed_keys
+            )
+
+            args = [
+                "--route",
+                str(ATM_LOCAL_ROUTER_GRAPH),
+                str(origin_lat),
+                str(origin_lon),
+                str(dest_lat),
+                str(dest_lon),
+                route_time,
+                "--first-route",
+                subway_route,
+                *live_args,
+            ]
+
+            route = _local_atm_router_json(
+                args,
+                timeout_s=4.0,
+            )
+
+            if not route:
+                candidate_route = None
+                break
+
+            legs = route.get("legs") or []
+
+            transit_legs = [
+                leg
+                for leg in legs
+                if (
+                    isinstance(leg, dict)
+                    and leg.get("mode") == "transit"
+                )
+            ]
+
+            if not transit_legs:
+                candidate_route = None
+                break
+
+            first_leg = transit_legs[0]
+
+            # --first-route deve restare una garanzia forte:
+            # questo candidato rappresenta esclusivamente la
+            # specifica linea metro richiesta.
+            if (
+                str(
+                    first_leg.get("route") or ""
+                ).strip()
+                != subway_route
+                or first_leg.get("live") is True
+            ):
+                candidate_route = None
+                break
+
+            candidate_route = route
+
+            downstream_stop_ids: list[str] = []
+
+            for leg in transit_legs[1:]:
+                stop_id = str(
+                    leg.get("from_stop_id") or ""
+                ).strip()
+
+                if stop_id:
+                    downstream_stop_ids.append(stop_id)
+
+            if not downstream_stop_ids:
+                break
+
+            before_keys = set(allowed_keys)
+
+            for stop_id in dict.fromkeys(
+                downstream_stop_ids
+            ):
+                if stop_id not in queried_stop_ids:
+                    observe_stop(stop_id)
+
+                for observation in observations:
+                    if (
+                        str(
+                            observation.get("stop_id") or ""
+                        ).strip()
+                        != stop_id
+                    ):
+                        continue
+
+                    allowed_keys.add(
+                        observation_key(observation)
+                    )
+
+            if allowed_keys == before_keys:
+                break
+
+        if candidate_route is not None:
+            candidate_routes.append(candidate_route)
+
+    # Le prime salite di superficie restano isolate una per
+    # volta e devono continuare a corrispondere a un live ATM.
     for first_key in initial_candidate_keys:
         allowed_keys = {first_key}
 
@@ -2971,17 +3088,54 @@ def _local_atm_realtime_route(
     def route_rank(
         candidate: dict[str, Any],
     ) -> tuple[int, int, int]:
-        def number(name: str) -> int:
+        def number_value(value: Any) -> int:
             try:
-                return int(candidate.get(name))
+                return int(value)
             except (TypeError, ValueError):
                 return 2**31 - 1
 
+        legs = candidate.get("legs") or []
+
+        intermediate_walk = 0
+        boardings = 0
+
+        for leg in legs:
+            if not isinstance(leg, dict):
+                continue
+
+            if leg.get("mode") == "walk":
+                value = number_value(
+                    leg.get("walk_seconds")
+                )
+
+                if value != 2**31 - 1:
+                    intermediate_walk += value
+
+            elif leg.get("mode") == "transit":
+                boardings += 1
+
+        total_walk = (
+            number_value(
+                candidate.get("origin_walk_seconds")
+            )
+            + intermediate_walk
+            + number_value(
+                candidate.get("final_walk_seconds")
+            )
+        )
+
+        # Stesso criterio lessicografico del router C:
+        #   1. arrivo assoluto
+        #   2. cammino totale
+        #   3. numero di salite/cambi
+        #
+        # Non usiamo total_seconds: candidati calcolati pochi
+        # istanti dopo avrebbero artificialmente un totale più
+        # basso pur arrivando alla stessa ora.
         return (
-            number("arrival_s"),
-            number("total_seconds"),
-            number("origin_walk_seconds")
-            + number("final_walk_seconds"),
+            number_value(candidate.get("arrival_s")),
+            total_walk,
+            boardings,
         )
 
     return min(candidate_routes, key=route_rank)

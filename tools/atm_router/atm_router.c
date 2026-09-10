@@ -663,6 +663,28 @@ static void json_string(const char *text)
 }
 
 
+
+static int route_cost_better(
+    uint32_t arrival,
+    uint32_t walk,
+    uint32_t boardings,
+    uint32_t current_arrival,
+    uint32_t current_walk,
+    uint32_t current_boardings
+)
+{
+    if (arrival != current_arrival) {
+        return arrival < current_arrival;
+    }
+
+    if (walk != current_walk) {
+        return walk < current_walk;
+    }
+
+    return boardings < current_boardings;
+}
+
+
 static int route(
     const graph_t *graph,
     double origin_lat,
@@ -797,14 +819,33 @@ static int route(
         node_count * sizeof(*dist)
     );
 
+    /*
+     * Costo secondario: secondi totali camminati fino al nodo.
+     * Il tempo di arrivo resta sempre il criterio principale.
+     */
+    uint32_t *walk_cost = malloc(
+        node_count * sizeof(*walk_cost)
+    );
+
+    /*
+     * Costo terziario: numero effettivo di salite.
+     * Più archi consecutivi dello stesso trip+route
+     * rappresentano una sola salita.
+     */
+    uint32_t *boarding_cost = malloc(
+        node_count * sizeof(*boarding_cost)
+    );
+
     previous_t *prev = calloc(
         node_count,
         sizeof(*prev)
     );
 
-    if (!dist || !prev) {
+    if (!dist || !walk_cost || !boarding_cost || !prev) {
         fprintf(stderr, "atm-router: memoria insufficiente\n");
         free(dist);
+        free(walk_cost);
+        free(boarding_cost);
         free(prev);
         free(conn_offsets);
         free(conn_indices);
@@ -815,6 +856,8 @@ static int route(
 
     for (size_t i = 0U; i < node_count; ++i) {
         dist[i] = INF_TIME;
+        walk_cost[i] = INF_TIME;
+        boarding_cost[i] = INF_TIME;
     }
 
     heap_t heap = {0};
@@ -858,8 +901,16 @@ static int route(
             stop_count
         );
 
-        if (arrival < dist[node]) {
+        if (
+            arrival < dist[node]
+            || (
+                arrival == dist[node]
+                && walk < walk_cost[node]
+            )
+        ) {
             dist[node] = arrival;
+            walk_cost[node] = walk;
+            boarding_cost[node] = 0U;
 
             prev[node].kind = PREV_ORIGIN;
             prev[node].walk_seconds = walk;
@@ -871,6 +922,8 @@ static int route(
                 );
                 heap_free(&heap);
                 free(dist);
+                free(walk_cost);
+                free(boarding_cost);
                 free(prev);
                 free(conn_offsets);
                 free(conn_indices);
@@ -1033,8 +1086,30 @@ static int route(
             uint32_t arrival =
                 (uint32_t)shifted_arrival;
 
-            if (arrival < dist[next_node]) {
+            uint32_t candidate_walk =
+                walk_cost[pre_node];
+
+            if (boarding_cost[pre_node] == INF_TIME) {
+                continue;
+            }
+
+            uint32_t candidate_boardings =
+                boarding_cost[pre_node] + 1U;
+
+            if (
+                route_cost_better(
+                    arrival,
+                    candidate_walk,
+                    candidate_boardings,
+                    dist[next_node],
+                    walk_cost[next_node],
+                    boarding_cost[next_node]
+                )
+            ) {
                 dist[next_node] = arrival;
+                walk_cost[next_node] = candidate_walk;
+                boarding_cost[next_node] =
+                    candidate_boardings;
 
                 prev[next_node].kind =
                     PREV_LIVE_TRANSIT;
@@ -1059,6 +1134,8 @@ static int route(
                     );
                     heap_free(&heap);
                     free(dist);
+                    free(walk_cost);
+                    free(boarding_cost);
                     free(prev);
                     free(conn_offsets);
                     free(conn_indices);
@@ -1071,6 +1148,8 @@ static int route(
     }
 
     uint32_t best_time = INF_TIME;
+    uint32_t best_walk = INF_TIME;
+    uint32_t best_boardings = INF_TIME;
     uint32_t best_node = UINT32_MAX;
     uint32_t best_final_walk = 0U;
 
@@ -1100,7 +1179,7 @@ static int route(
 
         if (
             best_time != INF_TIME
-            && item.time >= best_time
+            && item.time > best_time
         ) {
             break;
         }
@@ -1214,10 +1293,35 @@ static int route(
                     uint32_t arrival =
                         item.time + walk;
 
-                    if (arrival < best_time) {
-                        best_time = arrival;
-                        best_node = item.node;
-                        best_final_walk = walk;
+                    if (
+                        walk_cost[item.node] != INF_TIME
+                        && walk_cost[item.node]
+                           <= UINT32_MAX - walk
+                    ) {
+                        uint32_t candidate_walk =
+                            walk_cost[item.node] + walk;
+
+                        uint32_t candidate_boardings =
+                            boarding_cost[item.node];
+
+                        if (
+                            candidate_boardings != INF_TIME
+                            && route_cost_better(
+                                arrival,
+                                candidate_walk,
+                                candidate_boardings,
+                                best_time,
+                                best_walk,
+                                best_boardings
+                            )
+                        ) {
+                            best_time = arrival;
+                            best_walk = candidate_walk;
+                            best_boardings =
+                                candidate_boardings;
+                            best_node = item.node;
+                            best_final_walk = walk;
+                        }
                     }
                 }
             }
@@ -1257,8 +1361,36 @@ static int route(
                     stop_count
                 );
 
-                if (arrival < dist[next_node]) {
+                if (
+                    walk_cost[item.node] == INF_TIME
+                    || walk_cost[item.node]
+                       > UINT32_MAX - t->walk_seconds
+                ) {
+                    continue;
+                }
+
+                uint32_t candidate_walk =
+                    walk_cost[item.node]
+                    + t->walk_seconds;
+
+                uint32_t candidate_boardings =
+                    boarding_cost[item.node];
+
+                if (
+                    candidate_boardings != INF_TIME
+                    && route_cost_better(
+                        arrival,
+                        candidate_walk,
+                        candidate_boardings,
+                        dist[next_node],
+                        walk_cost[next_node],
+                        boarding_cost[next_node]
+                    )
+                ) {
                     dist[next_node] = arrival;
+                    walk_cost[next_node] = candidate_walk;
+                    boarding_cost[next_node] =
+                        candidate_boardings;
 
                     prev[next_node].kind = PREV_WALK;
                     prev[next_node].prev_stop = stop;
@@ -1282,6 +1414,8 @@ static int route(
                         );
                         heap_free(&heap);
                         free(dist);
+                        free(walk_cost);
+                        free(boarding_cost);
                         free(prev);
                         free(conn_offsets);
                         free(conn_indices);
@@ -1388,11 +1522,36 @@ static int route(
                     uint32_t arrival =
                         (uint32_t)shifted_arrival;
 
-                    if (arrival >= dist[next_node]) {
+                    uint32_t candidate_walk =
+                        walk_cost[item.node];
+
+                    if (
+                        boarding_cost[item.node]
+                        == INF_TIME
+                    ) {
+                        continue;
+                    }
+
+                    uint32_t candidate_boardings =
+                        boarding_cost[item.node] + 1U;
+
+                    if (
+                        !route_cost_better(
+                            arrival,
+                            candidate_walk,
+                            candidate_boardings,
+                            dist[next_node],
+                            walk_cost[next_node],
+                            boarding_cost[next_node]
+                        )
+                    ) {
                         continue;
                     }
 
                     dist[next_node] = arrival;
+                    walk_cost[next_node] = candidate_walk;
+                    boarding_cost[next_node] =
+                        candidate_boardings;
 
                     prev[next_node].kind =
                         PREV_LIVE_TRANSIT;
@@ -1422,6 +1581,8 @@ static int route(
 
                         heap_free(&heap);
                         free(dist);
+                        free(walk_cost);
+                        free(boarding_cost);
                         free(prev);
                         free(conn_offsets);
                         free(conn_indices);
@@ -1494,12 +1655,20 @@ static int route(
                     );
 
                 /*
-                 * Per la prima salita accettiamo soltanto
-                 * stop+line+direction verificati da ATM.
+                 * Per la prima salita di superficie, quando abbiamo
+                 * realtime ATM, accettiamo soltanto stop+line+direction
+                 * verificati dal live.
+                 *
+                 * La metropolitana (GTFS route_type == 1) non espone
+                 * necessariamente un WaitMessage compatibile con questo
+                 * canale realtime: deve quindi restare utilizzabile con
+                 * l'orario GTFS anche quando esistono live di superficie
+                 * nelle vicinanze.
                  */
                 if (
                     state == STATE_PRE_TRANSIT
                     && !live
+                    && graph->routes[c->route].route_type != 1U
                 ) {
                     continue;
                 }
@@ -1531,7 +1700,7 @@ static int route(
              */
             if (
                 best_time != INF_TIME
-                && c->departure_s >= best_time
+                && c->departure_s > best_time
             ) {
                 break;
             }
@@ -1542,8 +1711,69 @@ static int route(
                 stop_count
             );
 
-            if (c->arrival_s < dist[next_node]) {
+            uint32_t candidate_walk =
+                walk_cost[item.node];
+
+            if (boarding_cost[item.node] == INF_TIME) {
+                continue;
+            }
+
+            uint32_t candidate_boardings =
+                boarding_cost[item.node];
+
+            int continuing_same_trip = 0;
+
+            /*
+             * Se siamo già a bordo dello stesso trip+route,
+             * questo arco rappresenta solo la fermata
+             * successiva dello stesso mezzo e NON una nuova
+             * salita.
+             */
+            if (state == STATE_TRANSIT) {
+                previous_t current_prev =
+                    prev[item.node];
+
+                if (
+                    (
+                        current_prev.kind == PREV_TRANSIT
+                        || current_prev.kind
+                           == PREV_LIVE_TRANSIT
+                    )
+                    && current_prev.ref < connection_count
+                ) {
+                    const atm_connection_t *previous_connection =
+                        &graph->connections[
+                            current_prev.ref
+                        ];
+
+                    if (
+                        previous_connection->trip == c->trip
+                        && previous_connection->route
+                           == c->route
+                    ) {
+                        continuing_same_trip = 1;
+                    }
+                }
+            }
+
+            if (!continuing_same_trip) {
+                candidate_boardings++;
+            }
+
+            if (
+                route_cost_better(
+                    c->arrival_s,
+                    candidate_walk,
+                    candidate_boardings,
+                    dist[next_node],
+                    walk_cost[next_node],
+                    boarding_cost[next_node]
+                )
+            ) {
                 dist[next_node] = c->arrival_s;
+                walk_cost[next_node] = candidate_walk;
+                boarding_cost[next_node] =
+                    candidate_boardings;
 
                 prev[next_node].kind = PREV_TRANSIT;
                 prev[next_node].prev_stop = stop;
@@ -1565,6 +1795,8 @@ static int route(
                     );
                     heap_free(&heap);
                     free(dist);
+                    free(walk_cost);
+                    free(boarding_cost);
                     free(prev);
                     free(conn_offsets);
                     free(conn_indices);
@@ -1586,6 +1818,8 @@ static int route(
         );
 
         free(dist);
+        free(walk_cost);
+        free(boarding_cost);
         free(prev);
         free(conn_offsets);
         free(conn_indices);
@@ -1606,6 +1840,8 @@ static int route(
     if (!steps) {
         fprintf(stderr, "atm-router: memoria insufficiente\n");
         free(dist);
+        free(walk_cost);
+        free(boarding_cost);
         free(prev);
         free(conn_offsets);
         free(conn_indices);
@@ -1650,6 +1886,8 @@ static int route(
             );
             free(steps);
             free(dist);
+            free(walk_cost);
+            free(boarding_cost);
             free(prev);
             free(conn_offsets);
             free(conn_indices);
@@ -1697,6 +1935,8 @@ static int route(
         fprintf(stderr, "atm-router: memoria insufficiente\n");
         free(steps);
         free(dist);
+        free(walk_cost);
+        free(boarding_cost);
         free(prev);
         free(conn_offsets);
         free(conn_indices);
@@ -1733,6 +1973,8 @@ static int route(
                 free(legs);
                 free(steps);
                 free(dist);
+                free(walk_cost);
+                free(boarding_cost);
                 free(prev);
                 free(conn_offsets);
                 free(conn_indices);
@@ -1972,6 +2214,8 @@ static int route(
     free(legs);
     free(steps);
     free(dist);
+    free(walk_cost);
+    free(boarding_cost);
     free(prev);
     free(conn_offsets);
     free(conn_indices);

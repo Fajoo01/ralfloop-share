@@ -997,6 +997,12 @@ def _build_plan_route_lines(*_args, **_kwargs):
 
 
 def test_build_plan_selects_one_transfer_when_it_arrives_first(monkeypatch):
+    monkeypatch.setattr(
+        atm,
+        "_local_atm_realtime_route",
+        lambda *_args, **_kwargs: None,
+    )
+
     official = _build_plan_official(20 * 60)
 
     transfer = {
@@ -1073,6 +1079,12 @@ def test_build_plan_selects_one_transfer_when_it_arrives_first(monkeypatch):
 
 
 def test_build_plan_keeps_official_when_it_arrives_first(monkeypatch):
+    monkeypatch.setattr(
+        atm,
+        "_local_atm_realtime_route",
+        lambda *_args, **_kwargs: None,
+    )
+
     official = _build_plan_official(15 * 60)
 
     transfer = {
@@ -1471,6 +1483,12 @@ def test_route_ranking_direct_can_beat_official_and_transfer():
 
 
 def test_build_plan_selects_direct_when_it_arrives_first(monkeypatch):
+    monkeypatch.setattr(
+        atm,
+        "_local_atm_realtime_route",
+        lambda *_args, **_kwargs: None,
+    )
+
     official = _build_plan_official(20 * 60)
 
     transfer = {
@@ -1913,6 +1931,12 @@ def test_local_atm_realtime_refreshes_second_boarding_stop(
             }
 
         assert args[0] == "--route"
+
+        # Le chiamate metro GTFS appartengono a un
+        # percorso separato e non fanno parte dello
+        # scenario legacy simulato da questo test.
+        if "--first-route" in args:
+            return None
         route_calls.append(list(args))
 
         if len(route_calls) == 1:
@@ -2070,6 +2094,12 @@ def test_local_atm_realtime_isolates_competing_first_boardings(
 
         assert args[0] == "--route"
 
+        # Le chiamate metro GTFS appartengono a un
+        # percorso separato e non fanno parte dello
+        # scenario legacy simulato da questo test.
+        if "--first-route" in args:
+            return None
+
         route_calls.append(list(args))
         flat = " ".join(args)
 
@@ -2219,6 +2249,12 @@ def test_local_atm_realtime_retries_empty_linesummary(
                 ],
             }
 
+        # Le chiamate metro GTFS appartengono a un
+        # percorso separato e non fanno parte dello
+        # scenario legacy simulato da questo test.
+        if "--first-route" in args:
+            return None
+
         route_calls.append(list(args))
 
         flat = " ".join(args)
@@ -2245,3 +2281,279 @@ def test_local_atm_realtime_retries_empty_linesummary(
 
 
 # LOCAL_ATM_EMPTY_LIVESUMMARY_RETRY_TEST_END
+
+
+# LOCAL_ATM_SUBWAY_GTFS_COMPETITION_TEST_START
+
+def test_local_atm_realtime_compares_subway_gtfs_with_surface_live(
+    monkeypatch,
+    tmp_path,
+):
+    router_bin = tmp_path / "atm-router"
+    router_bin.write_text("", encoding="utf-8")
+
+    graph = tmp_path / "graph.bin"
+    graph.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(
+        atm,
+        "ATM_LOCAL_ROUTER_BIN",
+        router_bin,
+    )
+    monkeypatch.setattr(
+        atm,
+        "ATM_LOCAL_ROUTER_GRAPH",
+        graph,
+    )
+
+    today = int(
+        atm.datetime.now().strftime("%Y%m%d")
+    )
+
+    def fake_browser(path):
+        assert path == "tpl/stops/A/linesummary"
+
+        return {
+            "Lines": [
+                {
+                    "Line": {
+                        "LineCode": "R1",
+                        "LineId": "R1",
+                    },
+                    "Direction": "0",
+                    "WaitMessage": "1 min",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(
+        atm,
+        "_browser_fetch_json",
+        fake_browser,
+    )
+
+    subway_route = {
+        "status": "ok",
+        "service_date": today,
+        "query_departure_s": 36000,
+        "arrival_s": 36300,
+        "total_seconds": 300,
+        "origin_stop": "METRO A",
+        "origin_stop_id": "METRO-A",
+        "origin_walk_seconds": 10,
+        "destination_stop": "DEST",
+        "destination_stop_id": "D",
+        "final_walk_seconds": 10,
+        "legs": [
+            {
+                "mode": "transit",
+                "route": "M1",
+                "live": False,
+                "from": "METRO A",
+                "from_stop_id": "METRO-A",
+                "to": "DEST",
+                "to_stop_id": "D",
+                "departure_s": 36060,
+                "arrival_s": 36290,
+            }
+        ],
+    }
+
+    surface_route = {
+        "status": "ok",
+        "service_date": today,
+        "query_departure_s": 36000,
+        "arrival_s": 36600,
+        "total_seconds": 600,
+        "origin_stop": "Stop A",
+        "origin_stop_id": "A",
+        "origin_walk_seconds": 10,
+        "destination_stop": "DEST",
+        "destination_stop_id": "D",
+        "final_walk_seconds": 10,
+        "legs": [
+            {
+                "mode": "transit",
+                "route": "R1",
+                "live": True,
+                "live_wait_seconds": 60,
+                "from": "Stop A",
+                "from_stop_id": "A",
+                "to": "DEST",
+                "to_stop_id": "D",
+                "departure_s": 36060,
+                "arrival_s": 36590,
+            }
+        ],
+    }
+
+    route_calls = []
+
+    def fake_router(args, *, timeout_s=3.0):
+        if args[0] == "--nearby":
+            return {
+                "status": "ok",
+                "service_date": today,
+                "stops": [
+                    {
+                        "stop_id": "A",
+                        "name": "Stop A",
+                        "distance_m": 10,
+                        "walk_seconds": 8,
+                    }
+                ],
+            }
+
+        assert args[0] == "--route"
+        route_calls.append(list(args))
+
+        if "--first-route" in args:
+            index = args.index("--first-route")
+            required = args[index + 1]
+
+            if required == "M1":
+                return subway_route
+
+            return None
+
+        flat = " ".join(args)
+
+        if "--live A R1 0 " in flat:
+            return surface_route
+
+        raise AssertionError(
+            f"chiamata router inattesa: {args!r}"
+        )
+
+    monkeypatch.setattr(
+        atm,
+        "_local_atm_router_json",
+        fake_router,
+    )
+
+    result = atm._local_atm_realtime_route(
+        45.000000,
+        9.000000,
+        45.020000,
+        9.000000,
+    )
+
+    assert result is subway_route
+    assert result["legs"][0]["route"] == "M1"
+    assert result["legs"][0]["live"] is False
+
+    # Il candidato live deve comunque essere stato valutato
+    # separatamente.
+    assert any(
+        "--live A R1 0 " in " ".join(call)
+        for call in route_calls
+    )
+
+
+def test_local_atm_realtime_can_use_subway_without_surface_live(
+    monkeypatch,
+    tmp_path,
+):
+    router_bin = tmp_path / "atm-router"
+    router_bin.write_text("", encoding="utf-8")
+
+    graph = tmp_path / "graph.bin"
+    graph.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(
+        atm,
+        "ATM_LOCAL_ROUTER_BIN",
+        router_bin,
+    )
+    monkeypatch.setattr(
+        atm,
+        "ATM_LOCAL_ROUTER_GRAPH",
+        graph,
+    )
+
+    monkeypatch.setattr(
+        atm.time,
+        "sleep",
+        lambda _seconds: None,
+    )
+
+    today = int(
+        atm.datetime.now().strftime("%Y%m%d")
+    )
+
+    monkeypatch.setattr(
+        atm,
+        "_browser_fetch_json",
+        lambda _path: {"Lines": []},
+    )
+
+    subway_route = {
+        "status": "ok",
+        "service_date": today,
+        "query_departure_s": 36000,
+        "arrival_s": 36300,
+        "total_seconds": 300,
+        "origin_stop": "METRO A",
+        "origin_stop_id": "METRO-A",
+        "origin_walk_seconds": 5,
+        "destination_stop": "DEST",
+        "destination_stop_id": "D",
+        "final_walk_seconds": 5,
+        "legs": [
+            {
+                "mode": "transit",
+                "route": "M1",
+                "live": False,
+                "from": "METRO A",
+                "from_stop_id": "METRO-A",
+                "to": "DEST",
+                "to_stop_id": "D",
+                "departure_s": 36060,
+                "arrival_s": 36295,
+            }
+        ],
+    }
+
+    def fake_router(args, *, timeout_s=3.0):
+        if args[0] == "--nearby":
+            return {
+                "status": "ok",
+                "service_date": today,
+                "stops": [
+                    {
+                        "stop_id": "A",
+                        "name": "Stop A",
+                        "distance_m": 10,
+                        "walk_seconds": 8,
+                    }
+                ],
+            }
+
+        assert args[0] == "--route"
+        assert "--first-route" in args
+
+        index = args.index("--first-route")
+
+        if args[index + 1] == "M1":
+            return subway_route
+
+        return None
+
+    monkeypatch.setattr(
+        atm,
+        "_local_atm_router_json",
+        fake_router,
+    )
+
+    result = atm._local_atm_realtime_route(
+        45.000000,
+        9.000000,
+        45.020000,
+        9.000000,
+    )
+
+    assert result is subway_route
+    assert result["legs"][0]["route"] == "M1"
+
+
+# LOCAL_ATM_SUBWAY_GTFS_COMPETITION_TEST_END
