@@ -1,7 +1,7 @@
 {
   "baseline": {
     "errors": 0,
-    "failures": 65,
+    "failures": 64,
     "skipped": 21,
     "tests": 2488
   },
@@ -21,7 +21,6 @@
     "tests.test_domain_capability_mapping::test_mapping_sources_verify_against_declared_checksums",
     "tests.test_first_real_bando_domain::test_registry_tracks_draft_without_active_route",
     "tests.test_llama_cpp_lifecycle_reaper::test_backend_shutdown_invokes_managed_child_reaper",
-    "tests.test_mcp_transport_real::test_real_broker_initialize_and_tools_list",
     "tests.test_meowgram_runts_review_patch::test_runts_review_formatter_patch_preserves_approval_and_other_domains",
     "tests.test_ralf_gpu_handoff::test_magnolia_host_runner_loads_existing_safe_approval_configuration",
     "tests.test_recursive_mas_bounded_provenance::test_feature_math_and_telegram_invariants",
@@ -74,12 +73,12 @@
     "tests.test_routing::test_patch_allowed_mode"
   ],
   "baseline_report_complete": true,
-  "baseline_report_sha256": "60d170eacdb92f80e87d53b7ce343fcffecdc4c128ce4765213948ff9ee68e4e",
+  "baseline_report_sha256": "c593704bcffd5646634df6230987f9966c149c6b0c53fd6193cc59be4cd00c21",
   "candidate": {
     "errors": 0,
-    "failures": 65,
+    "failures": 64,
     "skipped": 21,
-    "tests": 2488
+    "tests": 2552
   },
   "candidate_exit": "139",
   "candidate_failure_ids": [
@@ -97,7 +96,6 @@
     "tests.test_domain_capability_mapping::test_mapping_sources_verify_against_declared_checksums",
     "tests.test_first_real_bando_domain::test_registry_tracks_draft_without_active_route",
     "tests.test_llama_cpp_lifecycle_reaper::test_backend_shutdown_invokes_managed_child_reaper",
-    "tests.test_mcp_transport_real::test_real_broker_initialize_and_tools_list",
     "tests.test_meowgram_runts_review_patch::test_runts_review_formatter_patch_preserves_approval_and_other_domains",
     "tests.test_ralf_gpu_handoff::test_magnolia_host_runner_loads_existing_safe_approval_configuration",
     "tests.test_recursive_mas_bounded_provenance::test_feature_math_and_telegram_invariants",
@@ -150,13 +148,13 @@
     "tests.test_routing::test_patch_allowed_mode"
   ],
   "candidate_report_complete": true,
-  "candidate_report_sha256": "594ac8ca1aafc401b50d2d4fa9a25c8e95c9320a882454ba8ad07ea84d3e0290",
+  "candidate_report_sha256": "2f57bb697b2040224586d49302b9160d5daf3f03bbb64dee4280c4fc2a83460b",
   "new_failure_count": 0,
   "new_failures": [],
   "no_regression": true,
   "resolved_failures": [],
   "suite_exit_preexisting_same": true,
   "suite_report_complete": true,
-  "tested_commit": "9bfa54a3ce46838f1fa873a55eb99db449752319",
-  "verified_at": "2026-09-09T18:33:51Z"
+  "tested_commit": "2fc2ba86a6b45a79c01cc53e5dc31a73c1334dd7",
+  "verified_at": "2026-09-10T13:04:07Z"
 }
