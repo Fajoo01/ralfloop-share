@@ -112,9 +112,24 @@ systemctl restart "$BRIDGE_UNIT"
 systemctl is-active --quiet "$FIREWALL_UNIT"
 systemctl is-active --quiet "$BRIDGE_UNIT"
 
-ss -H -lnt |
-    awk '{print $4}' |
-    grep -qx '10.252.14.138:19138'
+# systemctl considera il processo attivo appena ExecStart è partito, ma il
+# bridge Python può impiegare qualche centinaio di millisecondi prima del bind.
+# Attendi fino a 5 secondi invece di interpretare quel breve intervallo come
+# un errore d'installazione e attivare il rollback.
+LISTENER_READY=0
+for _ in $(seq 1 50); do
+    if ss -H -lnt |
+        awk '{print $4}' |
+        grep -qx '10.252.14.138:19138'
+    then
+        LISTENER_READY=1
+        break
+    fi
+    sleep 0.1
+done
+
+[ "$LISTENER_READY" -eq 1 ] ||
+    fail "Teacher bridge listener did not become ready"
 
 nft list chain inet filter input |
     grep -F 'iifname "sibilla"' |
