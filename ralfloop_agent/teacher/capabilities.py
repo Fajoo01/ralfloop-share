@@ -148,6 +148,55 @@ _STOP_TERMS = frozenset({
 })
 
 
+# Administrative/infrastructure targets are never actionable from the
+# student Teacher boundary.  They may still be discussed as school subjects:
+# e.g. "spiegami cos'è un server" is pedagogical, while "riavvia il server"
+# must not route to any Teacher capability.
+_PRIVILEGED_OPERATIONAL_TARGETS = frozenset({
+    "pec",
+    "runts",
+    "mailchimp",
+    "gmail",
+    "email",
+    "browser",
+    "shell",
+    "systemctl",
+    "server",
+    "domotica",
+    "whatsapp",
+    "bottazzi",
+    "sito",
+})
+
+_PRIVILEGED_OPERATIONAL_PHRASES = (
+    "home assistant",
+)
+
+_PRIVILEGED_ACTION_TERMS = frozenset({
+    "accedi",
+    "accendi",
+    "apri",
+    "avvia",
+    "cancella",
+    "controlla",
+    "elimina",
+    "entra",
+    "esegui",
+    "gestisci",
+    "invia",
+    "leggi",
+    "manda",
+    "mandami",
+    "modifica",
+    "pubblica",
+    "restart",
+    "riavvia",
+    "scarica",
+    "spegni",
+    "stop",
+})
+
+
 def _normalize_text(text: str) -> str:
     decomposed = unicodedata.normalize("NFKD", text.casefold())
     return "".join(
@@ -167,6 +216,23 @@ def _meaningful_terms(text: str) -> frozenset[str]:
         if len(token) >= 2
         and token not in _STOP_TERMS
     )
+
+
+def _is_privileged_operational_query(text: str) -> bool:
+    normalized = _normalize_text(text)
+    terms = _meaningful_terms(normalized)
+
+    has_privileged_target = bool(
+        terms & _PRIVILEGED_OPERATIONAL_TARGETS
+    ) or any(
+        phrase in normalized
+        for phrase in _PRIVILEGED_OPERATIONAL_PHRASES
+    )
+
+    if not has_privileged_target:
+        return False
+
+    return bool(terms & _PRIVILEGED_ACTION_TERMS)
 
 
 def _descriptor_routing_terms(
@@ -267,6 +333,12 @@ class StudentTeacherCapabilityRegistry(CapabilityRegistry):
         query_terms = _meaningful_terms(query)
 
         if not query_terms:
+            return ()
+
+        # Fail closed for operational requests aimed at administrative or
+        # infrastructure systems.  This check runs before semantic ranking,
+        # preventing collisions such as "leggi la PEC" -> prepare_reading.
+        if _is_privileged_operational_query(query):
             return ()
 
         compatible = tuple(

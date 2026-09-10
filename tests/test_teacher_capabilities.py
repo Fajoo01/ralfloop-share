@@ -198,3 +198,50 @@ def test_student_registry_select_returns_one_teacher_tool(query, expected):
 )
 def test_student_registry_select_denies_external_request(query):
     assert StudentTeacherCapabilityRegistry().select(query) is None
+
+
+def test_privileged_operational_queries_never_route_to_teacher():
+    from ralfloop_agent.teacher.capabilities import (
+        StudentTeacherCapabilityRegistry,
+    )
+
+    registry = StudentTeacherCapabilityRegistry()
+
+    blocked = (
+        "leggi la PEC",
+        "entra nel RUNTS",
+        "invia una newsletter Mailchimp",
+        "mandami una email",
+        "apri Gmail",
+        "usa Bottazzi",
+        "apri il browser",
+        "esegui un comando shell",
+        "fammi ls -la",
+        "riavvia il server",
+        "systemctl restart",
+        "accendi la domotica",
+        "controlla Home Assistant",
+        "manda un messaggio WhatsApp",
+        "gestisci il sito",
+    )
+
+    for query in blocked:
+        assert registry.select(query) is None, query
+
+
+def test_privileged_words_remain_teachable_as_subjects():
+    from ralfloop_agent.teacher.capabilities import (
+        StudentTeacherCapabilityRegistry,
+    )
+
+    registry = StudentTeacherCapabilityRegistry()
+
+    for query in (
+        "spiegami cos'è la PEC",
+        "spiegami cos'è un server",
+        "spiegami come funziona una email",
+        "spiegami come funziona un browser",
+    ):
+        selected = registry.select(query)
+        assert selected is not None, query
+        assert selected.capability_id == "teacher.explain", query
