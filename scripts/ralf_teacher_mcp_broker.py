@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-"""One-client, same-UID Teacher MCP stdio-to-AF_UNIX relay."""
+"""Multi-client Teacher MCP relay; inference is owned by one shared daemon."""
 
 import argparse
 import os
@@ -12,6 +12,7 @@ import socket
 import struct
 import subprocess
 import sys
+import threading
 import time
 
 
@@ -99,7 +100,19 @@ def main() -> int:
     parser.add_argument("--allow-uid", required=True, type=int)
     parser.add_argument("--command", required=True)
     parser.add_argument("--idle-timeout", type=float, default=60.0)
+    parser.add_argument("--max-clients", type=int, default=1)
     args = parser.parse_args()
+
+    if args.max_clients < 1 or args.max_clients > 16:
+        parser.error("--max-clients must be between 1 and 16")
+
+    if (
+        args.max_clients > 1
+        and not os.getenv("RALF_TEACHER_INFERENCE_SOCKET", "").strip()
+    ):
+        parser.error(
+            "multi-client mode requires RALF_TEACHER_INFERENCE_SOCKET"
+        )
     path = Path(args.socket)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
@@ -107,14 +120,38 @@ def main() -> int:
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         server.bind(str(path))
         os.chmod(path, 0o600)
-        server.listen(4)
+        server.listen(max(4, args.max_clients))
         signal.signal(signal.SIGTERM, lambda *_: server.close())
+
+        slots = threading.BoundedSemaphore(args.max_clients)
+
+        def handle(conn: socket.socket) -> None:
+            try:
+                with conn:
+                    if _peer_uid(conn) != args.allow_uid:
+                        return
+
+                    _relay(
+                        conn,
+                        args.command,
+                        max(1.0, args.idle_timeout),
+                    )
+            finally:
+                slots.release()
+
         while True:
             conn, _ = server.accept()
-            with conn:
-                if _peer_uid(conn) != args.allow_uid:
-                    continue
-                _relay(conn, args.command, max(1.0, args.idle_timeout))
+
+            if not slots.acquire(blocking=False):
+                conn.close()
+                continue
+
+            threading.Thread(
+                target=handle,
+                args=(conn,),
+                daemon=True,
+                name="teacher-mcp-client",
+            ).start()
     except (KeyboardInterrupt, OSError):
         return 0
     finally:

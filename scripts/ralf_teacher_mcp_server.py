@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import signal
 import sys
@@ -15,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from ralfloop_agent.teacher.catalog import DESCRIPTIONS, TOOL_MODELS
+from ralfloop_agent.teacher.inference import TeacherInferenceClient
 from ralfloop_agent.teacher.service import TeacherService
 from ralfloop_agent.teacher.store import TeacherStore
 from src.mcp_transport import MCP_PROTOCOL_VERSION
@@ -189,7 +191,22 @@ def _response(
 
 def main() -> int:
     store = TeacherStore()
-    service = TeacherService(store)
+
+    inference_socket = os.getenv(
+        "RALF_TEACHER_INFERENCE_SOCKET",
+        "",
+    ).strip()
+
+    model_call = (
+        TeacherInferenceClient(inference_socket)
+        if inference_socket
+        else None
+    )
+
+    service = TeacherService(
+        store,
+        model_call=model_call,
+    )
     server = TeacherMCPServer(service)
 
     def shutdown_handler(
