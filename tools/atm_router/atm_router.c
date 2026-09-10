@@ -1074,6 +1074,23 @@ static int route(
     uint32_t best_node = UINT32_MAX;
     uint32_t best_final_walk = 0U;
 
+    /*
+     * Se accesso + eventuali cambi a piedi + uscita finale
+     * richiedono già almeno quanto andare direttamente a piedi,
+     * quel candidato TPL non è utile.
+     *
+     * Usiamo lo stesso modello geometrico e la stessa velocità
+     * pedonale già usati dal router per accesso e uscita.
+     */
+    const uint32_t direct_walk = walk_seconds(
+        distance_m(
+            origin_lat,
+            origin_lon,
+            dest_lat,
+            dest_lon
+        )
+    );
+
     heap_item_t item;
 
     while (heap_pop(&heap, &item) == 0) {
@@ -1123,7 +1140,77 @@ static int route(
             if (metres <= DEST_RADIUS_M) {
                 uint32_t walk = walk_seconds(metres);
 
-                if (item.time <= UINT32_MAX - walk) {
+                /*
+                 * Ricostruiamo solo la componente pedonale del
+                 * candidato fino a questo nodo:
+                 *
+                 * - accesso iniziale;
+                 * - eventuali interscambi a piedi;
+                 * - uscita finale verso la destinazione.
+                 *
+                 * Importante: se il candidato viene scartato non
+                 * facciamo "continue", perché questo stesso nodo
+                 * può ancora portare a un percorso TPL successivo
+                 * migliore.
+                 */
+                uint32_t candidate_walk = walk;
+                uint32_t trace_node = item.node;
+                int candidate_walk_known = 0;
+
+                for (
+                    size_t hops = 0U;
+                    hops < node_count;
+                    ++hops
+                ) {
+                    previous_t p = prev[trace_node];
+
+                    if (p.kind == PREV_ORIGIN) {
+                        if (
+                            candidate_walk
+                            > UINT32_MAX - p.walk_seconds
+                        ) {
+                            candidate_walk = UINT32_MAX;
+                        } else {
+                            candidate_walk += p.walk_seconds;
+                        }
+
+                        candidate_walk_known = 1;
+                        break;
+                    }
+
+                    if (p.kind == PREV_WALK) {
+                        if (
+                            candidate_walk
+                            > UINT32_MAX - p.walk_seconds
+                        ) {
+                            candidate_walk = UINT32_MAX;
+                        } else {
+                            candidate_walk += p.walk_seconds;
+                        }
+                    }
+
+                    if (
+                        p.kind != PREV_WALK
+                        && p.kind != PREV_TRANSIT
+                        && p.kind != PREV_LIVE_TRANSIT
+                    ) {
+                        break;
+                    }
+
+                    trace_node = node_id(
+                        p.prev_stop,
+                        p.prev_state,
+                        stop_count
+                    );
+                }
+
+                if (
+                    (
+                        !candidate_walk_known
+                        || candidate_walk < direct_walk
+                    )
+                    && item.time <= UINT32_MAX - walk
+                ) {
                     uint32_t arrival =
                         item.time + walk;
 

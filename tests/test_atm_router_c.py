@@ -257,3 +257,195 @@ def test_realtime_is_used_after_walking_transfer(
     assert second["live"] is True
     assert second["departure_s"] == 37200
     assert second["arrival_s"] == 37300
+
+
+def _write_short_route_choice_graph(path):
+    strings = bytearray()
+    offsets = {}
+
+    def add_string(value):
+        if value in offsets:
+            return offsets[value]
+
+        offset = len(strings)
+        offsets[value] = offset
+        strings.extend(value.encode("utf-8"))
+        strings.append(0)
+        return offset
+
+    # Origine: 45.000000, 9.000000
+    # Destinazione: 45.000000, 9.004000
+    #
+    # BAD:
+    # bisogna quasi raggiungere la destinazione a piedi per
+    # prendere il mezzo, quindi accesso + uscita superano il
+    # cammino diretto.
+    #
+    # GOOD:
+    # fermata vicina all'origine e fermata vicina alla
+    # destinazione. Arriva leggermente dopo BAD, così prima
+    # della regressione BAD vinceva esclusivamente per ETA.
+    stops = [
+        (
+            int(45.0000000 * 10_000_000),
+            int(9.0005000 * 10_000_000),
+            add_string("Good origin"),
+            add_string("GOOD-A"),
+        ),
+        (
+            int(45.0000000 * 10_000_000),
+            int(9.0035000 * 10_000_000),
+            add_string("Good destination"),
+            add_string("GOOD-B"),
+        ),
+        (
+            int(45.0000000 * 10_000_000),
+            int(9.0045000 * 10_000_000),
+            add_string("Bad origin"),
+            add_string("BAD-A"),
+        ),
+        (
+            int(45.0000000 * 10_000_000),
+            int(9.0049000 * 10_000_000),
+            add_string("Bad destination"),
+            add_string("BAD-B"),
+        ),
+    ]
+
+    routes = [
+        (
+            add_string("GOOD"),
+            add_string("route-GOOD"),
+            3,
+            0,
+        ),
+        (
+            add_string("BAD"),
+            add_string("route-BAD"),
+            3,
+            0,
+        ),
+    ]
+
+    # Query 10:00.
+    #
+    # GOOD parte prima ma arriva alle 10:06.
+    # BAD parte alle 10:04:30 e arriva alle 10:05:
+    # senza il filtro sul cammino totale BAD risulta il più
+    # veloce, nonostante sia un evidente detour pedonale.
+    #
+    # Le connessioni restano ordinate per departure_s.
+    connections = [
+        (
+            0,       # GOOD-A
+            1,       # GOOD-B
+            0,       # GOOD
+            100,
+            36120,   # 10:02:00
+            36360,   # 10:06:00
+            0,
+        ),
+        (
+            2,       # BAD-A
+            3,       # BAD-B
+            1,       # BAD
+            200,
+            36270,   # 10:04:30
+            36300,   # 10:05:00
+            0,
+        ),
+    ]
+
+    transfers = []
+
+    header_size = HEADER.size
+    stops_offset = header_size
+    routes_offset = stops_offset + len(stops) * STOP.size
+    connections_offset = routes_offset + len(routes) * ROUTE.size
+    transfers_offset = (
+        connections_offset
+        + len(connections) * CONNECTION.size
+    )
+    strings_offset = (
+        transfers_offset
+        + len(transfers) * TRANSFER.size
+    )
+
+    header = HEADER.pack(
+        MAGIC,
+        VERSION,
+        20260910,
+        0,
+        len(stops),
+        len(routes),
+        len(connections),
+        len(transfers),
+        stops_offset,
+        routes_offset,
+        connections_offset,
+        transfers_offset,
+        strings_offset,
+        len(strings),
+    )
+
+    with path.open("wb") as f:
+        f.write(header)
+
+        for row in stops:
+            f.write(STOP.pack(*row))
+
+        for row in routes:
+            f.write(ROUTE.pack(*row))
+
+        for row in connections:
+            f.write(CONNECTION.pack(*row))
+
+        for row in transfers:
+            f.write(TRANSFER.pack(*row))
+
+        f.write(strings)
+
+
+def test_transit_detour_with_more_walking_than_direct_is_rejected(
+    router_bin,
+    tmp_path,
+):
+    graph = tmp_path / "short-choice.bin"
+    _write_short_route_choice_graph(graph)
+
+    completed = subprocess.run(
+        [
+            str(router_bin),
+            "--route",
+            str(graph),
+            "45.0000000",
+            "9.0000000",
+            "45.0000000",
+            "9.0040000",
+            "10:00:00",
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    result = json.loads(completed.stdout)
+
+    assert result["status"] == "ok"
+
+    transit = [
+        leg
+        for leg in result["legs"]
+        if leg["mode"] == "transit"
+    ]
+
+    assert len(transit) == 1
+    assert transit[0]["route"] == "GOOD"
+
+    # Il candidato scelto deve richiedere meno cammino
+    # dell'intero tragitto diretto.
+    assert (
+        result["origin_walk_seconds"]
+        + result["final_walk_seconds"]
+        < 240
+    )

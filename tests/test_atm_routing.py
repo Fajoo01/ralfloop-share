@@ -1950,3 +1950,298 @@ def test_local_atm_realtime_refreshes_second_boarding_stop(
 
 
 # LOCAL_ATM_SECOND_BOARDING_REALTIME_TEST_END
+
+
+
+# LOCAL_ATM_FIRST_BOARDING_ISOLATION_TEST_START
+
+def test_local_atm_realtime_isolates_competing_first_boardings(
+    monkeypatch,
+    tmp_path,
+):
+    router_bin = tmp_path / "atm-router"
+    router_bin.write_text("", encoding="utf-8")
+
+    graph = tmp_path / "graph.bin"
+    graph.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(
+        atm,
+        "ATM_LOCAL_ROUTER_BIN",
+        router_bin,
+    )
+    monkeypatch.setattr(
+        atm,
+        "ATM_LOCAL_ROUTER_GRAPH",
+        graph,
+    )
+
+    def fake_browser(path):
+        if path == "tpl/stops/A/linesummary":
+            return {
+                "Lines": [
+                    {
+                        "Line": {
+                            "LineCode": "44",
+                            "LineId": "44",
+                        },
+                        "Direction": "1",
+                        "WaitMessage": "5 min",
+                    }
+                ]
+            }
+
+        if path == "tpl/stops/B/linesummary":
+            return {
+                "Lines": [
+                    {
+                        "Line": {
+                            "LineCode": "44",
+                            "LineId": "44",
+                        },
+                        "Direction": "1",
+                        "WaitMessage": "10 min",
+                    }
+                ]
+            }
+
+        return {"Lines": []}
+
+    monkeypatch.setattr(
+        atm,
+        "_browser_fetch_json",
+        fake_browser,
+    )
+
+    route_calls = []
+
+    good_route = {
+        "status": "ok",
+        "service_date": int(
+            atm.datetime.now().strftime("%Y%m%d")
+        ),
+        "query_departure_s": 36000,
+        "arrival_s": 36700,
+        "total_seconds": 700,
+        "origin_stop": "Stop B",
+        "origin_stop_id": "B",
+        "origin_walk_seconds": 10,
+        "destination_stop": "Stop D",
+        "destination_stop_id": "D",
+        "final_walk_seconds": 10,
+        "legs": [
+            {
+                "mode": "transit",
+                "route": "44",
+                "live": True,
+                "live_wait_seconds": 600,
+                "from": "Stop B",
+                "from_stop_id": "B",
+                "to": "Stop D",
+                "to_stop_id": "D",
+                "departure_s": 36600,
+                "arrival_s": 36690,
+            }
+        ],
+    }
+
+    def fake_router(args, *, timeout_s=3.0):
+        if args[0] == "--nearby":
+            return {
+                "status": "ok",
+                "service_date": int(
+                    atm.datetime.now().strftime("%Y%m%d")
+                ),
+                "stops": [
+                    {
+                        "stop_id": "A",
+                        "name": "Stop A",
+                        "distance_m": 300,
+                        "walk_seconds": 225,
+                    },
+                    {
+                        "stop_id": "B",
+                        "name": "Stop B",
+                        "distance_m": 10,
+                        "walk_seconds": 8,
+                    },
+                ],
+            }
+
+        assert args[0] == "--route"
+
+        route_calls.append(list(args))
+        flat = " ".join(args)
+
+        has_a = "--live A 44 1 " in flat
+        has_b = "--live B 44 1 " in flat
+
+        # Regressione: le due possibili prime salite non devono
+        # più essere passate nello stesso shortest-path.
+        assert not (has_a and has_b)
+
+        if has_a:
+            # Modella il candidato con accesso pedonale assurdo,
+            # scartato dal filtro C.
+            return None
+
+        if has_b:
+            return good_route
+
+        raise AssertionError(
+            "run senza una prima salita live"
+        )
+
+    monkeypatch.setattr(
+        atm,
+        "_local_atm_router_json",
+        fake_router,
+    )
+
+    result = atm._local_atm_realtime_route(
+        45.000000,
+        9.000000,
+        45.001000,
+        9.001000,
+    )
+
+    assert result is good_route
+    assert result["origin_stop_id"] == "B"
+    assert len(route_calls) == 2
+
+
+# LOCAL_ATM_FIRST_BOARDING_ISOLATION_TEST_END
+
+
+
+# LOCAL_ATM_EMPTY_LIVESUMMARY_RETRY_TEST_START
+
+def test_local_atm_realtime_retries_empty_linesummary(
+    monkeypatch,
+    tmp_path,
+):
+    router_bin = tmp_path / "atm-router"
+    router_bin.write_text("", encoding="utf-8")
+
+    graph = tmp_path / "graph.bin"
+    graph.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(
+        atm,
+        "ATM_LOCAL_ROUTER_BIN",
+        router_bin,
+    )
+    monkeypatch.setattr(
+        atm,
+        "ATM_LOCAL_ROUTER_GRAPH",
+        graph,
+    )
+
+    browser_calls = []
+
+    def fake_browser(path):
+        browser_calls.append(path)
+
+        if len(browser_calls) == 1:
+            return {"Lines": []}
+
+        return {
+            "Lines": [
+                {
+                    "Line": {
+                        "LineCode": "44",
+                        "LineId": "44",
+                    },
+                    "Direction": "1",
+                    "WaitMessage": "5 min",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(
+        atm,
+        "_browser_fetch_json",
+        fake_browser,
+    )
+
+    monkeypatch.setattr(
+        atm.time,
+        "sleep",
+        lambda _seconds: None,
+    )
+
+    route = {
+        "status": "ok",
+        "service_date": int(
+            atm.datetime.now().strftime("%Y%m%d")
+        ),
+        "query_departure_s": 36000,
+        "arrival_s": 36400,
+        "total_seconds": 400,
+        "origin_stop": "via astico",
+        "origin_stop_id": "A",
+        "origin_walk_seconds": 10,
+        "destination_stop": "destinazione",
+        "destination_stop_id": "D",
+        "final_walk_seconds": 10,
+        "legs": [
+            {
+                "mode": "transit",
+                "route": "44",
+                "live": True,
+                "live_wait_seconds": 300,
+                "from": "via astico",
+                "from_stop_id": "A",
+                "to": "destinazione",
+                "to_stop_id": "D",
+                "departure_s": 36300,
+                "arrival_s": 36390,
+            }
+        ],
+    }
+
+    route_calls = []
+
+    def fake_router(args, *, timeout_s=3.0):
+        if args[0] == "--nearby":
+            return {
+                "status": "ok",
+                "service_date": int(
+                    atm.datetime.now().strftime("%Y%m%d")
+                ),
+                "stops": [
+                    {
+                        "stop_id": "A",
+                        "name": "via astico",
+                        "distance_m": 10,
+                        "walk_seconds": 8,
+                    }
+                ],
+            }
+
+        route_calls.append(list(args))
+
+        flat = " ".join(args)
+
+        assert "--live A 44 1 " in flat
+        return route
+
+    monkeypatch.setattr(
+        atm,
+        "_local_atm_router_json",
+        fake_router,
+    )
+
+    result = atm._local_atm_realtime_route(
+        45.000000,
+        9.000000,
+        45.010000,
+        9.010000,
+    )
+
+    assert result is route
+    assert len(browser_calls) == 2
+    assert len(route_calls) == 1
+
+
+# LOCAL_ATM_EMPTY_LIVESUMMARY_RETRY_TEST_END

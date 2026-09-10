@@ -2649,70 +2649,82 @@ def _local_atm_realtime_route(
         if not stop_id or stop_id in queried_stop_ids:
             return 0
 
+        path = (
+            "tpl/stops/"
+            + urllib.parse.quote(stop_id)
+            + "/linesummary"
+        )
+
+        # Il TPPortal può occasionalmente restituire Lines vuoto
+        # anche per una fermata che pochi istanti dopo espone il
+        # realtime. Ritentiamo brevemente, senza trasformare mai
+        # GTFS o altri dati in falso realtime.
+        for attempt in range(3):
+            try:
+                data = _browser_fetch_json(path)
+            except Exception:
+                data = None
+
+            observed_at = time.time()
+            added = 0
+
+            if isinstance(data, dict):
+                for row in data.get("Lines") or []:
+                    if not isinstance(row, dict):
+                        continue
+
+                    line_obj = row.get("Line") or {}
+
+                    if not isinstance(line_obj, dict):
+                        continue
+
+                    line = str(
+                        line_obj.get("LineCode")
+                        or line_obj.get("LineId")
+                        or ""
+                    ).strip()
+
+                    raw_direction = row.get("Direction")
+
+                    direction = (
+                        str(raw_direction).strip()
+                        if raw_direction is not None
+                        else ""
+                    )
+
+                    wait_seconds = _atm_wait_seconds(
+                        row.get("WaitMessage")
+                    )
+
+                    if (
+                        not line
+                        or direction not in {"0", "1"}
+                        or wait_seconds is None
+                    ):
+                        continue
+
+                    observations.append(
+                        {
+                            "stop_id": stop_id,
+                            "line": line,
+                            "direction": direction,
+                            "wait_seconds": wait_seconds,
+                            "observed_at": observed_at,
+                        }
+                    )
+                    added += 1
+
+            if added:
+                queried_stop_ids.add(stop_id)
+                return added
+
+            if attempt < 2:
+                time.sleep(0.15)
+
+        # Dopo tre tentativi consideriamo conclusa questa
+        # interrogazione: nessun dato viene inventato.
         queried_stop_ids.add(stop_id)
-
-        try:
-            data = _browser_fetch_json(
-                "tpl/stops/"
-                + urllib.parse.quote(stop_id)
-                + "/linesummary"
-            )
-        except Exception:
-            return 0
-
-        observed_at = time.time()
-
-        if not isinstance(data, dict):
-            return 0
-
-        added = 0
-
-        for row in data.get("Lines") or []:
-            if not isinstance(row, dict):
-                continue
-
-            line_obj = row.get("Line") or {}
-
-            if not isinstance(line_obj, dict):
-                continue
-
-            line = str(
-                line_obj.get("LineCode")
-                or line_obj.get("LineId")
-                or ""
-            ).strip()
-
-            raw_direction = row.get("Direction")
-
-            direction = (
-                str(raw_direction).strip()
-                if raw_direction is not None
-                else ""
-            )
-
-            wait_seconds = _atm_wait_seconds(
-                row.get("WaitMessage")
-            )
-
-            if (
-                not line
-                or direction not in {"0", "1"}
-                or wait_seconds is None
-            ):
-                continue
-
-            observations.append(
-                {
-                    "stop_id": stop_id,
-                    "line": line,
-                    "direction": direction,
-                    "wait_seconds": wait_seconds,
-                    "observed_at": observed_at,
-                }
-            )
-            added += 1
-
-        return added
+        return 0
 
     # Prima fase: realtime delle fermate raggiungibili a piedi
     # dall'origine, usato per scegliere la prima salita.
@@ -2727,17 +2739,56 @@ def _local_atm_realtime_route(
     if not observations:
         return None
 
-    def build_live_args() -> tuple[str, list[str]]:
+    def observation_key(
+        observation: dict[str, Any],
+    ) -> tuple[str, str, str]:
+        return (
+            str(observation["stop_id"]),
+            str(observation["line"]),
+            str(observation["direction"]),
+        )
+
+    # Ogni possibile prima salita viene valutata in modo
+    # indipendente. Due fermate diverse della stessa linea non
+    # devono condividere lo stesso stato shortest-path del C,
+    # altrimenti un accesso pedonale peggiore può oscurarne uno
+    # migliore.
+    initial_candidate_keys: list[
+        tuple[str, str, str]
+    ] = []
+
+    seen_initial_keys: set[
+        tuple[str, str, str]
+    ] = set()
+
+    for observation in observations:
+        key = observation_key(observation)
+
+        if key in seen_initial_keys:
+            continue
+
+        seen_initial_keys.add(key)
+        initial_candidate_keys.append(key)
+
+    def build_live_args(
+        allowed_keys: set[tuple[str, str, str]],
+    ) -> tuple[str, list[str]]:
         route_wall = time.time()
 
         # Una sola osservazione per stop+linea+direzione.
-        # Se ATM restituisce duplicati conserviamo l'arrivo più vicino.
+        # Se ATM restituisce duplicati conserviamo l'arrivo
+        # effettivo più vicino.
         live_by_key: dict[
             tuple[str, str, str],
             int,
         ] = {}
 
         for observation in observations:
+            key = observation_key(observation)
+
+            if key not in allowed_keys:
+                continue
+
             age_seconds = max(
                 0,
                 int(
@@ -2754,12 +2805,6 @@ def _local_atm_realtime_route(
                 0,
                 int(observation["wait_seconds"])
                 - age_seconds,
-            )
-
-            key = (
-                str(observation["stop_id"]),
-                str(observation["line"]),
-                str(observation["direction"]),
             )
 
             previous = live_by_key.get(key)
@@ -2795,78 +2840,151 @@ def _local_atm_realtime_route(
 
         return route_time, live_args
 
-    route: dict[str, Any] | None = None
+    candidate_routes: list[dict[str, Any]] = []
 
-    # Primo calcolo + massimo tre ricalcoli.
-    # Di norma basta un solo refresh: dalla prima rotta
-    # ricaviamo tutte le successive fermate di salita.
-    for _round in range(4):
-        route_time, live_args = build_live_args()
+    for first_key in initial_candidate_keys:
+        allowed_keys = {first_key}
 
-        args = [
-            "--route",
-            str(ATM_LOCAL_ROUTER_GRAPH),
-            str(origin_lat),
-            str(origin_lon),
-            str(dest_lat),
-            str(dest_lon),
-            route_time,
-            *live_args,
-        ]
+        candidate_route: dict[str, Any] | None = None
 
-        route = _local_atm_router_json(
-            args,
-            timeout_s=4.0,
+        # Primo calcolo + massimo tre refresh delle successive
+        # fermate di salita.
+        for _round in range(4):
+            route_time, live_args = build_live_args(
+                allowed_keys
+            )
+
+            if not live_args:
+                candidate_route = None
+                break
+
+            args = [
+                "--route",
+                str(ATM_LOCAL_ROUTER_GRAPH),
+                str(origin_lat),
+                str(origin_lon),
+                str(dest_lat),
+                str(dest_lon),
+                route_time,
+                *live_args,
+            ]
+
+            route = _local_atm_router_json(
+                args,
+                timeout_s=4.0,
+            )
+
+            # Se un refresh realtime rende impossibile il
+            # candidato, non conserviamo la vecchia versione
+            # calcolata solamente con GTFS.
+            if not route:
+                candidate_route = None
+                break
+
+            legs = route.get("legs") or []
+
+            transit_legs = [
+                leg
+                for leg in legs
+                if (
+                    isinstance(leg, dict)
+                    and leg.get("mode") == "transit"
+                )
+            ]
+
+            if not transit_legs:
+                candidate_route = None
+                break
+
+            first_leg = transit_legs[0]
+
+            # Il run appartiene a questa specifica prima salita.
+            # Le osservazioni aggiunte per gli interscambi non
+            # possono trasformarlo silenziosamente in un'altra
+            # partenza.
+            if (
+                str(
+                    first_leg.get("from_stop_id") or ""
+                ).strip()
+                != first_key[0]
+                or str(
+                    first_leg.get("route") or ""
+                ).strip()
+                != first_key[1]
+                or first_leg.get("live") is not True
+            ):
+                candidate_route = None
+                break
+
+            candidate_route = route
+
+            # La prima fermata è già osservata. Per ogni salita
+            # successiva recuperiamo il realtime ATM e lo
+            # aggiungiamo soltanto a questo candidato.
+            downstream_stop_ids: list[str] = []
+
+            for leg in transit_legs[1:]:
+                stop_id = str(
+                    leg.get("from_stop_id") or ""
+                ).strip()
+
+                if stop_id:
+                    downstream_stop_ids.append(stop_id)
+
+            if not downstream_stop_ids:
+                break
+
+            before_keys = set(allowed_keys)
+
+            for stop_id in dict.fromkeys(
+                downstream_stop_ids
+            ):
+                if stop_id not in queried_stop_ids:
+                    observe_stop(stop_id)
+
+                # Riutilizziamo anche un'osservazione già fatta
+                # da un candidato precedente.
+                for observation in observations:
+                    if (
+                        str(
+                            observation.get("stop_id") or ""
+                        ).strip()
+                        != stop_id
+                    ):
+                        continue
+
+                    allowed_keys.add(
+                        observation_key(observation)
+                    )
+
+            # ATM non ha fornito nuovo realtime utilizzabile:
+            # il candidato già calcolato resta valido.
+            if allowed_keys == before_keys:
+                break
+
+        if candidate_route is not None:
+            candidate_routes.append(candidate_route)
+
+    if not candidate_routes:
+        return None
+
+    def route_rank(
+        candidate: dict[str, Any],
+    ) -> tuple[int, int, int]:
+        def number(name: str) -> int:
+            try:
+                return int(candidate.get(name))
+            except (TypeError, ValueError):
+                return 2**31 - 1
+
+        return (
+            number("arrival_s"),
+            number("total_seconds"),
+            number("origin_walk_seconds")
+            + number("final_walk_seconds"),
         )
 
-        if not route:
-            return None
-
-        legs = route.get("legs") or []
-
-        if not any(
-            isinstance(leg, dict)
-            and leg.get("mode") == "transit"
-            for leg in legs
-        ):
-            return None
-
-        boarding_stop_ids: list[str] = []
-
-        for leg in legs:
-            if (
-                not isinstance(leg, dict)
-                or leg.get("mode") != "transit"
-            ):
-                continue
-
-            stop_id = str(
-                leg.get("from_stop_id") or ""
-            ).strip()
-
-            if (
-                stop_id
-                and stop_id not in queried_stop_ids
-            ):
-                boarding_stop_ids.append(stop_id)
-
-        if not boarding_stop_ids:
-            return route
-
-        added = 0
-
-        for stop_id in dict.fromkeys(
-            boarding_stop_ids
-        ):
-            added += observe_stop(stop_id)
-
-        # Abbiamo verificato le fermate del cambio ma ATM
-        # non ha fornito alcun realtime utilizzabile:
-        # manteniamo il risultato GTFS già calcolato.
-        if added == 0:
-            return route
-
-    return route
+    return min(candidate_routes, key=route_rank)
 
 
 # LOCAL_ATM_REALTIME_ROUTER_END
