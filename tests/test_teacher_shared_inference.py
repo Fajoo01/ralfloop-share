@@ -145,3 +145,99 @@ def test_teacher_broker_accepts_second_client_while_first_is_open(
         first.close()
         broker.terminate()
         broker.wait(timeout=5)
+
+
+def test_teacher_broker_does_not_idle_timeout_inflight_request(tmp_path):
+    child = tmp_path / "slow-mcp.py"
+
+    child.write_text(
+        """#!/usr/bin/env python3
+import json
+import sys
+import time
+
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request.get("method")
+    request_id = request.get("id")
+
+    if method == "notifications/initialized":
+        continue
+
+    if method == "initialize":
+        result = {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "slow-test", "version": "1"},
+        }
+
+    elif method == "tools/list":
+        # Più lungo dell'idle timeout del broker.
+        time.sleep(2.0)
+        result = {
+            "tools": [{
+                "name": "slow_tool",
+                "description": "slow",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": False,
+                },
+            }]
+        }
+
+    else:
+        continue
+
+    print(
+        json.dumps({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": result,
+        }),
+        flush=True,
+    )
+"""
+    )
+    child.chmod(0o700)
+
+    socket_path = tmp_path / "slow.sock"
+
+    broker = subprocess.Popen(
+        [
+            sys.executable,
+            "scripts/ralf_teacher_mcp_broker.py",
+            "--socket",
+            str(socket_path),
+            "--allow-uid",
+            str(os.getuid()),
+            "--command",
+            str(child),
+            "--idle-timeout",
+            "1",
+            "--max-clients",
+            "1",
+        ],
+    )
+
+    try:
+        deadline = time.monotonic() + 3.0
+
+        while (
+            not socket_path.exists()
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.02)
+
+        with MCPClientSession(
+            UnixMCPTransport(str(socket_path)),
+            timeout=5,
+        ) as session:
+            tools = session.list_tools()
+
+        assert [tool.name for tool in tools] == ["slow_tool"]
+
+    finally:
+        broker.terminate()
+        broker.wait(timeout=5)

@@ -4,6 +4,7 @@ from __future__ import annotations
 """Multi-client Teacher MCP relay; inference is owned by one shared daemon."""
 
 import argparse
+import json
 import os
 from pathlib import Path
 import selectors
@@ -44,10 +45,21 @@ def _relay(conn: socket.socket, command: str, idle_timeout: float) -> None:
     selector.register(process.stdout, selectors.EVENT_READ, "server")
     buffers = {"client": bytearray(), "server": bytearray()}
     last_activity = time.monotonic()
+    pending_requests = 0
+
     try:
         while process.poll() is None:
             events = selector.select(1.0)
-            if not events and time.monotonic() - last_activity >= idle_timeout:
+
+            # "Idle" significa davvero nessuna attività.
+            # Una richiesta JSON-RPC già inoltrata al Teacher server
+            # può legittimamente impiegare più dell'idle timeout mentre
+            # Qwen viene caricato o genera la risposta.
+            if (
+                not events
+                and pending_requests == 0
+                and time.monotonic() - last_activity >= idle_timeout
+            ):
                 return
             for key, _mask in events:
                 source = key.data
@@ -65,10 +77,35 @@ def _relay(conn: socket.socket, command: str, idle_timeout: float) -> None:
                     if not line.strip():
                         continue
                     payload = line + b"\n"
+
+                    try:
+                        rpc = json.loads(line)
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        rpc = None
+
                     if source == "client":
+                        if (
+                            isinstance(rpc, dict)
+                            and "method" in rpc
+                            and "id" in rpc
+                        ):
+                            pending_requests += 1
+
                         process.stdin.write(payload)
                         process.stdin.flush()
+
                     else:
+                        if (
+                            isinstance(rpc, dict)
+                            and "id" in rpc
+                            and (
+                                "result" in rpc
+                                or "error" in rpc
+                            )
+                            and pending_requests > 0
+                        ):
+                            pending_requests -= 1
+
                         conn.sendall(payload)
     finally:
         selector.close()

@@ -80,15 +80,22 @@ def _read_request(conn: socket.socket) -> dict[str, str]:
 def _send(
     conn: socket.socket,
     payload: dict[str, Any],
-) -> None:
-    conn.sendall(
-        json.dumps(
-            payload,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        + b"\n"
-    )
+) -> bool:
+    try:
+        conn.sendall(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            + b"\n"
+        )
+    except OSError:
+        # Il client può essersi disconnesso mentre Qwen stava
+        # generando. Questo non deve terminare il daemon condiviso.
+        return False
+
+    return True
 
 
 def main() -> int:
