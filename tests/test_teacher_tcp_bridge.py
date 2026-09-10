@@ -318,3 +318,24 @@ def test_teacher_firewall_matches_real_host_policy():
 
     assert "ralf_teacher_vpn_firewall.sh up" in FIREWALL_UNIT
     assert "ralf_teacher_vpn_firewall.sh down" in FIREWALL_UNIT
+
+
+def test_teacher_remote_installer_waits_for_listener_readiness():
+    root = Path(__file__).resolve().parents[1]
+    installer = (
+        root / "tools" / "install_teacher_remote_bridge.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "LISTENER_READY=0" in installer
+    assert "for _ in $(seq 1 50); do" in installer
+    assert "sleep 0.1" in installer
+    assert '[ "$LISTENER_READY" -eq 1 ]' in installer
+    assert "Teacher bridge listener did not become ready" in installer
+
+    restart = installer.index('systemctl restart "$BRIDGE_UNIT"')
+    wait = installer.index("LISTENER_READY=0")
+    firewall_check = installer.index(
+        "nft list chain inet filter input", wait
+    )
+
+    assert restart < wait < firewall_check
