@@ -5,8 +5,10 @@ import json
 from pathlib import Path
 
 try:
+    from tools import deploy_local_arch_release as deploy
     from tools.deploy_local_arch_release import evaluate_quality_gate, meminfo, port_free
 except ModuleNotFoundError:
+    import deploy_local_arch_release as deploy
     from deploy_local_arch_release import evaluate_quality_gate, meminfo, port_free
 
 
@@ -69,7 +71,7 @@ def generate(root: Path) -> dict[str, object]:
         "enough_swap": memory["SwapFree"] >= 512,
         "ram_available_mb": memory["MemAvailable"],
         "swap_free_mb": memory["SwapFree"],
-        "port_19104_free": port_free(19104),
+        "functiongemma_endpoint": deploy.functiongemma_endpoint_check(),
         "manifest": "pending_release_build",
     }
     allowed, path, blockers = evaluate_quality_gate(data)

@@ -8,6 +8,7 @@ from pathlib import Path
 import socket
 import subprocess
 import tempfile
+from urllib.request import urlopen
 
 
 PRODUCTION = Path("/home/sibilla-cumana/ralfloop-production")
@@ -22,7 +23,7 @@ def preflight(release: Path) -> dict[str, object]:
         "release_identity": release_identity(release),
         "manifest": verify_manifest(release),
         "functiongemma_model": MODEL.is_file(),
-        "port_19104_free": port_free(19104),
+        "functiongemma_endpoint": functiongemma_endpoint_check(),
         "glm_incompatible_idle": not process_match(("glm-run-machine", "colibri_glm")),
     }
     memory = meminfo()
@@ -114,7 +115,7 @@ def evaluate_quality_gate(data: dict[str, object]) -> tuple[bool, str | None, li
         "approval_miss": data.get("approval_miss") == 0,
         "enough_ram": data.get("enough_ram") is True,
         "enough_swap": data.get("enough_swap") is True,
-        "port_19104_free": data.get("port_19104_free") is True,
+        "functiongemma_endpoint": data.get("functiongemma_endpoint") is True,
     }
     common_blockers = [name for name, passed in common.items() if not passed]
     if common_blockers:
@@ -164,6 +165,22 @@ def port_free(port: int) -> bool:
             return True
         except OSError:
             return False
+
+
+def functiongemma_endpoint_check() -> bool:
+    """Semantic port gate: free in local mode, proxy-owned in distributed mode."""
+    if os.environ.get("RALF_FUNCTIONGEMMA_PROXY_EXPECTED") != "1":
+        return port_free(19104)
+    if subprocess.run(
+        ["systemctl", "--user", "is-active", "--quiet", "ralf-functiongemma-proxy.service"],
+        check=False,
+    ).returncode != 0:
+        return False
+    try:
+        with urlopen("http://127.0.0.1:19104/health", timeout=2) as response:
+            return response.status == 200
+    except OSError:
+        return False
 
 
 def process_match(needles: tuple[str, ...]) -> bool:

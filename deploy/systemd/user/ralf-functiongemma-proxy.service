@@ -1,0 +1,21 @@
+[Unit]
+Description=Ralf FunctionGemma loopback proxy to k3s worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/home/bandi/ralfloop-atm-teacher-integration/scripts/ralf_functiongemma_proxy
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+RestrictAddressFamilies=AF_INET AF_INET6
+MemoryMax=64M
+CPUQuota=20%
+TasksMax=32
+
+[Install]
+WantedBy=default.target

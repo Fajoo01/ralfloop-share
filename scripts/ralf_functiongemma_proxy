@@ -1,0 +1,5 @@
+#!/bin/sh
+
+exec /usr/bin/socat \
+  TCP-LISTEN:19104,bind=127.0.0.1,reuseaddr,fork,keepalive \
+  TCP:10.45.234.43:19104

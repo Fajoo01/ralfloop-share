@@ -25,7 +25,7 @@ def legacy_gate() -> dict[str, object]:
         "approval_miss": 0,
         "enough_ram": True,
         "enough_swap": True,
-        "port_19104_free": True,
+        "functiongemma_endpoint": True,
         "full_suite_clean": False,
         "preexisting_failures_only": True,
         "no_regression": True,
@@ -93,6 +93,13 @@ def test_candidate_error_blocks() -> None:
     assert isinstance(candidate, dict)
     candidate["errors"] = 1
     assert_blocked(data)
+
+
+def test_distributed_endpoint_requires_proxy(monkeypatch) -> None:
+    monkeypatch.setenv("RALF_FUNCTIONGEMMA_PROXY_EXPECTED", "1")
+    monkeypatch.setattr(deploy, "port_free", lambda port: False)
+    monkeypatch.setattr(deploy.subprocess, "run", lambda *args, **kwargs: type("R", (), {"returncode": 1})())
+    assert deploy.functiongemma_endpoint_check() is False
 
 
 def _release(root: Path, directory: str, commit: str) -> Path:

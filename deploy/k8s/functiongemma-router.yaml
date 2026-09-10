@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: functiongemma-router
+  namespace: ralf-routing
+spec:
+  selector:
+    matchLabels:
+      app: functiongemma-router
+  template:
+    metadata:
+      labels:
+        app: functiongemma-router
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        workload-role: compute
+        ralf-functiongemma: ready
+      containers:
+        - name: functiongemma
+          image: ubuntu:24.04
+          command: [/opt/llama/bin/llama-server]
+          args: [--model, /models/functiongemma-270m-it-q8_0.gguf, --alias, functiongemma-router, --host, 0.0.0.0, --port, "19104", --ctx-size, "1536", --threads, "2", --threads-batch, "2", --parallel, "1", --n-gpu-layers, "0", --jinja, --offline, --no-webui, --metrics, --slots]
+          ports:
+            - name: http
+              containerPort: 19104
+          readinessProbe: {httpGet: {path: /health, port: http}, periodSeconds: 3}
+          livenessProbe: {httpGet: {path: /health, port: http}, periodSeconds: 15}
+          securityContext: {runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
+          volumeMounts:
+            - {name: llama-bin, mountPath: /opt/llama/bin, readOnly: true}
+            - {name: functiongemma-model, mountPath: /models/functiongemma-270m-it-q8_0.gguf, readOnly: true}
+            - {name: host-libs, mountPath: /host-libs, readOnly: true}
+      volumes:
+        - {name: llama-bin, hostPath: {path: /home/temistocle/bonsai-deepseek-harness/llama.cpp/build/bin, type: Directory}}
+        - {name: functiongemma-model, hostPath: {path: /home/temistocle/ralf-models/functiongemma-270m/functiongemma-270m-it-q8_0.gguf, type: File}}
+        - {name: host-libs, hostPath: {path: /usr/lib/x86_64-linux-gnu, type: Directory}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: functiongemma-router
+  namespace: ralf-routing
+spec:
+  type: ClusterIP
+  selector:
+    app: functiongemma-router
+  ports:
+    - name: http
+      port: 19104
+      targetPort: http
