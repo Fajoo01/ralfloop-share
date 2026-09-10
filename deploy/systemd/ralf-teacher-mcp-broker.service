@@ -1,0 +1,47 @@
+[Unit]
+Description=Ralf Teacher student-only MCP broker
+Requires=ralf-teacher-inference.service
+After=ralf-teacher-inference.service
+
+[Service]
+Type=simple
+User=bandi
+Group=bandi
+
+WorkingDirectory=/home/sibilla-cumana/ralfloop-production/current
+
+Environment=PYTHONPATH=/home/sibilla-cumana/ralfloop-production/current
+Environment=RALF_TEACHER_INFERENCE_SOCKET=/run/ralf-teacher-inference/inference.sock
+Environment=RALF_TEACHER_DB=/var/lib/ralfloop-teacher/teacher.sqlite3
+
+RuntimeDirectory=ralf-teacher-mcp
+RuntimeDirectoryMode=0700
+StateDirectory=ralfloop-teacher
+StateDirectoryMode=0700
+
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_teacher_mcp_broker.py --socket /run/ralf-teacher-mcp/mcp.sock --allow-uid 1001 --command /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_teacher_mcp_server.py --idle-timeout 180 --max-clients 6
+
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=45
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+# Il processo MCP degli studenti non ha accesso IP.
+# Può parlare soltanto tramite socket Unix locale al daemon Teacher.
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
