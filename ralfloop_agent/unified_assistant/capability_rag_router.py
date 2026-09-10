@@ -103,6 +103,10 @@ CAPABILITY_HINTS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# One shared lexical/phrase hit is noise; domain-bearing queries in this
+# catalog score >= 8. Keep the floor below that for genuine ambiguous pairs.
+MIN_RETRIEVAL_SCORE = 4.0
+
 
 _STOPWORDS = frozenset(
     {
@@ -252,7 +256,7 @@ class CapabilityRAGIndex:
             if skill_id == "atm.route" and "portami" in normalized:
                 score += 8.0
 
-            if score <= 0:
+            if score < MIN_RETRIEVAL_SCORE:
                 continue
 
             providers = tuple(

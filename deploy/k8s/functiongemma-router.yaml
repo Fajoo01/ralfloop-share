@@ -4,6 +4,9 @@ metadata:
   name: functiongemma-router
   namespace: ralf-routing
 spec:
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 1}
   selector:
     matchLabels:
       app: functiongemma-router
@@ -13,6 +16,7 @@ spec:
         app: functiongemma-router
     spec:
       automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 10
       nodeSelector:
         workload-role: compute
         ralf-functiongemma: ready
@@ -24,17 +28,25 @@ spec:
           ports:
             - name: http
               containerPort: 19104
-          readinessProbe: {httpGet: {path: /health, port: http}, periodSeconds: 3}
-          livenessProbe: {httpGet: {path: /health, port: http}, periodSeconds: 15}
+          env:
+            - {name: LD_LIBRARY_PATH, value: /opt/llama/bin:/host-libs}
+          resources:
+            requests: {cpu: 250m, memory: 384Mi}
+            limits: {cpu: "2", memory: 1Gi}
+          startupProbe: {httpGet: {path: /health, port: http}, periodSeconds: 1, timeoutSeconds: 1, failureThreshold: 30}
+          readinessProbe: {httpGet: {path: /health, port: http}, periodSeconds: 3, timeoutSeconds: 1, failureThreshold: 3}
+          livenessProbe: {httpGet: {path: /health, port: http}, periodSeconds: 15, timeoutSeconds: 2, failureThreshold: 3}
           securityContext: {runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
           volumeMounts:
             - {name: llama-bin, mountPath: /opt/llama/bin, readOnly: true}
             - {name: functiongemma-model, mountPath: /models/functiongemma-270m-it-q8_0.gguf, readOnly: true}
             - {name: host-libs, mountPath: /host-libs, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
       volumes:
         - {name: llama-bin, hostPath: {path: /home/temistocle/bonsai-deepseek-harness/llama.cpp/build/bin, type: Directory}}
         - {name: functiongemma-model, hostPath: {path: /home/temistocle/ralf-models/functiongemma-270m/functiongemma-270m-it-q8_0.gguf, type: File}}
         - {name: host-libs, hostPath: {path: /usr/lib/x86_64-linux-gnu, type: Directory}}
+        - {name: tmp, emptyDir: {}}
 ---
 apiVersion: v1
 kind: Service

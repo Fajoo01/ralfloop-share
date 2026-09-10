@@ -82,7 +82,7 @@ def test_functiongemma_reranks_retrieved_logical_capabilities_only():
         client=FakeFunctionGemma(),
     )
 
-    result = router.route("cerca informazioni")
+    result = router.route("cerca messaggi posta")
 
     assert result is not None
     assert result["skill"] == "email.search"
@@ -95,3 +95,13 @@ def test_unknown_general_chat_is_not_forced_into_mcp():
         "raccontami una barzelletta sui pinguini"
     )
     assert rows == ()
+
+
+def test_generic_queries_do_not_select_a_leaf_capability():
+    index = CapabilityRAGIndex(UnifiedRegistryFacade())
+    for query in ("cerca informazioni", "fammi una ricerca", "controlla questa cosa", "dimmi qualcosa", "aiutami", "vediamo"):
+        assert index.retrieve(query) == (), query
+
+
+def test_foreign_query_is_none():
+    assert CapabilityRAGIndex(UnifiedRegistryFacade()).retrieve("barzelletta sui pinguini") == ()
