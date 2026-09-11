@@ -13,6 +13,7 @@ def test_web_unit_is_private_non_root_user_service():
     assert "WorkingDirectory=%h/.local/share/ralf-teacher-web/current" in unit
     assert "User=root" not in unit
     assert "Restart=on-failure" in unit and "UMask=0077" in unit
+    assert "PrivateTmp=yes" not in unit
     assert "ralf-teacher-inference" not in unit
     assert "0.0.0.0" not in unit
 

@@ -168,7 +168,8 @@ def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", sec
                     health_cache["checked"] = time.monotonic()
                 ok = health_cache["ok"]
             return JSONResponse({"status": "ok" if ok else "degraded"}, status_code=200 if ok else 503)
-        except Exception:
+        except Exception as exc:
+            log.warning("health error_class=%s", type(exc).__name__)
             return JSONResponse({"status": "unavailable"}, status_code=503)
 
     @app.post("/api/login")

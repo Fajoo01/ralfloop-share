@@ -11,7 +11,8 @@ Restart=on-failure
 RestartSec=3
 TimeoutStopSec=30
 NoNewPrivileges=yes
-PrivateTmp=yes
+# PrivateTmp in this user manager isolates access to the owner's 0700 MCP socket.
+# Keep the existing socket boundary; do not loosen its permissions.
 UMask=0077
 
 [Install]

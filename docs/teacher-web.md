@@ -129,6 +129,11 @@ user journal. On failed health, the previous web release is restored. Rollback:
 `--install --rollback <previous-40-character-commit>`. Additive schema rollback
 retains data; restore a backup only after stopping the web service, when needed.
 
+On this host `PrivateTmp=yes` in a **user** service caused `Permission denied`
+when connecting to the owner's protected MCP socket. The web unit therefore
+keeps `NoNewPrivileges` and private state permissions without `PrivateTmp`.
+The existing MCP socket permissions and all existing Teacher units are unchanged.
+
 No shared production/current switch, existing Teacher restart, VPN modification
 or k3s modification is needed. Public access requires an independently chosen
 HTTPS reverse proxy/origin; configure `TEACHER_WEB_ORIGIN` to the exact HTTPS
