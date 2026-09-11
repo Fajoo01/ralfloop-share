@@ -15,6 +15,12 @@ _NAMED_ROUTE_RE = re.compile(
     re.I,
 )
 
+
+_TRAILING_TRANSPORT_QUALIFIER_RE = re.compile(
+    r"\s+con\s+(?:atm|(?:i\s+)?mezzi(?:\s+atm)?)\s*$",
+    re.I,
+)
+
 _DESTINATION_PATTERNS = (
     re.compile(
         r"\bcome\s+(?:arrivo|vado|posso\s+andare)\s+"
@@ -51,6 +57,9 @@ def _named_route(text: str) -> tuple[str, str] | None:
 
     origin = _clean(match.group("origin"))
     destination = _clean(match.group("destination"))
+    destination = _clean(
+        _TRAILING_TRANSPORT_QUALIFIER_RE.sub("", destination)
+    )
 
     if len(origin) < 2 or len(destination) < 2:
         return None
@@ -59,6 +68,18 @@ def _named_route(text: str) -> tuple[str, str] | None:
 
 
 def _destination(text: str) -> str | None:
+    # With imperative "portami", a lone "da X" names the destination;
+    # "da X a Y" remains the explicit origin/destination form above.
+    single = re.fullmatch(
+        r"\s*portami\s+(?:da|dal|dalla|dallo|dai|dagli|dalle)\s+(.+?)\s*[?!.]*\s*",
+        text, re.I,
+    )
+    if single:
+        value = _clean(single.group(1))
+        if not re.search(r"\s+(?:a|al|alla|all['’]|in)\s+", value, re.I):
+            value = re.sub(r"^(?:dal|dalla|dallo|dai|dagli|dalle)\s+", "", value, flags=re.I)
+            return value if len(value) >= 2 else None
+
     for pattern in _DESTINATION_PATTERNS:
         match = pattern.search(text)
         if not match:
@@ -111,6 +132,7 @@ def _render(payload: Mapping[str, Any]) -> str:
 class ATMMCPReadOnly(MeteoMCPReadOnly):
     def __init__(self, context: Mapping[str, Any] | None = None) -> None:
         super().__init__(context)
+        self.socket_timeout_s = 130.0
         self.socket_path = os.getenv(
             "RALF_ATM_MCP_SOCKET",
             "/run/ralf-atm-mcp/mcp.sock",
