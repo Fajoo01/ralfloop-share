@@ -61,6 +61,7 @@ def main():
     units = Path.home() / ".config/systemd/user"
     units.mkdir(parents=True,exist_ok=True)
     unit = units / "ralf-teacher-web.service"
+    previous_unit = unit.read_bytes() if unit.exists() else None
     unit.write_bytes((release / "deploy/systemd/ralf-teacher-web.service").read_bytes())
     publish_current(release,current)
     try:
@@ -77,6 +78,9 @@ def main():
     except Exception:
         if previous:
             publish_current(previous,current)
+            if previous_unit is not None:
+                unit.write_bytes(previous_unit)
+                subprocess.run(["systemctl","--user","daemon-reload"],check=False)
             subprocess.run(["systemctl","--user","restart","ralf-teacher-web.service"],check=False)
         else:
             subprocess.run(["systemctl","--user","disable","--now","ralf-teacher-web.service"],check=False)

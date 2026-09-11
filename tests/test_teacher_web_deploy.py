@@ -50,6 +50,9 @@ def test_failed_health_restores_only_previous_web_release(tmp_path,monkeypatch):
     unit.write_text("[Service]\nExecStart=python scripts/ralf_teacher_web.py\n")
     (release / "MANIFEST.sha256").write_text(hashlib.sha256(unit.read_bytes()).hexdigest()+"  deploy/systemd/ralf-teacher-web.service\n")
     (root / "current").symlink_to(old)
+    installed_unit=tmp_path / ".config/systemd/user/ralf-teacher-web.service"
+    installed_unit.parent.mkdir(parents=True)
+    installed_unit.write_text("previous healthy unit")
     monkeypatch.setattr(Path,"home",classmethod(lambda cls:tmp_path))
     monkeypatch.setattr(sys,"argv",["install_teacher_web.py","--install","--rollback","a"*40])
     commands=[]
@@ -59,6 +62,7 @@ def test_failed_health_restores_only_previous_web_release(tmp_path,monkeypatch):
     monkeypatch.setattr(installer.urllib.request,"urlopen",unavailable)
     with pytest.raises(ConnectionError): installer.main()
     assert (root / "current").resolve() == old
+    assert installed_unit.read_text() == "previous healthy unit"
     assert all(cmd[:2]==["systemctl","--user"] for cmd in commands)
     assert all("ralf-teacher-inference.service" not in cmd for cmd in commands)
     assert (tmp_path / ".config/ralf-teacher-web.env").stat().st_mode & 0o777 == 0o600
