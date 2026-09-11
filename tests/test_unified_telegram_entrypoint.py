@@ -80,6 +80,20 @@ def test_route_only_keeps_existing_meowgram_two_step_contract(monkeypatch):
     assert result["current_role"] == "capability_router"
 
 
+def test_route_only_uses_capability_rag_for_atm_sonia(monkeypatch):
+    monkeypatch.setenv("RALFLOOP_UNIFIED_ASSISTANT", "1")
+    result = backend.run_task(backend.TaskRunRequest(
+        user_goal="Portami da Sonia", mode="route_only",
+        extra_context={"source": "telegram_natural", "telegram_user_id": 1,
+                       "telegram_chat_id": 1, "telegram_message_id": 1},
+    ))
+    route = result["capability_route"]
+    assert route["task_mode"] == "tool_backed_read"
+    assert route["intent"] == "atm.route"
+    assert route["skills_used"] == ["atm.route"]
+    assert route["mcp_connectors"] == ["atm.route.mcp"]
+
+
 def test_fastweb_route_only_avoids_meowgram_generic_orchestrate(monkeypatch):
     monkeypatch.setenv("RALFLOOP_UNIFIED_ASSISTANT", "1")
     request = backend.TaskRunRequest(

@@ -128,8 +128,9 @@ _MULTISOURCE_WHATSAPP_REPLY_RE = re.compile(
 class UnifiedPlanner:
     """Deterministic domain/skill plan. Model output is never an executor."""
 
-    def __init__(self, registry: UnifiedRegistryFacade) -> None:
+    def __init__(self, registry: UnifiedRegistryFacade, capability_router=None) -> None:
         self.registry = registry
+        self.capability_router = capability_router
 
     def plan(self, user_goal: str) -> AssistantPlan:
         goal = " ".join(user_goal.split())
@@ -305,6 +306,28 @@ class UnifiedPlanner:
         if _HOME_RE.search(goal):
             skill = "home.read" if re.search(r"\b(?:temperatura|fa\s+caldo|fa\s+freddo|stato|quanto)\b", goal, re.I) and not re.search(r"\b(?:accendi|spegni|apri|chiudi|imposta|metti|porta)\b", goal, re.I) else "home.control"
             return self._single(goal, "home", skill, PolicyClass.READ if skill == "home.read" else PolicyClass.AUTO_WRITE)
+        if self.capability_router is not None:
+            proposal = self.capability_router.route(goal)
+            if proposal is not None and proposal.get("skill") in {
+                "atm.route", "meteo.read", "email.search", "whatsapp.read",
+                "mailchimp.read", "fastweb.portal.read", "home.read",
+            }:
+                skill = proposal["skill"]
+                if skill == "email.search":
+                    search = plan_email_search(goal)
+                    if search is None:
+                        return self._clarification("email_search_arguments_unresolved")
+                    return AssistantPlan(
+                        intent=skill, domains=("tiremm",),
+                        assignments=(self._assignment(
+                            domain="tiremm", skill=skill, objective=goal,
+                            input_refs=("user.goal",), output_ref="artifact.email_search",
+                            policy=PolicyClass.READ,
+                            arguments={"organization": search.organization, "concept": search.concept, "queries": list(search.queries)},
+                        ),),
+                    )
+                domain = "home" if skill == "home.read" else "general_assistant"
+                return self._single(goal, domain, skill, PolicyClass.READ)
         if _RELATIONAL_RE.search(goal):
             return self._single(goal, "personal_relational", "personal_relational.analyze", PolicyClass.READ)
         if grant:

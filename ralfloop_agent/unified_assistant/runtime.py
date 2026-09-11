@@ -30,6 +30,7 @@ from .memory import MemoryRouter, tiremm_profile_items
 from .atm_mcp_adapter import ATMMCPReadOnly
 from .meteo_mcp_adapter import MeteoMCPReadOnly
 from .planner import UnifiedPlanner
+from .capability_rag_router import CapabilityRAGRouter
 from .recipient import GoogleWorkspaceRecipientResolver
 from .registry import DEFAULT_HOME_ENTITIES, UnifiedRegistryFacade
 from .skill_adapters import bandi_eligibility_adapter, bandi_read_adapter
@@ -61,11 +62,11 @@ _SUPPORTED = re.compile(
     r"manda\s+(?:una\s+)?(?:mail|email)|rispondi\s+(?:a|alla\s+mail(?:\s+di)?)|accendi|spegni|apri|chiudi|"
     r"imposta|metti|porta|abbassala|alzala|temperatura|quanto\s+fa|fa\s+caldo|"
     r"fa\s+freddo|rendila|cambiala|aggiungi|modifica|ok|invia|mandala|va\s+bene|annulla|"
-    r"fastweb|myfastpage|whatsapp|wapp|mailchimp|meteo|weather|previsioni|piove|pioggia|"
+    r"fastweb|myfastpage|whatsapp|wapp|mailchimp|meteo|weather|previsioni|piove|piover[aà]|pioggia|"
     r"temporale|radar|precipitazioni|vento|atm|giromilano|"
     r"mezzi\s+pubblici|trasporto\s+pubblico|portami|"
     r"come\s+(?:arrivo|vado|posso\s+andare)|"
-    r"mezzi\s+(?:per|verso)|percorso\s+(?:atm|con\s+i\s+mezzi))\b",
+    r"mezzi\s+(?:per|verso)|percorso\s+(?:atm|con\s+i\s+mezzi)|home\s+assistant|domotica|stato\s+(?:della\s+)?luce)\b",
     re.I,
 )
 
@@ -96,6 +97,11 @@ def is_unified_telegram_request(text: str, context: Mapping[str, Any]) -> bool:
             )
         )
     )
+
+
+def _build_unified_planner(registry: UnifiedRegistryFacade) -> UnifiedPlanner:
+    """Canonical Telegram/Ralf planner; filtered runtimes inject their own policy."""
+    return UnifiedPlanner(registry, capability_router=CapabilityRAGRouter(registry))
 
 
 def _has_single_approvable_pending(context: Mapping[str, Any]) -> bool:
@@ -175,7 +181,8 @@ def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any]
             "mcp_used": [], "mcp_connectors": [], "write_policy": "policy_gated",
             "evidence_first": True, "requires_confirmation": True,
         }
-    planner = UnifiedPlanner(UnifiedRegistryFacade())
+    registry = UnifiedRegistryFacade()
+    planner = _build_unified_planner(registry)
     plan = planner.validate(planner.plan(text))
     skills = [item.skill for item in plan.assignments]
     if (
@@ -371,7 +378,7 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
         ),
     )
     core = UnifiedAssistantCore(
-        planner=UnifiedPlanner(registry),
+        planner=_build_unified_planner(registry),
         conversation=conversation,
         flags=flags,
         email_memory=email_memory_builder,
