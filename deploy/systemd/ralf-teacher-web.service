@@ -1,0 +1,18 @@
+[Unit]
+Description=Bot-tazzi Teacher student web (loopback)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/ralf-teacher-web/current
+EnvironmentFile=%h/.config/ralf-teacher-web.env
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python scripts/ralf_teacher_web.py --port 19139
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+NoNewPrivileges=yes
+PrivateTmp=yes
+UMask=0077
+
+[Install]
+WantedBy=default.target
