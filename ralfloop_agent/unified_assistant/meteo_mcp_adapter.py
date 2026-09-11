@@ -328,7 +328,9 @@ class MeteoMCPReadOnly:
         arguments: Mapping[str, Any],
     ) -> dict[str, Any]:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-            client.settimeout(40)
+            client.settimeout(
+                float(getattr(self, "socket_timeout_s", 40.0))
+            )
             client.connect(self.socket_path)
 
             stream = client.makefile("rwb", buffering=0)

@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh Ralf ATM local routing graph
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=sibilla-cumana
+Group=sibilla-cumana
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralfloop-production/current/scripts/refresh_atm_router_graph.py

@@ -451,7 +451,7 @@ def main() -> int:
             tuple[int, int, int | None, int | None]
         ] = {}
 
-        bad_sequence = 0
+        bad_trip_ids: set[str] = set()
         scanned = 0
 
         for row in gtfs_rows(zf, "stop_times.txt") or []:
@@ -498,7 +498,7 @@ def main() -> int:
                 ) = previous
 
                 if sequence <= previous_sequence:
-                    bad_sequence += 1
+                    bad_trip_ids.add(trip_id)
                 else:
                     depart = (
                         previous_departure
@@ -554,11 +554,153 @@ def main() -> int:
             flush=True,
         )
 
-        if bad_sequence:
-            raise SystemExit(
-                "stop_times non monotono per trip: "
-                f"{bad_sequence} righe; importer da rendere "
-                "order-independent prima di usare il grafo"
+        # Il feed GTFS non garantisce necessariamente che tutte le righe
+        # di stop_times siano già ordinate per stop_sequence all'interno
+        # del trip. La scansione veloce sopra resta O(n); solo i trip
+        # effettivamente fuori ordine vengono ricostruiti con una seconda
+        # scansione del file.
+        if bad_trip_ids:
+            print(
+                f"repairing_non_monotonic_trips={len(bad_trip_ids)}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+            bad_trip_indices = {
+                trip_index[trip_id]
+                for trip_id in bad_trip_ids
+            }
+
+            # Le connessioni costruite durante la prima scansione per un
+            # trip fuori ordine non sono affidabili: le scartiamo tutte.
+            connections = [
+                item
+                for item in connections
+                if item[3] not in bad_trip_indices
+            ]
+
+            repair_rows: dict[
+                str,
+                list[
+                    tuple[
+                        int,
+                        int,
+                        int | None,
+                        int | None,
+                    ]
+                ],
+            ] = {
+                trip_id: []
+                for trip_id in bad_trip_ids
+            }
+
+            # Seconda scansione: memorizziamo soltanto i pochissimi trip
+            # risultati non monotoni, non l'intero stop_times.txt.
+            for row in gtfs_rows(zf, "stop_times.txt") or []:
+                trip_id = str(
+                    row.get("trip_id") or ""
+                ).strip()
+
+                bucket = repair_rows.get(trip_id)
+
+                if bucket is None:
+                    continue
+
+                stop_id = str(
+                    row.get("stop_id") or ""
+                ).strip()
+
+                stop_idx = graph_stop(stop_id)
+
+                if stop_idx is None:
+                    continue
+
+                try:
+                    sequence = int(
+                        row.get("stop_sequence") or 0
+                    )
+                except Exception:
+                    continue
+
+                bucket.append((
+                    sequence,
+                    stop_idx,
+                    gtfs_seconds(row.get("arrival_time")),
+                    gtfs_seconds(row.get("departure_time")),
+                ))
+
+            repaired_connections = 0
+
+            for trip_id in sorted(bad_trip_ids):
+                rows = repair_rows[trip_id]
+                rows.sort(key=lambda item: item[0])
+
+                previous = None
+                meta = active_trips[trip_id]
+
+                for current in rows:
+                    (
+                        sequence,
+                        stop_idx,
+                        arrival_s,
+                        departure_s,
+                    ) = current
+
+                    if previous is not None:
+                        (
+                            previous_sequence,
+                            previous_stop,
+                            previous_arrival,
+                            previous_departure,
+                        ) = previous
+
+                        # Dopo il sort un valore <= significa sequenza
+                        # realmente duplicata/malata, non semplice
+                        # disordine del file. In quel caso fail closed.
+                        if sequence <= previous_sequence:
+                            raise SystemExit(
+                                "stop_sequence duplicata nel trip "
+                                f"{trip_id}: {sequence}"
+                            )
+
+                        depart = (
+                            previous_departure
+                            if previous_departure is not None
+                            else previous_arrival
+                        )
+
+                        arrive = (
+                            arrival_s
+                            if arrival_s is not None
+                            else departure_s
+                        )
+
+                        if (
+                            depart is not None
+                            and arrive is not None
+                            and arrive >= depart
+                        ):
+                            route_id = meta["route_id"]
+
+                            connections.append((
+                                previous_stop,
+                                stop_idx,
+                                route_index[route_id],
+                                trip_index[trip_id],
+                                depart,
+                                arrive,
+                                int(meta["direction"]),
+                            ))
+
+                            repaired_connections += 1
+
+                    previous = current
+
+            print(
+                f"repaired_connections={repaired_connections:,} "
+                f"connections_after_repair={len(connections):,}",
+                file=sys.stderr,
+                flush=True,
             )
 
     # Connection Scan Algorithm: ordinate per partenza.

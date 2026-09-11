@@ -8,6 +8,7 @@ import re
 import subprocess
 import time
 import urllib.parse
+import contextvars
 import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -659,13 +660,52 @@ def _atm_direct_fallback_options(origin_lat: float, origin_lon: float, dest_lat:
     def wait_from_stop(ocode: str, line: str, jp: str) -> str:
         if expired():
             return "n/d"
-        data = _browser_fetch_json(f"tpl/stops/{urllib.parse.quote(ocode)}/linesummary")
+
+        snapshot = _atm_realtime_snapshot(
+            ocode,
+            [line],
+        )
+
+        if snapshot is not None:
+            for observation in snapshot.get("observations") or []:
+                if not isinstance(observation, dict):
+                    continue
+
+                row_line = _line_label(
+                    observation.get("line")
+                )
+                row_jp = str(
+                    observation.get("journey_pattern_id") or ""
+                ).strip()
+
+                if row_line == line and row_jp == jp:
+                    return str(
+                        observation.get("wait") or ""
+                    ).strip() or "n/d"
+
+            return "n/d"
+
+        # Legacy path, utilizzato solo quando nessun provider MCP
+        # è stato iniettato.
+        data = _browser_fetch_json(
+            f"tpl/stops/{urllib.parse.quote(ocode)}/linesummary"
+        )
+
         for row in (data or {}).get("Lines") or []:
             line_obj = row.get("Line") or {}
-            row_line = _line_label(line_obj.get("LineCode") or line_obj.get("LineId"))
-            row_jp = str(row.get("JourneyPatternId") or "").strip()
+            row_line = _line_label(
+                line_obj.get("LineCode")
+                or line_obj.get("LineId")
+            )
+            row_jp = str(
+                row.get("JourneyPatternId") or ""
+            ).strip()
+
             if row_line == line and row_jp == jp:
-                return str(row.get("WaitMessage") or "").strip() or "n/d"
+                return str(
+                    row.get("WaitMessage") or ""
+                ).strip() or "n/d"
+
         return "n/d"
 
     hints = []
@@ -921,6 +961,107 @@ def _atm_direct_fallback_options(origin_lat: float, origin_lon: float, dest_lat:
     return best_by_line[:6]
 
 
+_ATM_REALTIME_PROVIDER: contextvars.ContextVar[Any] = contextvars.ContextVar("atm_realtime_provider", default=None)
+
+
+def _atm_realtime_snapshot(
+    stop_code: str,
+    line_labels: list[str] | None = None,
+) -> dict[str, Any] | None:
+    stop_code = str(stop_code or "").strip()
+
+    if not stop_code:
+        return {
+            "ok": False,
+            "status": "not_available",
+            "stop_code": "",
+            "arrivals": {},
+            "observations": [],
+            "source": "no_stop_code",
+        }
+
+    provider = _ATM_REALTIME_PROVIDER.get()
+
+    # None significa che il chiamante non ha iniettato il provider MCP:
+    # il codice legacy può quindi mantenere il suo fallback diretto.
+    if provider is None:
+        return None
+
+    try:
+        snapshot_method = getattr(provider, "snapshot", None)
+
+        if callable(snapshot_method):
+            payload = snapshot_method(
+                stop_code,
+                list(line_labels) if line_labels is not None else None,
+            )
+        else:
+            arrivals = provider.waits(
+                stop_code,
+                list(line_labels or []),
+            )
+            payload = {
+                "ok": bool(arrivals),
+                "status": "ok" if arrivals else "not_available",
+                "stop_code": stop_code,
+                "arrivals": arrivals or {},
+                "observations": [],
+                "source": "atm_live_mcp_compat",
+            }
+    except Exception:
+        return {
+            "ok": False,
+            "status": "not_available",
+            "stop_code": stop_code,
+            "arrivals": {},
+            "observations": [],
+            "source": "atm_live_mcp_unavailable",
+        }
+
+    if not isinstance(payload, dict):
+        return {
+            "ok": False,
+            "status": "not_available",
+            "stop_code": stop_code,
+            "arrivals": {},
+            "observations": [],
+            "source": "atm_live_mcp_invalid",
+        }
+
+    arrivals_raw = payload.get("arrivals") or {}
+    observations_raw = payload.get("observations") or []
+
+    arrivals = (
+        {
+            str(line): str(wait)
+            for line, wait in arrivals_raw.items()
+        }
+        if isinstance(arrivals_raw, dict)
+        else {}
+    )
+
+    observations = [
+        dict(item)
+        for item in observations_raw
+        if isinstance(item, dict)
+    ]
+
+    return {
+        "ok": bool(payload.get("ok")),
+        "status": str(
+            payload.get("status")
+            or ("ok" if arrivals else "not_available")
+        ),
+        "stop_code": stop_code,
+        "arrivals": arrivals,
+        "observations": observations,
+        "source": str(
+            payload.get("source")
+            or "atm_live_mcp"
+        ),
+    }
+
+
 def _atm_live_minutes(stop: dict[str, Any], line_labels: list[str]) -> dict[str, Any]:
     if not stop or not line_labels:
         return {"status": "no_lines", "arrivals": {}}
@@ -934,6 +1075,19 @@ def _atm_live_minutes(stop: dict[str, Any], line_labels: list[str]) -> dict[str,
         url = _atm_link(float(lat), float(lon))
 
     stop_code = str(stop.get("atm_stop_code") or "").strip()
+
+    snapshot = _atm_realtime_snapshot(
+        stop_code,
+        line_labels,
+    )
+
+    if snapshot is not None:
+        return {
+            "status": snapshot.get("status") or "not_available",
+            "arrivals": snapshot.get("arrivals") or {},
+            "url": url,
+            "source": snapshot.get("source") or "atm_live_mcp",
+        }
 
     if stop_code:
         for attempt in range(3):
@@ -2458,6 +2612,18 @@ def _rank_atm_route_candidates(
         summary = official_trip.get("summary") or {}
         eta = summary.get("eta_seconds")
 
+        if eta is None:
+            duration = summary.get("duration")
+            try:
+                duration_minutes = float(
+                    str(duration).strip().replace(",", ".")
+                )
+            except (TypeError, ValueError):
+                duration_minutes = -1.0
+
+            if duration_minutes >= 0:
+                eta = int(round(duration_minutes * 60))
+
         has_transit = (
             _official_trip_has_transit(official_trip)
             or bool(summary.get("lines"))
@@ -2649,6 +2815,49 @@ def _local_atm_realtime_route(
         if not stop_id or stop_id in queried_stop_ids:
             return 0
 
+        snapshot = _atm_realtime_snapshot(stop_id)
+
+        if snapshot is not None:
+            observed_at = time.time()
+            added = 0
+
+            for row in snapshot.get("observations") or []:
+                if not isinstance(row, dict):
+                    continue
+
+                line = str(
+                    row.get("line") or ""
+                ).strip()
+
+                direction = str(
+                    row.get("direction") or ""
+                ).strip()
+
+                wait_seconds = _atm_wait_seconds(
+                    row.get("wait")
+                )
+
+                if (
+                    not line
+                    or direction not in {"0", "1"}
+                    or wait_seconds is None
+                ):
+                    continue
+
+                observations.append({
+                    "stop_id": stop_id,
+                    "line": line,
+                    "direction": direction,
+                    "wait_seconds": wait_seconds,
+                    "observed_at": observed_at,
+                })
+                added += 1
+
+            queried_stop_ids.add(stop_id)
+            return added
+
+        # Legacy diretto solo se nessun realtime provider MCP
+        # è stato iniettato.
         path = (
             "tpl/stops/"
             + urllib.parse.quote(stop_id)
@@ -3406,20 +3615,22 @@ def _build_plan_impl(lat: float, lon: float, destination_name: str) -> dict[str,
     }
 
 
-def build_plan(lat: float, lon: float, destination_name: str) -> dict[str, Any]:
+def build_plan(lat: float, lon: float, destination_name: str, realtime_provider: Any = None) -> dict[str, Any]:
+    token = _ATM_REALTIME_PROVIDER.set(realtime_provider)
     helper_opened = _atm_browser_helper("open", timeout_s=10.0)
     try:
         return _build_plan_impl(lat, lon, destination_name)
     finally:
+        _ATM_REALTIME_PROVIDER.reset(token)
         if helper_opened and ATM_BROWSER_CLOSE_AFTER:
             _atm_browser_helper("close", timeout_s=8.0)
 
 
-def build_named_plan(origin_name: str, destination_name: str) -> dict[str, Any]:
+def build_named_plan(origin_name: str, destination_name: str, realtime_provider: Any = None) -> dict[str, Any]:
     origin = _resolve_destination(origin_name)
     if not origin:
         raise HTTPException(status_code=404, detail="origin_not_found")
-    plan = build_plan(float(origin["lat"]), float(origin["lon"]), destination_name)
+    plan = build_plan(float(origin["lat"]), float(origin["lon"]), destination_name, realtime_provider)
     plan["origin_label"] = origin.get("label") or origin.get("name")
     plan["origin_saved_name"] = origin.get("name")
     return plan

@@ -132,7 +132,7 @@ def _render(payload: Mapping[str, Any]) -> str:
 class ATMMCPReadOnly(MeteoMCPReadOnly):
     def __init__(self, context: Mapping[str, Any] | None = None) -> None:
         super().__init__(context)
-        self.socket_timeout_s = 130.0
+        self.socket_timeout_s = 8.0
         self.socket_path = os.getenv(
             "RALF_ATM_MCP_SOCKET",
             "/run/ralf-atm-mcp/mcp.sock",
@@ -140,20 +140,8 @@ class ATMMCPReadOnly(MeteoMCPReadOnly):
 
     def read(self, request: str) -> Mapping[str, Any]:
         explicit = _named_route(request)
-
-        tool: str
-        arguments: dict[str, Any]
-        source: str
-
-        if explicit is not None:
-            origin, destination = explicit
-            tool = "atm_route_named"
-            arguments = {
-                "origin": origin,
-                "destination": destination,
-            }
-            source = "named_origin"
-        else:
+        source = "named_origin" if explicit else "telegram_gps"
+        if explicit is None:
             destination = _destination(request)
 
             if not destination:
@@ -198,14 +186,113 @@ class ATMMCPReadOnly(MeteoMCPReadOnly):
                         "location_source": None,
                     }
 
-            tool = "atm_route"
-            arguments = {
-                **location,
-                "destination": destination,
+        try:
+            from openshell_backend import atm_telegram
+
+            class _Realtime:
+                def __init__(inner) -> None:
+                    inner._cache: dict[tuple[str, tuple[str, ...] | None], Mapping[str, Any]] = {}
+
+                def snapshot(
+                    inner,
+                    stop_code: str,
+                    lines: list[str] | None = None,
+                ) -> Mapping[str, Any]:
+                    key = (
+                        str(stop_code),
+                        tuple(lines) if lines is not None else None,
+                    )
+
+                    cached = inner._cache.get(key)
+                    if cached is not None:
+                        return cached
+
+                    arguments: dict[str, Any] = {
+                        "stop_code": str(stop_code),
+                    }
+
+                    if lines is not None:
+                        arguments["lines"] = list(lines)
+
+                    try:
+                        response = self._call(
+                            "atm_realtime_waits",
+                            arguments,
+                        )
+                    except Exception:
+                        response = {
+                            "ok": False,
+                            "status": "not_available",
+                            "stop_code": str(stop_code),
+                            "arrivals": {},
+                            "observations": [],
+                            "source": "atm_mcp_unavailable",
+                        }
+
+                    inner._cache[key] = response
+                    return response
+
+                def waits(
+                    inner,
+                    stop_code: str,
+                    lines: list[str],
+                ) -> Mapping[str, str]:
+                    response = inner.snapshot(stop_code, lines)
+
+                    if not response.get("ok"):
+                        return {}
+
+                    arrivals = response.get("arrivals") or {}
+
+                    if not isinstance(arrivals, Mapping):
+                        return {}
+
+                    return {
+                        str(line): str(wait)
+                        for line, wait in arrivals.items()
+                    }
+
+            if explicit is not None:
+                payload = atm_telegram.build_named_plan(
+                    explicit[0],
+                    explicit[1],
+                    _Realtime(),
+                )
+            else:
+                payload = atm_telegram.build_plan(
+                    location["lat"],
+                    location["lon"],
+                    destination,
+                    _Realtime(),
+                )
+
+            payload = dict(payload)
+
+            route_mode = str(payload.get("route_mode") or "").strip()
+            plan_ok = bool(route_mode) and route_mode not in {
+                "official_atm_lookup_failed",
             }
 
-        try:
-            payload = self._call(tool, arguments)
+            if plan_ok:
+                payload["reply"] = atm_telegram.render_reply(payload)
+
+            payload["ok"] = plan_ok
+
+            # Il planner usa datetime internamente per ranking/ETA.
+            # L'envelope Unified deve invece essere JSON serializzabile.
+            payload = json.loads(
+                json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    default=lambda value: (
+                        value.isoformat()
+                        if hasattr(value, "isoformat")
+                        else str(value)
+                    ),
+                )
+            )
+
+            tool = "atm_realtime_waits"
         except (
             OSError,
             RuntimeError,
@@ -217,7 +304,7 @@ class ATMMCPReadOnly(MeteoMCPReadOnly):
                 "ok": False,
                 "status": "CONNECTOR_UNAVAILABLE",
                 "response": f"ATM MCP non disponibile: {type(exc).__name__}.",
-                "tool": tool,
+                "tool": "atm_realtime_waits",
                 "payload": {},
                 "read_operations": [],
                 "location_source": source,
@@ -229,9 +316,9 @@ class ATMMCPReadOnly(MeteoMCPReadOnly):
             "ok": ok,
             "status": str(payload.get("status") or ("OK" if ok else "ERROR")),
             "response": _render(payload) if ok else "Percorso ATM non disponibile.",
-            "tool": tool,
+            "tool": "atm_realtime_waits",
             "payload": payload,
-            "read_operations": [tool] if ok else [],
+            "read_operations": ["atm_realtime_waits"] if ok else [],
             "location_source": source,
         }
 

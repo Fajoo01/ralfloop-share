@@ -48,6 +48,6 @@ def test_named_route_strips_transport_qualifier(
 
 
 
-def test_atm_adapter_uses_long_read_timeout() -> None:
+def test_atm_adapter_uses_bounded_realtime_timeout() -> None:
     adapter = ATMMCPReadOnly({})
-    assert adapter.socket_timeout_s == 130.0
+    assert adapter.socket_timeout_s == 8.0

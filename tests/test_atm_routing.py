@@ -2557,3 +2557,38 @@ def test_local_atm_realtime_can_use_subway_without_surface_live(
 
 
 # LOCAL_ATM_SUBWAY_GTFS_COMPETITION_TEST_END
+
+
+
+def test_route_ranking_official_uses_duration_when_eta_missing():
+    official = {
+        "raw": {
+            "TotalDuration": 61,
+        },
+        "summary": {
+            "duration": "61",
+            "lines": ["M3", "51"],
+            "first_line": "M3",
+            "eta_seconds": None,
+        },
+    }
+
+    transfer = {
+        "first_line": "12",
+        "second_line": "M5",
+        "eta_seconds": 20768,
+    }
+
+    ranked = atm._rank_atm_route_candidates(
+        official,
+        [transfer],
+    )
+
+    assert len(ranked) == 2
+
+    assert ranked[0]["kind"] == "official_atm_trip"
+    assert ranked[0]["eta_seconds"] == 61 * 60
+    assert ranked[0]["option"] is official
+
+    assert ranked[1]["kind"] == "one_transfer"
+    assert ranked[1]["eta_seconds"] == 20768
