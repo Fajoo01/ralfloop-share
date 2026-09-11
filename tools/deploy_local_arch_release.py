@@ -171,11 +171,20 @@ def functiongemma_endpoint_check() -> bool:
     """Semantic port gate: free in local mode, proxy-owned in distributed mode."""
     if os.environ.get("RALF_FUNCTIONGEMMA_PROXY_EXPECTED") != "1":
         return port_free(19104)
-    if subprocess.run(
+    if os.geteuid() != 0 and subprocess.run(
         ["systemctl", "--user", "is-active", "--quiet", "ralf-functiongemma-proxy.service"],
         check=False,
     ).returncode != 0:
         return False
+    if os.geteuid() == 0:
+        listeners = subprocess.run(
+            ["ss", "-ltnp"], check=False, text=True, capture_output=True,
+        ).stdout
+        if not any(
+            "127.0.0.1:19104" in line and 'users:(("socat"' in line
+            for line in listeners.splitlines()
+        ):
+            return False
     try:
         with urlopen("http://127.0.0.1:19104/health", timeout=2) as response:
             return response.status == 200
