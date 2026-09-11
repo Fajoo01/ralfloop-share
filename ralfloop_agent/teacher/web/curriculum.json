@@ -1,0 +1,18 @@
+{
+  "version": "2026.09.11.1",
+  "coverage": "Original pilot sequences; grade placement is editorial, not a complete national programme.",
+  "school_levels": {"primary": [1,2,3,4,5], "middle": [1,2,3], "upper": [1,2,3,4,5]},
+  "school_tracks": ["liceo", "tecnico", "professionale"],
+  "subjects": ["matematica", "italiano", "inglese", "storia", "geografia", "scienze", "fisica", "chimica"],
+  "sources": [
+    {"id":"first-cycle-2012", "url":"https://www.mim.gov.it/documents/20182/51310/DM+254_2012.pdf", "note":"Intermediate cohorts continue until completion; original topic placement requires educator review."},
+    {"id":"first-cycle-transition", "url":"https://www.gazzettaufficiale.it/atto/serie_generale/caricaArticoloDefault/originario?atto.codiceRedazionale=26G00021&atto.dataPubblicazioneGazzetta=2026-01-27&atto.tipoProvvedimento=DECRETO", "note":"New indications start with first primary/middle classes in 2026/27."},
+    {"id":"upper-reference", "url":"https://www.normattiva.it/atto/caricaDettaglioAtto?atto.codiceRedazionale=010G0232&atto.dataPubblicazioneGazzetta=2010-12-14&currentPage=1", "note":"Licei reference; technical/professional tracks require separate editorial validation."}
+  ],
+  "topics": [
+    {"id":"equal_parts", "title":"Parti uguali", "subject":"matematica", "domain":"numeri", "school_levels":{"primary":[3,4,5],"middle":[1,2,3]}, "school_tracks":[], "subtopics":["unità", "partizione"], "prerequisites":[], "learning_objectives":["Riconoscere parti uguali di un intero"], "expected_competencies":["Collegare una parte alla sua unità"], "difficulty":1, "suggested_activity_types":["multiple_choice","true_false","guided_exercise"], "keywords":["parti", "intero"], "source":"first-cycle-2012"},
+    {"id":"fractions", "title":"Frazioni equivalenti", "subject":"matematica", "domain":"numeri", "school_levels":{"primary":[4,5],"middle":[1,2,3]}, "school_tracks":[], "subtopics":["rappresentazione", "equivalenza", "confronto"], "prerequisites":["equal_parts"], "learning_objectives":["Riconoscere frazioni equivalenti usando rappresentazioni e calcolo"], "expected_competencies":["Spiegare perché due frazioni rappresentano la stessa quantità"], "difficulty":2, "suggested_activity_types":["simulation","matching","guided_exercise","free_answer","multiple_choice","flashcards","ordering"], "keywords":["frazione", "frazioni", "numeratore", "denominatore"], "source":"first-cycle-2012"},
+    {"id":"motion", "title":"Velocità e distanza", "subject":"fisica", "domain":"moto", "school_levels":{"upper":[1,2,3,4,5]}, "school_tracks":["liceo","tecnico","professionale"], "subtopics":["moto uniforme"], "prerequisites":[], "learning_objectives":["Prevedere la distanza nel moto a velocità costante"], "expected_competencies":["Usare distanza = velocità × tempo con unità coerenti"], "difficulty":2, "suggested_activity_types":["simulation","free_answer","multiple_choice"], "keywords":["velocità", "distanza", "moto"], "source":"upper-reference"},
+    {"id":"water", "title":"Gli stati dell'acqua", "subject":"scienze", "domain":"materia", "school_levels":{"primary":[1,2,3,4,5],"middle":[1,2,3]}, "school_tracks":[], "subtopics":["solido", "liquido", "gas"], "prerequisites":[], "learning_objectives":["Distinguere gli stati fisici dell'acqua"], "expected_competencies":["Associare ghiaccio e acqua ai rispettivi stati"], "difficulty":1, "suggested_activity_types":["matching","multiple_choice","grouping","flashcards"], "keywords":["acqua", "ghiaccio", "vapore"], "source":"first-cycle-2012"}
+  ]
+}
