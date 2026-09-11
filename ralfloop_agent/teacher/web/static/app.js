@@ -1,4 +1,11 @@
 // All text, including model and material output, uses textContent. No HTML evaluation.
+import {BottazziAvatarController} from './avatar_controller.js';
+const avatarImage=document.querySelector('.brand img');
+const avatar=new BottazziAvatarController({onChange:controller=>{
+  if(!avatarImage)return;
+  avatarImage.dataset.state=controller.state;
+  avatarImage.style.transform=`scaleY(${1+controller.mouth_level*.06})`;
+}});
 const main = document.querySelector('#main');
 const notice = document.querySelector('#notice');
 let home, activity;
@@ -133,12 +140,13 @@ async function audioPage(){
     const text=el('p',asset.tracks[asset.chapter]?.text||'');let position=asset.position||0;
     select.onchange=()=>{position=0;text.textContent=asset.tracks[Number(select.value)].text;};
     const save=()=>api('/audio/'+asset.id+'/position',{chapter:Number(select.value),position:Number(position)});
-    const play=()=>{if(!('speechSynthesis' in window)||!speechSynthesis.getVoices().length)throw Error('Voce non disponibile sul dispositivo. Il testo è pronto; serve un provider audio.');speechSynthesis.cancel();const track=asset.tracks[Number(select.value)];const offset=Math.min(position,track.text.length);const utterance=new SpeechSynthesisUtterance(track.text.slice(offset));utterance.lang='it-IT';utterance.rate=Number(speed.value);utterance.onboundary=e=>{position=offset+e.charIndex;};utterance.onend=()=>{position=0;save().catch(showError);};speechSynthesis.speak(utterance);};
+    const play=()=>{if(!('speechSynthesis' in window)||!speechSynthesis.getVoices().length)throw Error('Voce non disponibile sul dispositivo. Il testo è pronto; serve un provider audio.');speechSynthesis.cancel();avatar.reset();const track=asset.tracks[Number(select.value)];const offset=Math.min(position,track.text.length);const utterance=new SpeechSynthesisUtterance(track.text.slice(offset));avatar.bindSpeech(utterance);utterance.lang='it-IT';utterance.rate=Number(speed.value);utterance.onboundary=e=>{position=offset+e.charIndex;};utterance.onend=()=>{position=0;save().catch(showError);};speechSynthesis.speak(utterance);};
     add(card,select,speed,text,button('Riproduci',play),button('Pausa',async()=>{window.speechSynthesis?.pause();await save();},true),button('Riprendi',()=>{if(window.speechSynthesis?.paused)speechSynthesis.resume();else play();},true),el('p','Voce browser opzionale. Nessun file audio generato dal server.',{class:'muted'}));main.append(card);
   }
 }
 async function render(){
   window.speechSynthesis?.cancel();
+  avatar.reset();
   notice.textContent='';main.replaceChildren(el('p','Un momento…'));const path=location.pathname;
   document.querySelectorAll('nav a').forEach(a=>{if(a.getAttribute('href')===path)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});
   if(path==='/login'){main.replaceChildren();login();return;}
