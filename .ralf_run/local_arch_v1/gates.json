@@ -153,6 +153,7 @@
   "enough_swap": true,
   "full_suite_clean": false,
   "functiongemma_real": true,
+  "functiongemma_endpoint": true,
   "manifest": "pending_release_build",
   "new_failures": 0,
   "no_host_candidate_execution": true,
