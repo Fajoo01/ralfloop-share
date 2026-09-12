@@ -27,3 +27,48 @@ export class BottazziAvatarController {
   }
   reset() { this.stop();this.state='idle'; if(this.enabled)this.onChange(this); }
 }
+
+export function installBottazziAvatarSurface() {
+  if (typeof document === 'undefined') return null;
+  const surface=document.querySelector('#teacher-avatar');
+  const face=surface?.querySelector('img');
+  const status=document.querySelector('#teacher-avatar-status');
+  const source=document.querySelector('.brand img');
+  if(!surface || !face || !status || !source) return null;
+  const labels={idle:'Pronto',listening:'Ti ascolto',thinking:'Sto pensando…',speaking:'Ti sto parlando',success:'Bene!',error:'Riproviamo'};
+  const apply=(state,mouthLevel=0)=>{
+    const selected=labels[state]?state:'idle';
+    surface.dataset.state=selected;
+    status.textContent=labels[selected];
+    if(selected==='speaking')face.style.transform=`scaleY(${1+Math.max(0,Math.min(1,Number(mouthLevel)||0))*.06})`;
+    else face.style.transform='scaleY(1)';
+  };
+  const sync=()=>{
+    const state=source.dataset.state||'idle';
+    const match=/scaleY\(([^)]+)\)/.exec(source.style.transform||'');
+    const scale=match?Number(match[1]):1;
+    const mouth=Math.max(0,(scale-1)/.06);
+    apply(state,mouth);
+  };
+  const observer=new MutationObserver(sync);
+  observer.observe(source,{attributes:true,attributeFilter:['data-state','style']});
+  sync();
+
+  const marker='__ralfTeacherAvatarFetchWrapped';
+  if(typeof globalThis.fetch==='function' && !globalThis[marker]){
+    const originalFetch=globalThis.fetch.bind(globalThis);
+    let pending=0;
+    globalThis.fetch=async (...args)=>{
+      const input=args[0];
+      const url=typeof input==='string'?input:(input?.url||'');
+      const apiCall=url.startsWith('/api');
+      if(apiCall){pending+=1;if((source.dataset.state||'idle')==='idle')apply('thinking');}
+      try{return await originalFetch(...args);}
+      finally{if(apiCall){pending=Math.max(0,pending-1);if(pending===0&&surface.dataset.state==='thinking')sync();}}
+    };
+    globalThis[marker]=true;
+  }
+  return ()=>observer.disconnect();
+}
+
+if(typeof document!=='undefined')queueMicrotask(()=>installBottazziAvatarSurface());
