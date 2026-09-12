@@ -19,6 +19,46 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.build_ralfloop_production_release import build_release, publish_current
 
 
+def _read_env_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not path.exists():
+        return values
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        name = name.strip()
+        if name:
+            values[name] = value.strip()
+    return values
+
+
+def _ensure_env_value(path: Path, name: str, value: str) -> None:
+    """Append a non-secret default without replacing operator configuration."""
+    if _read_env_file(path).get(name):
+        return
+    if "\n" in value or "\r" in value:
+        raise SystemExit("invalid_teacher_environment_value")
+    existing = path.read_text() if path.exists() else ""
+    prefix = "" if not existing or existing.endswith("\n") else "\n"
+    with path.open("a") as stream:
+        stream.write(f"{prefix}{name}={value}\n")
+
+
+def _voice_diagnostic(values: dict[str, str], release: Path) -> dict:
+    required = ("TEACHER_FISH_URL", "TEACHER_FISH_API_KEY", "TEACHER_FISH_PYTHON")
+    missing = [name for name in required if not values.get(name, "").strip()]
+    if not (release / "scripts/ralf_teacher_fish_client.py").is_file():
+        missing.append("TEACHER_FISH_HELPER")
+    return {
+        "provider": "fish",
+        "voice": "peppone",
+        "configured": not missing,
+        "missing": missing,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--install", action="store_true", help="Start only the user's loopback web service")
@@ -48,18 +88,19 @@ def main():
     config = Path.home() / ".config/ralf-teacher-web.env"
     config.parent.mkdir(parents=True,exist_ok=True)
     db = Path.home() / ".local/state/ralf-teacher-web/student.sqlite3"
-    values = {}
-    if config.exists():
-        # Do not back up a guessed path if the operator has customized the environment.
-        values = dict(line.split("=",1) for line in config.read_text().splitlines() if line and not line.startswith("#"))
-        db = Path(values["TEACHER_WEB_DB"])
-    else:
+    if not config.exists():
         config.write_text(f"TEACHER_WEB_DB={db}\nTEACHER_WEB_ORIGIN=http://127.0.0.1:19139\n")
+    # The installer is already run with the approved Teacher virtualenv. Reuse
+    # that interpreter for the bounded Fish helper without storing any secret.
+    _ensure_env_value(config, "TEACHER_FISH_PYTHON", sys.executable)
     config.chmod(0o600)
+    values = _read_env_file(config)
+    db = Path(values.get("TEACHER_WEB_DB", str(db)))
     origin = values.get("TEACHER_WEB_ORIGIN", "http://127.0.0.1:19139")
     health_host = urllib.parse.urlsplit(origin).netloc
     if not health_host:
         raise SystemExit("invalid_teacher_web_origin")
+    voice = _voice_diagnostic(values, release)
     if db.exists():
         # SQLite backup API preserves WAL data; no destructive migrations.
         with sqlite3.connect(db) as source, sqlite3.connect(str(db) + f".backup-{time.time_ns()}") as backup:
@@ -92,7 +133,7 @@ def main():
         else:
             subprocess.run(["systemctl","--user","disable","--now","ralf-teacher-web.service"],check=False)
         raise
-    print(json.dumps({"status":"healthy","release":str(release),"previous":previous,"health":"http://127.0.0.1:19139/health"}))
+    print(json.dumps({"status":"healthy","release":str(release),"previous":previous,"health":"http://127.0.0.1:19139/health","voice":voice}))
 
 
 if __name__ == "__main__": main()
