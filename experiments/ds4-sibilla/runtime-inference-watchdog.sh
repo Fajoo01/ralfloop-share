@@ -13,6 +13,7 @@ WRITEBACK_ABORT_KB="${WRITEBACK_ABORT_KB:-65536}"
 WATCH_INTERVAL="${WATCH_INTERVAL:-0.25}"
 POST_KILL_SECONDS="${POST_KILL_SECONDS:-12}"
 REQ_TIMEOUT="${REQ_TIMEOUT:-90}"
+MAX_TOKENS="${MAX_TOKENS:-1}"
 
 BIN="$PORT_DIR/ds4-server"
 LOG="$OUT/server.log"
@@ -21,6 +22,17 @@ RESP="$OUT/response.json"
 CURLERR="$OUT/curl.stderr"
 PIDFILE="$OUT/server.pid"
 LOCKFILE="$OUT/ds4-inference-watchdog.lock"
+METRICS="$OUT/metrics.txt"
+
+case "$MAX_TOKENS" in
+  1|2|3|4) ;;
+  *) echo "invalid_MAX_TOKENS: $MAX_TOKENS (expected 1..4)" >&2; exit 1 ;;
+esac
+if [[ "$MAX_TOKENS" -eq 1 ]]; then
+  REQUEST_PROMPT='Reply with one word: OK'
+else
+  REQUEST_PROMPT='Reply with exactly two words: OK GO'
+fi
 
 sudo -u "$OWNER" -H mkdir -p "$OUT"
 : | sudo -u "$OWNER" -H tee "$LOG" >/dev/null
@@ -164,7 +176,7 @@ echo "pre_inference_dirty_kb=$PRE_DIRTY"
 echo "pre_inference_writeback_kb=$PRE_WRITEBACK"
 echo "pre_inference_mpage=$PRE_MPAGE"
 
-printf '%s\n' '{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"Reply with one word: OK"}],"stream":false,"think":false,"max_tokens":1,"temperature":0}' | \
+printf '%s\n' "{\"model\":\"deepseek-v4-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"${REQUEST_PROMPT}\"}],\"stream\":false,\"think\":false,\"max_tokens\":${MAX_TOKENS},\"temperature\":0}" | \
   sudo -u "$OWNER" -H tee "$REQ" >/dev/null
 
 set +e
@@ -275,6 +287,12 @@ echo "final_mpage=$FINAL_MPAGE"
 echo '=== LOW-VRAM / INFERENCE LOG ==='
 grep -E 'low-VRAM|persistent cache|stage|SSD streaming|skipping file-backed|chat ctx=|decoding|t/s|memory:|CUDA' "$LOG" | tail -n 180 || true
 
+grep -E \
+  'CUDA low-VRAM stage summary|CUDA selected-expert upload summary|CUDA persistent routed-expert cache summary|chat ctx=.*(prompt done|decoding|finish=)' \
+  "$LOG" > "$METRICS" || true
+echo '=== AUDIT METRICS ==='
+cat "$METRICS"
+
 if [[ "$CURL_RC" -ne 0 ]]; then
   echo "INFERENCE_WATCHDOG_REQUEST_FAILED: curl_rc=$CURL_RC" >&2
   exit 7
@@ -288,4 +306,4 @@ if [[ "$FINAL_MODEL_STAT" != "$BASE_MODEL_STAT" ]]; then
   exit 9
 fi
 
-echo 'INFERENCE_WATCHDOG_OK: single-token inference completed; no EXT4 mpage warning; model metadata unchanged; production untouched; AgentCPM restored on cleanup'
+echo "INFERENCE_WATCHDOG_OK: ${MAX_TOKENS}-token inference completed; no EXT4 mpage warning; model metadata unchanged; production untouched; AgentCPM restored on cleanup"
