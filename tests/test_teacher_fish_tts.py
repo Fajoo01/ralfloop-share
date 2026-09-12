@@ -38,6 +38,34 @@ def test_fish_disabled_reports_only_missing_configuration_names(tmp_path, caplog
     assert "https://fish.internal.example" not in logged
 
 
+def test_loopback_fish_does_not_require_api_key(tmp_path):
+    helper = tmp_path / "helper.py"
+    helper.write_text("pass\n")
+    cache = FishTTSCache(
+        base_url="http://127.0.0.1:19195",
+        api_key="",
+        cache_dir=tmp_path / "cache",
+        python=sys.executable,
+        helper=helper,
+    )
+    assert cache.missing_configuration() == ()
+    assert cache.enabled
+
+
+def test_non_loopback_fish_without_api_key_is_disabled(tmp_path):
+    helper = tmp_path / "helper.py"
+    helper.write_text("pass\n")
+    cache = FishTTSCache(
+        base_url="http://10.0.0.5:19195",
+        api_key="",
+        cache_dir=tmp_path / "cache",
+        python=sys.executable,
+        helper=helper,
+    )
+    assert cache.missing_configuration() == ("TEACHER_FISH_API_KEY",)
+    assert not cache.enabled
+
+
 def test_fish_missing_helper_is_explicit_without_path_leak(tmp_path, caplog):
     missing = tmp_path / "private-helper-location.py"
     caplog.set_level(logging.WARNING, logger="teacher.web.fish_tts")
@@ -66,7 +94,7 @@ def test_fish_cache_is_bounded_async_and_deterministic(tmp_path):
     )
     cache = FishTTSCache(
         base_url="http://127.0.0.1:1",
-        api_key="secret-for-test",
+        api_key="",
         cache_dir=tmp_path / "cache",
         python=sys.executable,
         helper=helper,
@@ -94,7 +122,7 @@ def test_failed_fish_generation_is_not_requeued_in_a_tight_loop(tmp_path):
     helper.write_text("raise SystemExit(7)\n")
     cache = FishTTSCache(
         base_url="http://127.0.0.1:1",
-        api_key="secret-for-test",
+        api_key="",
         cache_dir=tmp_path / "cache",
         python=sys.executable,
         helper=helper,
@@ -120,5 +148,6 @@ def test_fish_helper_has_no_user_selectable_voice_or_text_argv():
     assert 'VOICE_ID = "peppone"' in source
     assert 'add_argument("--text"' not in source
     assert 'add_argument("--reference' not in source
+    assert '"latency"' not in source
     assert "TEACHER_FISH_API_KEY" in source
     assert "print(" not in source
