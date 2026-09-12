@@ -37,16 +37,33 @@ class FishTTSCache:
         self.cache_dir = Path(cache_dir)
         self.python = python.strip()
         self.helper = Path(helper)
-        self.enabled = bool(self.base_url and self.api_key and self.python and self.helper.is_file())
         self.failure_backoff_seconds = max(1.0, float(failure_backoff_seconds))
         self._pending: set[str] = set()
         self._failed_until: dict[str, float] = {}
         self._lock = threading.Lock()
         self._queue: queue.Queue[tuple[str, str]] = queue.Queue(maxsize=max(1, queue_size))
+        missing = self.missing_configuration()
+        self.enabled = not missing
         if self.enabled:
             self.cache_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
             os.chmod(self.cache_dir, 0o700)
             threading.Thread(target=self._worker, name="teacher-fish-tts", daemon=True).start()
+            log.info("fish_tts_enabled voice=%s", VOICE_ID)
+        else:
+            # Names only: never log URL, API key, paths containing feedback, or text.
+            log.warning("fish_tts_disabled missing=%s", ",".join(missing))
+
+    def missing_configuration(self) -> tuple[str, ...]:
+        missing = []
+        if not self.base_url:
+            missing.append("TEACHER_FISH_URL")
+        if not self.api_key:
+            missing.append("TEACHER_FISH_API_KEY")
+        if not self.python:
+            missing.append("TEACHER_FISH_PYTHON")
+        if not self.helper.is_file():
+            missing.append("TEACHER_FISH_HELPER")
+        return tuple(missing)
 
     @classmethod
     def from_env(cls) -> "FishTTSCache":
@@ -93,7 +110,12 @@ class FishTTSCache:
 
     def prepare(self, text: str) -> dict[str, str]:
         normalized = self._normalized(text)
-        if not normalized or len(normalized) > 600 or not self.enabled:
+        if not normalized:
+            return {"status": "browser_fallback"}
+        if len(normalized) > 600:
+            log.info("fish_tts_skipped reason=text_too_long length=%d", len(normalized))
+            return {"status": "browser_fallback"}
+        if not self.enabled:
             return {"status": "browser_fallback"}
         if self.ready_path(normalized):
             return {"status": "ready"}
