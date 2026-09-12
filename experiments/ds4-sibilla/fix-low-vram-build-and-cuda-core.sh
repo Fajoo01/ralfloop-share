@@ -25,7 +25,7 @@ sudo -u "$OWNER" -H sh -c 'git -C "$1" status --short --branch > "$2/before-stat
 
 sudo -u "$OWNER" -H env PORT="$PORT" OUT="$OUT" python3 - <<'PY'
 from pathlib import Path
-import os, re, sys
+import os
 
 root = Path(os.environ['PORT'])
 out = Path(os.environ['OUT'])
@@ -42,29 +42,33 @@ def save(p, s):
     p.write_text(s)
 
 def function_span(src: str, signature: str):
-    start = src.find(signature)
-    if start < 0:
-        raise PatchError(f"function signature not found: {signature}")
-    brace = src.find('{', start)
-    if brace < 0:
-        raise PatchError(f"opening brace not found: {signature}")
-    depth = 0
-    i = brace
-    while i < len(src):
-        c = src[i]
-        if c == '{':
-            depth += 1
-        elif c == '}':
-            depth -= 1
-            if depth == 0:
-                return start, i + 1
-        i += 1
-    raise PatchError(f"unterminated function: {signature}")
+    """Return the first real function definition, skipping forward declarations."""
+    search_from = 0
+    while True:
+        start = src.find(signature, search_from)
+        if start < 0:
+            raise PatchError(f"function definition not found: {signature}")
+        brace = src.find('{', start)
+        semi = src.find(';', start)
+        if brace >= 0 and (semi < 0 or brace < semi):
+            depth = 0
+            i = brace
+            while i < len(src):
+                c = src[i]
+                if c == '{':
+                    depth += 1
+                elif c == '}':
+                    depth -= 1
+                    if depth == 0:
+                        return start, i + 1
+                i += 1
+            raise PatchError(f"unterminated function: {signature}")
+        search_from = start + len(signature)
 
 # -------------------------------------------------------------------------
 # ds4.c: the low-VRAM flag belongs to the generic CUDA/Metal graph wrapper,
-# not to the GLM Metal-only leaf.  The partial reject application inserted it
-# in the wrong signature, which shifted every following GLM argument.
+# not to the GLM Metal-only leaf. The previous interrupted run may already
+# have performed these edits, so every operation is idempotent.
 # -------------------------------------------------------------------------
 p, s = load('ds4.c')
 
@@ -81,7 +85,6 @@ if wrong in block:
 else:
     report.append('ds4.c: GLM Metal leaf already clean')
 
-# Recompute span after the previous edit.
 sig_raw = 'static int generate_metal_graph_raw_swa('
 a, b = function_span(s, sig_raw)
 block = s[a:b]
@@ -104,16 +107,15 @@ save(p, s)
 
 # -------------------------------------------------------------------------
 # ds4_cuda.cu: port the semantic content of all three rejected CUDA hunks.
-# The upstream cache-limit function now defaults to UINT64_MAX.  In low-VRAM
-# mode we need a stable default ceiling derived once from currently free VRAM,
-# reserving both a guard and the fixed staging arena.  Explicit
-# DS4_CUDA_WEIGHT_CACHE_LIMIT_GB continues to override this policy.
+# The upstream cache-limit function defaults to UINT64_MAX. In low-VRAM mode
+# derive a stable persistent-cache ceiling once from free VRAM, reserving both
+# a guard and the fixed staging arena. Explicit DS4_CUDA_WEIGHT_CACHE_LIMIT_GB
+# continues to override this policy.
 # -------------------------------------------------------------------------
 p, s = load('ds4_cuda.cu')
 
 sig_limit = 'static uint64_t cuda_model_cache_limit_bytes(void)'
 a, b = function_span(s, sig_limit)
-old_block = s[a:b]
 
 if 'g_model_default_cache_limit_valid' not in s:
     new_block = r'''static uint64_t g_model_default_cache_limit;
@@ -192,65 +194,82 @@ static uint64_t cuda_model_cache_limit_bytes(void) {
 else:
     report.append('ds4_cuda.cu: persistent-cache ceiling already ported')
 
-# Add the two missing staging fallbacks inside cuda_model_range_ptr_from_fd.
+# Locate the real definition, not the forward declaration near the top.
 a, b = function_span(s, 'static const char *cuda_model_range_ptr_from_fd(')
 block = s[a:b]
 
-budget_old = '''    if (g_model_range_bytes > limit || bytes > limit - g_model_range_bytes) {
-        if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE")) {
-            fprintf(stderr, "ds4: CUDA direct %s %.2f MiB (cache budget %.2f GiB exhausted)\\n",
-                    what ? what : "weights",
-                    (double)bytes / 1048576.0,
-                    (double)limit / 1073741824.0);
-        }
-        return cuda_model_ptr(model_map, offset);
-    }
-'''
-budget_new = '''    if (g_model_range_bytes > limit || bytes > limit - g_model_range_bytes) {
-        if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE")) {
-            fprintf(stderr, "ds4: CUDA direct %s %.2f MiB (cache budget %.2f GiB exhausted)\\n",
-                    what ? what : "weights",
-                    (double)bytes / 1048576.0,
-                    (double)limit / 1073741824.0);
-        }
-        if (g_cuda_low_vram_stream) {
-            return cuda_low_vram_stage_range(model_map, offset, bytes, what);
-        }
-        return cuda_model_ptr(model_map, offset);
-    }
-'''
-if 'cache budget %.2f GiB exhausted' not in block:
-    raise PatchError('ds4_cuda.cu: cache-budget fallback anchor missing')
-if 'cache budget %.2f GiB exhausted' in block and budget_old in block:
-    block = block.replace(budget_old, budget_new, 1)
-    report.append('ds4_cuda.cu: staged fallback on persistent-cache budget exhaustion')
-elif budget_new in block:
-    report.append('ds4_cuda.cu: cache-budget staged fallback already present')
-else:
-    raise PatchError('ds4_cuda.cu: cache-budget block changed unexpectedly')
+budget_marker = 'return cuda_low_vram_stage_range(model_map, offset, bytes, what);'
+budget_head = 'if (g_model_range_bytes > limit || bytes > limit - g_model_range_bytes) {'
+if budget_head not in block:
+    raise PatchError('ds4_cuda.cu: cache-budget condition missing from range-ptr definition')
 
-alloc_old = '''    char *dev = cuda_model_arena_alloc(bytes, what);
-    if (!dev) {
-        if (getenv("DS4_CUDA_STRICT_WEIGHT_CACHE") != NULL) return NULL;
-        return cuda_model_ptr(model_map, offset);
-    }
-'''
-alloc_new = '''    char *dev = cuda_model_arena_alloc(bytes, what);
-    if (!dev) {
-        if (g_cuda_low_vram_stream) {
-            return cuda_low_vram_stage_range(model_map, offset, bytes, what);
-        }
-        if (getenv("DS4_CUDA_STRICT_WEIGHT_CACHE") != NULL) return NULL;
-        return cuda_model_ptr(model_map, offset);
-    }
-'''
-if alloc_old in block:
-    block = block.replace(alloc_old, alloc_new, 1)
-    report.append('ds4_cuda.cu: staged fallback on persistent arena allocation refusal')
-elif alloc_new in block:
-    report.append('ds4_cuda.cu: arena staged fallback already present')
+# Rather than matching the entire logging block, insert immediately before the
+# fallback return inside the budget-exhausted branch. This survives formatting
+# changes in the diagnostic string.
+condition_at = block.find(budget_head)
+condition_brace = block.find('{', condition_at)
+depth = 0
+condition_end = None
+for i in range(condition_brace, len(block)):
+    if block[i] == '{':
+        depth += 1
+    elif block[i] == '}':
+        depth -= 1
+        if depth == 0:
+            condition_end = i + 1
+            break
+if condition_end is None:
+    raise PatchError('ds4_cuda.cu: cache-budget branch unterminated')
+budget_branch = block[condition_at:condition_end]
+if budget_marker not in budget_branch:
+    fallback = '        return cuda_model_ptr(model_map, offset);\n'
+    if fallback not in budget_branch:
+        raise PatchError('ds4_cuda.cu: cache-budget fallback return missing')
+    budget_branch = budget_branch.replace(
+        fallback,
+        '        if (g_cuda_low_vram_stream) {\n'
+        '            return cuda_low_vram_stage_range(model_map, offset, bytes, what);\n'
+        '        }\n' + fallback,
+        1)
+    block = block[:condition_at] + budget_branch + block[condition_end:]
+    report.append('ds4_cuda.cu: staged fallback on persistent-cache budget exhaustion')
 else:
+    report.append('ds4_cuda.cu: cache-budget staged fallback already present')
+
+# Re-evaluate the allocation fallback after the previous edit.
+alloc_head = '    char *dev = cuda_model_arena_alloc(bytes, what);\n    if (!dev) {'
+alloc_at = block.find(alloc_head)
+if alloc_at < 0:
     raise PatchError('ds4_cuda.cu: arena allocation fallback anchor missing')
+alloc_brace = block.find('{', alloc_at + len('    char *dev = cuda_model_arena_alloc(bytes, what);\n    if (!dev) '))
+depth = 0
+alloc_end = None
+for i in range(alloc_brace, len(block)):
+    if block[i] == '{':
+        depth += 1
+    elif block[i] == '}':
+        depth -= 1
+        if depth == 0:
+            alloc_end = i + 1
+            break
+if alloc_end is None:
+    raise PatchError('ds4_cuda.cu: arena fallback branch unterminated')
+alloc_branch = block[alloc_at:alloc_end]
+if budget_marker not in alloc_branch:
+    insert_after = '    if (!dev) {\n'
+    if insert_after not in alloc_branch:
+        raise PatchError('ds4_cuda.cu: arena fallback insertion point missing')
+    alloc_branch = alloc_branch.replace(
+        insert_after,
+        insert_after +
+        '        if (g_cuda_low_vram_stream) {\n'
+        '            return cuda_low_vram_stage_range(model_map, offset, bytes, what);\n'
+        '        }\n',
+        1)
+    block = block[:alloc_at] + alloc_branch + block[alloc_end:]
+    report.append('ds4_cuda.cu: staged fallback on persistent arena allocation refusal')
+else:
+    report.append('ds4_cuda.cu: arena staged fallback already present')
 
 s = s[:a] + block + s[b:]
 save(p, s)
