@@ -58,7 +58,7 @@ def main() -> None:
             "authorization": f"Bearer {api_key}",
             "content-type": "application/msgpack",
         },
-        timeout=(3, 1800),
+        timeout=(3, 43200),
     )
     response.raise_for_status()
     audio = response.content
