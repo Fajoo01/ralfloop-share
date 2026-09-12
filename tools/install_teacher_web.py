@@ -11,6 +11,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 import sqlite3
 
@@ -47,6 +48,7 @@ def main():
     config = Path.home() / ".config/ralf-teacher-web.env"
     config.parent.mkdir(parents=True,exist_ok=True)
     db = Path.home() / ".local/state/ralf-teacher-web/student.sqlite3"
+    values = {}
     if config.exists():
         # Do not back up a guessed path if the operator has customized the environment.
         values = dict(line.split("=",1) for line in config.read_text().splitlines() if line and not line.startswith("#"))
@@ -54,6 +56,10 @@ def main():
     else:
         config.write_text(f"TEACHER_WEB_DB={db}\nTEACHER_WEB_ORIGIN=http://127.0.0.1:19139\n")
     config.chmod(0o600)
+    origin = values.get("TEACHER_WEB_ORIGIN", "http://127.0.0.1:19139")
+    health_host = urllib.parse.urlsplit(origin).netloc
+    if not health_host:
+        raise SystemExit("invalid_teacher_web_origin")
     if db.exists():
         # SQLite backup API preserves WAL data; no destructive migrations.
         with sqlite3.connect(db) as source, sqlite3.connect(str(db) + f".backup-{time.time_ns()}") as backup:
@@ -68,9 +74,10 @@ def main():
         subprocess.run(["systemctl","--user","daemon-reload"],check=True)
         subprocess.run(["systemctl","--user","enable","--now","ralf-teacher-web.service"],check=True)
         subprocess.run(["systemctl","--user","restart","ralf-teacher-web.service"],check=True)
+        health_request = urllib.request.Request("http://127.0.0.1:19139/health", headers={"Host": health_host})
         for attempt in range(20):
             try:
-                with urllib.request.urlopen("http://127.0.0.1:19139/health",timeout=5) as response:
+                with urllib.request.urlopen(health_request,timeout=5) as response:
                     if json.load(response) == {"status":"ok"}: break
             except Exception:
                 if attempt == 19: raise
