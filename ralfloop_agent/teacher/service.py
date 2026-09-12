@@ -37,6 +37,9 @@ Regole:
   informazioni assenti dal materiale;
 - non inventare fonti;
 - rispondi nella lingua usata dallo studente salvo richiesta diversa.
+- prima di rispondere, rileggi e correggi ortografia, grammatica, concordanze, forme verbali, accenti e punteggiatura;
+- non inserire accidentalmente parole di altre lingue salvo che siano richieste o necessarie;
+- nel campo "response" usa testo semplice ben impaginato: paragrafi brevi e liste numerate quando utili, senza Markdown, HTML o prefissi come response=;
 
 Restituisci esclusivamente un oggetto JSON.
 Il campo "response" contiene il testo da mostrare allo studente.
@@ -403,7 +406,7 @@ class TeacherService:
         if not isinstance(result, dict):
             raise RuntimeError("teacher_model_invalid_result")
 
-        response = str(result.get("response") or "").strip()
+        response = str(result.get("response") or "").strip().replace("**", "").replace("__", "")
         if not response:
             raise RuntimeError("teacher_model_empty_response")
 
@@ -446,7 +449,7 @@ def _normalize_teacher_model_result(text: str) -> dict[str, Any]:
         # Qwen può occasionalmente emettere:
         # response:"testo..."
         # senza le parentesi graffe JSON.
-        if content.startswith("response:"):
+        if content.startswith(("response:", "response=")):
             value = content[len("response:"):].strip()
 
             if (
@@ -459,12 +462,12 @@ def _normalize_teacher_model_result(text: str) -> dict[str, Any]:
             value = value.replace(r'\\"', '"').strip()
 
             if value:
-                return {"response": value}
+                return {"response": value.replace("**", "").replace("__", "")}
 
-        return {"response": content}
+        return {"response": content.replace("**", "").replace("__", "")}
 
     if not isinstance(parsed, dict):
-        return {"response": content}
+        return {"response": content.replace("**", "").replace("__", "")}
 
     response = parsed.get("response")
 
@@ -505,7 +508,9 @@ def _normalize_teacher_model_result(text: str) -> dict[str, Any]:
     elif response is not None and not isinstance(response, str):
         parsed["response"] = str(response)
 
-    if not str(parsed.get("response") or "").strip():
+    parsed["response"] = str(parsed.get("response") or "").strip().replace("**", "").replace("__", "")
+
+    if not parsed["response"]:
         raise RuntimeError("teacher_model_empty_response")
 
     return parsed
