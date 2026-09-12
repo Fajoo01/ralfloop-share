@@ -1,0 +1,23 @@
+[Unit]
+Description=Bot-tazzi Teacher Fish Speech 1.5 GPU TTS
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/ralf-teacher-voice/fish-speech-1.5
+Environment=CUDA_VISIBLE_DEVICES=0
+Environment=PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+ExecStart=%h/.local/share/ralf-teacher-voice/fish-speech-1.5/.venv/bin/python tools/api_server.py --mode tts --llama-checkpoint-path checkpoints/fish-speech-1.5 --decoder-checkpoint-path checkpoints/fish-speech-1.5/firefly-gan-vq-fsq-8x1024-21hz-generator.pth --decoder-config-name firefly_gan_vq --device cuda --half --max-text-length 600 --listen 127.0.0.1:19195 --workers 1
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+NoNewPrivileges=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX AF_INET
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+UMask=0077
+
+[Install]
+WantedBy=default.target
