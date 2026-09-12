@@ -51,8 +51,40 @@ export function installBottazziAvatarSurface() {
     const mouth=Math.max(0,(scale-1)/.06);
     apply(state,mouth);
   };
+  const decorateFeedback=feedback=>{
+    if(!(feedback instanceof HTMLElement) || feedback.dataset.teacherAvatarDecorated==='1')return;
+    const text=feedback.textContent||'';
+    const surface=document.createElement('span');
+    surface.className='teacher-avatar-inline';
+    surface.dataset.teacherAvatarSurface='1';
+    surface.dataset.state=source.dataset.state||'idle';
+    surface.setAttribute('aria-hidden','true');
+    const face=document.createElement('img');
+    face.src='/assets/bot-tazzi.jpeg';
+    face.alt='';
+    face.width=84;
+    face.height=84;
+    const copy=document.createElement('span');
+    copy.className='teacher-feedback-text';
+    copy.textContent=text;
+    surface.append(face);
+    feedback.dataset.teacherAvatarDecorated='1';
+    feedback.replaceChildren(surface,copy);
+    sync();
+  };
   const observer=new MutationObserver(sync);
   observer.observe(source,{attributes:true,attributeFilter:['data-state','style']});
+  const feedbackObserver=new MutationObserver(records=>{
+    for(const record of records){
+      for(const node of record.addedNodes){
+        if(!(node instanceof HTMLElement))continue;
+        if(node.matches('p.feedback'))decorateFeedback(node);
+        node.querySelectorAll?.('p.feedback').forEach(decorateFeedback);
+      }
+    }
+  });
+  feedbackObserver.observe(document.body,{childList:true,subtree:true});
+  document.querySelectorAll('p.feedback').forEach(decorateFeedback);
   sync();
 
   const marker='__ralfTeacherAvatarFetchWrapped';
@@ -69,7 +101,7 @@ export function installBottazziAvatarSurface() {
     };
     globalThis[marker]=true;
   }
-  return ()=>observer.disconnect();
+  return ()=>{observer.disconnect();feedbackObserver.disconnect();};
 }
 
 if(typeof document!=='undefined')queueMicrotask(()=>installBottazziAvatarSurface());
