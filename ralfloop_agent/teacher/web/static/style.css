@@ -7,5 +7,11 @@
 .teacher-avatar[data-state=thinking] img{filter:saturate(.7);animation:teacher-thinking .9s ease-in-out infinite alternate}
 .teacher-avatar[data-state=listening]{border-color:#d9ac4b}
 .teacher-avatar[data-state=speaking]{box-shadow:inset 0 -4px #923326}
+.feedback[data-teacher-avatar-decorated="1"]{display:grid;grid-template-columns:96px minmax(0,1fr);align-items:start;gap:1rem;max-width:none}
+.teacher-avatar-inline{display:flex;align-items:center;justify-content:center;align-self:start}
+.teacher-avatar-inline img{display:block;width:84px;height:84px;object-fit:cover;border-radius:50%;border:3px solid #292b22;transform-origin:center bottom}
+.teacher-avatar-inline[data-state=thinking] img{filter:saturate(.7);animation:teacher-thinking .9s ease-in-out infinite alternate}
+.teacher-avatar-inline[data-state=speaking] img{box-shadow:0 0 0 4px rgba(146,51,38,.18)}
+.teacher-feedback-text{display:block;min-width:0;padding-top:.2rem}
 @keyframes teacher-thinking{from{transform:translateY(0)}to{transform:translateY(-3px)}}
-@media(max-width:600px){.teacher-avatar{margin:.5rem .8rem 0}.teacher-avatar img{width:88px;height:88px}}
+@media(max-width:600px){.teacher-avatar{margin:.5rem .8rem 0}.teacher-avatar img{width:88px;height:88px}.feedback[data-teacher-avatar-decorated="1"]{grid-template-columns:68px minmax(0,1fr);gap:.7rem}.teacher-avatar-inline img{width:60px;height:60px}}
