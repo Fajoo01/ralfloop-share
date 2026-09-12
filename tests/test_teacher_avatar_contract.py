@@ -20,3 +20,17 @@ const disabled=new C({avatar_enabled:false,onChange:()=>assert.fail()});disabled
 const reduced=new C({reduced_motion:true});const before=scheduled;reduced.setState('speaking');reduced.setMouthLevel(1);assert.equal(reduced.mouth_level,0);assert.equal(scheduled,before);
 '''
     subprocess.run(['node','--input-type=module','-e',script,str(source)],check=True)
+
+
+def test_visible_avatar_surface_contract():
+    root = Path('ralfloop_agent/teacher/web/static')
+    html = (root / 'index.html').read_text()
+    css = (root / 'style.css').read_text()
+    controller = (root / 'avatar_controller.js').read_text()
+    assert 'id="teacher-avatar"' in html
+    assert 'id="teacher-avatar-status"' in html
+    assert '.teacher-avatar[data-state=speaking]' in css
+    assert '.teacher-avatar[data-state=thinking]' in css
+    assert 'installBottazziAvatarSurface' in controller
+    assert "thinking:'Sto pensando…'" in controller
+    assert "speaking:'Ti sto parlando'" in controller
