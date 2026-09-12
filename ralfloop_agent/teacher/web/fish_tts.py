@@ -132,7 +132,6 @@ class FishTTSCache:
                 [self.python, str(self.helper), "--output", str(temporary)],
                 input=text,
                 text=True,
-                stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 env=env,
