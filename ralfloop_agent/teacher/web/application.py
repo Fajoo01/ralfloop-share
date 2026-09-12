@@ -8,6 +8,26 @@ from .audio import BrowserTTS, prepare_tracks
 from .learning import ActivityContent, Curriculum, ERRORS, KINDS, choose_activity, evaluate, fraction_evidence, native_content, observe
 
 
+def _teacher_text(value, limit=4000):
+    text = str(value or "").strip()
+    for _ in range(3):
+        if not text.startswith("{"):
+            break
+        try:
+            parsed = json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            break
+        if not isinstance(parsed, dict):
+            break
+        nested = parsed.get("response")
+        if nested is None:
+            nested = parsed.get("feedback")
+        if nested is None:
+            break
+        text = str(nested).strip()
+    return text.replace("**", "").replace("__", "")[:limit]
+
+
 class LearningApplication:
     def __init__(self, state, teacher, tts=None):
         self.state, self.teacher = state, teacher
@@ -135,7 +155,7 @@ class LearningApplication:
             output = self.teacher.perform(student, self.curriculum.topics[row["topic"]], "teacher.check_answer", {"exercise": prompt[:12000], "student_answer": answer if isinstance(answer, str) else json.dumps(answer), "show_solution": False})
             if type(output.get("correct")) is not bool and verified_math is None:
                 raise ConnectionError("invalid_teacher_evaluation")
-            correct, feedback = output.get("correct", False), str(output["response"])[:2000]
+            correct, feedback = output.get("correct", False), _teacher_text(output.get("response"), 2000)
             if not correct:
                 error = "conceptual"
                 for category in ERRORS:
@@ -192,7 +212,7 @@ class LearningApplication:
             name, args = "teacher.explain", {"question": content["instructions"] + " " + question}
         try:
             result = self.teacher.perform(student, entry, name, args)
-            return {"feedback": str(result["response"])[:4000], "source": "teacher"}
+            return {"feedback": _teacher_text(result.get("response"), 4000), "source": "teacher"}
         except Exception:
             return {"feedback": content["hints"][0] if content["hints"] else "Rileggi la consegna, un passaggio alla volta.", "source": "original_fallback"}
 
@@ -242,7 +262,7 @@ class LearningApplication:
         name = "teacher.summarize_material" if action == "summarize" else "teacher.explain"
         args = {"material": material["text"], "objective": entry["learning_objectives"][0]} if action == "summarize" else {"question": "Spiega solo questo estratto autorizzato, senza attribuire altro al libro: " + material["text"]}
         out = self.teacher.perform(student, entry, name, args)
-        return {"feedback": str(out["response"])[:4000], "source": "provided_material"}
+        return {"feedback": _teacher_text(out.get("response"), 4000), "source": "provided_material"}
 
     def plan(self, student, minutes):
         states = self.state.states(student["id"])
@@ -250,7 +270,7 @@ class LearningApplication:
         if not topics: raise ValueError("curriculum_coverage_pending")
         try:
             out = self.teacher.perform(student, topics[0], "teacher.study_plan", {"objective": "Ripassa questi obiettivi: " + "; ".join(t["learning_objectives"][0] for t in topics), "available_minutes": minutes})
-            explanation = str(out["response"])[:2000]
+            explanation = _teacher_text(out.get("response"), 2000)
         except Exception:
             explanation = "Inizia dagli argomenti da consolidare, poi verifica ciò che hai imparato."
         with self.state.connect() as conn:
