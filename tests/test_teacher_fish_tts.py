@@ -1,4 +1,5 @@
 from pathlib import Path
+import logging
 import sys
 import time
 
@@ -10,6 +11,49 @@ def test_fish_disabled_is_immediate_browser_fallback(tmp_path):
     assert not cache.enabled
     assert cache.prepare("Ciao") == {"status": "browser_fallback"}
     assert cache.ready_path("Ciao") is None
+
+
+def test_fish_disabled_reports_only_missing_configuration_names(tmp_path, caplog):
+    helper = tmp_path / "helper.py"
+    helper.write_text("pass\n")
+    caplog.set_level(logging.WARNING, logger="teacher.web.fish_tts")
+
+    cache = FishTTSCache(
+        base_url="https://fish.internal.example",
+        api_key="",
+        cache_dir=tmp_path / "cache",
+        python="",
+        helper=helper,
+    )
+
+    assert cache.missing_configuration() == (
+        "TEACHER_FISH_API_KEY",
+        "TEACHER_FISH_PYTHON",
+    )
+    assert not cache.enabled
+    logged = caplog.text
+    assert "fish_tts_disabled" in logged
+    assert "TEACHER_FISH_API_KEY" in logged
+    assert "TEACHER_FISH_PYTHON" in logged
+    assert "https://fish.internal.example" not in logged
+
+
+def test_fish_missing_helper_is_explicit_without_path_leak(tmp_path, caplog):
+    missing = tmp_path / "private-helper-location.py"
+    caplog.set_level(logging.WARNING, logger="teacher.web.fish_tts")
+
+    cache = FishTTSCache(
+        base_url="http://127.0.0.1:8080",
+        api_key="secret-for-test",
+        cache_dir=tmp_path / "cache",
+        python=sys.executable,
+        helper=missing,
+    )
+
+    assert cache.missing_configuration() == ("TEACHER_FISH_HELPER",)
+    assert "TEACHER_FISH_HELPER" in caplog.text
+    assert str(missing) not in caplog.text
+    assert "secret-for-test" not in caplog.text
 
 
 def test_fish_cache_is_bounded_async_and_deterministic(tmp_path):
