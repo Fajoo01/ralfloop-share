@@ -5,6 +5,7 @@ PORT_DIR="${PORT_DIR:-/home/sibilla-cumana/src/ds4-main-lowvram-port}"
 OWNER="${OWNER:-sibilla-cumana}"
 AGENT_USER="${AGENT_USER:-bandi}"
 MODEL="${MODEL:-/home/sibilla-cumana/Dati/ralfloop-models/deepseek-v4-flash-pr739/gguf/DeepSeek-V4-Flash-IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8-chat-v2-imatrix-0731.gguf}"
+MODEL_ID="${MODEL_ID:-deepseek-v4-flash}"
 TEST_PORT="${TEST_PORT:-19195}"
 PROD_PORT="${PROD_PORT:-19194}"
 OUT="${OUT:-/home/sibilla-cumana/ds4-sibilla-snapshot-20260912/upstream-porting/inference-watchdog}"
@@ -30,6 +31,10 @@ METRICS="$OUT/metrics.txt"
 case "$MAX_TOKENS" in
   1|2|3|4) ;;
   *) echo "invalid_MAX_TOKENS: $MAX_TOKENS (expected 1..4)" >&2; exit 1 ;;
+esac
+case "$MODEL_ID" in
+  deepseek-v4-flash|deepseek-v4.1-flash) ;;
+  *) echo "invalid_MODEL_ID: $MODEL_ID" >&2; exit 1 ;;
 esac
 case "$MAX_TOKENS" in
   1) REQUEST_PROMPT='Reply with one word: OK' ;;
@@ -183,7 +188,7 @@ echo "pre_inference_dirty_kb=$PRE_DIRTY"
 echo "pre_inference_writeback_kb=$PRE_WRITEBACK"
 echo "pre_inference_mpage=$PRE_MPAGE"
 
-printf '%s\n' "{\"model\":\"deepseek-v4-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"${REQUEST_PROMPT}\"}],\"stream\":false,\"think\":false,\"max_tokens\":${MAX_TOKENS},\"temperature\":0}" | \
+printf '%s\n' "{\"model\":\"${MODEL_ID}\",\"messages\":[{\"role\":\"user\",\"content\":\"${REQUEST_PROMPT}\"}],\"stream\":false,\"think\":false,\"max_tokens\":${MAX_TOKENS},\"temperature\":0}" | \
   sudo -u "$OWNER" -H tee "$REQ" >/dev/null
 
 set +e
