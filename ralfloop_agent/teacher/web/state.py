@@ -31,9 +31,10 @@ class State:
         with self.connect() as conn:
             if conn.execute("SELECT 1 FROM sqlite_master WHERE name='schema_version'").fetchone():
                 version = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
-                if version and version > 1:
+                if version and version > 2:
                     raise ValueError("unsupported_schema_version")
             conn.executescript(Path(__file__).with_name("migrations").joinpath("001.sql").read_text())
+            conn.execute("CREATE TABLE IF NOT EXISTS disabled_students(student TEXT PRIMARY KEY REFERENCES students(id))")
         os.chmod(self.path, 0o600)
 
     @contextmanager
@@ -81,7 +82,7 @@ class State:
                 if row and row["until"] > now and row["count"] >= limit:
                     raise PermissionError("login_throttled")
                 conn.execute("INSERT INTO login_limits VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET count=CASE WHEN until<=? THEN 1 ELSE count+1 END, until=CASE WHEN until<=? THEN excluded.until ELSE until END", (key, now + 300, now, now))
-            row = conn.execute("SELECT s.id,c.salt,c.digest FROM students s JOIN credentials c ON c.student=s.id WHERE membership_card_id=?", (card_key,)).fetchone()
+            row = conn.execute("SELECT s.id,c.salt,c.digest FROM students s JOIN credentials c ON c.student=s.id WHERE membership_card_id=? AND s.id NOT IN (SELECT student FROM disabled_students)", (card_key,)).fetchone()
         salt = row["salt"] if row else "00" * 16
         computed = hashlib.scrypt(credential.encode(), salt=bytes.fromhex(salt), n=16384, r=8, p=1).hex()
         if not row or not secrets.compare_digest(computed, row["digest"]):
@@ -95,7 +96,7 @@ class State:
 
     def authenticate(self, token):
         with self.connect() as conn:
-            row = conn.execute("SELECT s.* FROM students s JOIN web_sessions w ON w.student=s.id WHERE token_hash=? AND expires>?", (digest(token), self.clock())).fetchone()
+            row = conn.execute("SELECT s.* FROM students s JOIN web_sessions w ON w.student=s.id WHERE token_hash=? AND expires>? AND s.id NOT IN (SELECT student FROM disabled_students)", (digest(token), self.clock())).fetchone()
         if row is None:
             raise PermissionError("session_required")
         return dict(row)
