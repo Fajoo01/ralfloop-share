@@ -48,16 +48,23 @@ fi
 
 : | sudo -u "$OWNER" -H tee "$LOG" >/dev/null
 
+owner_pid_alive() {
+  local pid="$1"
+  sudo -u "$OWNER" -H kill -0 "$pid" 2>/dev/null
+}
+
 cleanup() {
   if [[ -f "$PIDFILE" ]]; then
     pid="$(cat "$PIDFILE" 2>/dev/null || true)"
-    if [[ -n "${pid:-}" ]] && kill -0 "$pid" 2>/dev/null; then
-      kill "$pid" 2>/dev/null || true
-      for _ in $(seq 1 20); do
-        kill -0 "$pid" 2>/dev/null || break
+    if [[ -n "${pid:-}" ]] && owner_pid_alive "$pid"; then
+      sudo -u "$OWNER" -H kill -TERM "$pid" 2>/dev/null || true
+      for _ in $(seq 1 40); do
+        owner_pid_alive "$pid" || break
         sleep 0.25
       done
-      kill -KILL "$pid" 2>/dev/null || true
+      if owner_pid_alive "$pid"; then
+        sudo -u "$OWNER" -H kill -KILL "$pid" 2>/dev/null || true
+      fi
     fi
   fi
 }
@@ -87,12 +94,12 @@ PID="$(cat "$PIDFILE")"
 echo "runtime_pid=$PID"
 
 READY=0
-for i in $(seq 1 80); do
-  if ! kill -0 "$PID" 2>/dev/null; then
-    break
-  fi
+for i in $(seq 1 240); do
   if ss -ltn | awk '{print $4}' | grep -qE "[:.]${TEST_PORT}$"; then
     READY=1
+    break
+  fi
+  if ! owner_pid_alive "$PID"; then
     break
   fi
   sleep 0.5
@@ -111,11 +118,11 @@ echo '=== GPU DURING (used MiB, free MiB) ==='
 cat "$OUT/gpu-during.txt"
 echo
 echo '=== SERVER LOG TAIL ==='
-tail -n 120 "$LOG" || true
+tail -n 160 "$LOG" || true
 
 echo
 echo '=== LOW-VRAM STARTUP MARKERS ==='
-grep -E 'low-VRAM|persistent cache|stage|SSD streaming|listening on|context buffers|memory:' "$LOG" || true
+grep -E 'low-VRAM|persistent cache|cache plan|stage|SSD streaming|listening on|context buffers|memory:' "$LOG" || true
 
 if [[ "$READY" -ne 1 ]]; then
   echo "runtime_smoke_failed_before_listen" >&2
