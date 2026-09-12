@@ -5,8 +5,10 @@ only after the Teacher server has produced the feedback text itself.
 """
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
+import re
 import threading
 import time
 import uuid
@@ -14,11 +16,65 @@ import uuid
 log = logging.getLogger("teacher.web.feedback_voice")
 
 
+def _feedback_text(value, limit: int = 4000) -> str:
+    """Return plain tutor text, including from accidentally nested model JSON.
+
+    Qwen occasionally emits a JSON-looking response string containing literal
+    newlines inside the quoted ``response`` value. That is not valid JSON, so a
+    normal ``json.loads`` fallback would otherwise leak the wrapper to the
+    student UI and to TTS.
+    """
+    text = str(value or "").strip()
+    for _ in range(4):
+        if not text.startswith("{"):
+            break
+        try:
+            parsed = json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            match = re.fullmatch(
+                r"\s*\{\s*['\"](?:response|feedback)['\"]\s*:\s*(['\"])(.*)\1\s*\}\s*",
+                text,
+                flags=re.DOTALL,
+            )
+            if not match:
+                break
+            text = (
+                match.group(2)
+                .replace(r'\"', '"')
+                .replace(r"\'", "'")
+                .replace(r"\n", "\n")
+                .strip()
+            )
+            continue
+        if not isinstance(parsed, dict):
+            break
+        nested = parsed.get("response")
+        if nested is None:
+            nested = parsed.get("feedback")
+        if nested is None:
+            break
+        if isinstance(nested, (dict, list)):
+            text = json.dumps(nested, ensure_ascii=False)
+        else:
+            text = str(nested).strip()
+    return text.replace("**", "").replace("__", "")[:limit]
+
+
 class FeedbackVoiceRegistry:
-    def __init__(self, fish, *, ttl_seconds: float = 1800.0, max_entries: int = 512):
+    def __init__(
+        self,
+        fish,
+        *,
+        ttl_seconds: float = 1800.0,
+        max_entries: int = 512,
+        ready_wait_seconds: float = 30.0,
+        ready_poll_seconds: float = 0.25,
+    ):
         self.fish = fish
         self.ttl_seconds = float(ttl_seconds)
         self.max_entries = int(max_entries)
+        self.ready_wait_seconds = max(0.0, float(ready_wait_seconds))
+        self.ready_poll_seconds = max(0.05, float(ready_poll_seconds))
         self._lock = threading.Lock()
         self._entries: dict[str, tuple[str, str, float]] = {}
 
@@ -43,23 +99,35 @@ class FeedbackVoiceRegistry:
         feedback = result.get("feedback")
         if not isinstance(feedback, str) or not feedback.strip():
             return result
-        text = feedback.strip()
+
+        text = _feedback_text(feedback)
+        output = dict(result)
+        output["feedback"] = text
+        if not text:
+            return output
+
         prepared = self._safe_prepare(text)
         status = prepared.get("status")
-        # Preserve existing API payloads when Fish is disabled, unsuitable for
-        # this text, or unavailable. In particular, never fall back to a
-        # browser-selected voice for tutor feedback.
+        # Preserve the cleaned API payload when Fish is disabled, unsuitable for
+        # this text, or unavailable. Never fall back to a browser-selected voice
+        # for tutor feedback.
         if status not in {"pending", "ready"}:
-            return result
+            return output
+
         voice_id = uuid.uuid4().hex
         now = time.monotonic()
         with self._lock:
             self._cleanup_locked(now)
             self._entries[voice_id] = (student_id, text, now + self.ttl_seconds)
-        voice = {"id": voice_id, "status": status}
-        if status == "ready":
-            voice["url"] = f"/api/feedback-audio/{voice_id}/file"
-        output = dict(result)
+
+        # The same-origin file endpoint is waitable for a bounded period. Expose
+        # it immediately so the browser can start playback from the user's tutor
+        # action instead of waiting 15 seconds for the first polling cycle.
+        voice = {
+            "id": voice_id,
+            "status": "ready",
+            "url": f"/api/feedback-audio/{voice_id}/file",
+        }
         output["voice"] = voice
         return output
 
@@ -76,6 +144,14 @@ class FeedbackVoiceRegistry:
 
     def prepare(self, student_id: str, voice_id: str) -> dict:
         text = self._text(student_id, voice_id)
+        try:
+            path = self.fish.ready_path(text)
+        except Exception as exc:
+            log.warning("feedback_audio_prepare error_class=%s", type(exc).__name__)
+            path = None
+        if path is not None:
+            return {"status": "ready", "url": f"/api/feedback-audio/{voice_id}/file"}
+
         prepared = self._safe_prepare(text)
         status = prepared.get("status") or "unavailable"
         result = {"status": status}
@@ -85,8 +161,15 @@ class FeedbackVoiceRegistry:
 
     def ready_path(self, student_id: str, voice_id: str) -> Path | None:
         text = self._text(student_id, voice_id)
+        deadline = time.monotonic() + self.ready_wait_seconds
         try:
-            return self.fish.ready_path(text)
+            while True:
+                path = self.fish.ready_path(text)
+                if path is not None:
+                    return path
+                if time.monotonic() >= deadline:
+                    return None
+                time.sleep(self.ready_poll_seconds)
         except Exception as exc:
             log.warning("feedback_audio_file error_class=%s", type(exc).__name__)
             return None
