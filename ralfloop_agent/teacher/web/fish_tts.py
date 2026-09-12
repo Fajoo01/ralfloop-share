@@ -135,7 +135,7 @@ class FishTTSCache:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 env=env,
-                timeout=1900,
+                timeout=43300,
                 check=False,
             )
             if result.returncode == 0 and self._valid_wav(temporary):
