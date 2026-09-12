@@ -5,35 +5,39 @@ PORT="${PORT:-/home/sibilla-cumana/src/ds4-main-lowvram-port}"
 SNAPSHOT="${SNAPSHOT:-/home/sibilla-cumana/ds4-sibilla-snapshot-20260912}"
 OUT="${OUT:-$SNAPSHOT/upstream-porting/core-wiring-pass}"
 EXPECTED_HEAD="bd66c402070042bf0a79ad6ece8242de4c93680c"
+OWNER="${OWNER:-sibilla-cumana}"
 
 if [[ ! -d "$PORT/.git" ]]; then
   echo "missing_port_clone: $PORT" >&2
   exit 1
 fi
 
-HEAD="$(git -C "$PORT" rev-parse HEAD)"
+# The port clone belongs to sibilla-cumana. Always run Git as the repository
+# owner instead of weakening Git ownership checks with safe.directory='*'.
+HEAD="$(sudo -u "$OWNER" -H git -C "$PORT" rev-parse HEAD)"
 if [[ "$HEAD" != "$EXPECTED_HEAD" ]]; then
   echo "unexpected_head: $HEAD" >&2
   echo "expected_head:   $EXPECTED_HEAD" >&2
   exit 1
 fi
 
-sudo -u sibilla-cumana -H mkdir -p "$OUT"
-sudo -u sibilla-cumana -H sh -c 'git -C "$1" diff > "$2/before.patch"' sh "$PORT" "$OUT"
-sudo -u sibilla-cumana -H sh -c 'git -C "$1" status --short --branch > "$2/before-status.txt"' sh "$PORT" "$OUT"
+sudo -u "$OWNER" -H mkdir -p "$OUT"
+sudo -u "$OWNER" -H sh -c 'git -C "$1" diff > "$2/before.patch"' sh "$PORT" "$OUT"
+sudo -u "$OWNER" -H sh -c 'git -C "$1" status --short --branch > "$2/before-status.txt"' sh "$PORT" "$OUT"
 
-sudo -u sibilla-cumana -H env PORT="$PORT" OUT="$OUT" python3 - <<'PY'
+sudo -u "$OWNER" -H env PORT="$PORT" OUT="$OUT" python3 - <<'PY'
 from pathlib import Path
-import re, sys
+import re
 
 root = Path(__import__('os').environ['PORT'])
 out = Path(__import__('os').environ['OUT'])
 report = []
 
-class PatchError(RuntimeError): pass
+class PatchError(RuntimeError):
+    pass
 
 def load(name):
-    p = root/name
+    p = root / name
     return p, p.read_text()
 
 def save(p, text):
@@ -111,10 +115,8 @@ if 'cuda_low_vram_stream' not in block:
 else:
     report.append('ds4.c: already:engine.cuda_low_vram_stream')
 
-# Reload after structural edit.
-p, s = load('ds4.c')
-
 # 5) Validate the mode at engine creation.
+p, s = load('ds4.c')
 err_marker = '--cuda-low-vram-stream requires --cuda and --ssd-streaming'
 if err_marker not in s:
     anchor = '    e->cuda_low_vram_stream = opt->cuda_low_vram_stream;\n'
@@ -135,7 +137,8 @@ if 'ds4_gpu_set_cuda_low_vram_stream(e->cuda_low_vram_stream);' not in s:
         raise PatchError(f'ds4.c: gpu ssd setter candidates={len(candidates)}')
     m = candidates[0]
     line_end = s.find('\n', m.end())
-    if line_end < 0: line_end = m.end()
+    if line_end < 0:
+        line_end = m.end()
     addition = '\n' + m.group(1) + 'ds4_gpu_set_cuda_low_vram_stream(e->cuda_low_vram_stream);'
     s = s[:line_end] + addition + s[line_end:]
     save(p, s)
@@ -158,11 +161,10 @@ if 's->graph.cuda_low_vram_stream = e->cuda_low_vram_stream;' not in s:
 else:
     report.append('ds4.c: already:session graph low-vram propagation')
 
-# 8) CLI help test assertion. Non-runtime, but deterministic and useful.
+# 8) CLI help test assertion.
 p, s = load('tests/test_gpu_args_cli.sh')
 marker = '--help mentions --cuda-low-vram-stream'
 if marker not in s:
-    # Put it immediately after the existing SSD cold help assertion when possible.
     lines = s.splitlines(True)
     idx = None
     for i, line in enumerate(lines):
@@ -170,9 +172,8 @@ if marker not in s:
             idx = i + 1
             break
     if idx is None:
-        # Fallback: after first assert_grep in the help-check function.
         for i, line in enumerate(lines):
-            if 'assert_grep' in line and '--help' in ''.join(lines[max(0,i-8):i+1]):
+            if 'assert_grep' in line and '--help' in ''.join(lines[max(0, i-8):i+1]):
                 idx = i + 1
                 break
     if idx is None:
@@ -184,29 +185,28 @@ if marker not in s:
 else:
     report.append('tests/test_gpu_args_cli.sh: already:help assertion')
 
-# Intentionally do NOT port ds4_ssd.{c,h} parser helpers yet: the partially
-# ported ds4_cuda.cu already owns equivalent STAGE/RESERVE parsing. Adding both
-# implementations before compilation would risk creating dead/duplicated API.
+# Intentionally defer ds4_ssd.{c,h} helpers and the three CUDA reject hunks.
 report.append('ds4_ssd.c/h: deferred:CUDA file already contains stage/reserve parsers')
 report.append('README.md: deferred:documentation after runtime compiles')
 report.append('ds4_cuda.cu: 3 rejected hunks deferred for dedicated semantic port')
 
-(out/'edit-report.txt').write_text('\n'.join(report) + '\n')
+(out / 'edit-report.txt').write_text('\n'.join(report) + '\n')
 print('\n'.join(report))
 PY
 
-sudo -u sibilla-cumana -H sh -c 'git -C "$1" diff --check > "$2/diff-check.txt" 2>&1' sh "$PORT" "$OUT" || true
-sudo -u sibilla-cumana -H sh -c 'git -C "$1" diff --stat > "$2/after-stat.txt"' sh "$PORT" "$OUT"
-sudo -u sibilla-cumana -H sh -c 'git -C "$1" diff > "$2/after.patch"' sh "$PORT" "$OUT"
+sudo -u "$OWNER" -H sh -c 'git -C "$1" diff --check > "$2/diff-check.txt" 2>&1' sh "$PORT" "$OUT" || true
+sudo -u "$OWNER" -H sh -c 'git -C "$1" diff --stat > "$2/after-stat.txt"' sh "$PORT" "$OUT"
+sudo -u "$OWNER" -H sh -c 'git -C "$1" diff > "$2/after.patch"' sh "$PORT" "$OUT"
 
-# Build only in the isolated clone. Do not stop or touch the production service.
+# Build only in the isolated clone. Keep shell redirections inside the OWNER
+# shell too, otherwise bandi may be unable to create files under OUT.
 set +e
-sudo -u sibilla-cumana -H make -C "$PORT" -j2 ds4 ds4-server >"$OUT/build.stdout" 2>"$OUT/build.stderr"
+sudo -u "$OWNER" -H sh -c 'make -C "$1" -j2 ds4 ds4-server > "$2/build.stdout" 2> "$2/build.stderr"' sh "$PORT" "$OUT"
 BUILD_RC=$?
 set -e
-printf '%s\n' "$BUILD_RC" | sudo -u sibilla-cumana -H tee "$OUT/build.rc" >/dev/null
+printf '%s\n' "$BUILD_RC" | sudo -u "$OWNER" -H tee "$OUT/build.rc" >/dev/null
 
-sudo -u sibilla-cumana -H sh -c '
+sudo -u "$OWNER" -H sh -c '
   cd "$1"
   {
     echo "=== CORE SYMBOLS ==="
