@@ -4,6 +4,7 @@ set -euo pipefail
 PORT_DIR="${PORT_DIR:-/home/sibilla-cumana/src/ds4-main-lowvram-port}"
 MODEL="${MODEL:-/home/sibilla-cumana/Dati/ralfloop-models/deepseek-v4-flash-pr739/gguf/DeepSeek-V4-Flash-IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8-chat-v2-imatrix-0731.gguf}"
 OWNER="${OWNER:-sibilla-cumana}"
+AGENT_USER="${AGENT_USER:-bandi}"
 TEST_PORT="${TEST_PORT:-19195}"
 PROD_PORT="${PROD_PORT:-19194}"
 MAX_DIRTY_GROWTH_KB="${MAX_DIRTY_GROWTH_KB:-262144}"
@@ -40,11 +41,24 @@ BASE_WARNINGS="$(sudo dmesg 2>/dev/null | grep -c 'mpage_prepare_extent_to_map' 
 printf 'baseline_dirty_kb=%s\nbaseline_mpage_warnings=%s\n' "$BASE_DIRTY_KB" "$BASE_WARNINGS" | \
   sudo -u "$OWNER" -H tee "$OUT/baseline.txt" >/dev/null
 
+agent_systemctl() {
+  if [[ "$(id -un)" == "$AGENT_USER" ]]; then
+    systemctl --user "$@"
+    return
+  fi
+  local uid
+  uid="$(id -u "$AGENT_USER")"
+  runuser -u "$AGENT_USER" -- env \
+    XDG_RUNTIME_DIR="/run/user/$uid" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+    systemctl --user "$@"
+}
+
 AGENT_WAS_ACTIVE=0
-if systemctl --user is-active --quiet ralfloop-agentcpm.service; then
+if agent_systemctl is-active --quiet ralfloop-agentcpm.service; then
   AGENT_WAS_ACTIVE=1
   echo 'stopping AgentCPM temporarily for VRAM headroom'
-  systemctl --user stop ralfloop-agentcpm.service
+  agent_systemctl stop ralfloop-agentcpm.service
 fi
 
 owner_pid_alive() {
@@ -69,7 +83,7 @@ cleanup() {
     fi
   fi
   if [[ "$AGENT_WAS_ACTIVE" -eq 1 ]]; then
-    systemctl --user start ralfloop-agentcpm.service >/dev/null 2>&1
+    agent_systemctl start ralfloop-agentcpm.service >/dev/null 2>&1
   fi
 }
 trap cleanup EXIT INT TERM
