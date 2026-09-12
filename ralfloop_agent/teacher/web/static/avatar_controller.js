@@ -30,18 +30,19 @@ export class BottazziAvatarController {
 
 export function installBottazziAvatarSurface() {
   if (typeof document === 'undefined') return null;
-  const surface=document.querySelector('#teacher-avatar');
-  const face=surface?.querySelector('img');
-  const status=document.querySelector('#teacher-avatar-status');
   const source=document.querySelector('.brand img');
-  if(!surface || !face || !status || !source) return null;
+  const surfaces=()=>[...document.querySelectorAll('[data-teacher-avatar-surface]')];
+  if(!source || !surfaces().length) return null;
   const labels={idle:'Pronto',listening:'Ti ascolto',thinking:'Sto pensando…',speaking:'Ti sto parlando',success:'Bene!',error:'Riproviamo'};
   const apply=(state,mouthLevel=0)=>{
     const selected=labels[state]?state:'idle';
-    surface.dataset.state=selected;
-    status.textContent=labels[selected];
-    if(selected==='speaking')face.style.transform=`scaleY(${1+Math.max(0,Math.min(1,Number(mouthLevel)||0))*.06})`;
-    else face.style.transform='scaleY(1)';
+    for(const surface of surfaces()){
+      const face=surface.querySelector('img');
+      const status=surface.querySelector('[data-teacher-avatar-status]');
+      surface.dataset.state=selected;
+      if(status)status.textContent=labels[selected];
+      if(face)face.style.transform=selected==='speaking'?`scaleY(${1+Math.max(0,Math.min(1,Number(mouthLevel)||0))*.06})`:'scaleY(1)';
+    }
   };
   const sync=()=>{
     const state=source.dataset.state||'idle';
@@ -64,7 +65,7 @@ export function installBottazziAvatarSurface() {
       const apiCall=url.startsWith('/api');
       if(apiCall){pending+=1;if((source.dataset.state||'idle')==='idle')apply('thinking');}
       try{return await originalFetch(...args);}
-      finally{if(apiCall){pending=Math.max(0,pending-1);if(pending===0&&surface.dataset.state==='thinking')sync();}}
+      finally{if(apiCall){pending=Math.max(0,pending-1);if(pending===0&&surfaces().some(surface=>surface.dataset.state==='thinking'))sync();}}
     };
     globalThis[marker]=true;
   }
