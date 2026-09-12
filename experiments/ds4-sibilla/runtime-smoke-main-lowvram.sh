@@ -12,6 +12,7 @@ MIN_FREE_MIB="${MIN_FREE_MIB:-2000}"
 BIN="$PORT_DIR/ds4-server"
 LOG="$OUT/server.log"
 PIDFILE="$OUT/server.pid"
+LOCKFILE="$OUT/ds4-smoke.lock"
 
 sudo -u "$OWNER" -H mkdir -p "$OUT"
 
@@ -34,7 +35,7 @@ sudo -u "$OWNER" -H sh -c 'sha256sum "$1/source.patch" > "$1/source.patch.sha256
 
 FREE_MIB="$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits | head -n1 | tr -d ' ')"
 USED_MIB="$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -n1 | tr -d ' ')"
-printf 'gpu_used_mib=%s\ngpu_free_mib=%s\nmin_free_mib=%s\n' "$USED_MIB" "$FREE_MIB" "$MIN_FREE_MIB" | sudo -u "$OWNER" -H tee "$OUT/gpu-before.txt" >/dev/null
+printf 'gpu_used_mib=%s\ngpu_free_mib=%s\nmin_free_mib=%s\nlock_file=%s\n' "$USED_MIB" "$FREE_MIB" "$MIN_FREE_MIB" "$LOCKFILE" | sudo -u "$OWNER" -H tee "$OUT/gpu-before.txt" >/dev/null
 
 echo '=== GPU BEFORE ==='
 cat "$OUT/gpu-before.txt"
@@ -63,6 +64,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 sudo -u "$OWNER" -H sh -c '
+  DS4_LOCK_FILE="$5" \
   DS4_CUDA_LOW_VRAM_STAGE_MB=640 \
   DS4_CUDA_LOW_VRAM_RESERVE_MB=512 \
   "$1" \
@@ -79,7 +81,7 @@ sudo -u "$OWNER" -H sh -c '
     --port "$3" \
     > "$4" 2>&1 &
   echo $!
-' sh "$BIN" "$MODEL" "$TEST_PORT" "$LOG" | sudo -u "$OWNER" -H tee "$PIDFILE" >/dev/null
+' sh "$BIN" "$MODEL" "$TEST_PORT" "$LOG" "$LOCKFILE" | sudo -u "$OWNER" -H tee "$PIDFILE" >/dev/null
 
 PID="$(cat "$PIDFILE")"
 echo "runtime_pid=$PID"
@@ -96,7 +98,7 @@ for i in $(seq 1 80); do
   sleep 0.5
 done
 
-printf 'ready=%s\npid=%s\nport=%s\n' "$READY" "$PID" "$TEST_PORT" | sudo -u "$OWNER" -H tee "$OUT/result.txt" >/dev/null
+printf 'ready=%s\npid=%s\nport=%s\nlock_file=%s\n' "$READY" "$PID" "$TEST_PORT" "$LOCKFILE" | sudo -u "$OWNER" -H tee "$OUT/result.txt" >/dev/null
 
 nvidia-smi --query-gpu=memory.used,memory.free --format=csv,noheader,nounits | head -n1 | \
   sudo -u "$OWNER" -H tee "$OUT/gpu-during.txt" >/dev/null
