@@ -13,6 +13,9 @@ BIN="$PORT_DIR/ds4-server"
 LOG="$OUT/server.log"
 PIDFILE="$OUT/server.pid"
 LOCKFILE="$OUT/ds4-smoke.lock"
+REQ="$OUT/request.json"
+RESP="$OUT/response.json"
+CURLERR="$OUT/curl.stderr"
 
 sudo -u "$OWNER" -H mkdir -p "$OUT"
 
@@ -114,7 +117,7 @@ echo
 echo '=== RESULT ==='
 cat "$OUT/result.txt"
 echo
-echo '=== GPU DURING (used MiB, free MiB) ==='
+echo '=== GPU DURING STARTUP (used MiB, free MiB) ==='
 cat "$OUT/gpu-during.txt"
 echo
 echo '=== SERVER LOG TAIL ==='
@@ -129,5 +132,56 @@ if [[ "$READY" -ne 1 ]]; then
   exit 3
 fi
 
+printf '%s\n' '{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"Reply with exactly: DS4_SMOKE_OK"}],"stream":false,"think":false,"max_tokens":8,"temperature":0}' | \
+  sudo -u "$OWNER" -H tee "$REQ" >/dev/null
+
+START_TS="$(date +%s)"
+if sudo -u "$OWNER" -H sh -c '
+  curl --silent --show-error --fail-with-body \
+    --connect-timeout 5 --max-time 180 \
+    -H "Content-Type: application/json" \
+    --data-binary @"$1" \
+    "http://127.0.0.1:$2/v1/chat/completions" \
+    > "$3" 2> "$4"
+' sh "$REQ" "$TEST_PORT" "$RESP" "$CURLERR"; then
+  CURL_RC=0
+else
+  CURL_RC=$?
+fi
+END_TS="$(date +%s)"
+INFERENCE_SECONDS=$((END_TS - START_TS))
+
+nvidia-smi --query-gpu=memory.used,memory.free --format=csv,noheader,nounits | head -n1 | \
+  sudo -u "$OWNER" -H tee "$OUT/gpu-after-inference.txt" >/dev/null
+
+INFERENCE_OK=0
+if [[ "$CURL_RC" -eq 0 ]] && grep -q '"choices"' "$RESP"; then
+  INFERENCE_OK=1
+fi
+printf 'curl_rc=%s\ninference_ok=%s\ninference_seconds=%s\n' \
+  "$CURL_RC" "$INFERENCE_OK" "$INFERENCE_SECONDS" | \
+  sudo -u "$OWNER" -H tee "$OUT/inference-result.txt" >/dev/null
+
 echo
-echo "runtime_smoke_ok: http://127.0.0.1:${TEST_PORT}"
+echo '=== INFERENCE RESULT ==='
+cat "$OUT/inference-result.txt"
+echo
+echo '=== RESPONSE ==='
+cat "$RESP" 2>/dev/null || true
+echo
+echo '=== CURL STDERR ==='
+cat "$CURLERR" 2>/dev/null || true
+echo
+echo '=== GPU AFTER INFERENCE (used MiB, free MiB) ==='
+cat "$OUT/gpu-after-inference.txt"
+echo
+echo '=== LOW-VRAM / GENERATION MARKERS AFTER INFERENCE ==='
+grep -E 'low-VRAM|persistent cache|cache plan|stage|SSD streaming|chat ctx=|decoding|t/s|memory:|CUDA' "$LOG" | tail -n 160 || true
+
+if [[ "$INFERENCE_OK" -ne 1 ]]; then
+  echo "runtime_smoke_inference_failed" >&2
+  exit 4
+fi
+
+echo
+echo "runtime_smoke_ok: http://127.0.0.1:${TEST_PORT} inference_ok=1"
