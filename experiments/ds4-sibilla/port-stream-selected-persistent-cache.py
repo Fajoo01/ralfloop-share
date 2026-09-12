@@ -179,6 +179,21 @@ static int g_stream_selected_stage_recorded[4];
         "IQ2 MMQ persistent dispatch",
     )
 
+    duplicate_mxfp4_stream = """        if (!gate_w || !up_w || !down_w || weight_experts == 0u) return 0;
+
+        const cudaStream_t stream =
+            n_tokens == 1u ? cuda_decode_stream() : (cudaStream_t)0;
+        int rc = -1;
+"""
+    merged = replace_once(
+        merged,
+        duplicate_mxfp4_stream,
+        """        if (!gate_w || !up_w || !down_w || weight_experts == 0u) return 0;
+        int rc = -1;
+""",
+        "duplicate MXFP4 stream declaration",
+    )
+
     # PR738's asynchronous selected-id handoff is parent context of PR739,
     # so a three-way merge of PR739 alone cannot introduce it into modern.
     # Replace this one unchanged API implementation from current production.
