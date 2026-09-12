@@ -28,11 +28,12 @@ case "$MAX_TOKENS" in
   1|2|3|4) ;;
   *) echo "invalid_MAX_TOKENS: $MAX_TOKENS (expected 1..4)" >&2; exit 1 ;;
 esac
-if [[ "$MAX_TOKENS" -eq 1 ]]; then
-  REQUEST_PROMPT='Reply with one word: OK'
-else
-  REQUEST_PROMPT='Reply with exactly two words: OK GO'
-fi
+case "$MAX_TOKENS" in
+  1) REQUEST_PROMPT='Reply with one word: OK' ;;
+  2) REQUEST_PROMPT='Reply with exactly two words: OK GO' ;;
+  3) REQUEST_PROMPT='Reply with exactly three words: OK GO NOW' ;;
+  4) REQUEST_PROMPT='Reply with exactly four words: OK GO NOW DONE' ;;
+esac
 
 sudo -u "$OWNER" -H mkdir -p "$OUT"
 : | sudo -u "$OWNER" -H tee "$LOG" >/dev/null
@@ -306,4 +307,4 @@ if [[ "$FINAL_MODEL_STAT" != "$BASE_MODEL_STAT" ]]; then
   exit 9
 fi
 
-echo "INFERENCE_WATCHDOG_OK: ${MAX_TOKENS}-token inference completed; no EXT4 mpage warning; model metadata unchanged; production untouched; AgentCPM restored on cleanup"
+echo "INFERENCE_WATCHDOG_OK: max_tokens=${MAX_TOKENS} inference completed; no EXT4 mpage warning; model metadata unchanged; production untouched; AgentCPM restored on cleanup"
