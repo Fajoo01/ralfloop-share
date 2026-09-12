@@ -8,26 +8,69 @@ const avatar=new BottazziAvatarController({onChange:controller=>{
 }});
 const main = document.querySelector('#main');
 const notice = document.querySelector('#notice');
-let home, activity, serverAudio, serverAudioCleanup;
+let home, activity, serverAudio, serverAudioCleanup, tutorVoiceGeneration=0;
 const labels = {primary:'Primaria',middle:'Secondaria di primo grado',upper:'Secondaria di secondo grado'};
 const modes = {multiple_choice:'Scelta multipla',true_false:'Vero o falso',free_answer:'Risposta aperta',matching:'Abbinamenti',grouping:'Raggruppa',ordering:'Ordina',fill_blank:'Completa',flashcards:'Carte ripasso',memory:'Memory',definition_match:'Definizioni',sequence:'Sequenza',timed_challenge:'Sfida a tempo',guided_exercise:'Esercizio guidato',simulation:'Laboratorio'};
+const tutorVoicePollDelays=[15000,30000,60000,120000,240000,480000];
 
 function stopServerAudio(){
   if(serverAudio){serverAudio.pause();serverAudio.removeAttribute('src');serverAudio.load();serverAudio=null;}
   if(serverAudioCleanup){const cleanup=serverAudioCleanup;serverAudioCleanup=null;cleanup();}
 }
 
-function speakTutorFeedback(text){
-  const message=String(text||"").trim();
-  if(!message || !("speechSynthesis" in window) || !("SpeechSynthesisUtterance" in window)) return;
+function latestFeedbackNode(){
+  const nodes=document.querySelectorAll('.feedback');
+  return nodes.length?nodes[nodes.length-1]:null;
+}
+
+async function playTutorFeedbackVoice(url,generation,control){
+  if(generation!==tutorVoiceGeneration || !url) return false;
   stopServerAudio();
-  window.speechSynthesis.cancel();
   avatar.reset();
-  const utterance=new SpeechSynthesisUtterance(message);
-  avatar.bindSpeech(utterance);
-  utterance.lang="it-IT";
-  utterance.rate=1;
-  window.speechSynthesis.speak(utterance);
+  serverAudio=new Audio(url);
+  serverAudioCleanup=avatar.bindAudio(serverAudio);
+  serverAudio.addEventListener('ended',()=>{if(generation===tutorVoiceGeneration)stopServerAudio();},{once:true});
+  try{
+    await serverAudio.play();
+    if(control){control.hidden=false;control.textContent='Riascolta Bot-tazzi';}
+    return true;
+  }catch{
+    stopServerAudio();
+    if(control){control.hidden=false;control.disabled=false;control.textContent='Ascolta Bot-tazzi';}
+    return false;
+  }
+}
+
+async function speakTutorFeedback(result){
+  const generation=++tutorVoiceGeneration;
+  window.speechSynthesis?.cancel();
+  stopServerAudio();
+  avatar.reset();
+  const voice=result?.voice;
+  if(!voice?.id) return;
+  const feedback=latestFeedbackNode();
+  if(!feedback) return;
+  const control=el('button',voice.status==='ready'?'Ascolta Bot-tazzi':'Controlla voce Bot-tazzi',{type:'button',class:'secondary tutor-voice'});
+  feedback.insertAdjacentElement('afterend',control);
+  const prepare=()=>api('/feedback-audio/'+encodeURIComponent(voice.id)+'/prepare',{});
+  const usePrepared=async prepared=>{
+    if(generation!==tutorVoiceGeneration || !control.isConnected)return true;
+    if(prepared?.status==='ready'&&prepared.url){control.disabled=false;control.textContent='Ascolta Bot-tazzi';await playTutorFeedbackVoice(prepared.url,generation,control);return true;}
+    if(prepared?.status!=='pending'){control.remove();return true;}
+    control.disabled=false;control.textContent='Controlla voce Bot-tazzi';return false;
+  };
+  control.onclick=async()=>{
+    if(generation!==tutorVoiceGeneration)return;
+    control.disabled=true;
+    try{await usePrepared(await prepare());}
+    catch{if(control.isConnected){control.disabled=false;control.textContent='Riprova voce Bot-tazzi';}}
+  };
+  if(voice.status==='ready'&&voice.url){await playTutorFeedbackVoice(voice.url,generation,control);return;}
+  for(const delay of tutorVoicePollDelays){
+    await new Promise(resolve=>setTimeout(resolve,delay));
+    if(generation!==tutorVoiceGeneration || !control.isConnected)return;
+    try{if(await usePrepared(await prepare()))return;}catch{return;}
+  }
 }
 
 export function el(tag, text, attrs={}) {
@@ -133,9 +176,9 @@ async function activityPage(){
   }
   const feedback=el('div',null,{'aria-live':'polite'});
   let attemptKey=crypto.randomUUID();
-  if(a.activity_type!=='flashcards'){const send=button('Invia risposta',async()=>{const result=await api('/activities/'+a.activity_id+'/answer',{answer:getter(),request_key:attemptKey});attemptKey=crypto.randomUUID();feedback.replaceChildren(info(result.feedback),el('p',(result.correct?'Risposta corretta. ':'Proviamo insieme. ')+`+${result.xp_awarded} XP`));speakTutorFeedback(result.feedback);if(result.correct){send.hidden=true;feedback.append(button('Prossima attività',()=>start(result.next?.topic||a.topic,result.next?.activity_type)),button('Vedi progressi',()=>navigate('/progress'),true));}else{feedback.append(el('p','Puoi correggere la risposta e inviarla di nuovo.'));if(result.attempts>=5){send.hidden=true;feedback.append(button('Nuova attività guidata',()=>start(a.topic,'guided_exercise')));}}});section.append(send);}
-  const help=el('div',null,{class:'row'});for(const [mode,label] of [['hint','Suggerimento'],['different','Spiegamelo diversamente'],['explain','Fammi un esempio']])help.append(button(label,async()=>{const result=await api('/activities/'+a.activity_id+'/help',{mode,question:''});feedback.replaceChildren(info(result.feedback));speakTutorFeedback(result.feedback);},true));section.append(help,feedback);
-  const chat=el('details',null,{class:'card'});chat.append(el('summary','Non ho capito: chiedi al tutor'));const question=field(chat,'La tua domanda','question','textarea');question.maxLength=2000;chat.append(button('Chiedi',async()=>{const result=await api('/activities/'+a.activity_id+'/help',{mode:'explain',question:question.value});feedback.replaceChildren(info(result.feedback));speakTutorFeedback(result.feedback);}));section.append(chat,button('Scegli un’altra attività',()=>navigate('/study'),true));main.append(section);
+  if(a.activity_type!=='flashcards'){const send=button('Invia risposta',async()=>{const result=await api('/activities/'+a.activity_id+'/answer',{answer:getter(),request_key:attemptKey});attemptKey=crypto.randomUUID();feedback.replaceChildren(info(result.feedback),el('p',(result.correct?'Risposta corretta. ':'Proviamo insieme. ')+`+${result.xp_awarded} XP`));speakTutorFeedback(result);if(result.correct){send.hidden=true;feedback.append(button('Prossima attività',()=>start(result.next?.topic||a.topic,result.next?.activity_type)),button('Vedi progressi',()=>navigate('/progress'),true));}else{feedback.append(el('p','Puoi correggere la risposta e inviarla di nuovo.'));if(result.attempts>=5){send.hidden=true;feedback.append(button('Nuova attività guidata',()=>start(a.topic,'guided_exercise')));}}});section.append(send);}
+  const help=el('div',null,{class:'row'});for(const [mode,label] of [['hint','Suggerimento'],['different','Spiegamelo diversamente'],['explain','Fammi un esempio']])help.append(button(label,async()=>{const result=await api('/activities/'+a.activity_id+'/help',{mode,question:''});feedback.replaceChildren(info(result.feedback));speakTutorFeedback(result);},true));section.append(help,feedback);
+  const chat=el('details',null,{class:'card'});chat.append(el('summary','Non ho capito: chiedi al tutor'));const question=field(chat,'La tua domanda','question','textarea');question.maxLength=2000;chat.append(button('Chiedi',async()=>{const result=await api('/activities/'+a.activity_id+'/help',{mode:'explain',question:question.value});feedback.replaceChildren(info(result.feedback));speakTutorFeedback(result);}));section.append(chat,button('Scegli un’altra attività',()=>navigate('/study'),true));main.append(section);
 }
 async function progressPage(badgesOnly=false){
   const p=await api('/progress');heading(badgesOnly?'I tuoi traguardi':'Guarda quanta strada hai fatto');main.append(stats(p));
@@ -146,7 +189,7 @@ async function books(){
   heading('I miei libri','Appunti e capitoli autorizzati, collegati al tuo percorso.');const materials=await api('/materials');
   const results=el('div',null,{'aria-live':'polite'});
   for(const material of materials){const card=add(el('section',null,{class:'card'}),el('h2',material.title),el('p',material.chapter+' · '+material.pages),el('p',material.topics.map(topicName).join(' · ')||'Nessun argomento del percorso riconosciuto'));
-    for(const [action,label] of [['explain','Spiegami'],['summarize','Riassumi'],['exercise','Esercitati'],['quiz','Quiz'],['audio','Ascolta']])card.append(button(label,async()=>{const out=await api('/materials/'+material.id,{action});if(out.activity_id){navigate('/activity?id='+out.activity_id);}else if(out.audio_id){navigate('/audio');}else{results.replaceChildren(info(out.feedback));speakTutorFeedback(out.feedback);}},true));main.append(card);
+    for(const [action,label] of [['explain','Spiegami'],['summarize','Riassumi'],['exercise','Esercitati'],['quiz','Quiz'],['audio','Ascolta']])card.append(button(label,async()=>{const out=await api('/materials/'+material.id,{action});if(out.activity_id){navigate('/activity?id='+out.activity_id);}else if(out.audio_id){navigate('/audio');}else{results.replaceChildren(info(out.feedback));speakTutorFeedback(out);}},true));main.append(card);
   }main.append(results);
   const form=el('form',null,{class:'card'});form.append(el('h2','Aggiungi materiale'));const title=field(form,'Titolo','title');const text=field(form,'Testo o estratto autorizzato (massimo 10.000 caratteri)','text','textarea');const file=el('input',null,{type:'file',accept:'.txt,text/plain','aria-label':'Importa un file di testo'});file.onchange=async()=>{const f=file.files[0];if(f){if(f.size>20000){showError(Error('File troppo grande.'));return;}text.value=await f.text();}};form.append(file);const chapter=field(form,'Capitolo o sezione','chapter');chapter.required=false;const rights=el('select',null,{'aria-label':'Diritti sul materiale',required:''});for(const [value,label] of [['','Seleziona i diritti'],['own','Testo scritto da me'],['authorized','Ho autorizzazione per questi usi'],['public_domain','Pubblico dominio'],['compatible_license','Licenza compatibile']])rights.append(el('option',label,{value}));form.append(el('label','Diritti sul materiale'),rights,el('p','Carica solo materiale che puoi utilizzare. Nessuna riproduzione integrale di libri protetti.',{class:'muted'}),el('button','Aggiungi',{type:'submit'}));form.onsubmit=async e=>{e.preventDefault();const b=form.querySelector('button');b.disabled=true;try{await api('/materials',{title:title.value,text:text.value,rights:rights.value,chapter:chapter.value});await render();}catch(error){showError(error);}finally{b.disabled=false;}};main.append(form);
 }
@@ -165,6 +208,7 @@ async function audioPage(){
   }
 }
 async function render(){
+  tutorVoiceGeneration+=1;
   window.speechSynthesis?.cancel();
   stopServerAudio();
   avatar.reset();
