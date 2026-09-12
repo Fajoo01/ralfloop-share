@@ -208,11 +208,147 @@ static int g_stream_selected_stage_recorded[4];
     merged = replace_once(merged, merged_begin, production_begin,
                           "selected load lifecycle")
 
+    merged = replace_once(
+        merged,
+        "static int g_stream_selected_direct_logged;\n",
+        """static int g_stream_selected_direct_logged;
+static uint64_t g_stream_selected_upload_bytes;
+static uint64_t g_stream_selected_upload_ranges;
+""",
+        "selected upload counters",
+    )
+    merged = replace_once(
+        merged,
+        "    uint32_t count;\n    char *arena;\n",
+        "    uint32_t count;\n    uint32_t peak_count;\n    char *arena;\n",
+        "persistent cache peak field",
+    )
+    merged = replace_once(
+        merged,
+        """    cuda_stream_persistent_cache_release();
+    if (g_stream_selected_cache.gate_ptr) {
+""",
+        """    if (g_stream_selected_upload_ranges != 0) {
+        fprintf(stderr,
+                "ds4: CUDA selected-expert upload summary: ranges=%llu bytes=%.2f GiB\\n",
+                (unsigned long long)g_stream_selected_upload_ranges,
+                (double)g_stream_selected_upload_bytes / 1073741824.0);
+    }
+    cuda_stream_persistent_cache_release();
+    if (g_stream_selected_cache.gate_ptr) {
+""",
+        "selected upload summary",
+    )
+    merged = replace_once(
+        merged,
+        """    if (bytes == 0) return 1;
+    if (g_model_fd < 0 ||
+""",
+        """    if (bytes == 0) return 1;
+    g_stream_selected_upload_bytes += bytes;
+    g_stream_selected_upload_ranges++;
+    if (g_model_fd < 0 ||
+""",
+        "selected upload accounting",
+    )
+    merged = replace_once(
+        merged,
+        """                "ds4: CUDA persistent routed-expert cache summary: hits=%llu misses=%llu hit-rate=%.1f%% evictions=%llu loaded=%.2f GiB\\n",
+                (unsigned long long)cache->hits,
+                (unsigned long long)cache->misses,
+                hit_rate,
+                (unsigned long long)cache->evictions,
+                (double)cache->bytes_loaded / 1073741824.0);
+""",
+        """                "ds4: CUDA persistent routed-expert cache summary: hits=%llu misses=%llu hit-rate=%.1f%% evictions=%llu loaded=%.2f GiB resident=%u peak=%u capacity=%u arena=%.2f GiB\\n",
+                (unsigned long long)cache->hits,
+                (unsigned long long)cache->misses,
+                hit_rate,
+                (unsigned long long)cache->evictions,
+                (double)cache->bytes_loaded / 1073741824.0,
+                cache->count, cache->peak_count, cache->capacity,
+                (double)cache->capacity * cache->slot_bytes / 1073741824.0);
+""",
+        "persistent cache summary",
+    )
+    merged = replace_once(
+        merged,
+        """        cache->count++;
+        cache->bytes_loaded += cache->slot_bytes;
+""",
+        """        cache->count++;
+        if (cache->count > cache->peak_count) cache->peak_count = cache->count;
+        cache->bytes_loaded += cache->slot_bytes;
+""",
+        "persistent cache peak update",
+    )
+    merged = replace_once(
+        merged,
+        """static uint64_t g_low_vram_stage_hits;
+static uint64_t g_low_vram_stage_reuses;
+""",
+        """static uint64_t g_low_vram_stage_hits;
+static uint64_t g_low_vram_stage_reuses;
+static uint64_t g_low_vram_stage_peak_used;
+""",
+        "generic stage peak field",
+    )
+    merged = replace_once(
+        merged,
+        """static void cuda_low_vram_stage_release(void) {
+    if (g_low_vram_stage_device) {
+""",
+        """static void cuda_low_vram_stage_release(void) {
+    if (g_low_vram_stage_upload_ranges != 0) {
+        fprintf(stderr,
+                "ds4: CUDA low-VRAM stage summary: ranges=%llu bytes=%.2f GiB hits=%llu epoch-resets=%llu peak=%.2f MiB budget=%.2f MiB\\n",
+                (unsigned long long)g_low_vram_stage_upload_ranges,
+                (double)g_low_vram_stage_upload_bytes / 1073741824.0,
+                (unsigned long long)g_low_vram_stage_hits,
+                (unsigned long long)g_low_vram_stage_reuses,
+                (double)g_low_vram_stage_peak_used / 1048576.0,
+                (double)cuda_low_vram_stage_budget_bytes() / 1048576.0);
+    }
+    if (g_low_vram_stage_device) {
+""",
+        "generic stage summary",
+    )
+    merged = replace_once(
+        merged,
+        """    g_low_vram_stage_used = device_offset + bytes;
+    g_low_vram_stage_upload_bytes += bytes;
+""",
+        """    g_low_vram_stage_used = device_offset + bytes;
+    if (g_low_vram_stage_used > g_low_vram_stage_peak_used) {
+        g_low_vram_stage_peak_used = g_low_vram_stage_used;
+    }
+    g_low_vram_stage_upload_bytes += bytes;
+""",
+        "generic stage peak update",
+    )
+    merged = replace_once(
+        merged,
+        """    g_low_vram_stage_hits = 0;
+    g_low_vram_stage_reuses = 0;
+
+    if (g_cuda_low_vram_stream) {
+""",
+        """    g_low_vram_stage_hits = 0;
+    g_low_vram_stage_reuses = 0;
+    g_low_vram_stage_peak_used = 0;
+    g_stream_selected_upload_bytes = 0;
+    g_stream_selected_upload_ranges = 0;
+
+    if (g_cuda_low_vram_stream) {
+""",
+        "counter reset",
+    )
+
     marker_anchor = "/* The compact cache is one layer wide. This second bounded cache keeps\n"
     merged = replace_once(
         merged,
         marker_anchor,
-        f"/* {PORT_MARKER}\n+ * Semantic port of PR739 selected-expert reuse onto modern upstream.\n+ * The compact cache is one layer wide. This second bounded cache keeps\n",
+        f"/* {PORT_MARKER}\n * Semantic port of PR739 selected-expert reuse onto modern upstream.\n * The compact cache is one layer wide. This second bounded cache keeps\n",
         "port marker",
     )
 
