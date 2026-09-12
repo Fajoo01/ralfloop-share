@@ -5,6 +5,7 @@ Run only after scoped tests. Rollback changes only this web application's symlin
 """
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -46,9 +47,29 @@ def _ensure_env_value(path: Path, name: str, value: str) -> None:
         stream.write(f"{prefix}{name}={value}\n")
 
 
+def _loopback_url(value: str) -> bool:
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        host = parsed.hostname
+        if parsed.scheme not in {"http", "https"} or not host:
+            return False
+        if host == "localhost":
+            return True
+        return ipaddress.ip_address(host).is_loopback
+    except (ValueError, ipaddress.AddressValueError):
+        return False
+
+
 def _voice_diagnostic(values: dict[str, str], release: Path) -> dict:
-    required = ("TEACHER_FISH_URL", "TEACHER_FISH_API_KEY", "TEACHER_FISH_PYTHON")
-    missing = [name for name in required if not values.get(name, "").strip()]
+    missing = []
+    url = values.get("TEACHER_FISH_URL", "").strip()
+    api_key = values.get("TEACHER_FISH_API_KEY", "").strip()
+    if not url:
+        missing.append("TEACHER_FISH_URL")
+    elif not api_key and not _loopback_url(url):
+        missing.append("TEACHER_FISH_API_KEY")
+    if not values.get("TEACHER_FISH_PYTHON", "").strip():
+        missing.append("TEACHER_FISH_PYTHON")
     if not (release / "scripts/ralf_teacher_fish_client.py").is_file():
         missing.append("TEACHER_FISH_HELPER")
     return {
@@ -93,6 +114,7 @@ def main():
     # The installer is already run with the approved Teacher virtualenv. Reuse
     # that interpreter for the bounded Fish helper without storing any secret.
     _ensure_env_value(config, "TEACHER_FISH_PYTHON", sys.executable)
+    _ensure_env_value(config, "TEACHER_FISH_URL", "http://127.0.0.1:19195")
     config.chmod(0o600)
     values = _read_env_file(config)
     db = Path(values.get("TEACHER_WEB_DB", str(db)))
