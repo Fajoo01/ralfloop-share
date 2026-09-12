@@ -7,14 +7,17 @@ used by the helper process.
 from __future__ import annotations
 
 from hashlib import sha256
+import logging
 import os
 from pathlib import Path
 import queue
 import subprocess
 import threading
+import time
 
 VOICE_ID = "peppone"
 CACHE_VERSION = "fish-s2-pro-peppone-v1"
+log = logging.getLogger("teacher.web.fish_tts")
 
 
 class FishTTSCache:
@@ -27,6 +30,7 @@ class FishTTSCache:
         python: str = "",
         helper: str | Path,
         queue_size: int = 8,
+        failure_backoff_seconds: float = 60.0,
     ):
         self.base_url = base_url.strip().rstrip("/")
         self.api_key = api_key.strip()
@@ -34,7 +38,9 @@ class FishTTSCache:
         self.python = python.strip()
         self.helper = Path(helper)
         self.enabled = bool(self.base_url and self.api_key and self.python and self.helper.is_file())
+        self.failure_backoff_seconds = max(1.0, float(failure_backoff_seconds))
         self._pending: set[str] = set()
+        self._failed_until: dict[str, float] = {}
         self._lock = threading.Lock()
         self._queue: queue.Queue[tuple[str, str]] = queue.Queue(maxsize=max(1, queue_size))
         if self.enabled:
@@ -93,7 +99,13 @@ class FishTTSCache:
             return {"status": "ready"}
 
         key = self._key(normalized)
+        now = time.monotonic()
         with self._lock:
+            failed_until = self._failed_until.get(key)
+            if failed_until is not None:
+                if failed_until > now:
+                    return {"status": "unavailable"}
+                self._failed_until.pop(key, None)
             if key in self._pending:
                 return {"status": "pending"}
             self._pending.add(key)
@@ -107,17 +119,22 @@ class FishTTSCache:
     def _worker(self) -> None:
         while True:
             key, text = self._queue.get()
+            ok = False
             try:
-                self._generate(key, text)
+                ok = self._generate(key, text)
             finally:
                 with self._lock:
                     self._pending.discard(key)
+                    if ok:
+                        self._failed_until.pop(key, None)
+                    else:
+                        self._failed_until[key] = time.monotonic() + self.failure_backoff_seconds
                 self._queue.task_done()
 
-    def _generate(self, key: str, text: str) -> None:
+    def _generate(self, key: str, text: str) -> bool:
         target = self.cache_dir / f"{key}.wav"
         if self._valid_wav(target):
-            return
+            return True
         temporary = self.cache_dir / f".{key}.tmp.wav"
         try:
             temporary.unlink(missing_ok=True)
@@ -141,8 +158,12 @@ class FishTTSCache:
             if result.returncode == 0 and self._valid_wav(temporary):
                 os.replace(temporary, target)
                 os.chmod(target, 0o600)
-        except (OSError, subprocess.SubprocessError):
-            pass
+                return True
+            log.warning("fish_tts_generate_failed returncode=%s", result.returncode)
+            return False
+        except (OSError, subprocess.SubprocessError) as exc:
+            log.warning("fish_tts_generate_error error_class=%s", type(exc).__name__)
+            return False
         finally:
             try:
                 temporary.unlink(missing_ok=True)
