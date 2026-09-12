@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .application import LearningApplication
 from .client import TeacherClient
+from .fish_tts import FishTTSCache
 from .state import State
 
 STATIC = Path(__file__).with_name("static")
@@ -75,11 +76,17 @@ class AudioPosition(Input):
     position: float = Field(ge=0, le=86400, allow_inf_nan=False)
 
 
-def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", secure_cookie=False):
+class AudioPrepare(Input):
+    chapter: int = Field(ge=0, le=100)
+
+
+def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", secure_cookie=False, fish_tts=None):
     state = state or State(os.environ.get("TEACHER_WEB_DB", "/var/lib/ralfloop-teacher-web/student.sqlite3"))
     learning = LearningApplication(state, teacher or TeacherClient())
+    fish = fish_tts if fish_tts is not None else FishTTSCache.from_env()
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.state.learning = learning
+    app.state.fish_tts = fish
     locks = [threading.Lock() for _ in range(64)]
     rate_lock, rates = threading.Lock(), defaultdict(deque)
     health_lock, health_cache = threading.Lock(), {"checked": 0.0, "ok": False}
@@ -138,6 +145,16 @@ def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", sec
             return function(profile, *args)
         finally:
             lock.release()
+
+    def owned_audio_track(profile, asset_id: str, chapter: int):
+        asset = state.owned("audio_assets", profile["id"], asset_id)
+        tracks = json.loads(asset["tracks"])
+        if chapter >= len(tracks):
+            raise ValueError("chapter_unavailable")
+        text = tracks[chapter].get("text", "")
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("chapter_unavailable")
+        return asset, text
 
     @app.exception_handler(Exception)
     async def error(request, exc):
@@ -245,6 +262,24 @@ def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", sec
         with state.connect() as conn:
             conn.execute("UPDATE audio_assets SET chapter=?,position=? WHERE id=? AND student=?", (data.chapter, data.position, asset_id, profile["id"]))
         return {"ok": True}
+
+    @app.post("/api/audio/{asset_id}/prepare")
+    def audio_prepare(asset_id: str, data: AudioPrepare, profile=Depends(student)):
+        _, text = owned_audio_track(profile, asset_id, data.chapter)
+        result = dict(fish.prepare(text))
+        if result.get("status") == "ready":
+            result["url"] = f"/api/audio/{asset_id}/file/{data.chapter}"
+        return result
+
+    @app.get("/api/audio/{asset_id}/file/{chapter}")
+    def audio_file(asset_id: str, chapter: int, profile=Depends(student)):
+        if chapter < 0 or chapter > 100:
+            raise ValueError("chapter_unavailable")
+        _, text = owned_audio_track(profile, asset_id, chapter)
+        path = fish.ready_path(text)
+        if path is None:
+            raise HTTPException(404, "Audio non ancora pronto.")
+        return FileResponse(path, media_type="audio/wav")
 
     @app.get("/assets/{name}")
     def asset(name: str):
