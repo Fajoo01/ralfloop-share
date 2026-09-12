@@ -5,7 +5,12 @@ REPO="${REPO:-/home/sibilla-cumana/src/ds4-cuda-stream-pr739}"
 SNAPSHOT="${SNAPSHOT:-/home/sibilla-cumana/ds4-sibilla-snapshot-20260912}"
 OUT="${OUT:-$SNAPSHOT/low-vram-analysis}"
 
-mkdir -p "$OUT"
+# The current interactive shell may not yet have refreshed its supplementary
+# groups. Create the analysis directory as the DS4 owner when direct creation
+# is not possible; bandi and sibilla-cumana both have sudo on Sibilla.
+if ! mkdir -p "$OUT" 2>/dev/null; then
+  sudo -n install -d -o sibilla-cumana -g sibilla-cumana -m 0775 "$OUT"
+fi
 
 patterns='cuda-low-vram-stream|DS4_CUDA_LOW_VRAM_STAGE_MB|LOW_VRAM|low_vram|ssd-streaming-cold|ssd_streaming_cold|stream_all_weights|stream-all-weights|prefill_chunk|prefill-chunk'
 
@@ -52,10 +57,10 @@ git ls-files --others --exclude-standard > "$OUT/untracked-files.txt"
 '
 
 echo '=== LOW-VRAM ANALYSIS ==='
-ls -lh "$OUT"
+sudo -u sibilla-cumana -H ls -lh "$OUT"
 echo
 echo '=== SYMBOL HITS ==='
-sed -n '1,220p' "$OUT/symbol-hits.txt"
+sudo -u sibilla-cumana -H sed -n '1,220p' "$OUT/symbol-hits.txt"
 echo
 echo '=== PATCH SIZE ==='
-wc -l "$OUT"/*.patch
+sudo -u sibilla-cumana -H bash -c 'wc -l "$1"/*.patch' bash "$OUT"
