@@ -45,6 +45,32 @@ def test_fish_cache_is_bounded_async_and_deterministic(tmp_path):
     assert list((tmp_path / "cache").glob("*.wav")) == [ready]
 
 
+def test_failed_fish_generation_is_not_requeued_in_a_tight_loop(tmp_path):
+    helper = tmp_path / "helper.py"
+    helper.write_text("raise SystemExit(7)\n")
+    cache = FishTTSCache(
+        base_url="http://127.0.0.1:1",
+        api_key="secret-for-test",
+        cache_dir=tmp_path / "cache",
+        python=sys.executable,
+        helper=helper,
+        queue_size=1,
+        failure_backoff_seconds=60,
+    )
+
+    assert cache.prepare("Ciao") == {"status": "pending"}
+    deadline = time.time() + 5
+    status = None
+    while time.time() < deadline:
+        status = cache.prepare("Ciao")["status"]
+        if status == "unavailable":
+            break
+        time.sleep(0.02)
+
+    assert status == "unavailable"
+    assert cache.ready_path("Ciao") is None
+
+
 def test_fish_helper_has_no_user_selectable_voice_or_text_argv():
     source = Path("scripts/ralf_teacher_fish_client.py").read_text()
     assert 'VOICE_ID = "peppone"' in source
