@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .application import LearningApplication
 from .client import TeacherClient
+from .feedback_voice import FeedbackVoiceRegistry
 from .fish_tts import FishTTSCache
 from .state import State
 
@@ -84,9 +85,11 @@ def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", sec
     state = state or State(os.environ.get("TEACHER_WEB_DB", "/var/lib/ralfloop-teacher-web/student.sqlite3"))
     learning = LearningApplication(state, teacher or TeacherClient())
     fish = fish_tts if fish_tts is not None else FishTTSCache.from_env()
+    voices = FeedbackVoiceRegistry(fish)
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.state.learning = learning
     app.state.fish_tts = fish
+    app.state.feedback_voices = voices
     locks = [threading.Lock() for _ in range(64)]
     rate_lock, rates = threading.Lock(), defaultdict(deque)
     health_lock, health_cache = threading.Lock(), {"checked": 0.0, "ok": False}
@@ -224,11 +227,13 @@ def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", sec
     def answer(activity_id: str, data: Answer, profile=Depends(student)):
         if (isinstance(data.answer, str) and len(data.answer) > 4000) or (isinstance(data.answer, list) and (len(data.answer) > 12 or any(len(x) > 2000 for x in data.answer))):
             raise ValueError("answer_too_large")
-        return locked(profile, learning.answer, activity_id, data.answer, data.request_key)
+        result = locked(profile, learning.answer, activity_id, data.answer, data.request_key)
+        return voices.attach(profile["id"], result)
 
     @app.post("/api/activities/{activity_id}/help")
     def help_activity(activity_id: str, data: Help, profile=Depends(student)):
-        return locked(profile, learning.help, activity_id, data.mode, data.question)
+        result = locked(profile, learning.help, activity_id, data.mode, data.question)
+        return voices.attach(profile["id"], result)
 
     @app.post("/api/activities/{activity_id}/simulation")
     def simulation(activity_id: str, data: Simulation, profile=Depends(student)):
@@ -243,7 +248,8 @@ def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", sec
 
     @app.post("/api/materials/{material_id}")
     def material_action(material_id: str, data: MaterialAction, profile=Depends(student)):
-        return locked(profile, learning.material_action, material_id, data.action)
+        result = locked(profile, learning.material_action, material_id, data.action)
+        return voices.attach(profile["id"], result)
 
     @app.post("/api/study-plan")
     def plan(data: Plan, profile=Depends(student)):
@@ -254,6 +260,17 @@ def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", sec
         with state.connect() as conn:
             rows = conn.execute("SELECT a.id,a.provider,a.tracks,a.chapter,a.position,m.title FROM audio_assets a JOIN materials m ON m.id=a.material WHERE a.student=? ORDER BY a.created DESC LIMIT 30", (profile["id"],)).fetchall()
         return [{**dict(row), "tracks": json.loads(row["tracks"])} for row in rows]
+
+    @app.post("/api/feedback-audio/{voice_id}/prepare")
+    def feedback_audio_prepare(voice_id: str, profile=Depends(student)):
+        return voices.prepare(profile["id"], voice_id)
+
+    @app.get("/api/feedback-audio/{voice_id}/file")
+    def feedback_audio_file(voice_id: str, profile=Depends(student)):
+        path = voices.ready_path(profile["id"], voice_id)
+        if path is None:
+            raise HTTPException(404, "Audio non ancora pronto.")
+        return FileResponse(path, media_type="audio/wav")
 
     @app.post("/api/audio/{asset_id}/position")
     def audio_position(asset_id: str, data: AudioPosition, profile=Depends(student)):
