@@ -8,9 +8,14 @@ const avatar=new BottazziAvatarController({onChange:controller=>{
 }});
 const main = document.querySelector('#main');
 const notice = document.querySelector('#notice');
-let home, activity;
+let home, activity, serverAudio, serverAudioCleanup;
 const labels = {primary:'Primaria',middle:'Secondaria di primo grado',upper:'Secondaria di secondo grado'};
 const modes = {multiple_choice:'Scelta multipla',true_false:'Vero o falso',free_answer:'Risposta aperta',matching:'Abbinamenti',grouping:'Raggruppa',ordering:'Ordina',fill_blank:'Completa',flashcards:'Carte ripasso',memory:'Memory',definition_match:'Definizioni',sequence:'Sequenza',timed_challenge:'Sfida a tempo',guided_exercise:'Esercizio guidato',simulation:'Laboratorio'};
+
+function stopServerAudio(){
+  if(serverAudio){serverAudio.pause();serverAudio.removeAttribute('src');serverAudio.load();serverAudio=null;}
+  if(serverAudioCleanup){const cleanup=serverAudioCleanup;serverAudioCleanup=null;cleanup();}
+}
 
 export function el(tag, text, attrs={}) {
   const node=document.createElement(tag);
@@ -133,24 +138,27 @@ async function books(){
   const form=el('form',null,{class:'card'});form.append(el('h2','Aggiungi materiale'));const title=field(form,'Titolo','title');const text=field(form,'Testo o estratto autorizzato (massimo 10.000 caratteri)','text','textarea');const file=el('input',null,{type:'file',accept:'.txt,text/plain','aria-label':'Importa un file di testo'});file.onchange=async()=>{const f=file.files[0];if(f){if(f.size>20000){showError(Error('File troppo grande.'));return;}text.value=await f.text();}};form.append(file);const chapter=field(form,'Capitolo o sezione','chapter');chapter.required=false;const rights=el('select',null,{'aria-label':'Diritti sul materiale',required:''});for(const [value,label] of [['','Seleziona i diritti'],['own','Testo scritto da me'],['authorized','Ho autorizzazione per questi usi'],['public_domain','Pubblico dominio'],['compatible_license','Licenza compatibile']])rights.append(el('option',label,{value}));form.append(el('label','Diritti sul materiale'),rights,el('p','Carica solo materiale che puoi utilizzare. Nessuna riproduzione integrale di libri protetti.',{class:'muted'}),el('button','Aggiungi',{type:'submit'}));form.onsubmit=async e=>{e.preventDefault();const b=form.querySelector('button');b.disabled=true;try{await api('/materials',{title:title.value,text:text.value,rights:rights.value,chapter:chapter.value});await render();}catch(error){showError(error);}finally{b.disabled=false;}};main.append(form);
 }
 async function audioPage(){
-  heading('Ascolta e ripassa','Capitoli brevi, con la voce disponibile sul tuo dispositivo.');
+  heading('Ascolta e ripassa','Bot-tazzi usa la voce Peppone quando è pronta; nel frattempo parte subito la voce del dispositivo.');
   const assets=await api('/audio');if(!assets.length)main.append(el('p','Apri un libro e scegli “Ascolta” per preparare la lettura.'));
   for(const asset of assets){const card=add(el('section',null,{class:'card'}),el('h2',asset.title));const select=el('select',null,{'aria-label':'Capitolo audio'});asset.tracks.forEach((t,i)=>select.append(el('option','Capitolo '+(i+1),{value:i})));select.value=asset.chapter;
     const speed=el('select',null,{'aria-label':'Velocità di lettura'});for(const rate of [.75,1,1.25,1.5])speed.append(el('option',rate+'×',{value:rate}));speed.value=1;
     const text=el('p',asset.tracks[asset.chapter]?.text||'');let position=asset.position||0;
-    select.onchange=()=>{position=0;text.textContent=asset.tracks[Number(select.value)].text;};
+    select.onchange=()=>{window.speechSynthesis?.cancel();stopServerAudio();avatar.reset();position=0;text.textContent=asset.tracks[Number(select.value)].text;};
     const save=()=>api('/audio/'+asset.id+'/position',{chapter:Number(select.value),position:Number(position)});
-    const play=()=>{if(!('speechSynthesis' in window)||!speechSynthesis.getVoices().length)throw Error('Voce non disponibile sul dispositivo. Il testo è pronto; serve un provider audio.');speechSynthesis.cancel();avatar.reset();const track=asset.tracks[Number(select.value)];const offset=Math.min(position,track.text.length);const utterance=new SpeechSynthesisUtterance(track.text.slice(offset));avatar.bindSpeech(utterance);utterance.lang='it-IT';utterance.rate=Number(speed.value);utterance.onboundary=e=>{position=offset+e.charIndex;};utterance.onend=()=>{position=0;save().catch(showError);};speechSynthesis.speak(utterance);};
-    add(card,select,speed,text,button('Riproduci',play),button('Pausa',async()=>{window.speechSynthesis?.pause();await save();},true),button('Riprendi',()=>{if(window.speechSynthesis?.paused)speechSynthesis.resume();else play();},true),el('p','Voce browser opzionale. Nessun file audio generato dal server.',{class:'muted'}));main.append(card);
+    const playBrowser=()=>{if(!('speechSynthesis' in window)||!speechSynthesis.getVoices().length)throw Error('Voce non disponibile sul dispositivo. Il testo è pronto; Bot-tazzi sta preparando l’audio.');stopServerAudio();speechSynthesis.cancel();avatar.reset();const track=asset.tracks[Number(select.value)];const offset=Math.min(position,track.text.length);const utterance=new SpeechSynthesisUtterance(track.text.slice(offset));avatar.bindSpeech(utterance);utterance.lang='it-IT';utterance.rate=Number(speed.value);utterance.onboundary=e=>{position=offset+e.charIndex;};utterance.onend=()=>{position=0;save().catch(showError);};speechSynthesis.speak(utterance);};
+    const playServer=async url=>{window.speechSynthesis?.cancel();stopServerAudio();avatar.reset();position=0;serverAudio=new Audio(url);serverAudio.playbackRate=Number(speed.value);serverAudioCleanup=avatar.bindAudio(serverAudio);serverAudio.addEventListener('ended',()=>{position=0;save().catch(showError);stopServerAudio();},{once:true});try{await serverAudio.play();}catch(error){stopServerAudio();throw Error('Audio di Bot-tazzi non disponibile. Riprova.');}};
+    const play=async()=>{const chapter=Number(select.value);const prepared=await api('/audio/'+asset.id+'/prepare',{chapter});if(position===0&&prepared.status==='ready'&&prepared.url){await playServer(prepared.url);return;}playBrowser();};
+    add(card,select,speed,text,button('Riproduci',play),button('Pausa',async()=>{if(serverAudio&&!serverAudio.paused)serverAudio.pause();else window.speechSynthesis?.pause();await save();},true),button('Riprendi',async()=>{if(serverAudio?.paused)await serverAudio.play();else if(window.speechSynthesis?.paused)speechSynthesis.resume();else await play();},true),el('p','La preparazione Peppone avviene in background. Se non è ancora pronta, la lettura browser parte senza attese.',{class:'muted'}));main.append(card);
   }
 }
 async function render(){
   window.speechSynthesis?.cancel();
+  stopServerAudio();
   avatar.reset();
   notice.textContent='';main.replaceChildren(el('p','Un momento…'));const path=location.pathname;
   document.querySelectorAll('nav a').forEach(a=>{if(a.getAttribute('href')===path)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});
   if(path==='/login'){main.replaceChildren();login();return;}
   home=await api('/home');main.replaceChildren();
-  if(path==='/'||path==='/home')dashboard();else if(path==='/study')study();else if(path==='/quiz')study(true);else if(path==='/simulations')study(false,true);else if(path==='/activity')await activityPage();else if(path==='/progress')await progressPage();else if(path==='/badges')await progressPage(true);else if(path==='/books')await books();else if(path==='/audio')await audioPage();else if(path==='/profile'){heading('Il tuo profilo');main.append(el('p',home.profile.display_name),el('p',labels[home.profile.school_level]+' · classe '+home.profile.grade),el('p','La tessera identifica il tuo profilo. La credenziale protegge l’accesso.'),button('Esci',async()=>{await api('/logout',{});window.speechSynthesis?.cancel();navigate('/login');},true));}
+  if(path==='/'||path==='/home')dashboard();else if(path==='/study')study();else if(path==='/quiz')study(true);else if(path==='/simulations')study(false,true);else if(path==='/activity')await activityPage();else if(path==='/progress')await progressPage();else if(path==='/badges')await progressPage(true);else if(path==='/books')await books();else if(path==='/audio')await audioPage();else if(path==='/profile'){heading('Il tuo profilo');main.append(el('p',home.profile.display_name),el('p',labels[home.profile.school_level]+' · classe '+home.profile.grade),el('p','La tessera identifica il tuo profilo. La credenziale protegge l’accesso.'),button('Esci',async()=>{await api('/logout',{});window.speechSynthesis?.cancel();stopServerAudio();navigate('/login');},true));}
 }
 render().catch(showError);
