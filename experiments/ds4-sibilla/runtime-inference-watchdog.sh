@@ -14,6 +14,7 @@ WATCH_INTERVAL="${WATCH_INTERVAL:-0.25}"
 POST_KILL_SECONDS="${POST_KILL_SECONDS:-12}"
 REQ_TIMEOUT="${REQ_TIMEOUT:-90}"
 MAX_TOKENS="${MAX_TOKENS:-1}"
+CACHE_VERBOSE="${DS4_CUDA_WEIGHT_CACHE_VERBOSE:-}"
 
 BIN="$PORT_DIR/ds4-server"
 LOG="$OUT/server.log"
@@ -128,6 +129,7 @@ sudo -u "$OWNER" -H sh -c '
   DS4_LOCK_FILE="$5" \
   DS4_CUDA_LOW_VRAM_STAGE_MB=640 \
   DS4_CUDA_LOW_VRAM_RESERVE_MB=512 \
+  DS4_CUDA_WEIGHT_CACHE_VERBOSE="$6" \
   "$1" \
     -m "$2" \
     --backend cuda \
@@ -142,7 +144,7 @@ sudo -u "$OWNER" -H sh -c '
     --port "$3" \
     > "$4" 2>&1 &
   echo $!
-' sh "$BIN" "$MODEL" "$TEST_PORT" "$LOG" "$LOCKFILE" | sudo -u "$OWNER" -H tee "$PIDFILE" >/dev/null
+' sh "$BIN" "$MODEL" "$TEST_PORT" "$LOG" "$LOCKFILE" "$CACHE_VERBOSE" | sudo -u "$OWNER" -H tee "$PIDFILE" >/dev/null
 
 TEST_PID="$(cat "$PIDFILE")"
 echo "startup_test_pid=$TEST_PID"
