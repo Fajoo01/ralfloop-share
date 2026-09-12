@@ -1,12 +1,14 @@
 """Bounded asynchronous Fish TTS cache for the isolated Teacher web app.
 
-The browser never receives the Fish API key, ClusterIP, cache key, local path,
-or a way to choose a voice. Only the fixed persistent reference ``peppone`` is
-used by the helper process.
+The browser never receives the Fish endpoint, API key, cache key, local path, or
+a way to choose a voice. Only the fixed persistent reference ``peppone`` is used
+by the helper process. Authentication is optional only for a loopback Fish
+endpoint; non-loopback endpoints still require an API key.
 """
 from __future__ import annotations
 
 from hashlib import sha256
+import ipaddress
 import logging
 import os
 from pathlib import Path
@@ -14,10 +16,24 @@ import queue
 import subprocess
 import threading
 import time
+from urllib.parse import urlsplit
 
 VOICE_ID = "peppone"
-CACHE_VERSION = "fish-s2-pro-peppone-v1"
+CACHE_VERSION = "fish-1.5-peppone-v1"
 log = logging.getLogger("teacher.web.fish_tts")
+
+
+def _loopback_url(value: str) -> bool:
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname
+        if parsed.scheme not in {"http", "https"} or not host:
+            return False
+        if host == "localhost":
+            return True
+        return ipaddress.ip_address(host).is_loopback
+    except (ValueError, ipaddress.AddressValueError):
+        return False
 
 
 class FishTTSCache:
@@ -57,7 +73,7 @@ class FishTTSCache:
         missing = []
         if not self.base_url:
             missing.append("TEACHER_FISH_URL")
-        if not self.api_key:
+        elif not self.api_key and not _loopback_url(self.base_url):
             missing.append("TEACHER_FISH_API_KEY")
         if not self.python:
             missing.append("TEACHER_FISH_PYTHON")
