@@ -223,8 +223,24 @@ static bool test_index_packed() {
     return run_case(false) && run_case(true);
 }
 
+
+static bool test_router384() {
+    const uint32_t n=384u,k=6u; const float scale=1.5f;
+    std::vector<float> logits(n),refp(n),refw(k);
+    for(uint32_t i=0;i<n;i++) logits[i]=((int)i-192)*0.03125f;
+    for(uint32_t i=0;i<n;i++){float z=logits[i];float sp=z>20?z:(z<-20?std::exp(z):std::log1p(std::exp(z)));refp[i]=std::sqrt(sp);}
+    std::vector<int32_t> refs(k,-1);
+    for(uint32_t i=0;i<n;i++)for(uint32_t j=0;j<k;j++)if(refs[j]<0||refp[i]>refp[(uint32_t)refs[j]]){for(uint32_t m=k-1;m>j;m--)refs[m]=refs[m-1];refs[j]=(int32_t)i;break;}
+    float sum=0;for(uint32_t j=0;j<k;j++){refw[j]=refp[(uint32_t)refs[j]];sum+=refw[j];}sum=std::max(sum,6.103515625e-5f);for(float&v:refw)v=v/sum*scale;
+    T lt((uint64_t)n*4u),pt((uint64_t)n*4u),st((uint64_t)k*4u),wt((uint64_t)k*4u);
+    if(!write(lt,logits)||!ds4_gpu_router_select_tensor(st.p,wt.p,pt.p,(const void*)1,1,0,0,0,0,n,k,scale,0,0,false,false,lt.p))return false;
+    std::vector<int32_t> got(k);if(!ds4_gpu_tensor_read(st.p,0,got.data(),(uint64_t)k*4u))return false;
+    for(uint32_t j=0;j<k;j++)if(got[j]!=refs[j]){std::fprintf(stderr,"router384 selected[%u] got=%d expected=%d\n",j,got[j],refs[j]);return false;}
+    return same(read(pt,n),refp,"router384_probs",2e-6f)&&same(read(wt,k),refw,"router384_weights",2e-6f);
+}
+
 int main(){if(!ds4_gpu_init())return 2;bool ok=true;
 #define RUN(name) do { bool pass=test_##name(); std::printf("%-18s %s\n",#name,pass?"PASS":"FAIL"); ok=ok&&pass; } while(0)
-RUN(bf16);RUN(quant_formats);RUN(rope);RUN(candidates);RUN(carry);RUN(gather);RUN(pool);RUN(engram);RUN(index_scores);RUN(index_topk);RUN(index_packed);
+RUN(bf16);RUN(quant_formats);RUN(rope);RUN(candidates);RUN(carry);RUN(gather);RUN(pool);RUN(engram);RUN(index_scores);RUN(index_topk);RUN(index_packed);RUN(router384);
 #undef RUN
 ds4_gpu_cleanup();std::puts(ok?"v41 CUDA primitive oracle: OK":"v41 CUDA primitive oracle: FAIL");return ok?0:1;}

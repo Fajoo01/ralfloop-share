@@ -1,0 +1,44 @@
+--- a/ds4.c
++++ b/ds4.c
+@@ -39717,6 +39717,41 @@
+                               DS4_N_FF_EXP, DS4_SWIGLU_CLAMP_EXP, 1.0f) ||
+         !ds41_bf16(g->shared_mid, DS4_N_FF_EXP) ||
+         !ds41_matmul(g->shared, m, l->ffn_down_shexp, g->shared_mid, true))) return false;
++    /* CUDA low-VRAM streaming needs the six router-selected expert IDs on
++     * the host before routed MoE resolves their GGUF ranges.  The canonical
++     * CUDA graph already performs this readback/override/cache-load sequence;
++     * V4.1 must do the same instead of entering routed MoE with no selected
++     * streaming expert set. */
++    if (g->streaming) {
++        int32_t selected_ids[DS4_MAX_EXPERT_USED];
++
++        if (!ds4_gpu_tensor_read(
++                g->selected,
++                0,
++                selected_ids,
++                (uint64_t)DS4_N_EXPERT_USED * sizeof(selected_ids[0])) ||
++            !ds4_gpu_routed_moe_set_selected_override(
++                selected_ids,
++                DS4_N_EXPERT_USED)) {
++            return false;
++        }
++
++        const ds4_gpu_stream_expert_table table =
++            graph_stream_expert_table_make(
++                m,
++                l,
++                il,
++                gate_row * DS4_N_FF_EXP,
++                down_row * DS4_N_EMBD);
++
++        if (!ds4_gpu_stream_expert_cache_begin_selected_load(
++                &table,
++                selected_ids,
++                DS4_N_EXPERT_USED)) {
++            return false;
++        }
++    }
++
+     if (!ds4_gpu_routed_moe_one_tensor(routed, g->gate, g->up, g->mid, g->experts,
+             m->map, m->size, l->ffn_gate_exps->abs_offset, l->ffn_up_exps->abs_offset,
+             l->ffn_down_exps->abs_offset, l->ffn_gate_exps->type, l->ffn_down_exps->type,
