@@ -17,10 +17,23 @@ The initial Metal-only blocker below has been partially removed by commits
 
 Deterministic RTX 2070 oracle coverage compares CUDA outputs with CPU contracts
 derived from `metal/dsv41.metal`. It caught and fixed a missing warp-reduction
-broadcast in the Engram kernel. Final result:
+broadcast in the Engram kernel. Index scoring initially exceeded the Turing
+48-KiB default shared-memory limit through the generic WMMA path; the final
+single-GPU path uses the exact F32 kernel and avoids the extra F16 cast. Final
+result:
 
 ```text
 ds4: CUDA backend initialized on NVIDIA GeForce RTX 2070 (sm_75) dev=0
+bf16               PASS
+quant_formats      PASS
+rope               PASS
+candidates         PASS
+carry              PASS
+gather             PASS
+pool               PASS
+engram             PASS
+index_scores       PASS
+index_topk         PASS
 v41 CUDA primitive oracle: OK
 ```
 
@@ -44,6 +57,12 @@ Gate 1 is now PASS. Exact Q2 acquisition started under the model owner at
 had 1,343,399,133,184 free bytes before download. Runtime gates and cutover
 remain pending until the 365,713,686,528-byte artifact passes its upstream
 SHA-256 check.
+
+The download initially used the WireGuard full tunnel. Persistent split
+routing now keeps `10.252.0.0/16` and source `10.252.14.7` on table `51820`,
+while new Internet flows use `eno1` via `192.168.0.1`. `vpnpc` remained healthy
+and the existing Xet process was not stopped. Full evidence and rollback are
+in `SIBILLA-SPLIT-TUNNEL-2026-09-13.md`.
 
 ## Initial outcome (superseded by continuation above)
 
