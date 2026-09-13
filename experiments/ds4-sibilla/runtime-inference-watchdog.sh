@@ -43,10 +43,14 @@ case "$MAX_TOKENS" in
   4) REQUEST_PROMPT='Reply with exactly four words: OK GO NOW DONE' ;;
 esac
 
-sudo -u "$OWNER" -H mkdir -p "$OUT"
-: | sudo -u "$OWNER" -H tee "$LOG" >/dev/null
-: | sudo -u "$OWNER" -H tee "$RESP" >/dev/null
-: | sudo -u "$OWNER" -H tee "$CURLERR" >/dev/null
+[[ "$EUID" -eq 0 ]] || { echo 'run via vpnpc sudo --non-interactive' >&2; exit 1; }
+OWNER_HOME="$(getent passwd "$OWNER" | cut -d: -f6)"
+as_owner() { runuser -u "$OWNER" -- env HOME="$OWNER_HOME" "$@"; }
+
+as_owner mkdir -p "$OUT"
+: | as_owner tee "$LOG" >/dev/null
+: | as_owner tee "$RESP" >/dev/null
+: | as_owner tee "$CURLERR" >/dev/null
 
 if [[ ! -x "$BIN" ]]; then
   echo "missing_binary: $BIN" >&2
@@ -69,11 +73,11 @@ mem_kb() {
   awk -v key="$1:" '$1 == key {print $2; exit}' /proc/meminfo
 }
 mpage_count() {
-  sudo dmesg 2>/dev/null | grep -c 'mpage_prepare_extent_to_map' || true
+  dmesg 2>/dev/null | grep -c 'mpage_prepare_extent_to_map' || true
 }
 owner_pid_alive() {
   local pid="$1"
-  sudo -u "$OWNER" -H kill -0 "$pid" 2>/dev/null
+  as_owner kill -0 "$pid" 2>/dev/null
 }
 
 agent_systemctl() {
@@ -103,13 +107,13 @@ cleanup() {
     kill -TERM "$CURL_PID" 2>/dev/null || true
   fi
   if [[ -n "${TEST_PID:-}" ]] && owner_pid_alive "$TEST_PID"; then
-    sudo -u "$OWNER" -H kill -TERM "$TEST_PID" 2>/dev/null || true
+    as_owner kill -TERM "$TEST_PID" 2>/dev/null || true
     for _ in $(seq 1 30); do
       owner_pid_alive "$TEST_PID" || break
       sleep 0.2
     done
     if owner_pid_alive "$TEST_PID"; then
-      sudo -u "$OWNER" -H kill -KILL "$TEST_PID" 2>/dev/null || true
+      as_owner kill -KILL "$TEST_PID" 2>/dev/null || true
     fi
   fi
   if [[ "$AGENT_WAS_ACTIVE" -eq 1 ]]; then
@@ -132,7 +136,7 @@ if [[ "$FREE_MIB" -lt 4500 ]]; then
   exit 2
 fi
 
-sudo -u "$OWNER" -H sh -c '
+as_owner sh -c '
   DS4_LOCK_FILE="$5" \
   DS4_CUDA_LOW_VRAM_STAGE_MB="$6" \
   DS4_CUDA_LOW_VRAM_RESERVE_MB="$7" \
@@ -153,7 +157,7 @@ sudo -u "$OWNER" -H sh -c '
   echo $!
 ' sh "$BIN" "$MODEL" "$TEST_PORT" "$LOG" "$LOCKFILE" \
   "$STAGE_MB" "$RESERVE_MB" "$CACHE_VERBOSE" | \
-  sudo -u "$OWNER" -H tee "$PIDFILE" >/dev/null
+  as_owner tee "$PIDFILE" >/dev/null
 
 TEST_PID="$(cat "$PIDFILE")"
 echo "startup_test_pid=$TEST_PID"
@@ -189,10 +193,10 @@ echo "pre_inference_writeback_kb=$PRE_WRITEBACK"
 echo "pre_inference_mpage=$PRE_MPAGE"
 
 printf '%s\n' "{\"model\":\"${MODEL_ID}\",\"messages\":[{\"role\":\"user\",\"content\":\"${REQUEST_PROMPT}\"}],\"stream\":false,\"think\":false,\"max_tokens\":${MAX_TOKENS},\"temperature\":0}" | \
-  sudo -u "$OWNER" -H tee "$REQ" >/dev/null
+  as_owner tee "$REQ" >/dev/null
 
 set +e
-sudo -u "$OWNER" -H curl --silent --show-error --fail-with-body \
+as_owner curl --silent --show-error --fail-with-body \
   --connect-timeout 5 --max-time "$REQ_TIMEOUT" \
   -H 'Content-Type: application/json' \
   --data-binary @"$REQ" \
@@ -233,7 +237,7 @@ done
 if [[ -n "$ABORT_REASON" ]]; then
   echo "ABORT_INFERENCE_WATCHDOG: $ABORT_REASON" >&2
   kill -TERM "$CURL_PID" 2>/dev/null || true
-  sudo -u "$OWNER" -H kill -TERM "$TEST_PID" 2>/dev/null || true
+  as_owner kill -TERM "$TEST_PID" 2>/dev/null || true
   sleep 1
   echo '=== LOG TAIL ==='
   tail -n 160 "$LOG" || true
@@ -253,13 +257,13 @@ cat "$CURLERR" 2>/dev/null || true
 
 # Exercise cleanup/unpin paths while watchdog checks continue afterwards.
 if owner_pid_alive "$TEST_PID"; then
-  sudo -u "$OWNER" -H kill -TERM "$TEST_PID" 2>/dev/null || true
+  as_owner kill -TERM "$TEST_PID" 2>/dev/null || true
   for _ in $(seq 1 30); do
     owner_pid_alive "$TEST_PID" || break
     sleep 0.2
   done
   if owner_pid_alive "$TEST_PID"; then
-    sudo -u "$OWNER" -H kill -KILL "$TEST_PID" 2>/dev/null || true
+    as_owner kill -KILL "$TEST_PID" 2>/dev/null || true
   fi
 fi
 TEST_PID=""

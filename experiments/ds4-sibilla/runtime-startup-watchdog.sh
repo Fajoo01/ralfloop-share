@@ -16,8 +16,12 @@ LOG="$OUT/server.log"
 PIDFILE="$OUT/server.pid"
 LOCKFILE="$OUT/ds4-startup-watchdog.lock"
 
-sudo -u "$OWNER" -H mkdir -p "$OUT"
-: | sudo -u "$OWNER" -H tee "$LOG" >/dev/null
+[[ "$EUID" -eq 0 ]] || { echo 'run via vpnpc sudo --non-interactive' >&2; exit 1; }
+OWNER_HOME="$(getent passwd "$OWNER" | cut -d: -f6)"
+as_owner() { runuser -u "$OWNER" -- env HOME="$OWNER_HOME" "$@"; }
+
+as_owner mkdir -p "$OUT"
+: | as_owner tee "$LOG" >/dev/null
 
 if [[ ! -x "$BIN" ]]; then
   echo "missing_binary: $BIN" >&2
@@ -37,9 +41,9 @@ if ss -ltn | awk '{print $4}' | grep -qE "[:.]${TEST_PORT}$"; then
 fi
 
 BASE_DIRTY_KB="$(awk '/^Dirty:/ {print $2}' /proc/meminfo)"
-BASE_WARNINGS="$(sudo dmesg 2>/dev/null | grep -c 'mpage_prepare_extent_to_map' || true)"
+BASE_WARNINGS="$(dmesg 2>/dev/null | grep -c 'mpage_prepare_extent_to_map' || true)"
 printf 'baseline_dirty_kb=%s\nbaseline_mpage_warnings=%s\n' "$BASE_DIRTY_KB" "$BASE_WARNINGS" | \
-  sudo -u "$OWNER" -H tee "$OUT/baseline.txt" >/dev/null
+  as_owner tee "$OUT/baseline.txt" >/dev/null
 
 agent_systemctl() {
   if [[ "$(id -un)" == "$AGENT_USER" ]]; then
@@ -63,7 +67,7 @@ fi
 
 owner_pid_alive() {
   local pid="$1"
-  sudo -u "$OWNER" -H kill -0 "$pid" 2>/dev/null
+  as_owner kill -0 "$pid" 2>/dev/null
 }
 
 cleanup() {
@@ -72,13 +76,13 @@ cleanup() {
     local pid
     pid="$(cat "$PIDFILE" 2>/dev/null)"
     if [[ -n "${pid:-}" ]] && owner_pid_alive "$pid"; then
-      sudo -u "$OWNER" -H kill -TERM "$pid" 2>/dev/null
+      as_owner kill -TERM "$pid" 2>/dev/null
       for _ in $(seq 1 30); do
         owner_pid_alive "$pid" || break
         sleep 0.2
       done
       if owner_pid_alive "$pid"; then
-        sudo -u "$OWNER" -H kill -KILL "$pid" 2>/dev/null
+        as_owner kill -KILL "$pid" 2>/dev/null
       fi
     fi
   fi
@@ -95,7 +99,7 @@ if [[ "$FREE_MIB" -lt 4000 ]]; then
   exit 2
 fi
 
-sudo -u "$OWNER" -H sh -c '
+as_owner sh -c '
   DS4_LOCK_FILE="$5" \
   DS4_CUDA_LOW_VRAM_STAGE_MB=640 \
   DS4_CUDA_LOW_VRAM_RESERVE_MB=512 \
@@ -113,7 +117,7 @@ sudo -u "$OWNER" -H sh -c '
     > "$4" 2>&1 &
   echo $!
 ' sh "$BIN" "$MODEL" "$TEST_PORT" "$LOG" "$LOCKFILE" | \
-  sudo -u "$OWNER" -H tee "$PIDFILE" >/dev/null
+  as_owner tee "$PIDFILE" >/dev/null
 
 PID="$(cat "$PIDFILE")"
 echo "startup_test_pid=$PID"
@@ -129,7 +133,7 @@ for sec in $(seq 1 "$STARTUP_TIMEOUT"); do
   DIRTY_KB="$(awk '/^Dirty:/ {print $2}' /proc/meminfo)"
   DELTA_KB=$((DIRTY_KB - BASE_DIRTY_KB))
   if (( DELTA_KB < 0 )); then DELTA_KB=0; fi
-  WARNINGS="$(sudo dmesg 2>/dev/null | grep -c 'mpage_prepare_extent_to_map' || true)"
+  WARNINGS="$(dmesg 2>/dev/null | grep -c 'mpage_prepare_extent_to_map' || true)"
 
   printf 't=%ss dirty_kb=%s delta_kb=%s mpage_warnings=%s\n' \
     "$sec" "$DIRTY_KB" "$DELTA_KB" "$WARNINGS"
@@ -172,7 +176,7 @@ if ! grep -q 'CUDA low-VRAM SSD stream: skipping file-backed model host registra
 fi
 
 FINAL_DIRTY_KB="$(awk '/^Dirty:/ {print $2}' /proc/meminfo)"
-FINAL_WARNINGS="$(sudo dmesg 2>/dev/null | grep -c 'mpage_prepare_extent_to_map' || true)"
+FINAL_WARNINGS="$(dmesg 2>/dev/null | grep -c 'mpage_prepare_extent_to_map' || true)"
 
 echo '=== STARTUP LOG MARKERS ==='
 grep -E 'low-VRAM|skipping file-backed|SSD streaming|listening on|memory:|context buffers' "$LOG" | tail -n 120 || true
