@@ -106,4 +106,29 @@ static bool test_engram() {
     for(uint32_t hc=0;hc<4;hc++){float h2=0,k2=0,dot=0;for(uint32_t i=0;i<width;i++){float h=ref[hc*width+i],k=bf16(kv[hc*width+i]);h2+=h*h;k2+=k*k;dot+=h*(qw[hc*width+i]*kw[hc*width+i])*k;}dot*=1/std::sqrt(h2/width+1e-20f)*1/std::sqrt(k2/width+1e-20f)*1/std::sqrt((float)width);float gate=1/(1+std::exp(-std::copysign(std::sqrt(std::max(std::fabs(dot),1e-6f)),dot)));for(uint32_t i=0;i<width;i++)ref[hc*width+i]=bf16(ref[hc*width+i]+gate*bf16(kv[4*width+i]));}
     T r(residual.size()*4u),k(kv.size()*4u),q(qw.size()*4u),w(kw.size()*4u);return write(r,residual)&&write(k,kv)&&write(q,qw)&&write(w,kw)&&ds4_gpu_dsv41_engram_add(r.p,k.p,q.p,w.p,nullptr,width,rows,1e-20f)&&same(read(r,ref.size()),ref,"engram",0.008f);
 }
-int main(){if(!ds4_gpu_init())return 2;bool ok=test_bf16()&&test_quant_formats()&&test_rope()&&test_candidates()&&test_carry()&&test_gather()&&test_pool()&&test_engram();ds4_gpu_cleanup();std::puts(ok?"v41 CUDA primitive oracle: OK":"v41 CUDA primitive oracle: FAIL");return ok?0:1;}
+static bool test_index_scores() {
+    const uint32_t source=4,rows=2,start=6,ratio=2,heads=32,dim=128;
+    std::vector<float> q((size_t)rows*heads*dim),w((size_t)rows*heads),k((size_t)source*dim),ref((size_t)rows*source,-INFINITY);
+    for(size_t i=0;i<q.size();i++)q[i]=(i%5==0)?0.5f:-0.25f;
+    for(size_t i=0;i<w.size();i++)w[i]=(float)((i%4)+1)/8.0f;
+    for(size_t i=0;i<k.size();i++)k[i]=(i%7==0)?0.25f:-0.5f;
+    for(uint32_t t=0;t<rows;t++){uint32_t visible=(start+t+1)/ratio;for(uint32_t r=0;r<std::min(source,visible);r++){float sum=0;for(uint32_t h=0;h<heads;h++){float dot=0;for(uint32_t d=0;d<dim;d++)dot+=q[((size_t)t*heads+h)*dim+d]*k[(size_t)r*dim+d];sum+=std::max(dot/64.0f,0.0f)*w[(size_t)t*heads+h];}ref[(size_t)t*source+r]=sum;}}
+    T qt(q.size()*4u),wt(w.size()*4u),kt(k.size()*4u),st(ref.size()*4u);
+    return write(qt,q)&&write(wt,w)&&write(kt,k)&&
+        ds4_gpu_dsv41_indexer_scores_batch(st.p,qt.p,wt.p,kt.p,source,rows,start,ratio)&&
+        same(read(st,ref.size()),ref,"index_scores",0.02f);
+}
+static bool test_index_topk() {
+    const uint32_t width=1024,rows=1,start=2047,ratio=2,top=512;
+    std::vector<float> scores(width);for(uint32_t i=0;i<width;i++)scores[i]=(float)i;
+    T s(scores.size()*4u),out(top*sizeof(int32_t));std::vector<int32_t> got(top);
+    if(!write(s,scores)||!ds4_gpu_dsv41_indexer_topk_batch(out.p,s.p,width,rows,start,ratio)||
+       !ds4_gpu_tensor_read(out.p,0,got.data(),got.size()*sizeof(int32_t)))return false;
+    for(uint32_t i=0;i<top;i++)if(got[i]!=(int32_t)(width-1u-i)){std::fprintf(stderr,"index_topk mismatch[%u]: got=%d expected=%u\n",i,got[i],width-1u-i);return false;}
+    return true;
+}
+int main(){if(!ds4_gpu_init())return 2;bool ok=true;
+#define RUN(name) do { bool pass=test_##name(); std::printf("%-18s %s\n",#name,pass?"PASS":"FAIL"); ok=ok&&pass; } while(0)
+RUN(bf16);RUN(quant_formats);RUN(rope);RUN(candidates);RUN(carry);RUN(gather);RUN(pool);RUN(engram);RUN(index_scores);RUN(index_topk);
+#undef RUN
+ds4_gpu_cleanup();std::puts(ok?"v41 CUDA primitive oracle: OK":"v41 CUDA primitive oracle: FAIL");return ok?0:1;}

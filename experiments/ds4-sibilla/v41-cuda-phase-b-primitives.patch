@@ -17,8 +17,8 @@
  void ds4_gpu_parallel_ffn_abort(void);
  int ds4_gpu_parallel_ffn_start(
 --- a/ds4_cuda.cu	2026-09-13 07:07:28.170216207 +0200
-+++ b/ds4_cuda.cu	2026-09-13 07:17:59.264780876 +0200
-@@ -34616,3 +34616,372 @@
++++ b/ds4_cuda.cu	2026-09-13 07:40:26.947701672 +0200
+@@ -34616,3 +34616,386 @@
  #define DS4_GLM53_VISION_STREAM cuda_decode_stream()
  #include "ds4_glm53_vision_gpu.cuh"
  #include "ds4_deepseek4_vision_gpu.cuh"
@@ -359,9 +359,22 @@
 +        const ds4_gpu_tensor *q, const ds4_gpu_tensor *weights,
 +        const ds4_gpu_tensor *keys, uint32_t source_rows, uint32_t rows,
 +        uint32_t start, uint32_t ratio) {
-+    if (ratio != 1u && ratio != 2u) return 0;
-+    return ds4_gpu_glm_indexer_scores_batch_tensor(scores, q, weights, keys,
-+        source_rows, rows, start, 32u, 128u, 1.0f / 64.0f, false);
++    if (!scores || !q || !weights || !keys ||
++        (ratio != 1u && ratio != 2u) || !source_rows || !rows ||
++        rows > UINT32_MAX - start || (start + rows) / ratio > source_rows ||
++        q->bytes < (uint64_t)rows * 32u * 128u * sizeof(float) ||
++        weights->bytes < (uint64_t)rows * 32u * sizeof(float) ||
++        keys->bytes < (uint64_t)source_rows * 128u * sizeof(float) ||
++        scores->bytes < (uint64_t)rows * source_rows * sizeof(float) ||
++        ds4_gpu_set_current_device(ds4_tensor_device_idx(scores)) != 0) return 0;
++    /* The generic WMMA tile needs about 52 KiB shared memory. Turing's
++     * default per-block limit is 48 KiB, and V4.1 also requires no extra
++     * cast after FP4 rounding. Use the exact F32 kernel on sm_75. */
++    glm_indexer_scores_f32_kernel<float><<<dim3(source_rows, rows, 1u), 128u>>>(
++        (float *)scores->ptr, (const float *)q->ptr,
++        (const float *)weights->ptr, (const float *)keys->ptr,
++        source_rows, rows, start, 32u, 128u, ratio, 1.0f / 64.0f, true);
++    return cuda_ok(cudaGetLastError(), "V4.1 exact indexer scores launch");
 +}
 +
 +extern "C" int ds4_gpu_dsv41_indexer_topk_batch(ds4_gpu_tensor *selected,
@@ -391,3 +404,4 @@
 +    (void)source_rows; (void)rows; (void)start; (void)ratio;
 +    (void)packed_rows; (void)offset; return 0;
 +}
++
