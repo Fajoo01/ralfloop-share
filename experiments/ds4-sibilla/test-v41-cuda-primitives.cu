@@ -12,6 +12,21 @@ static float bf16(float x) {
     uint32_t u=bits(x); if ((u&0x7f800000u)!=0x7f800000u) u+=0x7fffu+((u>>16u)&1u);
     return from_bits(u&0xffff0000u);
 }
+static float e4m3_value(int i) {
+    int e=(i>>3)&15,m=i&7; return e ? (1.0f+(float)m*0.125f)*std::exp2((float)e-7.0f)
+                                      : (float)m*0.001953125f;
+}
+static float e4m3(float x) {
+    float sign=x<0?-1.0f:1.0f,ax=std::min(std::fabs(x),448.0f); int lo=0,hi=126;
+    while(lo<hi){int mid=(lo+hi+1)>>1;if(e4m3_value(mid)<=ax)lo=mid;else hi=mid-1;}
+    int best=lo;if(best<126){float a=std::fabs(ax-e4m3_value(best)),b=std::fabs(ax-e4m3_value(best+1));if(b<a||(b==a&&((best+1)&1)==0&&(best&1)))best++;}
+    return sign*e4m3_value(best);
+}
+static float e2m1(float x) {
+    static const float v[]={0,0.5f,1,1.5f,2,3,4,6};float sign=x<0?-1.0f:1.0f,ax=std::min(std::fabs(x),6.0f);int best=0;
+    for(int i=1;i<8;i++){float a=std::fabs(ax-v[best]),b=std::fabs(ax-v[i]);if(b<a||(b==a&&(i&1)==0&&(best&1)))best=i;}return sign*v[best];
+}
+static float pow2ceil(float x){uint32_t u=bits(x);return from_bits((u&0x7f800000u)+((u&0x7fffffu)?0x800000u:0));}
 static bool same(const std::vector<float>& a,const std::vector<float>& b,const char *name,float eps=0) {
     if(a.size()!=b.size()) return false;
     for(size_t i=0;i<a.size();i++) {
@@ -28,6 +43,18 @@ static bool test_bf16() {
         std::numeric_limits<float>::infinity(),-std::numeric_limits<float>::infinity()};
     std::vector<float> ref=in; for(float& x:ref)x=bf16(x); T t(in.size()*4u);
     return write(t,in)&&ds4_gpu_dsv41_quantize(t.p,(uint32_t)in.size(),1,DS4_V41_BF16)&&same(read(t,in.size()),ref,"bf16");
+}
+static bool test_quant_formats() {
+    for(uint32_t mode=DS4_V41_FP8_E8M0;mode<=DS4_V41_FP4_E4M3;mode++){
+        const uint32_t width=mode==DS4_V41_FP4_E4M3?16:32;std::vector<float> in(width),ref;
+        for(uint32_t i=0;i<width;i++)in[i]=((int)i-(int)width/2)*0.73125f;ref=in;
+        float amax=0;for(float x:ref)amax=std::max(amax,std::fabs(bf16(x)));float scale;
+        if(mode==DS4_V41_FP8_E8M0)scale=pow2ceil(std::max(amax,1.0e-4f)/448.0f);
+        else if(mode==DS4_V41_FP4_E8M0)scale=pow2ceil(std::max(amax,7.052966104933725e-38f)/6.0f);
+        else scale=e4m3(std::max(amax,0.01171875f)/6.0f);
+        for(float&x:ref){float v=bf16(x);x=bf16((mode==DS4_V41_FP8_E8M0?e4m3(v/scale):e2m1(v/scale))*scale);}
+        T t(in.size()*4u);if(!write(t,in)||!ds4_gpu_dsv41_quantize(t.p,width,1,(ds4_v41_activation_format)mode)||!same(read(t,in.size()),ref,"quant_format"))return false;
+    }return true;
 }
 static bool test_rope() {
     const uint32_t width=64, heads=2, rows=2, start=7; std::vector<float> in(width*heads*rows),ref;
@@ -72,4 +99,11 @@ static bool test_pool() {
     std::vector<float> zeros(width,0); if(!write(k,kv)||!write(s,sc)||!write(pk,prev)||!write(ps,zeros)||!ds4_gpu_dsv41_pool2(o.p,k.p,s.p,pk.p,ps.p,width,rows,start))return false;
     return same(read(o,ref.size()),ref,"pool2")&&same(read(pk,width),std::vector<float>(kv.begin()+4,kv.begin()+8),"pool_previous");
 }
-int main(){if(!ds4_gpu_init())return 2;bool ok=test_bf16()&&test_rope()&&test_candidates()&&test_carry()&&test_gather()&&test_pool();ds4_gpu_cleanup();std::puts(ok?"v41 CUDA primitive oracle: OK":"v41 CUDA primitive oracle: FAIL");return ok?0:1;}
+static bool test_engram() {
+    const uint32_t width=32,rows=1;std::vector<float> residual(4*width),kv(5*width),qw(4*width),kw(4*width,1.0f),ref;
+    for(size_t i=0;i<residual.size();i++){residual[i]=((int)(i%11)-5)*0.125f;qw[i]=((int)(i%7)-3)*0.25f;}
+    for(size_t i=0;i<kv.size();i++)kv[i]=((int)(i%13)-6)*0.0625f;ref=residual;
+    for(uint32_t hc=0;hc<4;hc++){float h2=0,k2=0,dot=0;for(uint32_t i=0;i<width;i++){float h=ref[hc*width+i],k=bf16(kv[hc*width+i]);h2+=h*h;k2+=k*k;dot+=h*(qw[hc*width+i]*kw[hc*width+i])*k;}dot*=1/std::sqrt(h2/width+1e-20f)*1/std::sqrt(k2/width+1e-20f)*1/std::sqrt((float)width);float gate=1/(1+std::exp(-std::copysign(std::sqrt(std::max(std::fabs(dot),1e-6f)),dot)));for(uint32_t i=0;i<width;i++)ref[hc*width+i]=bf16(ref[hc*width+i]+gate*bf16(kv[4*width+i]));}
+    T r(residual.size()*4u),k(kv.size()*4u),q(qw.size()*4u),w(kw.size()*4u);return write(r,residual)&&write(k,kv)&&write(q,qw)&&write(w,kw)&&ds4_gpu_dsv41_engram_add(r.p,k.p,q.p,w.p,nullptr,width,rows,1e-20f)&&same(read(r,ref.size()),ref,"engram",0.008f);
+}
+int main(){if(!ds4_gpu_init())return 2;bool ok=test_bf16()&&test_quant_formats()&&test_rope()&&test_candidates()&&test_carry()&&test_gather()&&test_pool()&&test_engram();ds4_gpu_cleanup();std::puts(ok?"v41 CUDA primitive oracle: OK":"v41 CUDA primitive oracle: FAIL");return ok?0:1;}

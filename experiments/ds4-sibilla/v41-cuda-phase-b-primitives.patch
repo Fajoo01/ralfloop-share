@@ -17,8 +17,8 @@
  void ds4_gpu_parallel_ffn_abort(void);
  int ds4_gpu_parallel_ffn_start(
 --- a/ds4_cuda.cu	2026-09-13 07:07:28.170216207 +0200
-+++ b/ds4_cuda.cu	2026-09-13 07:09:04.791525830 +0200
-@@ -34616,3 +34616,369 @@
++++ b/ds4_cuda.cu	2026-09-13 07:17:59.264780876 +0200
+@@ -34616,3 +34616,372 @@
  #define DS4_GLM53_VISION_STREAM cuda_decode_stream()
  #include "ds4_glm53_vision_gpu.cuh"
  #include "ds4_deepseek4_vision_gpu.cuh"
@@ -152,6 +152,9 @@
 +        h2 += h * h; k2 += k * k; dot += h * (qw[wi] * kw[wi]) * k;
 +    }
 +    h2 = warp_sum_f32(h2); k2 = warp_sum_f32(k2); dot = warp_sum_f32(dot);
++    h2 = __shfl_sync(0xffffffffu, h2, 0);
++    k2 = __shfl_sync(0xffffffffu, k2, 0);
++    dot = __shfl_sync(0xffffffffu, dot, 0);
 +    const float scaled = dot * rsqrtf(h2 / width + eps) *
 +                         rsqrtf(k2 / width + eps) * rsqrtf((float)width);
 +    const float gate = 1.0f / (1.0f + expf(-copysignf(sqrtf(fmaxf(fabsf(scaled), 1.0e-6f)), scaled)));
