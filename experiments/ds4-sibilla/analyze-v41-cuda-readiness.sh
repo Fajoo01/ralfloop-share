@@ -50,7 +50,11 @@ sed 's/^/  /' "$tmp/missing-cuda"
 
 if [[ "$required" -eq 0 || "$missing" -ne 0 || "$runtime_metal_reject" -ne 0 ||
       "$binary_v41_symbols" -eq 0 ]]; then
-    echo 'V41_CUDA_BLOCKED: upstream graph and GPU primitives are Metal-only'
+    if [[ "$missing" -ne 0 || "$binary_v41_symbols" -eq 0 ]]; then
+        echo 'V41_CUDA_BLOCKED: CUDA primitives are incomplete'
+    else
+        echo 'V41_CUDA_BLOCKED: CUDA primitives exist; graph/runtime remains Metal-only'
+    fi
     exit 2
 fi
 
