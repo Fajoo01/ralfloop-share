@@ -1,5 +1,5 @@
---- a/ds4_gpu.h	2026-09-13 07:07:28.167920500 +0200
-+++ b/ds4_gpu.h	2026-09-13 07:07:48.678191647 +0200
+--- a/ds4_gpu.h
++++ b/ds4_gpu.h
 @@ -78,7 +78,6 @@
  int ds4_gpu_flush_encoder(void);
  int ds4_gpu_flush_commands(void);
@@ -16,9 +16,9 @@
  int ds4_gpu_parallel_ffn_finish(void);
  void ds4_gpu_parallel_ffn_abort(void);
  int ds4_gpu_parallel_ffn_start(
---- a/ds4_cuda.cu	2026-09-13 07:07:28.170216207 +0200
-+++ b/ds4_cuda.cu	2026-09-13 07:40:26.947701672 +0200
-@@ -34616,3 +34616,386 @@
+--- a/ds4_cuda.cu
++++ b/ds4_cuda.cu
+@@ -34616,3 +34616,495 @@
  #define DS4_GLM53_VISION_STREAM cuda_decode_stream()
  #include "ds4_glm53_vision_gpu.cuh"
  #include "ds4_deepseek4_vision_gpu.cuh"
@@ -386,22 +386,131 @@
 +}
 +
 +extern "C" int ds4_gpu_dsv41_tensor_ops_available(void) { return 0; }
++static uint64_t dsv41_indexer_flags_bytes(uint32_t source_rows,
++                                           uint32_t rows) {
++    const uint64_t key_groups = ((uint64_t)source_rows + 63u) / 64u;
++    return (((uint64_t)rows + key_groups) * 4u + 255u) & ~UINT64_C(255);
++}
 +extern "C" uint64_t ds4_gpu_dsv41_indexer_packed_bytes(uint32_t source_rows,
 +                                                          uint32_t rows) {
-+    (void)source_rows; (void)rows; return 256u;
++    const uint64_t key_groups = ((uint64_t)source_rows + 63u) / 64u;
++    return dsv41_indexer_flags_bytes(source_rows, rows) +
++           (uint64_t)rows * 32u * 128u * sizeof(uint16_t) +
++           key_groups * 64u * 128u * sizeof(uint16_t);
 +}
++
++__global__ static void dsv41_indexer_pack_kernel(const float *q,
++        const float *keys, uint32_t *flags, uint16_t *packed_q,
++        uint16_t *packed_keys, uint32_t source_rows, uint32_t rows) {
++    const uint32_t group = blockIdx.x, tid = threadIdx.x;
++    const bool query = group < rows;
++    const uint32_t count = query ? 32u * 128u : 64u * 128u;
++    const uint64_t offset = query ? (uint64_t)group * count :
++        (uint64_t)(group - rows) * count;
++    bool exact = true;
++    for (uint32_t i = tid; i < count; i += blockDim.x) {
++        const uint64_t index = offset + i;
++        const float value = query ? q[index] :
++            index < (uint64_t)source_rows * 128u ? keys[index] : 0.0f;
++        const uint16_t converted =
++            (uint16_t)(__float_as_uint(dsv41_bf16_dev(value)) >> 16u);
++        if (query) packed_q[index] = converted;
++        else packed_keys[index] = converted;
++        exact = exact && __uint_as_float((uint32_t)converted << 16u) == value;
++    }
++    __shared__ uint32_t warp_exact[4];
++    const uint32_t lane = tid & 31u, warp = tid >> 5u;
++    const bool same = __all_sync(0xffffffffu, exact);
++    if (!lane) warp_exact[warp] = same;
++    __syncthreads();
++    if (!tid) flags[group] =
++        warp_exact[0] && warp_exact[1] && warp_exact[2] && warp_exact[3];
++}
++
 +extern "C" int ds4_gpu_dsv41_indexer_pack(ds4_gpu_tensor *packed,
 +        const ds4_gpu_tensor *q, const ds4_gpu_tensor *keys,
 +        uint32_t source_rows, uint32_t rows) {
-+    (void)packed; (void)q; (void)keys; (void)source_rows; (void)rows; return 0;
++    const uint32_t key_groups = (source_rows + 63u) / 64u;
++    const uint64_t flags_bytes = dsv41_indexer_flags_bytes(source_rows, rows);
++    const uint64_t q_bytes = (uint64_t)rows * 32u * 128u * sizeof(float);
++    const uint64_t key_bytes = (uint64_t)source_rows * 128u * sizeof(float);
++    if (!packed || !q || !keys || !source_rows || !rows ||
++        q->bytes < q_bytes || keys->bytes < key_bytes ||
++        packed->bytes < ds4_gpu_dsv41_indexer_packed_bytes(source_rows, rows) ||
++        ds4_gpu_set_current_device(ds4_tensor_device_idx(packed)) != 0) return 0;
++    unsigned char *base = (unsigned char *)packed->ptr;
++    dsv41_indexer_pack_kernel<<<rows + key_groups, 128u>>>(
++        (const float *)q->ptr, (const float *)keys->ptr,
++        (uint32_t *)base, (uint16_t *)(base + flags_bytes),
++        (uint16_t *)(base + flags_bytes + (uint64_t)rows * 8192u),
++        source_rows, rows);
++    return cuda_ok(cudaGetLastError(), "V4.1 index input packing launch");
 +}
++
++__global__ static void dsv41_indexer_scores_packed_kernel(float *scores,
++        const float *q, const float *weights, const float *keys,
++        const uint32_t *flags, const uint16_t *packed_q,
++        const uint16_t *packed_keys, uint32_t source_rows, uint32_t rows,
++        uint32_t start, uint32_t ratio, uint32_t packed_rows,
++        uint32_t offset) {
++    const uint32_t row = blockIdx.x, token = blockIdx.y, tid = threadIdx.x;
++    if (row >= source_rows || token >= rows || tid >= 128u) return;
++    const uint32_t visible = (start + token + 1u) / ratio;
++    if (row >= min(source_rows, visible)) {
++        if (!tid) scores[(uint64_t)token * source_rows + row] = -INFINITY;
++        return;
++    }
++    const bool exact = flags[offset + token] && flags[packed_rows + row / 64u];
++    __shared__ float warp_partial[4];
++    const uint32_t lane = tid & 31u, warp = tid >> 5u;
++    float total = 0.0f;
++    for (uint32_t head = 0; head < 32u; head++) {
++        const uint64_t qi = ((uint64_t)token * 32u + head) * 128u + tid;
++        const uint64_t pi = ((uint64_t)(offset + token) * 32u + head) * 128u + tid;
++        const uint64_t ki = (uint64_t)row * 128u + tid;
++        const float qv = exact ?
++            __uint_as_float((uint32_t)packed_q[pi] << 16u) : q[qi];
++        const float kv = exact ?
++            __uint_as_float((uint32_t)packed_keys[ki] << 16u) : keys[ki];
++        float dot = qv * kv;
++        for (uint32_t delta = 16u; delta; delta >>= 1u)
++            dot += __shfl_down_sync(0xffffffffu, dot, delta);
++        if (!lane) warp_partial[warp] = dot;
++        __syncthreads();
++        if (!tid) {
++            const float sum = warp_partial[0] + warp_partial[1] +
++                              warp_partial[2] + warp_partial[3];
++            total += fmaxf(sum * (1.0f / 64.0f), 0.0f) *
++                     weights[(uint64_t)token * 32u + head];
++        }
++        __syncthreads();
++    }
++    if (!tid) scores[(uint64_t)token * source_rows + row] = total;
++}
++
 +extern "C" int ds4_gpu_dsv41_indexer_scores_packed(ds4_gpu_tensor *scores,
 +        const ds4_gpu_tensor *q, const ds4_gpu_tensor *weights,
 +        const ds4_gpu_tensor *keys, const ds4_gpu_tensor *packed,
 +        uint32_t source_rows, uint32_t rows, uint32_t start, uint32_t ratio,
 +        uint32_t packed_rows, uint32_t offset) {
-+    (void)scores; (void)q; (void)weights; (void)keys; (void)packed;
-+    (void)source_rows; (void)rows; (void)start; (void)ratio;
-+    (void)packed_rows; (void)offset; return 0;
++    const uint64_t flags_bytes = dsv41_indexer_flags_bytes(source_rows, packed_rows);
++    if (!scores || !q || !weights || !keys || !packed ||
++        (ratio != 1u && ratio != 2u) || !source_rows || !rows || !packed_rows ||
++        rows > UINT32_MAX - start || (start + rows) / ratio > source_rows ||
++        offset > packed_rows || rows > packed_rows - offset ||
++        q->bytes < (uint64_t)rows * 32u * 128u * sizeof(float) ||
++        weights->bytes < (uint64_t)rows * 32u * sizeof(float) ||
++        keys->bytes < (uint64_t)source_rows * 128u * sizeof(float) ||
++        scores->bytes < (uint64_t)rows * source_rows * sizeof(float) ||
++        packed->bytes < ds4_gpu_dsv41_indexer_packed_bytes(source_rows, packed_rows) ||
++        ds4_gpu_set_current_device(ds4_tensor_device_idx(scores)) != 0) return 0;
++    const unsigned char *base = (const unsigned char *)packed->ptr;
++    dsv41_indexer_scores_packed_kernel<<<dim3(source_rows, rows, 1u), 128u>>>(
++        (float *)scores->ptr, (const float *)q->ptr,
++        (const float *)weights->ptr, (const float *)keys->ptr,
++        (const uint32_t *)base, (const uint16_t *)(base + flags_bytes),
++        (const uint16_t *)(base + flags_bytes + (uint64_t)packed_rows * 8192u),
++        source_rows, rows, start, ratio, packed_rows, offset);
++    return cuda_ok(cudaGetLastError(), "V4.1 packed index scores launch");
 +}
 +

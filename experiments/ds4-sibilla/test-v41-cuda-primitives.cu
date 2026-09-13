@@ -127,8 +127,104 @@ static bool test_index_topk() {
     for(uint32_t i=0;i<top;i++)if(got[i]!=(int32_t)(width-1u-i)){std::fprintf(stderr,"index_topk mismatch[%u]: got=%d expected=%u\n",i,got[i],width-1u-i);return false;}
     return true;
 }
+
+static bool test_index_packed() {
+    const uint32_t source=65, packed_rows=3, rows=2;
+    const uint32_t offset=1, start=128, ratio=2;
+    const size_t row_elems=32u*128u;
+
+    auto run_case = [&](bool fallback)->bool {
+        std::vector<float> q_all((size_t)packed_rows*row_elems);
+        std::vector<float> keys((size_t)source*128u);
+        std::vector<float> weights((size_t)rows*32u);
+
+        for(size_t i=0;i<q_all.size();i++)
+            q_all[i]=(i%3==0)?0.5f:-0.25f;
+
+        for(size_t i=0;i<keys.size();i++)
+            keys[i]=(i%5==0)?0.25f:-0.5f;
+
+        for(size_t i=0;i<weights.size();i++)
+            weights[i]=(float)((i%4)+1)/8.0f;
+
+        if(fallback) {
+            /* row 1 query becomes non-BF16-exact */
+            q_all[row_elems + 7] = 0.1f;
+
+            /* second 64-row key group becomes non-BF16-exact */
+            keys[(size_t)64*128u + 3] = 0.3f;
+        }
+
+        std::vector<float> q(
+            q_all.begin() + (size_t)offset*row_elems,
+            q_all.begin() + (size_t)(offset+rows)*row_elems);
+
+        const uint64_t packed_bytes =
+            ds4_gpu_dsv41_indexer_packed_bytes(source,packed_rows);
+
+        T qall(q_all.size()*4u);
+        T qt(q.size()*4u);
+        T kt(keys.size()*4u);
+        T wt(weights.size()*4u);
+        T packed(packed_bytes);
+        T direct((uint64_t)rows*source*4u);
+        T scored((uint64_t)rows*source*4u);
+
+        if(!write(qall,q_all) || !write(qt,q) ||
+           !write(kt,keys) || !write(wt,weights))
+            return false;
+
+        if(!ds4_gpu_dsv41_indexer_pack(
+                packed.p,qall.p,kt.p,source,packed_rows))
+            return false;
+
+        uint32_t flags[5]={0,0,0,0,0};
+        if(!ds4_gpu_tensor_read(
+                packed.p,0,flags,sizeof(flags)))
+            return false;
+
+        const uint32_t exact_flags[5]={1,1,1,1,1};
+        const uint32_t fallback_flags[5]={1,0,1,1,0};
+        const uint32_t *expected =
+            fallback ? fallback_flags : exact_flags;
+
+        for(size_t i=0;i<5;i++) {
+            if(flags[i]!=expected[i]) {
+                std::fprintf(
+                    stderr,
+                    "packed flag mismatch case=%s idx=%zu got=%u expected=%u\n",
+                    fallback?"fallback":"exact",
+                    i,flags[i],expected[i]);
+                return false;
+            }
+        }
+
+        if(!ds4_gpu_dsv41_indexer_scores_batch(
+                direct.p,qt.p,wt.p,kt.p,
+                source,rows,start,ratio))
+            return false;
+
+        if(!ds4_gpu_dsv41_indexer_scores_packed(
+                scored.p,qt.p,wt.p,kt.p,packed.p,
+                source,rows,start,ratio,
+                packed_rows,offset))
+            return false;
+
+        auto a=read(direct,(size_t)rows*source);
+        auto b=read(scored,(size_t)rows*source);
+
+        return same(
+            b,a,
+            fallback ? "index_packed_fallback"
+                     : "index_packed_exact",
+            0.02f);
+    };
+
+    return run_case(false) && run_case(true);
+}
+
 int main(){if(!ds4_gpu_init())return 2;bool ok=true;
 #define RUN(name) do { bool pass=test_##name(); std::printf("%-18s %s\n",#name,pass?"PASS":"FAIL"); ok=ok&&pass; } while(0)
-RUN(bf16);RUN(quant_formats);RUN(rope);RUN(candidates);RUN(carry);RUN(gather);RUN(pool);RUN(engram);RUN(index_scores);RUN(index_topk);
+RUN(bf16);RUN(quant_formats);RUN(rope);RUN(candidates);RUN(carry);RUN(gather);RUN(pool);RUN(engram);RUN(index_scores);RUN(index_topk);RUN(index_packed);
 #undef RUN
 ds4_gpu_cleanup();std::puts(ok?"v41 CUDA primitive oracle: OK":"v41 CUDA primitive oracle: FAIL");return ok?0:1;}
