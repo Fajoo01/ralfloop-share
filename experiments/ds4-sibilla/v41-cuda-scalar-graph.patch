@@ -1,0 +1,229 @@
+--- a/Makefile	2026-09-13 07:23:49.070460883 +0200
++++ b/Makefile	2026-09-13 07:23:49.110654376 +0200
+@@ -52,7 +52,7 @@
+ # Vendored llama.cpp mmq prefill tier (cuda/mmq/, see cuda/mmq/VENDOR.md).
+ MMQ_INCLUDES := -Icuda/mmq
+ MMQ_OBJS := cuda/mmq/ds4_ggml_stubs.o cuda/mmq/ds4_mmq.o cuda/mmq/ds4_mmq_d2r.o cuda/mmq/quantize.o cuda/mmq/mmid.o cuda/mmq/mmvq.o cuda/mmq/ds4_repack.o
+-CORE_OBJS = ds4.o ds4_image.o ds4_distributed.o ds4_tp.o ds4_ssd.o ds4_cuda.o ds4_layer_pack.o $(MMQ_OBJS)
++CORE_OBJS = ds4.o ds4_image.o ds4_distributed.o ds4_tp.o ds4_ssd.o ds4_cuda.o ds4_layer_pack.o ds4_engram.o $(MMQ_OBJS)
+ CPU_CORE_OBJS = ds4_cpu.o ds4_image.o ds4_distributed.o ds4_tp.o ds4_ssd.o ds4_layer_pack.o
+ CUDA_LDLIBS ?= -lm -Xcompiler -pthread -L$(CUDA_HOME)/targets/sbsa-linux/lib -L$(CUDA_HOME)/lib64 -lcudart -lcublas
+ HIPCC ?= $(shell command -v hipcc 2>/dev/null || echo /opt/rocm/bin/hipcc)
+--- a/ds4.c	2026-09-13 07:19:40.178256644 +0200
++++ b/ds4.c	2026-09-13 07:26:11.925212584 +0200
+@@ -38645,7 +38645,7 @@
+             normal_layers - 1u);
+ }
+ 
+-#if defined(__APPLE__)
++#if !defined(DS4_NO_GPU) && !defined(DS4_ROCM_BUILD)
+ static ds4_context_memory ds41_graph_memory(uint32_t ctx);
+ #endif
+ 
+@@ -38658,7 +38658,7 @@
+     uint32_t ctx = ctx_size > 0 ? (uint32_t)ctx_size : 1u;
+ 
+     if (ds4_backend_uses_graph(backend)) {
+-#if defined(__APPLE__)
++#if !defined(DS4_NO_GPU) && !defined(DS4_ROCM_BUILD)
+         if (DS4_MODEL_FAMILY == DS4_MODEL_FAMILY_DEEPSEEK41)
+             return ds41_graph_memory(ctx);
+ #endif
+@@ -39060,9 +39060,9 @@
+     return true;
+ }
+ 
+-#if defined(__APPLE__) && !defined(DS4_NO_GPU)
++#ifndef DS4_NO_GPU
+ /* =========================================================================
+- * DeepSeek V4.1 Metal Graph.
++ * DeepSeek V4.1 backend graph.
+  * =========================================================================
+  * Four layers own compressed KV/index keys. Every layer owns its sliding
+  * window; index-source layers publish selections for following reuse layers.
+@@ -39111,9 +39111,14 @@
+ } ds41_prefill_row;
+ 
+ static uint32_t ds41_prefill_limit(uint32_t ctx) {
++#ifndef __APPLE__
++    (void)ctx;
++    return 1u;
++#else
+     const uint32_t limit = ctx < 8192u || getenv("DS4_METAL_DISABLE_V41_WIDE_CHUNK") ? 2048u :
+         (ctx < 16384u || getenv("DS4_METAL_DISABLE_V41_8K_CHUNK")) ? 4096u : DS41_PREFILL_CAP;
+     return ctx < limit ? ctx : limit;
++#endif
+ }
+ 
+ static uint32_t ds41_carry_words(uint32_t width, uint32_t format, bool compact) {
+@@ -40769,7 +40774,7 @@
+     return largest->prefill_cap >= (uint32_t)count ? largest : NULL;
+ }
+ 
+-static bool ds41_graph_step_batch(ds41_gpu_graph *const *graphs, const int *tokens, int count,
++static DS4_MAYBE_UNUSED bool ds41_graph_step_batch(ds41_gpu_graph *const *graphs, const int *tokens, int count,
+                                    uint32_t prefill_rows,
+                                    const ds4_model *model, const ds4_weights *weights) {
+     if (!graphs || !tokens || count < 2 || count > DS4_TP_BATCH_MAX_ROWS ||
+@@ -56672,7 +56677,7 @@
+     uint64_t tp_session_id;
+     uint64_t glm_reserved_graph_bytes;
+ #ifndef DS4_NO_GPU
+-#ifdef __APPLE__
++#if !defined(DS4_ROCM_BUILD)
+     ds41_gpu_graph ds41_graph;
+     bool ds41_graph_ready;
+ #endif
+@@ -58780,7 +58785,7 @@
+ }
+ #endif
+ 
+-#if defined(__APPLE__) && !defined(DS4_NO_GPU)
++#if !defined(DS4_NO_GPU) && !defined(DS4_ROCM_BUILD)
+ typedef struct {
+     ds4_gpu_tensor *tensor;
+     uint64_t bytes;
+@@ -58892,7 +58897,7 @@
+ uint64_t ds4_session_payload_bytes(ds4_session *s) {
+     if (!s || !s->checkpoint_valid) return 0;
+     if (s->distributed) return 0;
+-#if defined(__APPLE__) && !defined(DS4_NO_GPU)
++#if !defined(DS4_NO_GPU) && !defined(DS4_ROCM_BUILD)
+     if (ds4_session_is_ds41(s)) {
+         if (!s->ds41_graph_ready || !s->ds41_graph.valid ||
+             s->ds41_graph.pos != (uint32_t)s->checkpoint.len) return 0;
+@@ -59032,7 +59037,7 @@
+     if (s->distributed) {
+         return ds4_dist_session_save_payload(s->distributed, s, fp, err, errlen);
+     }
+-#if defined(__APPLE__) && !defined(DS4_NO_GPU)
++#if !defined(DS4_NO_GPU) && !defined(DS4_ROCM_BUILD)
+     if (ds4_session_is_ds41(s)) return ds41_save_payload(s, fp, err, errlen);
+ #endif
+     if (ds4_session_is_glm(s)) {
+@@ -59411,7 +59416,7 @@
+         ds4_tokens_free(&tokens);
+         return rc;
+     }
+-#if defined(__APPLE__) && !defined(DS4_NO_GPU)
++#if !defined(DS4_NO_GPU) && !defined(DS4_ROCM_BUILD)
+     if (ds4_session_is_ds41(s)) return ds41_load_payload(s, fp, h, remaining, err, errlen);
+ #endif
+     if (ds4_session_is_glm(s)) {
+@@ -60198,8 +60203,10 @@
+             return 1;
+         }
+         if (ctx_size > 1048576 ||
++#ifdef __APPLE__
+             !ds41_memory_admit(e, ds4_add_sat_u64(e->ds41_session_bytes,
+                 ds41_graph_bytes((uint32_t)ctx_size)), false) ||
++#endif
+             !ds41_graph_alloc(&d, &e->model, &e->weights, e->model_path,
+                               (uint32_t)ctx_size, e->ssd_streaming)) return 1;
+     } else
+@@ -65682,7 +65689,8 @@
+     }
+     config_validate_model(&e->model);
+     if (DS4_MODEL_FAMILY == DS4_MODEL_FAMILY_DEEPSEEK41 && !opt->inspect_only) {
+-        const bool supported = e->backend == DS4_BACKEND_METAL &&
++        const bool supported =
++            (e->backend == DS4_BACKEND_METAL || e->backend == DS4_BACKEND_CUDA) &&
+             opt->distributed.role == DS4_DISTRIBUTED_NONE &&
+             !load_slice && !opt->dspark && !opt->glm_mtp &&
+             !opt->first_token_test && !opt->metal_graph_test &&
+@@ -65690,7 +65698,7 @@
+             (!opt->directional_steering_file || !opt->directional_steering_file[0]) &&
+             e->power_percent == 100 && opt->context_size <= 1048576;
+         if (!supported) {
+-            fprintf(stderr, "ds4: V4.1 requires Metal inference, with optional tensor parallelism; "
++            fprintf(stderr, "ds4: V4.1 requires supported Metal/CUDA inference; "
+                             "DSpark, steering and legacy diagnostics are not supported (maximum context 1048576)\n");
+             ds4_engine_close(e);
+             *out = NULL;
+@@ -67661,11 +67669,13 @@
+     ds4_session *s = xcalloc(1, sizeof(*s));
+     s->engine = e;
+     s->ctx_size = ctx_size;
+-#ifdef __APPLE__
++#if !defined(DS4_ROCM_BUILD)
+     if (DS4_MODEL_FAMILY == DS4_MODEL_FAMILY_DEEPSEEK41) {
+         if (ctx_size > 1048576 ||
++#ifdef __APPLE__
+             !ds41_memory_admit(e, ds4_add_sat_u64(e->ds41_session_bytes,
+                 ds41_graph_bytes((uint32_t)ctx_size)), false) ||
++#endif
+             !ds41_graph_alloc(&s->ds41_graph, &e->model, &e->weights,
+                               e->model_path, (uint32_t)ctx_size, e->ssd_streaming)) {
+             free(s);
+@@ -68028,7 +68038,7 @@
+     }
+ #ifndef DS4_NO_GPU
+     else {
+-#ifdef __APPLE__
++#if !defined(DS4_ROCM_BUILD)
+         if (s->ds41_graph_ready) {
+             s->engine->ds41_session_bytes -= s->ds41_graph.allocation_bytes;
+             ds41_graph_free(&s->ds41_graph);
+@@ -69719,7 +69729,7 @@
+     ds4_engine *e = s->engine;
+     const char *backend_name = ds4_backend_name(e->backend);
+     (void)backend_name; (void)e;
+-#ifdef __APPLE__
++#if !defined(DS4_ROCM_BUILD)
+     if (ds4_session_is_ds41(s)) {
+         ds41_gpu_graph *g = &s->ds41_graph;
+         if (!s->ds41_graph_ready) {
+@@ -71638,7 +71648,7 @@
+     return 1;
+ #else
+     ds4_engine *e = s->engine;
+-#ifdef __APPLE__
++#if !defined(DS4_ROCM_BUILD)
+     if (ds4_session_is_ds41(s)) {
+         if (!s->ds41_graph_ready ||
+             (!s->checkpoint_valid && s->checkpoint.len != 0) ||
+@@ -78416,7 +78426,7 @@
+     s->checkpoint_image_count = 0;
+     ds4_session_dspark_capture_invalidate(s);
+ #ifndef DS4_NO_GPU
+-#ifdef __APPLE__
++#if !defined(DS4_ROCM_BUILD)
+     if (s->ds41_graph_ready) ds41_graph_reset(&s->ds41_graph);
+ #endif
+     ds4_session_glm_reset_dense_cache(s);
+--- a/ds4_gpu.h	2026-09-13 07:19:40.182119298 +0200
++++ b/ds4_gpu.h	2026-09-13 07:19:40.224873473 +0200
+@@ -175,7 +175,6 @@
+ int ds4_gpu_dsv41_gather_kv(ds4_gpu_tensor *out, const ds4_gpu_tensor *source,
+                            const ds4_gpu_tensor *ids, uint32_t source_rows,
+                            uint32_t selected_rows);
+-#ifdef __APPLE__
+ int ds4_gpu_parallel_ffn_finish(void);
+ void ds4_gpu_parallel_ffn_abort(void);
+ int ds4_gpu_parallel_ffn_start(
+@@ -258,7 +257,6 @@
+ int ds4_gpu_kv_norm_task_flush(void);
+ int ds4_gpu_kv_norm_task_begin_concurrent(void);
+ void ds4_gpu_kv_norm_task_end_concurrent(void);
+-#endif
+ int ds4_gpu_signal_selected_readback_ready(uint64_t *event_value);
+ int ds4_gpu_commit_and_wait_selected_readback(uint64_t event_value, const char *label);
+ int ds4_gpu_wait_selected_readback_ready(uint64_t event_value, const char *label);
+--- a/ds4_cuda.cu	2026-09-13 07:27:55.507734749 +0200
++++ b/ds4_cuda.cu	2026-09-13 07:23:49.116959053 +0200
+@@ -34985,3 +34985,15 @@
+     (void)source_rows; (void)rows; (void)start; (void)ratio;
+     (void)packed_rows; (void)offset; return 0;
+ }
++
++extern "C" int ds4_gpu_tp_failed(void) { return 0; }
++extern "C" int ds4_gpu_hc_rms_scale_project_f16_tensor(
++        ds4_gpu_tensor *out, ds4_gpu_tensor *scale_scratch,
++        const void *model_map, uint64_t model_size, uint64_t weight_offset,
++        uint32_t in_dim, uint32_t out_dim, const ds4_gpu_tensor *x,
++        uint32_t n_rows, float eps) {
++    (void)out; (void)scale_scratch; (void)model_map; (void)model_size;
++    (void)weight_offset; (void)in_dim; (void)out_dim; (void)x;
++    (void)n_rows; (void)eps;
++    return 0; /* CUDA V4.1 scalar path never calls the batch-only primitive. */
++}
