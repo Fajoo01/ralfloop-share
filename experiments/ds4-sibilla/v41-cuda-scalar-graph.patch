@@ -11,7 +11,42 @@
  HIPCC ?= $(shell command -v hipcc 2>/dev/null || echo /opt/rocm/bin/hipcc)
 --- a/ds4.c
 +++ b/ds4.c
-@@ -38645,7 +38645,7 @@
+@@ -3157,14 +3157,17 @@
+     for (uint64_t i = 0; i < m->n_tensors; i++) {
+         const ds4_tensor *t = &m->tensors[i];
+         if (t->bytes == 0) continue;
+-        if (t->abs_offset > m->size || t->bytes > m->size - t->abs_offset) {
+-            free(spans);
+-            return false;
+-        }
++        /* Filter before mapped-range validation. DeepSeek V4.1 deliberately
++         * keeps disk-only Engram tensor descriptors beyond m->size after
++         * model_unmap_engram(); those tensors are not part of resident spans. */
+         if (!accelerator_span_filter_contains(t->abs_offset, t->bytes,
+                                               span_offsets, span_sizes, span_count)) {
+             continue;
+         }
++        if (t->abs_offset > m->size || t->bytes > m->size - t->abs_offset) {
++            free(spans);
++            return false;
++        }
+ #if !defined(__APPLE__) && !defined(DS4_ROCM_BUILD)
+         if (ds4_gpu_model_range_replaced(m->map, t->abs_offset, t->bytes)) {
+             continue;
+@@ -3258,11 +3261,11 @@
+     for (uint64_t i = 0; i < m->n_tensors; i++) {
+         const ds4_tensor *t = &m->tensors[i];
+         if (t->bytes == 0) continue;
+-        if (t->abs_offset > m->size || t->bytes > m->size - t->abs_offset) return false;
+         if (!accelerator_span_filter_contains(t->abs_offset, t->bytes,
+                                               span_offsets, span_sizes, span_count)) {
+             continue;
+         }
++        if (t->abs_offset > m->size || t->bytes > m->size - t->abs_offset) return false;
+         char label[128];
+         snprintf(label, sizeof(label), "tensor:%.*s", (int)t->name.len, t->name.ptr);
+         if (t->type == DS4_TENSOR_Q8_0 && t->ndim == 2 &&
+@@ -38645,7 +38648,7 @@
              normal_layers - 1u);
  }
 
@@ -20,7 +55,7 @@
  static ds4_context_memory ds41_graph_memory(uint32_t ctx);
  #endif
 
-@@ -38658,7 +38658,7 @@
+@@ -38658,7 +38661,7 @@
      uint32_t ctx = ctx_size > 0 ? (uint32_t)ctx_size : 1u;
 
      if (ds4_backend_uses_graph(backend)) {
@@ -29,7 +64,7 @@
          if (DS4_MODEL_FAMILY == DS4_MODEL_FAMILY_DEEPSEEK41)
              return ds41_graph_memory(ctx);
  #endif
-@@ -39060,9 +39060,9 @@
+@@ -39060,9 +39063,9 @@
      return true;
  }
 
@@ -41,7 +76,7 @@
   * =========================================================================
   * Four layers own compressed KV/index keys. Every layer owns its sliding
   * window; index-source layers publish selections for following reuse layers.
-@@ -39111,9 +39111,14 @@
+@@ -39111,9 +39114,14 @@
  } ds41_prefill_row;
 
  static uint32_t ds41_prefill_limit(uint32_t ctx) {
@@ -56,7 +91,7 @@
  }
 
  static uint32_t ds41_carry_words(uint32_t width, uint32_t format, bool compact) {
-@@ -40769,7 +40774,7 @@
+@@ -40769,7 +40777,7 @@
      return largest->prefill_cap >= (uint32_t)count ? largest : NULL;
  }
 
@@ -65,7 +100,7 @@
                                     uint32_t prefill_rows,
                                     const ds4_model *model, const ds4_weights *weights) {
      if (!graphs || !tokens || count < 2 || count > DS4_TP_BATCH_MAX_ROWS ||
-@@ -56672,7 +56677,7 @@
+@@ -56672,7 +56680,7 @@
      uint64_t tp_session_id;
      uint64_t glm_reserved_graph_bytes;
  #ifndef DS4_NO_GPU
@@ -74,7 +109,7 @@
      ds41_gpu_graph ds41_graph;
      bool ds41_graph_ready;
  #endif
-@@ -58780,7 +58785,7 @@
+@@ -58780,7 +58788,7 @@
  }
  #endif
 
@@ -83,7 +118,7 @@
  typedef struct {
      ds4_gpu_tensor *tensor;
      uint64_t bytes;
-@@ -58892,7 +58897,7 @@
+@@ -58892,7 +58900,7 @@
  uint64_t ds4_session_payload_bytes(ds4_session *s) {
      if (!s || !s->checkpoint_valid) return 0;
      if (s->distributed) return 0;
@@ -92,7 +127,7 @@
      if (ds4_session_is_ds41(s)) {
          if (!s->ds41_graph_ready || !s->ds41_graph.valid ||
              s->ds41_graph.pos != (uint32_t)s->checkpoint.len) return 0;
-@@ -59032,7 +59037,7 @@
+@@ -59032,7 +59040,7 @@
      if (s->distributed) {
          return ds4_dist_session_save_payload(s->distributed, s, fp, err, errlen);
      }
@@ -101,7 +136,7 @@
      if (ds4_session_is_ds41(s)) return ds41_save_payload(s, fp, err, errlen);
  #endif
      if (ds4_session_is_glm(s)) {
-@@ -59411,7 +59416,7 @@
+@@ -59411,7 +59419,7 @@
          ds4_tokens_free(&tokens);
          return rc;
      }
@@ -110,7 +145,7 @@
      if (ds4_session_is_ds41(s)) return ds41_load_payload(s, fp, h, remaining, err, errlen);
  #endif
      if (ds4_session_is_glm(s)) {
-@@ -60198,8 +60203,10 @@
+@@ -60198,8 +60206,10 @@
              return 1;
          }
          if (ctx_size > 1048576 ||
@@ -121,7 +156,7 @@
              !ds41_graph_alloc(&d, &e->model, &e->weights, e->model_path,
                                (uint32_t)ctx_size, e->ssd_streaming)) return 1;
      } else
-@@ -65682,7 +65689,12 @@
+@@ -65682,7 +65692,12 @@
      }
      config_validate_model(&e->model);
      if (DS4_MODEL_FAMILY == DS4_MODEL_FAMILY_DEEPSEEK41 && !opt->inspect_only) {
@@ -135,7 +170,7 @@
              opt->distributed.role == DS4_DISTRIBUTED_NONE &&
              !load_slice && !opt->dspark && !opt->glm_mtp &&
              !opt->first_token_test && !opt->metal_graph_test &&
-@@ -65690,7 +65702,7 @@
+@@ -65690,7 +65705,7 @@
              (!opt->directional_steering_file || !opt->directional_steering_file[0]) &&
              e->power_percent == 100 && opt->context_size <= 1048576;
          if (!supported) {
@@ -144,7 +179,7 @@
                              "DSpark, steering and legacy diagnostics are not supported (maximum context 1048576)\n");
              ds4_engine_close(e);
              *out = NULL;
-@@ -67661,11 +67673,13 @@
+@@ -67661,11 +67676,13 @@
      ds4_session *s = xcalloc(1, sizeof(*s));
      s->engine = e;
      s->ctx_size = ctx_size;
@@ -159,7 +194,7 @@
              !ds41_graph_alloc(&s->ds41_graph, &e->model, &e->weights,
                                e->model_path, (uint32_t)ctx_size, e->ssd_streaming)) {
              free(s);
-@@ -68028,7 +68042,7 @@
+@@ -68028,7 +68045,7 @@
      }
  #ifndef DS4_NO_GPU
      else {
@@ -168,7 +203,7 @@
          if (s->ds41_graph_ready) {
              s->engine->ds41_session_bytes -= s->ds41_graph.allocation_bytes;
              ds41_graph_free(&s->ds41_graph);
-@@ -69719,7 +69733,7 @@
+@@ -69719,7 +69736,7 @@
      ds4_engine *e = s->engine;
      const char *backend_name = ds4_backend_name(e->backend);
      (void)backend_name; (void)e;
@@ -177,7 +212,7 @@
      if (ds4_session_is_ds41(s)) {
          ds41_gpu_graph *g = &s->ds41_graph;
          if (!s->ds41_graph_ready) {
-@@ -71638,7 +71652,7 @@
+@@ -71638,7 +71655,7 @@
      return 1;
  #else
      ds4_engine *e = s->engine;
@@ -186,7 +221,7 @@
      if (ds4_session_is_ds41(s)) {
          if (!s->ds41_graph_ready ||
              (!s->checkpoint_valid && s->checkpoint.len != 0) ||
-@@ -78416,7 +78430,7 @@
+@@ -78416,7 +78433,7 @@
      s->checkpoint_image_count = 0;
      ds4_session_dspark_capture_invalidate(s);
  #ifndef DS4_NO_GPU
