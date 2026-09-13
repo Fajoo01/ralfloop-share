@@ -1,6 +1,51 @@
 # DeepSeek V4.1 CUDA sm_75 replacement — 2026-09-13
 
-## Outcome
+## Continuation update — CUDA Phase A/B and scalar graph
+
+The initial Metal-only blocker below has been partially removed by commits
+`75a801a`, `bceffc7`, and `211376d`:
+
+- all 18 V4.1 GPU API symbols now exist in the CUDA `sm_75` binary;
+- BF16, FP8 E8M0, FP4 E8M0/E4M3 rounding, V4.1 RoPE, Engram add,
+  pair pooling, candidate masking, compact carry, sparse KV gather, F16 row
+  projection, attention output, index scoring, and top-k have CUDA paths;
+- packed Metal TensorOps and TP remain disabled; single-GPU fallbacks are used;
+- the backend-neutral V4.1 graph compiles on Linux/CUDA;
+- CUDA uses `prefill_cap=1` so CPU code never dereferences Metal-style shared
+  batch buffers backed by `cudaMalloc` device memory;
+- `ds4_engram.o` is linked in CUDA builds.
+
+Deterministic RTX 2070 oracle coverage compares CUDA outputs with CPU contracts
+derived from `metal/dsv41.metal`. It caught and fixed a missing warp-reduction
+broadcast in the Engram kernel. Final result:
+
+```text
+ds4: CUDA backend initialized on NVIDIA GeForce RTX 2070 (sm_75) dev=0
+v41 CUDA primitive oracle: OK
+```
+
+The full `ds4` and `ds4-server` build passes with `CUDA_ARCH=sm_75`; only the
+pre-existing signedness warning remains. Updated static audit:
+
+```text
+required_v41_gpu_apis=18
+cuda_v41_gpu_apis=18
+missing_cuda_apis=0
+v41_graph_metal_guard=0
+runtime_metal_reject=0
+binary_v41_gpu_symbols=18
+sm75_cubins=9
+host_register_guards=3
+V41_CUDA_STATIC_READY
+```
+
+Gate 1 is now PASS. Exact Q2 acquisition started under the model owner at
+`/home/sibilla-cumana/Dati/ds4-v41/DeepSeek-V4.1-Flash-Q2.gguf`; the destination
+had 1,343,399,133,184 free bytes before download. Runtime gates and cutover
+remain pending until the 365,713,686,528-byte artifact passes its upstream
+SHA-256 check.
+
+## Initial outcome (superseded by continuation above)
 
 **BLOCKED at Gate 1. No cutover.** Current upstream implements DeepSeek V4.1
 inference only for Metal. The CUDA backend has none of the required V4.1 GPU
