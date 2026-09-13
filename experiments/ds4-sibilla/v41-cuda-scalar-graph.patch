@@ -10,7 +10,7 @@
  CUDA_LDLIBS ?= -lm -Xcompiler -pthread -L$(CUDA_HOME)/targets/sbsa-linux/lib -L$(CUDA_HOME)/lib64 -lcudart -lcublas
  HIPCC ?= $(shell command -v hipcc 2>/dev/null || echo /opt/rocm/bin/hipcc)
 --- a/ds4.c	2026-09-13 07:19:40.178256644 +0200
-+++ b/ds4.c	2026-09-13 07:26:11.925212584 +0200
++++ b/ds4.c	2026-09-13 07:34:02.486060225 +0200
 @@ -38645,7 +38645,7 @@
              normal_layers - 1u);
  }
@@ -34,7 +34,7 @@
  }
  
 -#if defined(__APPLE__) && !defined(DS4_NO_GPU)
-+#ifndef DS4_NO_GPU
++#if !defined(DS4_NO_GPU) && !defined(DS4_ROCM_BUILD)
  /* =========================================================================
 - * DeepSeek V4.1 Metal Graph.
 + * DeepSeek V4.1 backend graph.
@@ -121,17 +121,21 @@
              !ds41_graph_alloc(&d, &e->model, &e->weights, e->model_path,
                                (uint32_t)ctx_size, e->ssd_streaming)) return 1;
      } else
-@@ -65682,7 +65689,8 @@
+@@ -65682,7 +65689,12 @@
      }
      config_validate_model(&e->model);
      if (DS4_MODEL_FAMILY == DS4_MODEL_FAMILY_DEEPSEEK41 && !opt->inspect_only) {
 -        const bool supported = e->backend == DS4_BACKEND_METAL &&
 +        const bool supported =
-+            (e->backend == DS4_BACKEND_METAL || e->backend == DS4_BACKEND_CUDA) &&
++            (e->backend == DS4_BACKEND_METAL ||
++#ifndef DS4_ROCM_BUILD
++             e->backend == DS4_BACKEND_CUDA ||
++#endif
++             false) &&
              opt->distributed.role == DS4_DISTRIBUTED_NONE &&
              !load_slice && !opt->dspark && !opt->glm_mtp &&
              !opt->first_token_test && !opt->metal_graph_test &&
-@@ -65690,7 +65698,7 @@
+@@ -65690,7 +65702,7 @@
              (!opt->directional_steering_file || !opt->directional_steering_file[0]) &&
              e->power_percent == 100 && opt->context_size <= 1048576;
          if (!supported) {
@@ -140,7 +144,7 @@
                              "DSpark, steering and legacy diagnostics are not supported (maximum context 1048576)\n");
              ds4_engine_close(e);
              *out = NULL;
-@@ -67661,11 +67669,13 @@
+@@ -67661,11 +67673,13 @@
      ds4_session *s = xcalloc(1, sizeof(*s));
      s->engine = e;
      s->ctx_size = ctx_size;
@@ -155,7 +159,7 @@
              !ds41_graph_alloc(&s->ds41_graph, &e->model, &e->weights,
                                e->model_path, (uint32_t)ctx_size, e->ssd_streaming)) {
              free(s);
-@@ -68028,7 +68038,7 @@
+@@ -68028,7 +68042,7 @@
      }
  #ifndef DS4_NO_GPU
      else {
@@ -164,7 +168,7 @@
          if (s->ds41_graph_ready) {
              s->engine->ds41_session_bytes -= s->ds41_graph.allocation_bytes;
              ds41_graph_free(&s->ds41_graph);
-@@ -69719,7 +69729,7 @@
+@@ -69719,7 +69733,7 @@
      ds4_engine *e = s->engine;
      const char *backend_name = ds4_backend_name(e->backend);
      (void)backend_name; (void)e;
@@ -173,7 +177,7 @@
      if (ds4_session_is_ds41(s)) {
          ds41_gpu_graph *g = &s->ds41_graph;
          if (!s->ds41_graph_ready) {
-@@ -71638,7 +71648,7 @@
+@@ -71638,7 +71652,7 @@
      return 1;
  #else
      ds4_engine *e = s->engine;
@@ -182,7 +186,7 @@
      if (ds4_session_is_ds41(s)) {
          if (!s->ds41_graph_ready ||
              (!s->checkpoint_valid && s->checkpoint.len != 0) ||
-@@ -78416,7 +78426,7 @@
+@@ -78416,7 +78430,7 @@
      s->checkpoint_image_count = 0;
      ds4_session_dspark_capture_invalidate(s);
  #ifndef DS4_NO_GPU
