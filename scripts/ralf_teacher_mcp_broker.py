@@ -10,24 +10,15 @@ from pathlib import Path
 import selectors
 import signal
 import socket
-import struct
 import subprocess
 import sys
 import threading
 import time
 
 
+from ralf_mcp_peer_auth import assign_socket_group, peer_allowed
+
 MAX_LINE = 8 * 1024 * 1024
-
-
-def _peer_uid(conn: socket.socket) -> int:
-    raw = conn.getsockopt(
-        socket.SOL_SOCKET,
-        socket.SO_PEERCRED,
-        struct.calcsize("3i"),
-    )
-    _pid, uid, _gid = struct.unpack("3i", raw)
-    return uid
 
 
 def _relay(conn: socket.socket, command: str, idle_timeout: float) -> None:
@@ -134,7 +125,8 @@ def _relay(conn: socket.socket, command: str, idle_timeout: float) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--socket", required=True)
-    parser.add_argument("--allow-uid", required=True, type=int)
+    parser.add_argument("--allow-group", default="ralf-mcp")
+    parser.add_argument("--allow-uid", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--command", required=True)
     parser.add_argument("--idle-timeout", type=float, default=60.0)
     parser.add_argument("--max-clients", type=int, default=1)
@@ -151,12 +143,12 @@ def main() -> int:
             "multi-client mode requires RALF_TEACHER_INFERENCE_SOCKET"
         )
     path = Path(args.socket)
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path.parent.mkdir(mode=0o2770, parents=True, exist_ok=True)
     try:
         path.unlink(missing_ok=True)
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         server.bind(str(path))
-        os.chmod(path, 0o600)
+        assign_socket_group(path, args.allow_group)
         server.listen(max(4, args.max_clients))
         signal.signal(signal.SIGTERM, lambda *_: server.close())
 
@@ -165,7 +157,7 @@ def main() -> int:
         def handle(conn: socket.socket) -> None:
             try:
                 with conn:
-                    if _peer_uid(conn) != args.allow_uid:
+                    if not peer_allowed(conn, args.allow_group, args.allow_uid):
                         return
 
                     _relay(

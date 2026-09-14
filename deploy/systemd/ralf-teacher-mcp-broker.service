@@ -7,7 +7,8 @@ After=ralf-teacher-inference.service ralf-teacher-grammar-mcp.service ralf-teach
 [Service]
 Type=simple
 User=bandi
-Group=bandi
+Group=ralf-mcp
+SupplementaryGroups=bandi
 
 WorkingDirectory=/home/sibilla-cumana/ralfloop-production/current
 
@@ -18,11 +19,11 @@ Environment=RALF_TEACHER_CORE_SOCKET=/run/ralf-teacher-core/core.sock
 Environment=RALF_TEACHER_DB=/var/lib/ralfloop-teacher/teacher.sqlite3
 
 RuntimeDirectory=ralf-teacher-mcp
-RuntimeDirectoryMode=0700
+RuntimeDirectoryMode=2770
 StateDirectory=ralfloop-teacher
 StateDirectoryMode=0700
 
-ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_teacher_mcp_broker.py --socket /run/ralf-teacher-mcp/mcp.sock --allow-uid 1001 --command /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_teacher_mcp_server.py --idle-timeout 180 --max-clients 6
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_teacher_mcp_broker.py --socket /run/ralf-teacher-mcp/mcp.sock --allow-group ralf-mcp --command /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_teacher_mcp_server.py --idle-timeout 180 --max-clients 6
 
 Restart=on-failure
 RestartSec=2
@@ -44,7 +45,7 @@ LockPersonality=yes
 RestrictAddressFamilies=AF_UNIX
 IPAddressDeny=any
 
-UMask=0077
+UMask=0007
 
 [Install]
 WantedBy=multi-user.target
