@@ -9,7 +9,7 @@ const avatar=new BottazziAvatarController({onChange:controller=>{
 const main = document.querySelector('#main');
 const notice = document.querySelector('#notice');
 let home, activity, serverAudio, serverAudioCleanup, tutorVoiceGeneration=0;
-const labels = {primary:'Primaria',middle:'Secondaria di primo grado',upper:'Secondaria di secondo grado'};
+const labels = {primary:'Primaria',middle:'Secondaria di primo grado',upper:'Secondaria di secondo grado',adult:'Adulto',university:'Università',postgraduate:'Post-laurea',master:'Master'};
 const modes = {multiple_choice:'Scelta multipla',true_false:'Vero o falso',free_answer:'Risposta aperta',matching:'Abbinamenti',grouping:'Raggruppa',ordering:'Ordina',fill_blank:'Completa',flashcards:'Carte ripasso',memory:'Memory',definition_match:'Definizioni',sequence:'Sequenza',timed_challenge:'Sfida a tempo',guided_exercise:'Esercizio guidato',simulation:'Laboratorio'};
 const tutorVoicePollDelays=[15000,30000,60000,120000,240000,480000];
 
@@ -90,6 +90,41 @@ export async function api(path,data){
   if(!response.ok){if(response.status===401 && path!='/login'){navigate('/login');}throw Error(typeof body.detail==='string'?body.detail:body.error||'Controlla i campi e riprova.');}
   return body;
 }
+
+export async function apiStream(path,data,onEvent){
+  const response=await fetch('/api'+path,{method:'POST',credentials:'same-origin',headers:{'X-Teacher-Request':'1','Content-Type':'application/json'},body:JSON.stringify(data)});
+  if(!response.ok){let body={};try{body=await response.json();}catch{};throw Error(typeof body.detail==='string'?body.detail:body.error||'Streaming non disponibile. Riprova.');}
+  if(!response.body)throw Error('Streaming non supportato dal browser.');
+  const reader=response.body.getReader(),decoder=new TextDecoder();let pending='';
+  while(true){const {value,done}=await reader.read();pending+=decoder.decode(value||new Uint8Array(),{stream:!done});let pos;while((pos=pending.indexOf('\n'))>=0){const line=pending.slice(0,pos).trim();pending=pending.slice(pos+1);if(line)await onEvent(JSON.parse(line));}if(done)break;}
+  if(pending.trim())await onEvent(JSON.parse(pending));
+}
+
+function learnerAccess(){return home?.profile?.learner_profile?.accessibility_support||{};}
+function applyLearnerAccess(){
+  const a=learnerAccess(),root=document.documentElement,body=document.body;
+  root.style.setProperty('--reader-font-scale',String(a.font_scale||1));
+  root.style.setProperty('--reader-line-spacing',String(a.line_spacing||1.55));
+  root.style.setProperty('--reader-column',(a.column_chars||72)+'ch');
+  for(const [key,cls] of [['short_lines','reader-short-lines'],['line_focus','reader-line-focus'],['low_clutter','reader-low-clutter'],['enlarged_text','reader-enlarged']])body.classList.toggle(cls,!!a[key]);
+}
+function speakStreamSentence(text){
+  if(!text||!('speechSynthesis' in window))return;
+  const u=new SpeechSynthesisUtterance(text);u.lang='it-IT';u.rate=learnerAccess().text_to_speech?0.92:1;avatar.bindSpeech(u);speechSynthesis.speak(u);
+}
+async function streamHelp(a,mode,question,feedback){
+  tutorVoiceGeneration+=1;stopServerAudio();window.speechSynthesis?.cancel();avatar.reset();avatar.thinking?.();
+  const live=info('Sto preparando la spiegazione…');feedback.replaceChildren(live);let text='';let finalResult=null;
+  const autoSpeak=!!learnerAccess().text_to_speech||home?.profile?.learner_profile?.education_level==='emergent_literacy';
+  await apiStream('/activities/'+a.activity_id+'/help/stream',{mode,question},async event=>{
+    if(event.type==='delta'){text+=event.text||'';live.textContent=text||'Sto preparando la spiegazione…';}
+    else if(event.type==='voice'&&autoSpeak){speakStreamSentence(event.text||'');}
+    else if(event.type==='done'){finalResult=event.result||null;}
+  });
+  if(finalResult){live.textContent=finalResult.feedback||text;if(!autoSpeak)speakTutorFeedback(finalResult);}
+  avatar.reset();
+  return finalResult;
+}
 function navigate(path){history.pushState({},'',path);render().then(()=>window.scrollTo(0,0)).catch(showError);}
 document.addEventListener('click',e=>{const a=e.target.closest('a');if(a&&a.getAttribute('href')?.startsWith('/')&&!e.ctrlKey&&!e.metaKey){e.preventDefault();navigate(a.getAttribute('href'));}});
 window.addEventListener('popstate',()=>render().catch(showError));
@@ -126,8 +161,8 @@ function study(onlyQuiz=false,onlySimulation=false){
   for(const topic of home.topics){if(onlySimulation&&!['fractions','motion'].includes(topic.id))continue;
     const card=add(el('section',null,{class:'card'}),el('h2',topic.title),el('p',topic.learning_objectives[0]));
     if(!onlyQuiz&&!onlySimulation)card.append(button('Percorso consigliato',()=>start(topic.id)));
-    const select=el('select',null,{'aria-label':'Modalità per '+topic.title});
-    for(const [value,label] of Object.entries(modes)){if(value==='simulation'&&!['fractions','motion'].includes(topic.id))continue;if(onlySimulation&&value!=='simulation')continue;if(onlyQuiz&&value!=='multiple_choice')continue;select.append(el('option',label,{value}));}
+    const select=el('select',null,{'aria-label':'Modalità per '+topic.title});const allowed=new Set(topic.suggested_activity_types||Object.keys(modes));
+    for(const [value,label] of Object.entries(modes)){if(!allowed.has(value))continue;if(value==='simulation'&&!['fractions','motion'].includes(topic.id))continue;if(onlySimulation&&value!=='simulation')continue;if(onlyQuiz&&value!=='multiple_choice')continue;select.append(el('option',label,{value}));}
     add(card,select,button(onlySimulation?'Apri laboratorio':'Inizia',()=>start(topic.id,select.value),true));grid.append(card);
   }main.append(grid);
   if(!onlySimulation&&!onlyQuiz)main.append(button('Prepara un piano di 15 minuti',async()=>{const plan=await api('/study-plan',{minutes:15});main.append(info(plan.explanation));for(const item of plan.activities)main.append(button(topicName(item.topic),()=>start(item.topic,item.activity_type)));},true));
@@ -177,8 +212,8 @@ async function activityPage(){
   const feedback=el('div',null,{'aria-live':'polite'});
   let attemptKey=crypto.randomUUID();
   if(a.activity_type!=='flashcards'){const send=button('Invia risposta',async()=>{const result=await api('/activities/'+a.activity_id+'/answer',{answer:getter(),request_key:attemptKey});attemptKey=crypto.randomUUID();feedback.replaceChildren(info(result.feedback),el('p',(result.correct?'Risposta corretta. ':'Proviamo insieme. ')+`+${result.xp_awarded} XP`));speakTutorFeedback(result);if(result.correct){send.hidden=true;feedback.append(button('Prossima attività',()=>start(result.next?.topic||a.topic,result.next?.activity_type)),button('Vedi progressi',()=>navigate('/progress'),true));}else{feedback.append(el('p','Puoi correggere la risposta e inviarla di nuovo.'));if(result.attempts>=5){send.hidden=true;feedback.append(button('Nuova attività guidata',()=>start(a.topic,'guided_exercise')));}}});section.append(send);}
-  const help=el('div',null,{class:'row'});for(const [mode,label] of [['hint','Suggerimento'],['different','Spiegamelo diversamente'],['explain','Fammi un esempio']])help.append(button(label,async()=>{const result=await api('/activities/'+a.activity_id+'/help',{mode,question:''});feedback.replaceChildren(info(result.feedback));speakTutorFeedback(result);},true));section.append(help,feedback);
-  const chat=el('details',null,{class:'card'});chat.append(el('summary','Non ho capito: chiedi al tutor'));const question=field(chat,'La tua domanda','question','textarea');question.maxLength=2000;chat.append(button('Chiedi',async()=>{const result=await api('/activities/'+a.activity_id+'/help',{mode:'explain',question:question.value});feedback.replaceChildren(info(result.feedback));speakTutorFeedback(result);}));section.append(chat,button('Scegli un’altra attività',()=>navigate('/study'),true));main.append(section);
+  const help=el('div',null,{class:'row'});for(const [mode,label] of [['hint','Suggerimento'],['different','Spiegamelo diversamente'],['explain','Fammi un esempio']])help.append(button(label,async()=>{await streamHelp(a,mode,'',feedback);},true));section.append(help,feedback);
+  const chat=el('details',null,{class:'card'});chat.append(el('summary','Non ho capito: chiedi al tutor'));const question=field(chat,'La tua domanda','question','textarea');question.maxLength=2000;chat.append(button('Chiedi',async()=>{await streamHelp(a,'explain',question.value,feedback);}));section.append(chat,button('Scegli un’altra attività',()=>navigate('/study'),true));main.append(section);
 }
 async function progressPage(badgesOnly=false){
   const p=await api('/progress');heading(badgesOnly?'I tuoi traguardi':'Guarda quanta strada hai fatto');main.append(stats(p));
@@ -207,6 +242,21 @@ async function audioPage(){
     add(card,select,speed,text,button('Riproduci',play),button('Pausa',async()=>{if(serverAudio&&!serverAudio.paused)serverAudio.pause();else window.speechSynthesis?.pause();await save();},true),button('Riprendi',async()=>{if(serverAudio?.paused)await serverAudio.play();else if(window.speechSynthesis?.paused)speechSynthesis.resume();else await play();},true),el('p','La preparazione Peppone avviene in background. Se non è ancora pronta, la lettura browser parte senza attese.',{class:'muted'}));main.append(card);
   }
 }
+async function profilePage(){
+  heading('Il tuo profilo','Qui scegli come accedere ai contenuti. Queste sono preferenze didattiche, non diagnosi.');
+  const profile=structuredClone(home.profile.learner_profile||{}),access=profile.accessibility_support||{};
+  main.append(el('p',home.profile.display_name),el('p',(labels[home.profile.school_level]||home.profile.school_level)+' · livello '+home.profile.grade));
+  const form=el('form',null,{class:'card reader-settings'});form.append(el('h2','Reader e accessibilità'));
+  const checks=[['text_to_speech','Leggi automaticamente le spiegazioni'],['speech_to_text','Preferisco poter rispondere a voce'],['short_lines','Periodi e righe più brevi'],['line_focus','Focus su una riga/idea alla volta'],['enlarged_text','Testo ingrandito'],['low_clutter','Riduci elementi non essenziali'],['synchronized_highlight','Evidenziazione sincronizzata'],['alternative_response_modes','Mostra modalità di risposta alternative']];
+  for(const [key,label] of checks){const id='access-'+key;const row=el('label',null,{class:'toggle',for:id});const input=el('input',null,{type:'checkbox',id});input.checked=!!access[key];input.onchange=()=>{access[key]=input.checked;};row.append(input,el('span',label));form.append(row);}
+  const scale=el('input',null,{type:'range',min:'0.8',max:'2',step:'0.1',value:String(access.font_scale||1),'aria-label':'Dimensione testo'});scale.oninput=()=>{access.font_scale=Number(scale.value);};form.append(el('label','Dimensione testo'),scale);
+  const spacing=el('input',null,{type:'range',min:'1',max:'3',step:'0.1',value:String(access.line_spacing||1.5),'aria-label':'Interlinea'});spacing.oninput=()=>{access.line_spacing=Number(spacing.value);};form.append(el('label','Interlinea'),spacing);
+  const mode=el('select',null,{'aria-label':'Modalità sessione'});for(const [v,l] of [['auto','Adattiva'],['micro','Micro'],['standard','Standard'],['doposcuola','Doposcuola'],['exam','Esame'],['scholar','Scholar'],['literacy_l2','Literacy / L2']])mode.append(el('option',l,{value:v}));mode.value=profile.session_preference||'auto';mode.onchange=()=>{profile.session_preference=mode.value;};form.append(el('label','Modalità di studio'),mode);
+  profile.accessibility_support=access;form.append(button('Salva preferenze',async()=>{home.profile.learner_profile=await api('/learner-profile',profile);applyLearnerAccess();notice.textContent='Preferenze salvate.';}));main.append(form);
+  if(['university','postgraduate','master'].includes(home.profile.school_level))main.append(el('section',null,{class:'card scholar-card'}),button('Apri i materiali Scholar',()=>navigate('/books')));
+  main.append(el('p','La tessera identifica il tuo profilo. La credenziale protegge l’accesso.'),button('Esci',async()=>{await api('/logout',{});window.speechSynthesis?.cancel();stopServerAudio();navigate('/login');},true));
+}
+
 async function render(){
   tutorVoiceGeneration+=1;
   window.speechSynthesis?.cancel();
@@ -215,7 +265,7 @@ async function render(){
   notice.textContent='';main.replaceChildren(el('p','Un momento…'));const path=location.pathname;
   document.querySelectorAll('nav a').forEach(a=>{if(a.getAttribute('href')===path)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});
   if(path==='/login'){main.replaceChildren();login();return;}
-  home=await api('/home');main.replaceChildren();
-  if(path==='/'||path==='/home')dashboard();else if(path==='/study')study();else if(path==='/quiz')study(true);else if(path==='/simulations')study(false,true);else if(path==='/activity')await activityPage();else if(path==='/progress')await progressPage();else if(path==='/badges')await progressPage(true);else if(path==='/books')await books();else if(path==='/audio')await audioPage();else if(path==='/profile'){heading('Il tuo profilo');main.append(el('p',home.profile.display_name),el('p',labels[home.profile.school_level]+' · classe '+home.profile.grade),el('p','La tessera identifica il tuo profilo. La credenziale protegge l’accesso.'),button('Esci',async()=>{await api('/logout',{});window.speechSynthesis?.cancel();stopServerAudio();navigate('/login');},true));}
+  home=await api('/home');applyLearnerAccess();main.replaceChildren();
+  if(path==='/'||path==='/home')dashboard();else if(path==='/study')study();else if(path==='/quiz')study(true);else if(path==='/simulations')study(false,true);else if(path==='/activity')await activityPage();else if(path==='/progress')await progressPage();else if(path==='/badges')await progressPage(true);else if(path==='/books')await books();else if(path==='/audio')await audioPage();else if(path==='/profile')await profilePage();
 }
 render().catch(showError);

@@ -15,3 +15,15 @@
 .teacher-feedback-text{display:block;min-width:0;padding-top:.2rem}
 @keyframes teacher-thinking{from{transform:translateY(0)}to{transform:translateY(-3px)}}
 @media(max-width:600px){.teacher-avatar{margin:.5rem .8rem 0}.teacher-avatar img{width:88px;height:88px}.feedback[data-teacher-avatar-decorated="1"]{grid-template-columns:68px minmax(0,1fr);gap:.7rem}.teacher-avatar-inline img{width:60px;height:60px}}
+:root{--reader-font-scale:1;--reader-line-spacing:1.55;--reader-column:72ch}
+body{font-size:calc(18px * var(--reader-font-scale));line-height:var(--reader-line-spacing)}
+main p,.feedback,.activity h1,.reader-text{max-width:var(--reader-column)}
+.reader-short-lines main p,.reader-short-lines .feedback,.reader-short-lines .activity h1{max-width:min(var(--reader-column),52ch)}
+.reader-enlarged .activity,.reader-enlarged .card{letter-spacing:.015em}
+.reader-low-clutter footer,.reader-low-clutter .association{display:none}
+.reader-low-clutter .hero,.reader-low-clutter .card{box-shadow:none;background-image:none}
+.reader-line-focus .feedback,.reader-line-focus .activity .card{outline:2px solid transparent}
+.reader-line-focus .feedback:focus-within,.reader-line-focus .activity .card:focus-within,.reader-line-focus .feedback:hover{outline-color:#923326;background:#fff8dc}
+.reader-settings .toggle{display:flex;align-items:center;gap:.75rem;font-weight:500;padding:.45rem 0;margin:0}
+.reader-settings .toggle input{width:24px;min-height:24px;flex:0 0 auto}
+.scholar-card{border-left:5px solid #923326}

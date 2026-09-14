@@ -1,18 +1,1325 @@
 {
-  "version": "2026.09.11.1",
+  "version": "2026.09.14.2",
   "coverage": "Original pilot sequences; grade placement is editorial, not a complete national programme.",
-  "school_levels": {"primary": [1,2,3,4,5], "middle": [1,2,3], "upper": [1,2,3,4,5]},
-  "school_tracks": ["liceo", "tecnico", "professionale"],
-  "subjects": ["matematica", "italiano", "inglese", "storia", "geografia", "scienze", "fisica", "chimica"],
+  "school_levels": {
+    "primary": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "middle": [
+      1,
+      2,
+      3
+    ],
+    "upper": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ]
+  },
+  "school_tracks": [
+    "liceo",
+    "tecnico",
+    "professionale"
+  ],
+  "subjects": [
+    "matematica",
+    "italiano",
+    "inglese",
+    "storia",
+    "geografia",
+    "scienze",
+    "fisica",
+    "chimica",
+    "studio accademico"
+  ],
   "sources": [
-    {"id":"first-cycle-2012", "url":"https://www.mim.gov.it/documents/20182/51310/DM+254_2012.pdf", "note":"Intermediate cohorts continue until completion; original topic placement requires educator review."},
-    {"id":"first-cycle-transition", "url":"https://www.gazzettaufficiale.it/atto/serie_generale/caricaArticoloDefault/originario?atto.codiceRedazionale=26G00021&atto.dataPubblicazioneGazzetta=2026-01-27&atto.tipoProvvedimento=DECRETO", "note":"New indications start with first primary/middle classes in 2026/27."},
-    {"id":"upper-reference", "url":"https://www.normattiva.it/atto/caricaDettaglioAtto?atto.codiceRedazionale=010G0232&atto.dataPubblicazioneGazzetta=2010-12-14&currentPage=1", "note":"Licei reference; technical/professional tracks require separate editorial validation."}
+    {
+      "id": "first-cycle-2012",
+      "url": "https://www.mim.gov.it/documents/20182/51310/DM+254_2012.pdf",
+      "note": "Intermediate cohorts continue until completion; original topic placement requires educator review."
+    },
+    {
+      "id": "first-cycle-transition",
+      "url": "https://www.gazzettaufficiale.it/atto/serie_generale/caricaArticoloDefault/originario?atto.codiceRedazionale=26G00021&atto.dataPubblicazioneGazzetta=2026-01-27&atto.tipoProvvedimento=DECRETO",
+      "note": "New indications start with first primary/middle classes in 2026/27."
+    },
+    {
+      "id": "upper-reference",
+      "url": "https://www.normattiva.it/atto/caricaDettaglioAtto?atto.codiceRedazionale=010G0232&atto.dataPubblicazioneGazzetta=2010-12-14&currentPage=1",
+      "note": "Licei reference; technical/professional tracks require separate editorial validation."
+    },
+    {
+      "id": "structured-literacy-seed",
+      "url": "",
+      "note": "Internal reviewed seed sequence for Italian literacy/L2; editorial expansion required before broad curricular claims."
+    }
   ],
   "topics": [
-    {"id":"equal_parts", "title":"Parti uguali", "subject":"matematica", "domain":"numeri", "school_levels":{"primary":[3,4,5],"middle":[1,2,3]}, "school_tracks":[], "subtopics":["unità", "partizione"], "prerequisites":[], "learning_objectives":["Riconoscere parti uguali di un intero"], "expected_competencies":["Collegare una parte alla sua unità"], "difficulty":1, "suggested_activity_types":["multiple_choice","true_false","guided_exercise"], "keywords":["parti", "intero"], "source":"first-cycle-2012"},
-    {"id":"fractions", "title":"Frazioni equivalenti", "subject":"matematica", "domain":"numeri", "school_levels":{"primary":[4,5],"middle":[1,2,3]}, "school_tracks":[], "subtopics":["rappresentazione", "equivalenza", "confronto"], "prerequisites":["equal_parts"], "learning_objectives":["Riconoscere frazioni equivalenti usando rappresentazioni e calcolo"], "expected_competencies":["Spiegare perché due frazioni rappresentano la stessa quantità"], "difficulty":2, "suggested_activity_types":["simulation","matching","guided_exercise","free_answer","multiple_choice","flashcards","ordering"], "keywords":["frazione", "frazioni", "numeratore", "denominatore"], "source":"first-cycle-2012"},
-    {"id":"motion", "title":"Velocità e distanza", "subject":"fisica", "domain":"moto", "school_levels":{"upper":[1,2,3,4,5]}, "school_tracks":["liceo","tecnico","professionale"], "subtopics":["moto uniforme"], "prerequisites":[], "learning_objectives":["Prevedere la distanza nel moto a velocità costante"], "expected_competencies":["Usare distanza = velocità × tempo con unità coerenti"], "difficulty":2, "suggested_activity_types":["simulation","free_answer","multiple_choice"], "keywords":["velocità", "distanza", "moto"], "source":"upper-reference"},
-    {"id":"water", "title":"Gli stati dell'acqua", "subject":"scienze", "domain":"materia", "school_levels":{"primary":[1,2,3,4,5],"middle":[1,2,3]}, "school_tracks":[], "subtopics":["solido", "liquido", "gas"], "prerequisites":[], "learning_objectives":["Distinguere gli stati fisici dell'acqua"], "expected_competencies":["Associare ghiaccio e acqua ai rispettivi stati"], "difficulty":1, "suggested_activity_types":["matching","multiple_choice","grouping","flashcards"], "keywords":["acqua", "ghiaccio", "vapore"], "source":"first-cycle-2012"}
+    {
+      "id": "equal_parts",
+      "title": "Parti uguali",
+      "subject": "matematica",
+      "domain": "numeri",
+      "school_levels": {
+        "primary": [
+          3,
+          4,
+          5
+        ],
+        "middle": [
+          1,
+          2,
+          3
+        ]
+      },
+      "school_tracks": [],
+      "subtopics": [
+        "unità",
+        "partizione"
+      ],
+      "prerequisites": [],
+      "learning_objectives": [
+        "Riconoscere parti uguali di un intero"
+      ],
+      "expected_competencies": [
+        "Collegare una parte alla sua unità"
+      ],
+      "difficulty": 1,
+      "suggested_activity_types": [
+        "multiple_choice",
+        "true_false",
+        "guided_exercise"
+      ],
+      "keywords": [
+        "parti",
+        "intero"
+      ],
+      "source": "first-cycle-2012"
+    },
+    {
+      "id": "fractions",
+      "title": "Frazioni equivalenti",
+      "subject": "matematica",
+      "domain": "numeri",
+      "school_levels": {
+        "primary": [
+          4,
+          5
+        ],
+        "middle": [
+          1,
+          2,
+          3
+        ]
+      },
+      "school_tracks": [],
+      "subtopics": [
+        "rappresentazione",
+        "equivalenza",
+        "confronto"
+      ],
+      "prerequisites": [
+        "equal_parts"
+      ],
+      "learning_objectives": [
+        "Riconoscere frazioni equivalenti usando rappresentazioni e calcolo"
+      ],
+      "expected_competencies": [
+        "Spiegare perché due frazioni rappresentano la stessa quantità"
+      ],
+      "difficulty": 2,
+      "suggested_activity_types": [
+        "simulation",
+        "matching",
+        "guided_exercise",
+        "free_answer",
+        "multiple_choice",
+        "flashcards",
+        "ordering"
+      ],
+      "keywords": [
+        "frazione",
+        "frazioni",
+        "numeratore",
+        "denominatore"
+      ],
+      "source": "first-cycle-2012"
+    },
+    {
+      "id": "motion",
+      "title": "Velocità e distanza",
+      "subject": "fisica",
+      "domain": "moto",
+      "school_levels": {
+        "upper": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      },
+      "school_tracks": [
+        "liceo",
+        "tecnico",
+        "professionale"
+      ],
+      "subtopics": [
+        "moto uniforme"
+      ],
+      "prerequisites": [],
+      "learning_objectives": [
+        "Prevedere la distanza nel moto a velocità costante"
+      ],
+      "expected_competencies": [
+        "Usare distanza = velocità × tempo con unità coerenti"
+      ],
+      "difficulty": 2,
+      "suggested_activity_types": [
+        "simulation",
+        "free_answer",
+        "multiple_choice"
+      ],
+      "keywords": [
+        "velocità",
+        "distanza",
+        "moto"
+      ],
+      "source": "upper-reference"
+    },
+    {
+      "id": "water",
+      "title": "Gli stati dell'acqua",
+      "subject": "scienze",
+      "domain": "materia",
+      "school_levels": {
+        "primary": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "middle": [
+          1,
+          2,
+          3
+        ]
+      },
+      "school_tracks": [],
+      "subtopics": [
+        "solido",
+        "liquido",
+        "gas"
+      ],
+      "prerequisites": [],
+      "learning_objectives": [
+        "Distinguere gli stati fisici dell'acqua"
+      ],
+      "expected_competencies": [
+        "Associare ghiaccio e acqua ai rispettivi stati"
+      ],
+      "difficulty": 1,
+      "suggested_activity_types": [
+        "matching",
+        "multiple_choice",
+        "grouping",
+        "flashcards"
+      ],
+      "keywords": [
+        "acqua",
+        "ghiaccio",
+        "vapore"
+      ],
+      "source": "first-cycle-2012"
+    },
+    {
+      "id": "academic_study",
+      "title": "Studio accademico e metodo",
+      "subject": "studio accademico",
+      "domain": "scholar",
+      "school_levels": {
+        "university": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20
+        ],
+        "postgraduate": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20
+        ],
+        "master": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20
+        ]
+      },
+      "school_tracks": [],
+      "subtopics": [
+        "fonti",
+        "argomentazione",
+        "metodo",
+        "oral exam",
+        "retrieval"
+      ],
+      "prerequisites": [],
+      "learning_objectives": [
+        "Analizzare materiali accademici, distinguere tesi, prove, metodi e limiti"
+      ],
+      "expected_competencies": [
+        "Spiegare e discutere criticamente un materiale del proprio corso con riferimenti al testo fornito"
+      ],
+      "difficulty": 5,
+      "suggested_activity_types": [
+        "guided_exercise",
+        "free_answer",
+        "multiple_choice",
+        "flashcards"
+      ],
+      "keywords": [],
+      "source": "student-material"
+    },
+    {
+      "id": "it_phonology",
+      "title": "Consapevolezza fonologica",
+      "subject": "italiano",
+      "domain": "literacy",
+      "school_levels": {
+        "primary": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "middle": [
+          1,
+          2,
+          3
+        ],
+        "adult": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20
+        ]
+      },
+      "school_tracks": [],
+      "subtopics": [],
+      "prerequisites": [],
+      "learning_objectives": [
+        "Riconoscere e manipolare suoni in parole brevi"
+      ],
+      "expected_competencies": [
+        "Distinguere suoni iniziali, finali e segmenti orali"
+      ],
+      "difficulty": 1,
+      "suggested_activity_types": [
+        "guided_exercise",
+        "free_answer",
+        "multiple_choice",
+        "fill_blank"
+      ],
+      "keywords": [
+        "suono",
+        "fonema",
+        "rima"
+      ],
+      "source": "structured-literacy-seed",
+      "common_misconceptions": [],
+      "hint_ladder": [
+        {
+          "level": 0,
+          "kind": "orientation",
+          "text": "Ascolta o rileggi un solo elemento e dimmi che cosa riconosci."
+        },
+        {
+          "level": 1,
+          "kind": "prerequisite",
+          "text": "Riprendiamo il passaggio precedente con un esempio più semplice."
+        },
+        {
+          "level": 2,
+          "kind": "analogy",
+          "text": "Confrontalo con una parola o frase molto simile."
+        },
+        {
+          "level": 3,
+          "kind": "first_step",
+          "text": "Ti mostro il primo passaggio; completa tu il successivo."
+        }
+      ]
+    },
+    {
+      "id": "it_grapheme_phoneme",
+      "title": "Fonemi e grafemi",
+      "subject": "italiano",
+      "domain": "literacy",
+      "school_levels": {
+        "primary": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "middle": [
+          1,
+          2,
+          3
+        ],
+        "adult": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20
+        ]
+      },
+      "school_tracks": [],
+      "subtopics": [],
+      "prerequisites": [
+        "it_phonology"
+      ],
+      "learning_objectives": [
+        "Collegare suoni della lingua ai principali grafemi"
+      ],
+      "expected_competencies": [
+        "Associare un suono ascoltato alla sua rappresentazione scritta"
+      ],
+      "difficulty": 1,
+      "suggested_activity_types": [
+        "guided_exercise",
+        "free_answer",
+        "multiple_choice",
+        "fill_blank"
+      ],
+      "keywords": [
+        "grafema",
+        "fonema",
+        "lettera"
+      ],
+      "source": "structured-literacy-seed",
+      "common_misconceptions": [],
+      "hint_ladder": [
+        {
+          "level": 0,
+          "kind": "orientation",
+          "text": "Ascolta o rileggi un solo elemento e dimmi che cosa riconosci."
+        },
+        {
+          "level": 1,
+          "kind": "prerequisite",
+          "text": "Riprendiamo il passaggio precedente con un esempio più semplice."
+        },
+        {
+          "level": 2,
+          "kind": "analogy",
+          "text": "Confrontalo con una parola o frase molto simile."
+        },
+        {
+          "level": 3,
+          "kind": "first_step",
+          "text": "Ti mostro il primo passaggio; completa tu il successivo."
+        }
+      ]
+    },
+    {
+      "id": "it_syllables",
+      "title": "Sillabe e parole",
+      "subject": "italiano",
+      "domain": "literacy",
+      "school_levels": {
+        "primary": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "middle": [
+          1,
+          2,
+          3
+        ],
+        "adult": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20
+        ]
+      },
+      "school_tracks": [],
+      "subtopics": [],
+      "prerequisites": [
+        "it_grapheme_phoneme"
+      ],
+      "learning_objectives": [
+        "Segmentare e ricomporre parole in sillabe"
+      ],
+      "expected_competencies": [
+        "Leggere e ricomporre parole regolari a partire dalle sillabe"
+      ],
+      "difficulty": 1,
+      "suggested_activity_types": [
+        "guided_exercise",
+        "free_answer",
+        "multiple_choice",
+        "fill_blank"
+      ],
+      "keywords": [
+        "sillaba",
+        "sillabe"
+      ],
+      "source": "structured-literacy-seed",
+      "common_misconceptions": [],
+      "hint_ladder": [
+        {
+          "level": 0,
+          "kind": "orientation",
+          "text": "Ascolta o rileggi un solo elemento e dimmi che cosa riconosci."
+        },
+        {
+          "level": 1,
+          "kind": "prerequisite",
+          "text": "Riprendiamo il passaggio precedente con un esempio più semplice."
+        },
+        {
+          "level": 2,
+          "kind": "analogy",
+          "text": "Confrontalo con una parola o frase molto simile."
+        },
+        {
+          "level": 3,
+          "kind": "first_step",
+          "text": "Ti mostro il primo passaggio; completa tu il successivo."
+        }
+      ]
+    },
+    {
+      "id": "it_orthography",
+      "title": "Ortografia di base",
+      "subject": "italiano",
+      "domain": "literacy",
+      "school_levels": {
+        "primary": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "middle": [
+          1,
+          2,
+          3
+        ],
+        "adult": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20
+        ]
+      },
+      "school_tracks": [],
+      "subtopics": [],
+      "prerequisites": [
+        "it_syllables"
+      ],
+      "learning_objectives": [
+        "Consolidare corrispondenze ortografiche frequenti"
+      ],
+      "expected_competencies": [
+        "Scrivere parole e frasi brevi controllando grafemi e accenti"
+      ],
+      "difficulty": 2,
+      "suggested_activity_types": [
+        "guided_exercise",
+        "free_answer",
+        "multiple_choice",
+        "fill_blank"
+      ],
+      "keywords": [
+        "ortografia",
+        "accento",
+        "apostrofo"
+      ],
+      "source": "structured-literacy-seed",
+      "common_misconceptions": [],
+      "hint_ladder": [
+        {
+          "level": 0,
+          "kind": "orientation",
+          "text": "Ascolta o rileggi un solo elemento e dimmi che cosa riconosci."
+        },
+        {
+          "level": 1,
+          "kind": "prerequisite",
+          "text": "Riprendiamo il passaggio precedente con un esempio più semplice."
+        },
+        {
+          "level": 2,
+          "kind": "analogy",
+          "text": "Confrontalo con una parola o frase molto simile."
+        },
+        {
+          "level": 3,
+          "kind": "first_step",
+          "text": "Ti mostro il primo passaggio; completa tu il successivo."
+        }
+      ]
+    },
+    {
+      "id": "it_vocabulary",
+      "title": "Lessico e significato",
+      "subject": "italiano",
+      "domain": "language",
+      "school_levels": {
+        "primary": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "middle": [
+          1,
+          2,
+          3
+        ],
+        "adult": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20
+        ]
+      },
+      "school_tracks": [],
+      "subtopics": [],
+      "prerequisites": [
+        "it_syllables"
+      ],
+      "learning_objectives": [
+        "Ampliare lessico ricettivo e produttivo in contesto"
+      ],
+      "expected_competencies": [
+        "Usare parole nuove in frasi pertinenti"
+      ],
+      "difficulty": 2,
+      "suggested_activity_types": [
+        "guided_exercise",
+        "free_answer",
+        "multiple_choice",
+        "fill_blank"
+      ],
+      "keywords": [
+        "lessico",
+        "parola",
+        "significato"
+      ],
+      "source": "structured-literacy-seed",
+      "common_misconceptions": [],
+      "hint_ladder": [
+        {
+          "level": 0,
+          "kind": "orientation",
+          "text": "Ascolta o rileggi un solo elemento e dimmi che cosa riconosci."
+        },
+        {
+          "level": 1,
+          "kind": "prerequisite",
+          "text": "Riprendiamo il passaggio precedente con un esempio più semplice."
+        },
+        {
+          "level": 2,
+          "kind": "analogy",
+          "text": "Confrontalo con una parola o frase molto simile."
+        },
+        {
+          "level": 3,
+          "kind": "first_step",
+          "text": "Ti mostro il primo passaggio; completa tu il successivo."
+        }
+      ]
+    },
+    {
+      "id": "it_morphology",
+      "title": "Morfologia italiana",
+      "subject": "italiano",
+      "domain": "grammar",
+      "school_levels": {
+        "primary": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "middle": [
+          1,
+          2,
+          3
+        ],
+        "adult": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20
+        ]
+      },
+      "school_tracks": [],
+      "subtopics": [],
+      "prerequisites": [
+        "it_vocabulary"
+      ],
+      "learning_objectives": [
+        "Riconoscere forma e funzione delle principali categorie grammaticali"
+      ],
+      "expected_competencies": [
+        "Analizzare e trasformare parole secondo genere, numero, persona e tempo"
+      ],
+      "difficulty": 3,
+      "suggested_activity_types": [
+        "guided_exercise",
+        "free_answer",
+        "multiple_choice",
+        "fill_blank"
+      ],
+      "keywords": [
+        "morfologia",
+        "nome",
+        "verbo",
+        "aggettivo",
+        "articolo"
+      ],
+      "source": "structured-literacy-seed",
+      "common_misconceptions": [],
+      "hint_ladder": [
+        {
+          "level": 0,
+          "kind": "orientation",
+          "text": "Ascolta o rileggi un solo elemento e dimmi che cosa riconosci."
+        },
+        {
+          "level": 1,
+          "kind": "prerequisite",
+          "text": "Riprendiamo il passaggio precedente con un esempio più semplice."
+        },
+        {
+          "level": 2,
+          "kind": "analogy",
+          "text": "Confrontalo con una parola o frase molto simile."
+        },
+        {
+          "level": 3,
+          "kind": "first_step",
+          "text": "Ti mostro il primo passaggio; completa tu il successivo."
+        }
+      ]
+    },
+    {
+      "id": "it_syntax",
+      "title": "Sintassi della frase",
+      "subject": "italiano",
+      "domain": "grammar",
+      "school_levels": {
+        "primary": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "middle": [
+          1,
+          2,
+          3
+        ],
+        "adult": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20
+        ]
+      },
+      "school_tracks": [],
+      "subtopics": [],
+      "prerequisites": [
+        "it_morphology"
+      ],
+      "learning_objectives": [
+        "Riconoscere relazioni essenziali nella frase"
+      ],
+      "expected_competencies": [
+        "Costruire e analizzare frasi coerenti individuando nucleo e argomenti"
+      ],
+      "difficulty": 3,
+      "suggested_activity_types": [
+        "guided_exercise",
+        "free_answer",
+        "multiple_choice",
+        "fill_blank"
+      ],
+      "keywords": [
+        "sintassi",
+        "frase",
+        "soggetto",
+        "predicato",
+        "valenza"
+      ],
+      "source": "structured-literacy-seed",
+      "common_misconceptions": [],
+      "hint_ladder": [
+        {
+          "level": 0,
+          "kind": "orientation",
+          "text": "Ascolta o rileggi un solo elemento e dimmi che cosa riconosci."
+        },
+        {
+          "level": 1,
+          "kind": "prerequisite",
+          "text": "Riprendiamo il passaggio precedente con un esempio più semplice."
+        },
+        {
+          "level": 2,
+          "kind": "analogy",
+          "text": "Confrontalo con una parola o frase molto simile."
+        },
+        {
+          "level": 3,
+          "kind": "first_step",
+          "text": "Ti mostro il primo passaggio; completa tu il successivo."
+        }
+      ]
+    },
+    {
+      "id": "it_reading",
+      "title": "Comprensione del testo",
+      "subject": "italiano",
+      "domain": "reading",
+      "school_levels": {
+        "primary": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "middle": [
+          1,
+          2,
+          3
+        ],
+        "adult": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20
+        ]
+      },
+      "school_tracks": [],
+      "subtopics": [],
+      "prerequisites": [
+        "it_vocabulary",
+        "it_syntax"
+      ],
+      "learning_objectives": [
+        "Comprendere informazioni esplicite e inferenze controllate"
+      ],
+      "expected_competencies": [
+        "Ricostruire significato, referenti e nessi di un testo breve"
+      ],
+      "difficulty": 3,
+      "suggested_activity_types": [
+        "guided_exercise",
+        "free_answer",
+        "multiple_choice",
+        "fill_blank"
+      ],
+      "keywords": [
+        "comprensione",
+        "testo",
+        "lettura"
+      ],
+      "source": "structured-literacy-seed",
+      "common_misconceptions": [],
+      "hint_ladder": [
+        {
+          "level": 0,
+          "kind": "orientation",
+          "text": "Ascolta o rileggi un solo elemento e dimmi che cosa riconosci."
+        },
+        {
+          "level": 1,
+          "kind": "prerequisite",
+          "text": "Riprendiamo il passaggio precedente con un esempio più semplice."
+        },
+        {
+          "level": 2,
+          "kind": "analogy",
+          "text": "Confrontalo con una parola o frase molto simile."
+        },
+        {
+          "level": 3,
+          "kind": "first_step",
+          "text": "Ti mostro il primo passaggio; completa tu il successivo."
+        }
+      ]
+    },
+    {
+      "id": "it_oral",
+      "title": "Produzione orale",
+      "subject": "italiano",
+      "domain": "language",
+      "school_levels": {
+        "primary": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "middle": [
+          1,
+          2,
+          3
+        ],
+        "adult": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20
+        ]
+      },
+      "school_tracks": [],
+      "subtopics": [],
+      "prerequisites": [
+        "it_vocabulary"
+      ],
+      "learning_objectives": [
+        "Produrre messaggi orali comprensibili e progressivamente articolati"
+      ],
+      "expected_competencies": [
+        "Descrivere, raccontare e spiegare con lessico adeguato"
+      ],
+      "difficulty": 2,
+      "suggested_activity_types": [
+        "guided_exercise",
+        "free_answer",
+        "multiple_choice",
+        "fill_blank"
+      ],
+      "keywords": [
+        "orale",
+        "parlare",
+        "raccontare"
+      ],
+      "source": "structured-literacy-seed",
+      "common_misconceptions": [],
+      "hint_ladder": [
+        {
+          "level": 0,
+          "kind": "orientation",
+          "text": "Ascolta o rileggi un solo elemento e dimmi che cosa riconosci."
+        },
+        {
+          "level": 1,
+          "kind": "prerequisite",
+          "text": "Riprendiamo il passaggio precedente con un esempio più semplice."
+        },
+        {
+          "level": 2,
+          "kind": "analogy",
+          "text": "Confrontalo con una parola o frase molto simile."
+        },
+        {
+          "level": 3,
+          "kind": "first_step",
+          "text": "Ti mostro il primo passaggio; completa tu il successivo."
+        }
+      ]
+    },
+    {
+      "id": "it_writing",
+      "title": "Produzione scritta",
+      "subject": "italiano",
+      "domain": "writing",
+      "school_levels": {
+        "primary": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "middle": [
+          1,
+          2,
+          3
+        ],
+        "adult": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20
+        ]
+      },
+      "school_tracks": [],
+      "subtopics": [],
+      "prerequisites": [
+        "it_orthography",
+        "it_syntax"
+      ],
+      "learning_objectives": [
+        "Produrre testi brevi coerenti e revisionabili"
+      ],
+      "expected_competencies": [
+        "Pianificare, scrivere e rivedere frasi e testi"
+      ],
+      "difficulty": 3,
+      "suggested_activity_types": [
+        "guided_exercise",
+        "free_answer",
+        "multiple_choice",
+        "fill_blank"
+      ],
+      "keywords": [
+        "scrittura",
+        "scrivere",
+        "testo"
+      ],
+      "source": "structured-literacy-seed",
+      "common_misconceptions": [],
+      "hint_ladder": [
+        {
+          "level": 0,
+          "kind": "orientation",
+          "text": "Ascolta o rileggi un solo elemento e dimmi che cosa riconosci."
+        },
+        {
+          "level": 1,
+          "kind": "prerequisite",
+          "text": "Riprendiamo il passaggio precedente con un esempio più semplice."
+        },
+        {
+          "level": 2,
+          "kind": "analogy",
+          "text": "Confrontalo con una parola o frase molto simile."
+        },
+        {
+          "level": 3,
+          "kind": "first_step",
+          "text": "Ti mostro il primo passaggio; completa tu il successivo."
+        }
+      ]
+    },
+    {
+      "id": "it_advanced_grammar",
+      "title": "Grammatica avanzata",
+      "subject": "italiano",
+      "domain": "grammar",
+      "school_levels": {
+        "middle": [
+          1,
+          2,
+          3
+        ],
+        "upper": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "adult": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20
+        ]
+      },
+      "school_tracks": [],
+      "subtopics": [],
+      "prerequisites": [
+        "it_morphology",
+        "it_syntax"
+      ],
+      "learning_objectives": [
+        "Analizzare strutture morfosintattiche complesse senza ridurle a etichette mnemoniche"
+      ],
+      "expected_competencies": [
+        "Motivare analisi grammaticali usando prove linguistiche"
+      ],
+      "difficulty": 4,
+      "suggested_activity_types": [
+        "guided_exercise",
+        "free_answer",
+        "multiple_choice",
+        "fill_blank"
+      ],
+      "keywords": [
+        "grammatica",
+        "subordinata",
+        "valenza",
+        "morfosintassi"
+      ],
+      "source": "structured-literacy-seed",
+      "common_misconceptions": [],
+      "hint_ladder": [
+        {
+          "level": 0,
+          "kind": "orientation",
+          "text": "Ascolta o rileggi un solo elemento e dimmi che cosa riconosci."
+        },
+        {
+          "level": 1,
+          "kind": "prerequisite",
+          "text": "Riprendiamo il passaggio precedente con un esempio più semplice."
+        },
+        {
+          "level": 2,
+          "kind": "analogy",
+          "text": "Confrontalo con una parola o frase molto simile."
+        },
+        {
+          "level": 3,
+          "kind": "first_step",
+          "text": "Ti mostro il primo passaggio; completa tu il successivo."
+        }
+      ]
+    }
   ]
 }

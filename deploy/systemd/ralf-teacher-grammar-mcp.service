@@ -1,0 +1,32 @@
+[Unit]
+Description=Ralf Teacher internal read-only grammar MCP
+After=local-fs.target
+
+[Service]
+Type=simple
+User=bandi
+Group=bandi
+WorkingDirectory=/home/sibilla-cumana/ralfloop-production/current
+Environment=RALF_TEACHER_GRAMMAR_DB=/home/sibilla-cumana/ralfloop_data/skills/grammar/db/grammar_lexicon.sqlite
+RuntimeDirectory=ralf-teacher-grammar
+RuntimeDirectoryMode=0700
+ExecStart=/home/sibilla-cumana/ralfloop-production/current/bin/ralf-teacher-grammar-mcp --db ${RALF_TEACHER_GRAMMAR_DB} --socket /run/ralf-teacher-grammar/grammar.sock --allow-uid 1001
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

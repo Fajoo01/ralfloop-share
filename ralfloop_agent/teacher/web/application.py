@@ -5,6 +5,7 @@ import secrets
 import logging
 
 from .audio import BrowserTTS, prepare_tracks
+from ..content_pipeline import ContentPipeline, ContentSource
 from .learning import ActivityContent, Curriculum, ERRORS, KINDS, choose_activity, evaluate, fraction_evidence, native_content, observe
 
 
@@ -32,21 +33,35 @@ class LearningApplication:
     def __init__(self, state, teacher, tts=None):
         self.state, self.teacher = state, teacher
         self.curriculum, self.tts = Curriculum(), tts or BrowserTTS()
+        self.content_pipeline = ContentPipeline(self.curriculum)
 
     def home(self, student):
         topics = self.curriculum.available(student)
         progress = self.state.progress(student["id"])
         with self.state.connect() as conn:
             active = conn.execute("SELECT id FROM activities WHERE student=? AND completed IS NULL ORDER BY created DESC LIMIT 1", (student["id"],)).fetchone()
-        return {"profile": {k: student[k] for k in ("display_name", "school_level", "grade", "school_track", "demo")},
+        profile = {k: student[k] for k in ("display_name", "school_level", "grade", "school_track", "demo")}
+        profile["learner_profile"] = student.get("learner_profile") or self.state.learner_profile(student)
+        return {"profile": profile,
                 "topics": topics, "progress": progress, "resume": active[0] if active else None,
                 "recommendation": self.next(student, topics[0]["id"]) if topics else None}
 
     def next(self, student, topic):
         entry = self.curriculum.require(student, topic)
+        if topic == "academic_study":
+            return {"topic": topic, "activity_type": "guided_exercise", "reason": "scholar_mode", "difficulty": 5}
+        if topic.startswith("it_"):
+            state = self.state.states(student["id"]).get(topic, {})
+            score = state.get("score", 0)
+            kind = "guided_exercise" if score < 50 else "free_answer" if score < 80 else "multiple_choice"
+            return {"topic": topic, "activity_type": kind, "reason": "structured_literacy", "difficulty": min(5, max(1, 1 + score // 25))}
         result = choose_activity(entry, self.state.states(student["id"]), self.state.recent(student["id"], topic), self.state.clock())
+        allowed = list(entry.get("suggested_activity_types") or KINDS)
         if result["activity_type"] == "simulation" and result["topic"] not in ("fractions", "motion"):
             result["activity_type"] = "guided_exercise"
+        if result["activity_type"] not in allowed:
+            preferred = ["guided_exercise", "multiple_choice", "free_answer", "matching", "true_false"]
+            result["activity_type"] = next((kind for kind in preferred if kind in allowed), allowed[0])
         return result
 
     def public_activity(self, row):
@@ -65,7 +80,8 @@ class LearningApplication:
         topic = selection["topic"]
         entry = self.curriculum.require(student, topic)
         kind = kind or selection["activity_type"]
-        if kind not in KINDS or (kind == "simulation" and topic not in ("fractions", "motion")):
+        allowed_kinds = set(entry.get("suggested_activity_types") or KINDS)
+        if kind not in KINDS or kind not in allowed_kinds or (kind == "simulation" and topic not in ("fractions", "motion")):
             raise ValueError("unsupported_activity")
         material = self.state.owned("materials", student["id"], material_id) if material_id else None
         if material:
@@ -201,7 +217,7 @@ class LearningApplication:
             conn.execute("UPDATE activities SET simulation=? WHERE id=?", (json.dumps(flow), activity_id))
         return flow
 
-    def help(self, student, activity_id, mode, question):
+    def _help_request(self, student, activity_id, mode, question):
         row = self.state.owned("activities", student["id"], activity_id)
         content, entry = json.loads(row["content"]), self.curriculum.topics[row["topic"]]
         if mode == "hint":
@@ -210,24 +226,73 @@ class LearningApplication:
             name, args = "teacher.explain_differently", {"concept": content["instructions"] + " " + question}
         else:
             name, args = "teacher.explain", {"question": content["instructions"] + " " + question}
+        fallback = content["hints"][0] if content["hints"] else "Rileggi la consegna, un passaggio alla volta."
+        return entry, name, args, fallback
+
+    def help(self, student, activity_id, mode, question):
+        entry, name, args, fallback = self._help_request(student, activity_id, mode, question)
         try:
             result = self.teacher.perform(student, entry, name, args)
-            return {"feedback": _teacher_text(result.get("response"), 4000), "source": "teacher"}
+            return {"feedback": _teacher_text(result.get("response"), 4000), "source": "teacher",
+                    "pedagogy": result.get("pedagogy")}
         except Exception:
-            return {"feedback": content["hints"][0] if content["hints"] else "Rileggi la consegna, un passaggio alla volta.", "source": "original_fallback"}
+            return {"feedback": fallback, "source": "original_fallback"}
+
+    def help_stream(self, student, activity_id, mode, question):
+        entry, name, args, fallback = self._help_request(student, activity_id, mode, question)
+        streamer = getattr(self.teacher, "stream_perform", None)
+        if not callable(streamer):
+            result = self.help(student, activity_id, mode, question)
+            yield {"type": "delta", "text": result["feedback"]}
+            yield {"type": "done", "result": result}
+            return
+        try:
+            final = None
+            for event in streamer(student, entry, name, args):
+                if not isinstance(event, dict):
+                    raise ValueError("invalid_teacher_stream_event")
+                if event.get("type") == "delta" and isinstance(event.get("text"), str):
+                    yield event
+                elif event.get("type") == "done" and isinstance(event.get("result"), dict):
+                    final = event["result"]
+            if final is None:
+                raise ValueError("teacher_stream_missing_done")
+            result = {
+                "feedback": _teacher_text(final.get("response"), 4000),
+                "source": "teacher",
+                "pedagogy": final.get("pedagogy"),
+            }
+            yield {"type": "done", "result": result}
+        except Exception:
+            yield {"type": "delta", "text": fallback}
+            yield {"type": "done", "result": {"feedback": fallback, "source": "original_fallback"}}
 
     def add_material(self, student, title, text, rights, kind="notes", chapter="", pages=""):
         if rights not in ("own", "authorized", "public_domain", "compatible_license"):
             raise ValueError("material_rights_required")
         material = secrets.token_hex(16)
-        topics = self.curriculum.map_material(student, text)
+        record = self.content_pipeline.ingest(student, ContentSource(
+            source_id=material,
+            title=title,
+            text=text,
+            source_class="student_material",
+            rights=rights,
+            license={
+                "own": "user_owned",
+                "authorized": "user_authorized",
+                "public_domain": "public_domain",
+                "compatible_license": "compatible_license",
+            }[rights],
+            locator=(chapter + (" · " + pages if pages else "")).strip(" ·"),
+        ))
+        topics = record.topic_ids
         with self.state.connect() as conn:
             count = conn.execute("SELECT COUNT(*) FROM materials WHERE student=?", (student["id"],)).fetchone()[0]
             if count >= 30: raise ValueError("material_limit")
             conn.execute("INSERT INTO materials VALUES(?,?,?,?,?,?,?,?,?)", (material, student["id"], title, kind, chapter, pages, text, rights, self.state.clock()))
             for topic in topics:
                 conn.execute("INSERT INTO material_mapping VALUES(?,?)", (material, topic))
-        return {"material_id": material, "topics": topics}
+        return {"material_id": material, "topics": topics, "content_hash": record.content_hash, "trusted": record.trusted}
 
     def materials(self, student):
         with self.state.connect() as conn:
@@ -259,10 +324,18 @@ class LearningApplication:
             with self.state.connect() as conn:
                 conn.execute("INSERT INTO audio_assets(id,student,material,provider,tracks,created) VALUES(?,?,?,?,?,?)", (asset, student["id"], material_id, self.tts.name, json.dumps(tracks), self.state.clock()))
             return {"audio_id": asset, "provider": self.tts.name, "tracks": tracks}
-        name = "teacher.summarize_material" if action == "summarize" else "teacher.explain"
-        args = {"material": material["text"], "objective": entry["learning_objectives"][0]} if action == "summarize" else {"question": "Spiega solo questo estratto autorizzato, senza attribuire altro al libro: " + material["text"]}
+        name = "teacher.summarize_material"
+        objective = entry["learning_objectives"][0]
+        if action == "explain":
+            objective = "Spiega il contenuto con intuizione, formalizzazione, esempio, limiti e una domanda di verifica, senza aggiungere fatti esterni."
+        args = {"material": material["text"], "objective": objective}
         out = self.teacher.perform(student, entry, name, args)
-        return {"feedback": _teacher_text(out.get("response"), 4000), "source": "provided_material"}
+        return {
+            "feedback": _teacher_text(out.get("response"), 7000),
+            "source": "provided_material",
+            "pedagogy": out.get("pedagogy"),
+            "source_ref": {"title": material["title"], "chapter": material["chapter"], "pages": material["pages"]},
+        }
 
     def plan(self, student, minutes):
         states = self.state.states(student["id"])

@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from ralfloop_agent.teacher.catalog import DESCRIPTIONS, TOOL_MODELS
 from ralfloop_agent.teacher.inference import TeacherInferenceClient
+from ralfloop_agent.teacher.grammar_client import GrammarEvidenceClient
 from ralfloop_agent.teacher.service import TeacherService
 from ralfloop_agent.teacher.store import TeacherStore
 from src.mcp_transport import MCP_PROTOCOL_VERSION
@@ -109,14 +110,57 @@ class TeacherMCPServer:
         payload.setdefault("sends", 0)
         payload.setdefault("external_side_effects", 0)
 
-        return {
-            "content": [{
-                "type": "text",
-                "text": json.dumps(payload, ensure_ascii=False),
-            }],
-            "structuredContent": payload,
-            "isError": not bool(payload.get("ok")),
-        }
+        return _tool_result(payload)
+
+    def stream(
+        self,
+        name: str,
+        arguments: Mapping[str, Any],
+    ):
+        """Stream only pedagogical text operations; never widen tools/capabilities."""
+        if name not in {EXPLAIN, EXPLAIN_DIFFERENTLY, HINT}:
+            raise ValueError("POLICY_DENIED")
+        model = TOOL_MODELS.get(name)
+        if model is None or not isinstance(arguments, Mapping):
+            raise ValueError("INVALID_INPUT")
+        try:
+            values = model.model_validate(arguments).model_dump()
+        except ValidationError as exc:
+            raise ValueError("INVALID_INPUT") from exc
+
+        if name == EXPLAIN:
+            events = self.service.stream_explain(**values)
+        elif name == EXPLAIN_DIFFERENTLY:
+            events = self.service.stream_explain_differently(**values)
+        else:
+            events = self.service.stream_hint(**values)
+
+        for event in events:
+            if not isinstance(event, dict) or event.get("type") not in {"delta", "done"}:
+                raise RuntimeError("invalid_teacher_stream_event")
+            if event["type"] == "done":
+                payload = event.get("result")
+                if not isinstance(payload, dict):
+                    raise RuntimeError("invalid_teacher_stream_result")
+                payload.setdefault("writes", 0)
+                payload.setdefault("sends", 0)
+                payload.setdefault("external_side_effects", 0)
+                yield {"type": "done", "result": _tool_result(payload)}
+            else:
+                text = event.get("text")
+                if isinstance(text, str) and text:
+                    yield {"type": "delta", "text": text}
+
+
+def _tool_result(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "content": [{
+            "type": "text",
+            "text": json.dumps(payload, ensure_ascii=False),
+        }],
+        "structuredContent": payload,
+        "isError": not bool(payload.get("ok")),
+    }
 
 
 def _error(code: str) -> dict[str, Any]:
@@ -189,6 +233,42 @@ def _response(
     }
 
 
+def _write_message(payload: Mapping[str, Any]) -> None:
+    sys.stdout.write(json.dumps(dict(payload), ensure_ascii=False, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+
+
+def _stream_response(request: Mapping[str, Any], server: TeacherMCPServer) -> bool:
+    if request.get("method") != "teacher/stream":
+        return False
+    request_id = request.get("id")
+    params = request.get("params")
+    if request_id is None or not isinstance(params, Mapping):
+        _write_message({"jsonrpc": "2.0", "id": request_id, "result": _error("INVALID_INPUT")})
+        return True
+    name = str(params.get("name") or "")
+    arguments = params.get("arguments", {})
+    final = None
+    try:
+        for event in server.stream(name, arguments):
+            if event["type"] == "delta":
+                _write_message({
+                    "jsonrpc": "2.0",
+                    "method": "teacher/stream/event",
+                    "params": {"requestId": request_id, "event": event},
+                })
+            else:
+                final = event["result"]
+    except (KeyError, ValueError) as exc:
+        final = _error(str(exc.args[0] if exc.args else exc).upper())
+    except Exception:
+        final = _error("SOURCE_UNAVAILABLE")
+    if final is None:
+        final = _error("SOURCE_UNAVAILABLE")
+    _write_message({"jsonrpc": "2.0", "id": request_id, "result": final})
+    return True
+
+
 def main() -> int:
     store = TeacherStore()
 
@@ -203,9 +283,24 @@ def main() -> int:
         else None
     )
 
+    grammar_socket = os.getenv(
+        "RALF_TEACHER_GRAMMAR_SOCKET",
+        "",
+    ).strip()
+    grammar_client = (
+        GrammarEvidenceClient(grammar_socket)
+        if grammar_socket
+        else None
+    )
+
     service = TeacherService(
         store,
         model_call=model_call,
+        grammar_evidence=(
+            grammar_client.evidence_for
+            if grammar_client is not None
+            else None
+        ),
     )
     server = TeacherMCPServer(service)
 
@@ -229,6 +324,8 @@ def main() -> int:
                 if not isinstance(request, Mapping):
                     raise ValueError("request_not_object")
 
+                if _stream_response(request, server):
+                    continue
                 response = _response(request, server)
 
             except Exception:
@@ -242,15 +339,7 @@ def main() -> int:
                 }
 
             if response is not None:
-                sys.stdout.write(
-                    json.dumps(
-                        response,
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    )
-                    + "\n"
-                )
-                sys.stdout.flush()
+                _write_message(response)
     finally:
         service.close()
 

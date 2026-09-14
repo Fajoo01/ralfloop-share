@@ -52,7 +52,7 @@ def test_migration_idempotent_backup_and_private_permissions(setup, tmp_path):
     state.backup(destination)
     with sqlite3.connect(destination) as conn:
         assert conn.execute("SELECT COUNT(*) FROM students").fetchone()[0] == 2
-        assert conn.execute("SELECT version FROM schema_version").fetchall() == [(1,)]
+        assert conn.execute("SELECT version FROM schema_version ORDER BY version").fetchall() == [(1,), (2,)]
     assert state.path.stat().st_mode & 0o777 == 0o600
     assert "Credential!123" not in state.path.read_bytes().decode(errors="ignore")
 
@@ -90,7 +90,7 @@ def test_invalid_activity_rejected(patch):
 
 def test_curriculum_all_grades_and_tracks(setup):
     _, app, profiles, _ = setup
-    assert len(app.curriculum.data["subjects"]) == 8
+    assert len(app.curriculum.data["subjects"]) == 9
     assert sum(map(len, app.curriculum.data["school_levels"].values())) == 13
     assert len(app.curriculum.data["school_tracks"]) == 3
     assert app.curriculum.require(profiles[0], "fractions")

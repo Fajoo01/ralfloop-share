@@ -13,6 +13,7 @@ import time
 from zoneinfo import ZoneInfo
 
 from .learning import level, mastery_status, update_evidence, xp_points
+from ..pedagogy import EvidenceType, KnowledgeState, LearnerProfile, default_learner_profile, update_knowledge_state
 
 
 def day_at(now):
@@ -21,6 +22,20 @@ def day_at(now):
 
 def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
+
+
+def knowledge_evidence(kind: str, attempt_index: int) -> EvidenceType:
+    if attempt_index > 0:
+        return EvidenceType.CORRECTION
+    if kind in {"multiple_choice", "true_false", "matching", "grouping", "definition_match"}:
+        return EvidenceType.RECOGNITION
+    if kind in {"free_answer", "fill_blank", "flashcards"}:
+        return EvidenceType.RECALL
+    if kind in {"simulation", "timed_challenge"}:
+        return EvidenceType.TRANSFER
+    if kind in {"guided_exercise", "ordering", "sequence"}:
+        return EvidenceType.APPLICATION
+    return EvidenceType.EXPLANATION
 
 
 class State:
@@ -33,7 +48,9 @@ class State:
                 version = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
                 if version and version > 2:
                     raise ValueError("unsupported_schema_version")
-            conn.executescript(Path(__file__).with_name("migrations").joinpath("001.sql").read_text())
+            migrations = Path(__file__).with_name("migrations")
+            conn.executescript(migrations.joinpath("001.sql").read_text())
+            conn.executescript(migrations.joinpath("002_universal_tutor.sql").read_text())
             conn.execute("CREATE TABLE IF NOT EXISTS disabled_students(student TEXT PRIMARY KEY REFERENCES students(id))")
         os.chmod(self.path, 0o600)
 
@@ -57,9 +74,12 @@ class State:
     def register(self, card, credential, name, school_level, grade, school_track="", demo=False):
         if len(credential) < 8 or len(credential) > 128:
             raise ValueError("credential_length")
-        if school_level not in ("primary", "middle", "upper") or grade not in range(1, 4 if school_level == "middle" else 6):
+        limits = {"primary": 5, "middle": 3, "upper": 5, "adult": 20, "university": 20, "postgraduate": 20, "master": 20}
+        if school_level not in limits or grade not in range(1, limits[school_level] + 1):
             raise ValueError("invalid_school_profile")
         if school_level == "upper" and school_track not in ("liceo", "tecnico", "professionale"):
+            raise ValueError("invalid_school_track")
+        if school_level != "upper" and school_track:
             raise ValueError("invalid_school_track")
         student, salt = secrets.token_hex(16), secrets.token_hex(16)
         hashed = hashlib.scrypt(credential.encode(), salt=bytes.fromhex(salt), n=16384, r=8, p=1).hex()
@@ -69,6 +89,86 @@ class State:
                           "", self.clock(), None, int(demo)))
             conn.execute("INSERT INTO credentials VALUES(?,?,?)", (student, salt, hashed))
         return student
+
+    def learner_profile(self, student: str | dict) -> dict:
+        row = student if isinstance(student, dict) else None
+        student_id = row["id"] if row is not None else student
+        if row is None:
+            with self.connect() as conn:
+                db_row = conn.execute("SELECT * FROM students WHERE id=?", (student_id,)).fetchone()
+            if db_row is None:
+                raise LookupError("student_not_found")
+            row = dict(db_row)
+        with self.connect() as conn:
+            stored = conn.execute("SELECT profile_json FROM learner_profiles WHERE student=?", (student_id,)).fetchone()
+        if stored:
+            return LearnerProfile.model_validate_json(stored[0]).model_dump(mode="json")
+        return default_learner_profile(row.get("school_level"), str(row.get("grade") or "")).model_dump(mode="json")
+
+    def set_learner_profile(self, student: str, profile: dict) -> dict:
+        self.require_student(student)
+        validated = LearnerProfile.model_validate(profile)
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO learner_profiles(student,profile_json,updated) VALUES(?,?,?) "
+                "ON CONFLICT(student) DO UPDATE SET profile_json=excluded.profile_json,updated=excluded.updated",
+                (student, validated.model_dump_json(), self.clock()),
+            )
+        return validated.model_dump(mode="json")
+
+    def require_student(self, student: str) -> None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM students WHERE id=? AND id NOT IN (SELECT student FROM disabled_students)",
+                (student,),
+            ).fetchone()
+        if not row:
+            raise LookupError("student_not_found")
+
+    def update_kc_mastery(
+        self,
+        student: str,
+        component: str,
+        correct: bool,
+        evidence_type: EvidenceType,
+    ) -> dict:
+        self.require_student(student)
+        now = self.clock()
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM kc_mastery WHERE student=? AND component=?",
+                (student, component),
+            ).fetchone()
+            state = KnowledgeState(
+                component=component,
+                probability=row["probability"] if row else 0.15,
+                attempts=row["attempts"] if row else 0,
+                successes=row["successes"] if row else 0,
+                due_at=row["due"] if row else None,
+                last_seen=row["last_seen"] if row else None,
+            )
+            updated = update_knowledge_state(
+                state,
+                correct=correct,
+                evidence_type=evidence_type,
+                now=now,
+            )
+            conn.execute(
+                "INSERT INTO kc_mastery(student,component,probability,attempts,successes,due,last_seen) "
+                "VALUES(?,?,?,?,?,?,?) ON CONFLICT(student,component) DO UPDATE SET "
+                "probability=excluded.probability,attempts=excluded.attempts,successes=excluded.successes,"
+                "due=excluded.due,last_seen=excluded.last_seen",
+                (
+                    student,
+                    component,
+                    updated.probability,
+                    updated.attempts,
+                    updated.successes,
+                    updated.due_at,
+                    updated.last_seen,
+                ),
+            )
+        return updated.model_dump(mode="json")
 
     def login(self, card, credential, remote="local"):
         now = self.clock()
@@ -177,6 +277,33 @@ class State:
                 due = now + (7 if score >= 80 else 2) * 86400
                 conn.execute("UPDATE mastery SET score=?,attempts=attempts+1,successes=successes+?,failures=failures+?,consecutive=?,difficulty=MAX(difficulty,?),last_seen=?,due=? WHERE student=? AND topic=?",
                              (score, int(correct), int(not correct), current["consecutive"] + 1 if correct else 0, row["difficulty"], now, due, student, row["topic"]))
+                kc_row = conn.execute(
+                    "SELECT * FROM kc_mastery WHERE student=? AND component=?",
+                    (student, row["topic"]),
+                ).fetchone()
+                kc_before = KnowledgeState(
+                    component=row["topic"],
+                    probability=kc_row["probability"] if kc_row else 0.15,
+                    attempts=kc_row["attempts"] if kc_row else 0,
+                    successes=kc_row["successes"] if kc_row else 0,
+                    due_at=kc_row["due"] if kc_row else None,
+                    last_seen=kc_row["last_seen"] if kc_row else None,
+                )
+                kc_after = update_knowledge_state(
+                    kc_before,
+                    correct=bool(correct),
+                    evidence_type=knowledge_evidence(row["kind"], attempts),
+                    now=now,
+                )
+                conn.execute(
+                    "INSERT INTO kc_mastery(student,component,probability,attempts,successes,due,last_seen) "
+                    "VALUES(?,?,?,?,?,?,?) ON CONFLICT(student,component) DO UPDATE SET "
+                    "probability=excluded.probability,attempts=excluded.attempts,successes=excluded.successes,"
+                    "due=excluded.due,last_seen=excluded.last_seen",
+                    (student, row["topic"], kc_after.probability, kc_after.attempts, kc_after.successes, kc_after.due_at, kc_after.last_seen),
+                )
+            else:
+                kc_after = None
             if correct:
                 conn.execute("UPDATE activities SET completed=? WHERE id=?", (now, activity))
                 if not duplicate:
@@ -206,6 +333,9 @@ class State:
                     for badge in earned:
                         conn.execute("INSERT OR IGNORE INTO badges VALUES(?,?,?)", (student, badge, now))
             result = {"correct": correct, "error_type": error, "feedback": feedback, "xp_awarded": awarded, "mastery": score, "attempts": attempts + 1}
+            if kc_after is not None:
+                result["knowledge_mastery"] = round(kc_after.probability, 4)
+                result["review_due"] = kc_after.due_at
             conn.execute("INSERT INTO attempts(student,activity,request_key,correct,error,result,created) VALUES(?,?,?,?,?,?,?)", (student, activity, key, int(correct), error, json.dumps(result), now))
             conn.execute("UPDATE students SET last_activity=? WHERE id=?", (now, student))
         return result

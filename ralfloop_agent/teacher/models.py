@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .pedagogy import LearnerProfile
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -11,6 +13,7 @@ class LoginInput(StrictModel):
     card_id: str = Field(min_length=1, max_length=256)
     school_level: str | None = Field(default=None, max_length=80)
     class_year: str | None = Field(default=None, max_length=80)
+    learner_profile: LearnerProfile | None = None
 
 
 class StartSessionInput(StrictModel):

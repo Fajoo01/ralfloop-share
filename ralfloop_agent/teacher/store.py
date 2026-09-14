@@ -91,6 +91,7 @@ class TeacherStore:
         *,
         school_level: str | None = None,
         class_year: str | None = None,
+        learner_profile: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         card_hash = self.card_hash(card_id)
         now = time.time()
@@ -103,18 +104,22 @@ class TeacherStore:
 
             if row is None:
                 student_id = "stu_" + uuid.uuid4().hex
+                preferences = {}
+                if learner_profile is not None:
+                    preferences["learner_profile"] = learner_profile
                 conn.execute(
                     """
                     INSERT INTO students(
                         student_id, card_hash, school_level, class_year,
-                        created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        preferences_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         student_id,
                         card_hash,
                         school_level,
                         class_year,
+                        json.dumps(preferences, ensure_ascii=False),
                         now,
                         now,
                     ),
@@ -131,13 +136,16 @@ class TeacherStore:
                     if class_year is not None
                     else row["class_year"]
                 )
+                preferences = json.loads(row["preferences_json"] or "{}")
+                if learner_profile is not None:
+                    preferences["learner_profile"] = learner_profile
                 conn.execute(
                     """
                     UPDATE students
-                    SET school_level = ?, class_year = ?, updated_at = ?
+                    SET school_level = ?, class_year = ?, preferences_json = ?, updated_at = ?
                     WHERE student_id = ?
                     """,
-                    (new_level, new_year, now, student_id),
+                    (new_level, new_year, json.dumps(preferences, ensure_ascii=False), now, student_id),
                 )
 
             conn.commit()

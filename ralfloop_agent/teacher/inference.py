@@ -6,7 +6,7 @@ from pathlib import Path
 import socket
 import threading
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from .service import ScheduledQwenModel
 
@@ -104,6 +104,39 @@ class TeacherInferenceClient:
 
         return result
 
+    def stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> Iterator[dict[str, Any]]:
+        request = {
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+            "stream": True,
+        }
+        wire = json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(self.timeout)
+            client.connect(str(self.socket_path))
+            client.sendall(wire)
+            stream = client.makefile("rb")
+            while True:
+                line = stream.readline(MAX_RESPONSE_BYTES + 1)
+                if not line or len(line) > MAX_RESPONSE_BYTES:
+                    raise RuntimeError("teacher_inference_invalid_stream")
+                try:
+                    response = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError("teacher_inference_malformed_response") from exc
+                if not isinstance(response, dict) or not response.get("ok"):
+                    raise RuntimeError(str(response.get("error") if isinstance(response, dict) else "teacher_inference_failed"))
+                event = response.get("event")
+                if not isinstance(event, dict) or event.get("type") not in {"delta", "done"}:
+                    raise RuntimeError("teacher_inference_invalid_stream_event")
+                yield event
+                if event["type"] == "done":
+                    return
+
     def close(self) -> None:
         # Nessuna connessione persistente posseduta dal client.
         return None
@@ -148,6 +181,28 @@ class SharedTeacherInferenceEngine:
                 return result
             except Exception:
                 # Fail closed: non lasciare una lease GPU dubbia.
+                self._close_locked()
+                raise
+
+    def stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> Iterator[dict[str, Any]]:
+        with self._lock:
+            if self._backend is None:
+                self._backend = self.backend_factory()
+                self._backend.ensure_session(self.SHARED_SESSION_ID)
+            try:
+                streamer = getattr(self._backend, "stream", None)
+                if not callable(streamer):
+                    result = self._backend(system_prompt, user_prompt)
+                    yield {"type": "delta", "text": str(result.get("response") or "")}
+                    yield {"type": "done", "result": result, "metadata": {}, "model_path": "fallback"}
+                else:
+                    yield from streamer(system_prompt, user_prompt)
+                self._last_activity = time.monotonic()
+            except Exception:
                 self._close_locked()
                 raise
 

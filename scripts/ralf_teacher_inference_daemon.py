@@ -30,7 +30,7 @@ def _peer_uid(conn: socket.socket) -> int:
     return uid
 
 
-def _read_request(conn: socket.socket) -> dict[str, str]:
+def _read_request(conn: socket.socket) -> dict[str, Any]:
     conn.settimeout(10.0)
     raw = bytearray()
 
@@ -65,12 +65,11 @@ def _read_request(conn: socket.socket) -> dict[str, str]:
 
     if (
         not isinstance(payload, dict)
-        or set(payload) != {
-            "system_prompt",
-            "user_prompt",
-        }
+        or not {"system_prompt", "user_prompt"} <= set(payload)
+        or set(payload) - {"system_prompt", "user_prompt", "stream"}
         or not isinstance(payload["system_prompt"], str)
         or not isinstance(payload["user_prompt"], str)
+        or not isinstance(payload.get("stream", False), bool)
     ):
         raise ValueError("invalid_request")
 
@@ -159,18 +158,25 @@ def main() -> int:
 
                     request = _read_request(conn)
 
-                    result = engine.infer(
-                        request["system_prompt"],
-                        request["user_prompt"],
-                    )
-
-                    _send(
-                        conn,
-                        {
-                            "ok": True,
-                            "result": result,
-                        },
-                    )
+                    if request.get("stream"):
+                        for event in engine.stream(
+                            request["system_prompt"],
+                            request["user_prompt"],
+                        ):
+                            if not _send(conn, {"ok": True, "event": event}):
+                                break
+                    else:
+                        result = engine.infer(
+                            request["system_prompt"],
+                            request["user_prompt"],
+                        )
+                        _send(
+                            conn,
+                            {
+                                "ok": True,
+                                "result": result,
+                            },
+                        )
 
                 except Exception as exc:
                     _send(

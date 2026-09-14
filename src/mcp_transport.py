@@ -237,6 +237,57 @@ class MCPClientSession:
             raise MCPError(str(error))
         return result
 
+    def stream_request(
+        self,
+        method: str,
+        params: Mapping[str, Any],
+        *,
+        notification_method: str,
+    ):
+        """Issue one bounded request and yield matching progress notifications.
+
+        The final item has ``type=result``. Notifications from other methods are
+        ignored; a mismatched request id still fails closed. This keeps Teacher
+        streaming inside the same authenticated MCP transport without expanding
+        the student's tool surface.
+        """
+        if not self._initialized:
+            raise MCPProtocolError("mcp_not_initialized")
+        request_id = self._next_id
+        self._next_id += 1
+        self.transport.send({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": method,
+            "params": dict(params),
+        })
+        deadline = time.monotonic() + self.timeout
+        while True:
+            response = self.transport.receive(max(0.001, deadline - time.monotonic()))
+            if "method" in response and "id" not in response:
+                if response.get("method") != notification_method:
+                    continue
+                raw = response.get("params")
+                if not isinstance(raw, dict):
+                    raise MCPProtocolError("malformed_mcp_notification")
+                if raw.get("requestId") != request_id:
+                    continue
+                event = raw.get("event")
+                if not isinstance(event, dict):
+                    raise MCPProtocolError("malformed_mcp_stream_event")
+                yield {"type": "notification", "event": event}
+                continue
+            if response.get("jsonrpc") != "2.0" or response.get("id") != request_id:
+                raise MCPProtocolError("mcp_response_id_mismatch")
+            if "error" in response:
+                error = response["error"]
+                raise MCPError(str(error.get("message") if isinstance(error, dict) else error))
+            result = response.get("result")
+            if not isinstance(result, dict):
+                raise MCPProtocolError("mcp_result_not_object")
+            yield {"type": "result", "result": result}
+            return
+
     def close(self) -> None:
         self.transport.close()
         self._initialized = False

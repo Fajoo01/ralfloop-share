@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 from urllib.parse import urlparse
 
 from ralfloop_agent.providers.chat import (
@@ -14,6 +14,7 @@ from ralfloop_agent.providers.gpu_engine_scheduler import (
 )
 
 from .store import TeacherStore
+from .pedagogy import default_learner_profile, profile_from_student, select_pedagogy
 
 
 PEDAGOGY_PROMPT = """
@@ -36,6 +37,8 @@ Regole:
 - quando lavori su materiale fornito, non aggiungere come fatti
   informazioni assenti dal materiale;
 - non inventare fonti;
+- se il contesto contiene grammar_evidence, trattalo come evidenza lessicale/sintattica read-only: più analisi dello stesso token sono alternative contestuali, non scegliere arbitrariamente;
+- nei dati grammaticali, i frame valenziali approvati sono evidenza scolastica più forte; i pattern T-PAS sono candidati semantici utili ma non una decisione automatica sul contesto;
 - rispondi nella lingua usata dallo studente salvo richiesta diversa.
 - prima di rispondere, rileggi e correggi ortografia, grammatica, concordanze, forme verbali, accenti e punteggiatura;
 - non inserire accidentalmente parole di altre lingue salvo che siano richieste o necessarie;
@@ -44,6 +47,17 @@ Regole:
 Restituisci esclusivamente un oggetto JSON.
 Il campo "response" contiene il testo da mostrare allo studente.
 """
+
+
+TEACHER_RESPONSE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["response"],
+    "properties": {
+        "response": {"type": "string", "minLength": 1},
+        "correct": {"type": "boolean"},
+    },
+}
 
 
 ModelCall = Callable[[str, str], dict[str, Any]]
@@ -55,20 +69,29 @@ class TeacherService:
         store: TeacherStore,
         *,
         model_call: ModelCall | None = None,
+        grammar_evidence: Callable[[str], dict[str, Any] | None] | None = None,
     ) -> None:
         self.store = store
         self.model_call = model_call or ScheduledQwenModel()
+        self.grammar_evidence = grammar_evidence
 
     def login(
         self,
         card_id: str,
         school_level: str | None = None,
         class_year: str | None = None,
+        learner_profile: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        validated_profile = None
+        if learner_profile is not None:
+            validated_profile = default_learner_profile(
+                school_level, class_year, override=learner_profile
+            ).model_dump(mode="json")
         student = self.store.login(
             card_id,
             school_level=school_level,
             class_year=class_year,
+            learner_profile=validated_profile,
         )
         return {
             "ok": True,
@@ -93,6 +116,25 @@ class TeacherService:
             "session": session,
             "student": student,
         }
+
+    def _grammar_context(
+        self,
+        session: dict[str, Any],
+        payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if self.grammar_evidence is None:
+            return None
+        scope = f"{session.get('subject', '')} {session.get('topic', '')}".casefold()
+        if not any(word in scope for word in ("ital", "grammat", "lingu", "morfolog", "sintass", "ortograf")):
+            return None
+        fields = ("question", "concept", "exercise", "student_attempt", "material", "objective", "topic")
+        text = " ".join(str(payload.get(key) or "") for key in fields).strip()[:1200]
+        if not text:
+            return None
+        try:
+            return self.grammar_evidence(text)
+        except Exception:
+            return None
 
     def explain(
         self,
@@ -354,6 +396,128 @@ class TeacherService:
             "chunks": chunks,
         }
 
+    def stream_explain(self, session_id: str, question: str) -> Iterator[dict[str, Any]]:
+        yield from self._stream_teaching_call(
+            session_id,
+            "explain",
+            {
+                "question": question,
+                "instruction": "Spiega il concetto in modo adatto allo studente. Termina con una breve domanda di verifica.",
+            },
+        )
+
+    def stream_explain_differently(self, session_id: str, concept: str) -> Iterator[dict[str, Any]]:
+        yield from self._stream_teaching_call(
+            session_id,
+            "explain_differently",
+            {
+                "concept": concept,
+                "instruction": "Rispiega con un approccio diverso, preferendo un esempio concreto o un'analogia utile.",
+            },
+        )
+
+    def stream_hint(self, session_id: str, exercise: str, student_attempt: str = "") -> Iterator[dict[str, Any]]:
+        yield from self._stream_teaching_call(
+            session_id,
+            "hint",
+            {
+                "exercise": exercise,
+                "student_attempt": student_attempt,
+                "instruction": "Dai un solo suggerimento progressivo. NON fornire la soluzione o il risultato finale.",
+            },
+        )
+
+    def _stream_teaching_call(
+        self,
+        session_id: str,
+        action: str,
+        payload: dict[str, Any],
+    ) -> Iterator[dict[str, Any]]:
+        if action not in {"explain", "explain_differently", "hint"}:
+            raise ValueError("teacher_stream_action_denied")
+        session = self.store.session(session_id)
+        student = self.store.student(session["student_id"])
+        learner = profile_from_student(student)
+        decision = select_pedagogy(
+            learner,
+            action=action,
+            subject=session["subject"],
+            topic=session["topic"],
+            material_supplied=False,
+            show_solution=False,
+        )
+        context = {
+            "action": action,
+            "student": {
+                "school_level": student.get("school_level"),
+                "class_year": student.get("class_year"),
+                "learner_profile": learner.compact_context(),
+            },
+            "session": {"subject": session["subject"], "topic": session["topic"]},
+            "pedagogy": decision.model_dump(mode="json"),
+            "request": payload,
+        }
+        grammar_context = self._grammar_context(session, payload)
+        if grammar_context is not None:
+            context["grammar_evidence"] = grammar_context
+        system_prompt = PEDAGOGY_PROMPT + "\n\nDECISIONE PEDAGOGICA DETERMINISTICA:\n" + decision.prompt_contract()
+        user_prompt = json.dumps(context, ensure_ascii=False)
+        ensure_session = getattr(self.model_call, "ensure_session", None)
+        release_session = getattr(self.model_call, "release_session", None)
+        if callable(ensure_session):
+            ensure_session(session_id)
+        final_result: dict[str, Any] | None = None
+        try:
+            streamer = getattr(self.model_call, "stream", None)
+            if callable(streamer):
+                events = streamer(system_prompt, user_prompt)
+            else:
+                raw = self.model_call(system_prompt, user_prompt)
+                events = iter((
+                    {"type": "delta", "text": str(raw.get("response") or "")},
+                    {"type": "done", "result": raw},
+                ))
+            for event in events:
+                if not isinstance(event, dict):
+                    raise RuntimeError("teacher_model_invalid_stream_event")
+                if event.get("type") == "delta":
+                    text = event.get("text")
+                    if isinstance(text, str) and text:
+                        yield {"type": "delta", "text": text}
+                elif event.get("type") == "done" and isinstance(event.get("result"), dict):
+                    final_result = event["result"]
+                else:
+                    raise RuntimeError("teacher_model_invalid_stream_event")
+        except Exception:
+            if callable(release_session):
+                release_session(session_id)
+            raise
+        if final_result is None:
+            raise RuntimeError("teacher_model_stream_missing_done")
+        response = str(final_result.get("response") or "").strip().replace("**", "").replace("__", "")
+        if not response:
+            raise RuntimeError("teacher_model_empty_response")
+        output = {
+            "ok": True,
+            "action": action,
+            "response": response,
+            "source_mode": "general_model_knowledge",
+            "pedagogy": decision.model_dump(mode="json"),
+        }
+        self.store.event(
+            session_id,
+            action,
+            {
+                "response": response[:4000],
+                "source_mode": "general_model_knowledge",
+                "strategy": decision.strategy.value,
+                "mode": decision.mode.value,
+                "model_path": decision.model_path.value,
+                "streamed": True,
+            },
+        )
+        yield {"type": "done", "result": output}
+
     def _teaching_call(
         self,
         session_id: str,
@@ -363,19 +527,33 @@ class TeacherService:
         session = self.store.session(session_id)
         student = self.store.student(session["student_id"])
 
+        learner = profile_from_student(student)
+        decision = select_pedagogy(
+            learner,
+            action=action,
+            subject=session["subject"],
+            topic=session["topic"],
+            material_supplied=("material" in payload or payload.get("source_mode") == "provided_material"),
+            show_solution=bool(payload.get("show_solution", False)),
+        )
         context = {
             "action": action,
             "student": {
                 "school_level": student.get("school_level"),
                 "class_year": student.get("class_year"),
-                "preferences": student.get("preferences", {}),
+                "learner_profile": learner.compact_context(),
             },
             "session": {
                 "subject": session["subject"],
                 "topic": session["topic"],
             },
+            "pedagogy": decision.model_dump(mode="json"),
             "request": payload,
         }
+
+        grammar_context = self._grammar_context(session, payload)
+        if grammar_context is not None:
+            context["grammar_evidence"] = grammar_context
 
         ensure_session = getattr(
             self.model_call,
@@ -393,7 +571,7 @@ class TeacherService:
 
         try:
             result = self.model_call(
-                PEDAGOGY_PROMPT,
+                PEDAGOGY_PROMPT + "\n\nDECISIONE PEDAGOGICA DETERMINISTICA:\n" + decision.prompt_contract(),
                 json.dumps(context, ensure_ascii=False),
             )
         except Exception:
@@ -416,9 +594,10 @@ class TeacherService:
             "response": response,
             "source_mode": (
                 "provided_material"
-                if "material" in payload
+                if "material" in payload or payload.get("source_mode") == "provided_material"
                 else "general_model_knowledge"
             ),
+            "pedagogy": decision.model_dump(mode="json"),
         }
 
         if isinstance(result.get("correct"), bool):
@@ -430,6 +609,9 @@ class TeacherService:
             {
                 "response": response[:4000],
                 "source_mode": output["source_mode"],
+                "strategy": decision.strategy.value,
+                "mode": decision.mode.value,
+                "model_path": decision.model_path.value,
             },
         )
 
@@ -517,6 +699,63 @@ def _normalize_teacher_model_result(text: str) -> dict[str, Any]:
 
 
 
+class _ResponseStringExtractor:
+    """Incrementally expose only the JSON `response` string."""
+
+    def __init__(self) -> None:
+        self.buffer = ""
+        self.position = 0
+        self.started = False
+        self.ended = False
+        self.escape = False
+        self.unicode_digits = ""
+
+    def feed(self, text: str) -> str:
+        if self.ended or not text:
+            return ""
+        self.buffer += text
+        if not self.started:
+            key = self.buffer.find('"response"')
+            if key < 0:
+                return ""
+            colon = self.buffer.find(":", key + len('"response"'))
+            if colon < 0:
+                return ""
+            quote = self.buffer.find('"', colon + 1)
+            if quote < 0:
+                return ""
+            self.position = quote + 1
+            self.started = True
+
+        out: list[str] = []
+        while self.position < len(self.buffer) and not self.ended:
+            char = self.buffer[self.position]
+            self.position += 1
+            if self.unicode_digits:
+                self.unicode_digits += char
+                if len(self.unicode_digits) == 5:
+                    try:
+                        out.append(chr(int(self.unicode_digits[1:], 16)))
+                    except ValueError:
+                        out.append("\\" + self.unicode_digits)
+                    self.unicode_digits = ""
+                continue
+            if self.escape:
+                self.escape = False
+                if char == "u":
+                    self.unicode_digits = "u"
+                    continue
+                out.append({"n": "\n", "r": "\r", "t": "\t", "b": "\b", "f": "\f"}.get(char, char))
+                continue
+            if char == "\\":
+                self.escape = True
+            elif char == '"':
+                self.ended = True
+            else:
+                out.append(char)
+        return "".join(out)
+
+
 class ScheduledQwenModel:
     """Qwen locale con lease GPU bounded alla sessione Teacher."""
 
@@ -547,24 +786,41 @@ class ScheduledQwenModel:
             "RALF_LLAMA_CPP_MODEL",
             "qwen2.5:7b",
         )
-
-        self.provider = OpenAICompatibleChatProvider(
-            base_url=self.base_url,
-            model=self.model,
-            provider_name="teacher_qwen",
-            settings=ChatProviderSettings(
-                connect_timeout_sec=5.0,
-                inactivity_timeout_sec=90.0,
-            ),
-            request_options={
-                "temperature": 0.2,
-                "max_tokens": 512,
-                "cache_prompt": True,
-                "chat_template_kwargs": {
-                    "enable_thinking": False,
+        self.fast_model = os.getenv("RALF_TEACHER_FAST_MODEL", self.model)
+        self.deep_model = os.getenv("RALF_TEACHER_DEEP_MODEL", self.model)
+        common_options = {
+            "temperature": 0.2,
+            "cache_prompt": True,
+            "chat_template_kwargs": {"enable_thinking": False},
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "teacher_response",
+                    "strict": True,
+                    "schema": TEACHER_RESPONSE_SCHEMA,
                 },
             },
+        }
+        settings = ChatProviderSettings(
+            connect_timeout_sec=5.0,
+            inactivity_timeout_sec=90.0,
         )
+        self.fast_provider = OpenAICompatibleChatProvider(
+            base_url=self.base_url,
+            model=self.fast_model,
+            provider_name="teacher_qwen_fast",
+            settings=settings,
+            request_options={**common_options, "max_tokens": 768},
+        )
+        self.deep_provider = OpenAICompatibleChatProvider(
+            base_url=self.base_url,
+            model=self.deep_model,
+            provider_name="teacher_qwen_deep",
+            settings=settings,
+            request_options={**common_options, "max_tokens": 2048},
+        )
+        # Historical attribute retained for diagnostics/tests.
+        self.provider = self.fast_provider
 
         self.scheduler = scheduler or TransactionalGpuScheduler()
 
@@ -606,15 +862,9 @@ class ScheduledQwenModel:
             "transition": self._transition,
         }
 
-    def __call__(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-    ) -> dict[str, Any]:
-        if self._lease_cm is None:
-            raise RuntimeError("teacher_model_lease_not_active")
-
-        strict_system_prompt = (
+    @staticmethod
+    def _strict_system_prompt(system_prompt: str) -> str:
+        return (
             system_prompt.rstrip()
             + "\n\n"
             + "CONTRATTO OUTPUT OBBLIGATORIO:\n"
@@ -624,10 +874,27 @@ class ScheduledQwenModel:
             + "- non usare markdown intorno al JSON."
         )
 
-        result = self.provider.chat([
+    def _provider_for(self, user_prompt: str) -> OpenAICompatibleChatProvider:
+        try:
+            payload = json.loads(user_prompt)
+            path = payload.get("pedagogy", {}).get("model_path") if isinstance(payload, dict) else None
+        except (TypeError, json.JSONDecodeError):
+            path = None
+        return self.deep_provider if path == "deep" else self.fast_provider
+
+    def __call__(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> dict[str, Any]:
+        if self._lease_cm is None:
+            raise RuntimeError("teacher_model_lease_not_active")
+
+        provider = self._provider_for(user_prompt)
+        result = provider.chat([
             {
                 "role": "system",
-                "content": strict_system_prompt,
+                "content": self._strict_system_prompt(system_prompt),
             },
             {
                 "role": "user",
@@ -635,9 +902,38 @@ class ScheduledQwenModel:
             },
         ])
 
-        return _normalize_teacher_model_result(
-            result.text
-        )
+        return _normalize_teacher_model_result(result.text)
+
+    def stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> Iterator[dict[str, Any]]:
+        if self._lease_cm is None:
+            raise RuntimeError("teacher_model_lease_not_active")
+        provider = self._provider_for(user_prompt)
+        extractor = _ResponseStringExtractor()
+        raw: list[str] = []
+        final_metadata: dict[str, Any] = {}
+        messages = [
+            {"role": "system", "content": self._strict_system_prompt(system_prompt)},
+            {"role": "user", "content": user_prompt},
+        ]
+        for chunk in provider.stream_chat(messages):
+            if chunk.text:
+                raw.append(chunk.text)
+                delta = extractor.feed(chunk.text)
+                if delta:
+                    yield {"type": "delta", "text": delta}
+            if chunk.done:
+                final_metadata = dict(chunk.metadata)
+        result = _normalize_teacher_model_result("".join(raw))
+        yield {
+            "type": "done",
+            "result": result,
+            "metadata": final_metadata,
+            "model_path": "deep" if provider is self.deep_provider else "fast",
+        }
 
     def release_session(
         self,
@@ -664,17 +960,15 @@ class ScheduledQwenModel:
 
     def close(self) -> None:
         self._release_lease()
-
-        session = getattr(
-            self.provider,
-            "session",
-            None,
-        )
-
-        closer = getattr(session, "close", None)
-
-        if callable(closer):
-            closer()
+        seen: set[int] = set()
+        for provider in (self.fast_provider, self.deep_provider):
+            session = getattr(provider, "session", None)
+            if session is None or id(session) in seen:
+                continue
+            seen.add(id(session))
+            closer = getattr(session, "close", None)
+            if callable(closer):
+                closer()
 
 
 def scheduled_qwen_model_call(

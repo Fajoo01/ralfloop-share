@@ -1,7 +1,8 @@
 [Unit]
 Description=Ralf Teacher student-only MCP broker
 Requires=ralf-teacher-inference.service
-After=ralf-teacher-inference.service
+Wants=ralf-teacher-grammar-mcp.service
+After=ralf-teacher-inference.service ralf-teacher-grammar-mcp.service
 
 [Service]
 Type=simple
@@ -12,6 +13,7 @@ WorkingDirectory=/home/sibilla-cumana/ralfloop-production/current
 
 Environment=PYTHONPATH=/home/sibilla-cumana/ralfloop-production/current
 Environment=RALF_TEACHER_INFERENCE_SOCKET=/run/ralf-teacher-inference/inference.sock
+Environment=RALF_TEACHER_GRAMMAR_SOCKET=/run/ralf-teacher-grammar/grammar.sock
 Environment=RALF_TEACHER_DB=/var/lib/ralfloop-teacher/teacher.sqlite3
 
 RuntimeDirectory=ralf-teacher-mcp

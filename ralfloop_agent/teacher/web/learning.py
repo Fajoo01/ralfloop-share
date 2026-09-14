@@ -84,8 +84,12 @@ class Curriculum:
         return matches[0]
 
     def map_material(self, student, text):
-        return [t["id"] for t in self.available(student)
-                if any(k in text.casefold() for k in t["keywords"])]
+        matches = [t["id"] for t in self.available(student)
+                   if t["keywords"] and any(k in text.casefold() for k in t["keywords"])]
+        if not matches and student.get("school_level") in {"university", "postgraduate", "master"}:
+            if "academic_study" in {t["id"] for t in self.available(student)}:
+                matches.append("academic_study")
+        return matches
 
 
 def level(xp):

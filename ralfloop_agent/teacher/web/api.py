@@ -5,6 +5,7 @@ from collections import defaultdict, deque
 import json
 import logging
 import os
+import re
 from pathlib import Path
 import threading
 import time
@@ -13,8 +14,10 @@ from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
+
+from ..pedagogy import LearnerProfile
 
 from .application import LearningApplication
 from .client import TeacherClient
@@ -138,6 +141,7 @@ def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", sec
         except PermissionError:
             raise HTTPException(401, "Accedi con la tua tessera.")
         request.state.student = result["id"][:12]
+        result["learner_profile"] = state.learner_profile(result)
         return result
 
     def locked(profile, function, *args):
@@ -215,6 +219,14 @@ def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", sec
     @app.get("/api/progress")
     def progress(profile=Depends(student)): return state.progress(profile["id"])
 
+    @app.get("/api/learner-profile")
+    def learner_profile(profile=Depends(student)):
+        return profile["learner_profile"]
+
+    @app.post("/api/learner-profile")
+    def learner_profile_update(data: LearnerProfile, profile=Depends(student)):
+        return state.set_learner_profile(profile["id"], data.model_dump(mode="json"))
+
     @app.post("/api/activities")
     def generate(data: Generate, profile=Depends(student)):
         return locked(profile, learning.generate, data.topic, data.activity_type)
@@ -234,6 +246,59 @@ def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", sec
     def help_activity(activity_id: str, data: Help, profile=Depends(student)):
         result = locked(profile, learning.help, activity_id, data.mode, data.question)
         return voices.attach(profile["id"], result)
+
+    @app.post("/api/activities/{activity_id}/help/stream")
+    def help_activity_stream(activity_id: str, data: Help, profile=Depends(student)):
+        lock = locks[int(profile["id"][:4], 16) % len(locks)]
+        if not lock.acquire(timeout=1):
+            raise HTTPException(409, "Sto già preparando la tua attività. Attendi.")
+
+        def ndjson():
+            sentence_buffer = ""
+
+            def voice_event(sentence: str):
+                prepared = voices.attach(profile["id"], {"feedback": sentence})
+                voice = prepared.get("voice") if isinstance(prepared, dict) else None
+                if not isinstance(voice, dict):
+                    return {"type": "voice", "text": sentence, "status": "browser_fallback"}
+                status = voices.prepare(profile["id"], voice["id"])
+                return {
+                    "type": "voice",
+                    "text": sentence,
+                    "status": status.get("status", "pending"),
+                    "url": status.get("url"),
+                }
+
+            try:
+                for event in learning.help_stream(profile, activity_id, data.mode, data.question):
+                    if event.get("type") == "delta":
+                        text = event.get("text")
+                        if isinstance(text, str) and text:
+                            sentence_buffer += text
+                            yield json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+                            while True:
+                                match = re.search(r"(?<=[.!?])(?:\s+|$)", sentence_buffer)
+                                if not match:
+                                    break
+                                sentence = sentence_buffer[:match.end()].strip()
+                                sentence_buffer = sentence_buffer[match.end():]
+                                if sentence:
+                                    yield json.dumps(voice_event(sentence), ensure_ascii=False, separators=(",", ":")) + "\n"
+                        continue
+                    if event.get("type") == "done" and isinstance(event.get("result"), dict):
+                        if sentence_buffer.strip():
+                            yield json.dumps(voice_event(sentence_buffer.strip()), ensure_ascii=False, separators=(",", ":")) + "\n"
+                            sentence_buffer = ""
+                        event = {"type": "done", "result": voices.attach(profile["id"], event["result"])}
+                    yield json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+            finally:
+                lock.release()
+
+        return StreamingResponse(
+            ndjson(),
+            media_type="application/x-ndjson",
+            headers={"X-Accel-Buffering": "no"},
+        )
 
     @app.post("/api/activities/{activity_id}/simulation")
     def simulation(activity_id: str, data: Simulation, profile=Depends(student)):

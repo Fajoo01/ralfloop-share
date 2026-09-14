@@ -42,6 +42,7 @@ def build_release(
             bundle.extractall(temporary, filter="data")
         _build_shell_parser(temporary)
         _build_atm_router(temporary)
+        _build_teacher_grammar_mcp(temporary)
         metadata = {
             "schema_version": 1,
             "commit": commit_sha,
@@ -123,6 +124,26 @@ def _build_atm_router(root: Path) -> None:
     if not destination.is_file():
         raise RuntimeError("atm_router_binary_missing_after_build")
 
+    destination.chmod(0o555)
+
+
+def _build_teacher_grammar_mcp(root: Path) -> None:
+    source = root / "tools" / "teacher_grammar_mcp"
+    c_source = source / "main.c"
+    header = source / "sqlite3_min.h"
+    makefile = source / "Makefile"
+    jsmn = root / "third_party" / "jsmn" / "jsmn.h"
+    if not c_source.is_file() or not header.is_file() or not jsmn.is_file():
+        return
+    if not makefile.is_file():
+        raise RuntimeError("teacher_grammar_mcp_makefile_missing")
+    subprocess.run(["make", "-C", str(source), "ralf-teacher-grammar-mcp"], check=True, shell=False)
+    built = source / "ralf-teacher-grammar-mcp"
+    if not built.is_file():
+        raise RuntimeError("teacher_grammar_mcp_binary_missing_after_build")
+    destination = root / "bin" / "ralf-teacher-grammar-mcp"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(built, destination)
     destination.chmod(0o555)
 
 
