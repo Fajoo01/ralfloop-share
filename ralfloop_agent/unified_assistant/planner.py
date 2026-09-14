@@ -10,8 +10,9 @@ from .registry import UnifiedRegistryFacade
 
 _EMAIL_RE = re.compile(
     r"\b(?:scrivi\s+(?:una\s+mail\s+)?a|prepara\s+(?:una\s+)?(?:mail|email)|"
-    r"manda\s+(?:una\s+)?(?:mail|email)|rispondi\s+(?:alla|a\s+questa)\s+mail|"
-    r"rispondi\s+a\s+[\wÀ-ÿ][\wÀ-ÿ'. -]{0,80})\b",
+    r"manda\s+(?:una\s+)?(?:mail|email)|"
+    r"rispond(?:i|ere)\s+(?:all['’]\s*|alla\s+|a\s+questa\s+)(?:mail|email|appello|comunicazione)|"
+    r"rispond(?:i|ere)\s+a\s+[\wÀ-ÿ][\wÀ-ÿ'. -]{0,80})\b",
     re.I,
 )
 _HOME_RE = re.compile(
@@ -22,6 +23,9 @@ _HOME_RE = re.compile(
 _GRANT_RE = re.compile(r"\b(?:band[oi]|grant|contribut[oi]|finanziament[oi]|candidatur[ae]|opportunit[aà])\b", re.I)
 _GRANT_DISCOVER_RE = re.compile(r"\b(?:cerca(?:mi|re)?|trova(?:mi|re)?|scopri|ricerca|aggiorna|nuov[ioe]|apert[ioe]|opportunit[aà]|segnala)\b", re.I)
 _GRANT_REVIEW_RE = re.compile(r"\b(?:valuta|analizza|verifica|ammissibil|compatibil|conviene|requisit|scaden|budget|cofinanzi)\w*\b", re.I)
+_ARCI_GRANT_SOURCE_RE = re.compile(
+    r"(?=.*\barci(?:\s+milano)?\b)(?=.*\b(?:band[oi]|appello|comunicazione|circoli)\b)", re.I
+)
 _TIREMM_RE = re.compile(r"\b(?:tiremm|associazione|aps|partner|progetto)\b", re.I)
 _RELATIONAL_RE = re.compile(r"\b(?:rsc|abc|relazional[ei]|formula\s+loop)\b", re.I)
 _INFRA_RE = re.compile(r"\b(?:agentcpm|servizi[oa]?|spazio\s+libero|disco|server|amule)\b", re.I)
@@ -278,7 +282,10 @@ class UnifiedPlanner:
 
         # Email payload is data. Embedded home/tool words cannot add assignments.
         if email and grant:
-            return self._grant_email_plan(goal, include_tiremm=tiremm)
+            return self._grant_email_plan(
+                goal, include_tiremm=tiremm,
+                include_email_source=bool(_ARCI_GRANT_SOURCE_RE.search(goal)),
+            )
         if email:
             email_skill = (
                 "email.reply"
@@ -406,12 +413,30 @@ class UnifiedPlanner:
             seen.add(item.task_id)
         return plan
 
-    def _grant_email_plan(self, goal: str, *, include_tiremm: bool) -> AssistantPlan:
-        assignments = [self._assignment(
+    def _grant_email_plan(
+        self, goal: str, *, include_tiremm: bool, include_email_source: bool = False
+    ) -> AssistantPlan:
+        assignments: list[PlanAssignment] = []
+        previous: str | None = None
+        grant_inputs: tuple[str, ...] = ("user.goal",)
+        if include_email_source:
+            source = self._assignment(
+                domain="tiremm", skill="email.search",
+                objective="Cerca la comunicazione di ARCI Milano relativa al bando/appello ai circoli.",
+                input_refs=("user.goal",), output_ref="artifact.grant_source_email",
+                policy=PolicyClass.READ,
+                arguments={"organization": "ARCI Milano", "concept": "grant_notice"},
+            )
+            assignments.append(source)
+            previous = source.task_id
+            grant_inputs = ("user.goal", source.output_ref)
+        grant = self._assignment(
             domain="bandi", skill="bandi.read", objective=goal,
-            input_refs=("user.goal",), output_ref="artifact.grant_evidence", policy=PolicyClass.READ,
-        )]
-        previous = assignments[-1].task_id
+            input_refs=grant_inputs, output_ref="artifact.grant_evidence", policy=PolicyClass.READ,
+            depends_on=((previous,) if previous else ()),
+        )
+        assignments.append(grant)
+        previous = grant.task_id
         if include_tiremm:
             assignments.append(self._assignment(
                 domain="bandi", skill="bandi.eligibility",
@@ -426,10 +451,9 @@ class UnifiedPlanner:
             output_ref="artifact.email_draft", depends_on=(previous,),
             policy=PolicyClass.CONFIRM_WRITE,
         ))
+        domains = ("bandi", "tiremm", "email") if (include_tiremm or include_email_source) else ("bandi", "email")
         return AssistantPlan(
-            intent="bandi.review_and_email",
-            domains=("bandi", "tiremm", "email") if include_tiremm else ("bandi", "email"),
-            assignments=tuple(assignments),
+            intent="bandi.review_and_email", domains=domains, assignments=tuple(assignments),
         )
 
     def _gmail_whatsapp_reply_plan(self, goal: str, *, target: str) -> AssistantPlan:

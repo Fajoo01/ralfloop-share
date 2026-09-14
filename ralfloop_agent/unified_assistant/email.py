@@ -104,6 +104,8 @@ def pending_email_payload(
     risk: str = "normal",
     validation_state: str = "passed",
     reply_mode: bool = False,
+    cc: str = "",
+    bcc: str = "",
 ) -> dict[str, Any]:
     source = working.packet.get("source_email") or {}
     source_message_id = str(source.get("message_id") or source.get("messageId") or "") if reply_mode else ""
@@ -113,6 +115,8 @@ def pending_email_payload(
         "recipient": recipient,
         "subject": subject,
         "body": body,
+        "cc": cc,
+        "bcc": bcc,
         "source_message_id": source_message_id,
         "thread_id": thread_id,
         "reply_mode": approval_action == "reply_email",

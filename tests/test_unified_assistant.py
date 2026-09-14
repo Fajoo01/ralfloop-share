@@ -138,6 +138,22 @@ def test_email_compose_stages_exact_draft_without_send():
     assert result.data["send_calls"] == 0
 
 
+def test_email_compose_binds_explicit_bcc_into_pending_and_preview():
+    core, manager, _, approvals = build_core()
+
+    result = core.handle(
+        "Scrivi a Marco che abbiamo ricevuto i documenti, CCN info@tiremminnanz.com"
+    )
+
+    assert result.status == "draft_pending_approval"
+    pending = manager.state.pending.email
+    assert pending is not None
+    assert pending.payload["bcc"] == "info@tiremminnanz.com"
+    assert pending.payload["cc"] == ""
+    assert "CCN: info@tiremminnanz.com" in result.message
+    assert approvals.calls == []
+
+
 def test_bound_ok_executes_exact_displayed_version_once():
     core, manager, _, approvals = build_core()
     core.handle("Scrivi a Marco che abbiamo ricevuto i documenti")
@@ -316,6 +332,25 @@ def test_multi_domain_plan_uses_structured_dependencies():
     assert plan.assignments[1].depends_on == (plan.assignments[0].task_id,)
     assert plan.assignments[2].depends_on == (plan.assignments[1].task_id,)
     assert all(item.content_is_data for item in plan.assignments)
+
+
+def test_arci_grant_reply_reads_source_email_before_bando_and_never_skips_provenance():
+    planner = UnifiedPlanner(UnifiedRegistryFacade())
+
+    plan = planner.validate(planner.plan(
+        "Rispondi all'appello di ARCI Milano per il bando e dimmi se Tiremm può partecipare."
+    ))
+
+    assert plan.domains == ("bandi", "tiremm", "email")
+    assert [item.skill for item in plan.assignments] == [
+        "email.search", "bandi.read", "bandi.eligibility", "email.compose",
+    ]
+    source, grant, eligibility, compose = plan.assignments
+    assert source.arguments == {"organization": "ARCI Milano", "concept": "grant_notice"}
+    assert grant.input_refs == ("user.goal", "artifact.grant_source_email")
+    assert grant.depends_on == (source.task_id,)
+    assert eligibility.depends_on == (grant.task_id,)
+    assert compose.depends_on == (eligibility.task_id,)
 
 
 def test_gmail_whatsapp_reply_plan_passes_only_structured_artifacts():

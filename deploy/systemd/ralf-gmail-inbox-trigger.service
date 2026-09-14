@@ -1,0 +1,21 @@
+[Unit]
+Description=Ralf Gmail inbox trigger (read-only discovery, approval-bound drafts)
+After=network-online.target ralf-google-workspace-mcp-broker.service ralfloop-backend.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=sibilla-cumana
+Group=sibilla-cumana
+WorkingDirectory=/home/sibilla-cumana/ralfloop-production/current
+Environment=PYTHONPATH=/home/sibilla-cumana/ralfloop-production/current:/home/bandi/bot-tazzi
+Environment=RALFLOOP_UNIFIED_ASSISTANT=1
+Environment=RALFLOOP_EMAIL_ASSISTANT_LIVE=1
+Environment=RALFLOOP_OPERATIONAL_MEMORY_PATH=/home/bandi/.local/share/bottazzi/runtime-production/operational-memory.sqlite3
+EnvironmentFile=/etc/ralfloop/telegram-approval.env
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python scripts/ralf_gmail_inbox_trigger.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/sibilla-cumana/.local/state/ralf /home/bandi/.local/share/bottazzi/runtime-production

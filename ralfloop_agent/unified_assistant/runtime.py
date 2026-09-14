@@ -60,7 +60,8 @@ from src.whatsapp import WhatsAppMCPContext
 _LEGACY = re.compile(r"^(?:/|rl:|rsc\b|abc\b|atm\b|apri\s+cancello\b)", re.I)
 _SUPPORTED = re.compile(
     r"\b(?:scrivi\s+(?:una\s+mail\s+)?a|prepara\s+(?:una\s+)?(?:mail|email)|"
-    r"manda\s+(?:una\s+)?(?:mail|email)|rispondi\s+(?:a|alla\s+mail(?:\s+di)?)|accendi|spegni|apri|chiudi|"
+    r"manda\s+(?:una\s+)?(?:mail|email)|rispond(?:i|ere)\s+(?:all['’]\s*|alla\s+|a\s+questa\s+)(?:mail|email|appello|comunicazione)|"
+    r"rispondi\s+(?:a|alla\s+mail(?:\s+di)?)|accendi|spegni|apri|chiudi|"
     r"imposta|metti|porta|abbassala|alzala|temperatura|quanto\s+fa|fa\s+caldo|"
     r"fa\s+freddo|rendila|cambiala|aggiungi|modifica|ok|invia|mandala|va\s+bene|annulla|"
     r"fastweb|myfastpage|whatsapp|wapp|mailchimp|meteo|weather|previsioni|piove|piover[aà]|pioggia|"
@@ -187,46 +188,28 @@ def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any]
     planner = _build_unified_planner(registry)
     plan = planner.validate(planner.plan(text))
     skills = [item.skill for item in plan.assignments]
-    if (
-        "email.search" in skills
-        or "fastweb.portal.read" in skills
-        or "whatsapp.read" in skills
-        or "mailchimp.read" in skills
-        or "meteo.read" in skills
-        or "atm.route" in skills
-        or any(skill.startswith("bandi.") for skill in skills)
-    ):
+    all_read = all(item.policy.value == "READ" for item in plan.assignments)
+    if all_read:
         task_mode = "tool_backed_read"
         interaction_class = "TOOL_BACKED_READ"
-        connectors = []
-        if "email.search" in skills:
-            connectors.append("google_workspace.gmail")
-        if "fastweb.portal.read" in skills:
-            connectors.append("fastweb.portal.read_only")
-        if "whatsapp.read" in skills:
-            connectors.append("whatsapp.web.mcp")
-        if "mailchimp.read" in skills:
-            connectors.append("mailchimp.marketing")
-        if "meteo.read" in skills:
-            connectors.append("meteo.radar.mcp")
-        if "atm.route" in skills:
-            connectors.append("atm.route.mcp")
-        if any(skill.startswith("bandi.") for skill in skills):
-            connectors.append("bandi.research.mcp")
-    elif all(item.policy.value == "READ" for item in plan.assignments):
-        task_mode = "tool_backed_read"
-        interaction_class = "TOOL_BACKED_READ"
-        connectors = []
     else:
         task_mode = "external_action"
         interaction_class = "EXTERNAL_ACTION"
-        connectors = []
-        if any(item.domain == "email" for item in plan.assignments):
-            connectors.append("google_workspace.gmail")
-        if any(item.domain == "whatsapp" for item in plan.assignments):
-            connectors.append("whatsapp.web.mcp")
-        if any(item.domain == "mailchimp" for item in plan.assignments):
-            connectors.append("mailchimp.marketing")
+    connectors = []
+    if "email.search" in skills or (not all_read and any(item.domain == "email" for item in plan.assignments)):
+        connectors.append("google_workspace.gmail")
+    if "fastweb.portal.read" in skills:
+        connectors.append("fastweb.portal.read_only")
+    if "whatsapp.read" in skills or (not all_read and any(item.domain == "whatsapp" for item in plan.assignments)):
+        connectors.append("whatsapp.web.mcp")
+    if "mailchimp.read" in skills or (not all_read and any(item.domain == "mailchimp" for item in plan.assignments)):
+        connectors.append("mailchimp.marketing")
+    if "meteo.read" in skills:
+        connectors.append("meteo.radar.mcp")
+    if "atm.route" in skills:
+        connectors.append("atm.route.mcp")
+    if any(skill.startswith("bandi.") for skill in skills):
+        connectors.append("bandi.research.mcp")
     return {
         "task_mode": task_mode,
         "mode": task_mode,
@@ -479,9 +462,12 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
 
     def email_search_adapter(assignment, _inputs):
         organization = str(assignment.arguments.get("organization") or "").strip()
+        concept = str(assignment.arguments.get("concept") or "").strip()
         request = (
+            f"Cerca le mail di {organization} riguardo bando appello comunicazione ai circoli"
+            if organization and concept == "grant_notice" else
             f"Cerca le mail di {organization} riguardo comunicazioni pertinenti"
-            if organization and assignment.arguments.get("concept") == "communications" else
+            if organization and concept == "communications" else
             f"Controlla se {organization} ha mai comunicato un aumento"
             if organization else assignment.objective
         )
@@ -490,8 +476,10 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
             artifact_type="email_search_result", status=search.status,
             producer_task_id=assignment.task_id,
             facts=tuple({
+                "message_id": item.message_id, "thread_id": item.thread_id,
                 "date": item.date, "sender": item.sender, "subject": item.subject,
-                "matched_terms": list(item.matched_terms), "content_role": "data",
+                "matched_terms": list(item.matched_terms), "excerpt": item.excerpt,
+                "content_role": "data",
             } for item in search.evidence),
             evidence_refs=tuple(item.provenance_ref for item in search.evidence),
             payload={

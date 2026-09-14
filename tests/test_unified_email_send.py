@@ -93,7 +93,7 @@ class Context(AbstractContextManager):
         return None
 
 
-def _approval(tmp_path, *, reply=False):
+def _approval(tmp_path, *, reply=False, cc="", bcc=""):
     policy = DomainApprovalPolicy(
         enabled=True,
         ttl_sec=300,
@@ -109,6 +109,8 @@ def _approval(tmp_path, *, reply=False):
         "recipient": "marco@example.invalid",
         "subject": "Documenti",
         "body": "Grazie, documenti ricevuti.",
+        "cc": cc,
+        "bcc": bcc,
         "source_message_id": "1234567890abcdef" if reply else "",
         "thread_id": "fedcba9876543210" if reply else "",
         "approval_action": "reply_email" if reply else "send_email",
@@ -164,6 +166,27 @@ def test_scope_binds_account_recipient_subject_body_thread_draft_and_idempotency
     assert scope["draft_id"] == pending.pending_id
     assert scope["payload_digest"] == pending.payload_digest
     assert scope["idempotency_key"].startswith("email:")
+
+
+def test_approved_send_forwards_hash_bound_bcc_to_gmail_provider(tmp_path):
+    store, _, pending = _approval(tmp_path, bcc="info@tiremminnanz.com")
+    session = FakeSession()
+    gateway = GoogleWorkspaceGateway(session, account=ACCOUNT)
+    gateway.discovered_tools = ("manage_email",)
+    gateway._manage_email_fields = frozenset({
+        "operation", "email", "to", "subject", "body", "cc", "bcc"
+    })
+    executor = UnifiedGmailApprovalExecutor(
+        lambda: Context(gateway), store=store, account=ACCOUNT
+    )
+
+    result = executor.execute(pending)
+
+    assert result["status"] == "executed"
+    sends = [args for _, args in session.calls if args["operation"] == "send"]
+    assert len(sends) == 1
+    assert sends[0]["bcc"] == "info@tiremminnanz.com"
+    assert "cc" not in sends[0]
 
 
 def test_approval_request_queues_reply_bound_telegram_preview(tmp_path):

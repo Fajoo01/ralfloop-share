@@ -196,7 +196,14 @@ class GoogleWorkspaceGateway:
             raise GoogleWorkspaceError("approved_email_account_mismatch")
         body = str(scope.get("body") or "")
         recipient = str(scope.get("recipient") or "")
-        if not body.strip() or not _valid_recipient(recipient):
+        cc = str(scope.get("cc") or "").strip()
+        bcc = str(scope.get("bcc") or "").strip()
+        if (
+            not body.strip()
+            or not _valid_recipient(recipient)
+            or not _valid_recipient_list(cc)
+            or not _valid_recipient_list(bcc)
+        ):
             raise GoogleWorkspaceError("approved_email_scope_invalid")
         if action == "reply_email":
             message_id = str(scope.get("source_message_id") or "")
@@ -211,6 +218,12 @@ class GoogleWorkspaceGateway:
                 "operation": "send", "email": self.account,
                 "to": recipient, "subject": str(scope.get("subject") or ""), "body": body,
             }
+        for field, value in (("cc", cc), ("bcc", bcc)):
+            if not value:
+                continue
+            if field not in self._manage_email_fields:
+                raise GoogleWorkspaceError(f"manage_email_{field}_unsupported")
+            arguments[field] = value
         idempotency_key = str(scope.get("idempotency_key") or "")
         if idempotency_key:
             for field in ("idempotencyKey", "idempotency_key"):
@@ -890,6 +903,15 @@ def verify_approved_email_scope(store: DomainApprovalStore, request_id: str, cur
 def _valid_recipient(value: str) -> bool:
     _, address = parseaddr(value)
     return bool(address and "@" in address and not re.search(r"[\r\n]", value))
+
+
+def _valid_recipient_list(value: str) -> bool:
+    if not value:
+        return True
+    if re.search(r"[\r\n]", value):
+        return False
+    items = [item.strip() for item in value.split(",") if item.strip()]
+    return bool(items) and all(_valid_recipient(item) for item in items)
 
 
 def _email_write_confirmation(result: Mapping[str, Any]) -> dict[str, str]:

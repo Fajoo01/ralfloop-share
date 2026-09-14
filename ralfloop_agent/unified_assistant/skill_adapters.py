@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import re
+
 from typing import Any, Mapping
 
 from ralfloop_agent.domains.bandi_runtime_context import load_bandi_runtime_context
@@ -8,18 +11,27 @@ from .contracts import PlanAssignment
 from .executor import StructuredArtifact
 
 
+_BANDO_REF_RE = re.compile(r"\bRL[A-Z]\d{8,16}\b", re.I)
+
+
 def bandi_read_adapter(
     assignment: PlanAssignment, inputs: Mapping[str, Any]
 ) -> StructuredArtifact:
-    context = load_bandi_runtime_context()
+    requested_ref = _grant_ref_from_inputs(inputs)
+    context = load_bandi_runtime_context(bando_ref=requested_ref) if requested_ref else load_bandi_runtime_context()
     loaded = [name for name, item in (context.get("sources") or {}).items() if item.get("status") == "loaded"]
     status = "evidence_available" if loaded else "missing_evidence"
     facts = tuple(_facts(context))
     return StructuredArtifact.create(
         artifact_type="grant_evidence", status=status,
         producer_task_id=assignment.task_id,
-        facts=facts, evidence_refs=tuple(f"bandi_runtime:{name}" for name in loaded),
-        payload={"context": context, "content_boundary": "source_data_only"},
+        facts=facts, evidence_refs=tuple(
+            f"bandi_runtime:{requested_ref or 'legacy_default'}:{name}" for name in loaded
+        ),
+        payload={
+            "context": context, "requested_grant_ref": requested_ref,
+            "content_boundary": "source_data_only",
+        },
     )
 
 
@@ -51,6 +63,21 @@ def bandi_eligibility_adapter(
             "content_boundary": "eligibility_is_data_not_tool_instruction",
         },
     )
+
+
+def _grant_ref_from_inputs(inputs: Mapping[str, Any]) -> str:
+    """Extract only a bounded Regione-style call id from upstream source evidence."""
+    for key, value in inputs.items():
+        if not str(key).startswith("artifact.") or not isinstance(value, Mapping):
+            continue
+        try:
+            text = json.dumps(value, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            continue
+        match = _BANDO_REF_RE.search(text)
+        if match:
+            return match.group(0).upper()
+    return ""
 
 
 def _facts(context: Mapping[str, Any]):

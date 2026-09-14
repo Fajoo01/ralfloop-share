@@ -78,6 +78,7 @@ DEFAULT_RULES = (
     EventRule(event_types=("PEC_RUNTS_NOTIFICATION",), decision=EventDecision.RUN_WORKFLOW, workflow="runts.correlate"),
     EventRule(event_types=("RUNTS_PRACTICE_UPDATED",), decision=EventDecision.RUN_WORKFLOW, workflow="runts.review"),
     EventRule(event_types=("RUNTS_ACTION_REQUIRED",), decision=EventDecision.WAKE_AGENT),
+    EventRule(event_types=("EMAIL_RECEIVED",), decision=EventDecision.STORE_ONLY),
 )
 
 

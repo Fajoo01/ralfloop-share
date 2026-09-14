@@ -927,6 +927,8 @@ class UnifiedAssistantCore:
         if not all((self.email_memory, self.email_pipeline, self.recipient_resolver)):
             return self._result("unavailable", "Email assistant adapter unavailable.", plan=plan)
         reply_requested = _is_reply_request(text)
+        explicit_cc = _explicit_copy_recipients(text, hidden=False)
+        explicit_bcc = _explicit_copy_recipients(text, hidden=True)
         exact_address = _verified_recipient_address(text) if reply_requested else None
         exact_message_id = _explicit_source_message_id(text) if reply_requested else None
 
@@ -1038,9 +1040,12 @@ class UnifiedAssistantCore:
             risk=outcome.risk,
             validation_state=outcome.final_validator,
             reply_mode=reply_requested,
+            cc=explicit_cc,
+            bcc=explicit_bcc,
         )
         display = _email_display(
-            recipient.get("name") or label, outcome.body, resolved_subject
+            recipient.get("name") or label, outcome.body, resolved_subject,
+            cc=explicit_cc, bcc=explicit_bcc,
         )
         pending = self.conversation.stage(
             domain="email",
@@ -1354,9 +1359,28 @@ def _recipient_label(text: str) -> str | None:
     return None
 
 
-def _email_display(recipient: str, body: str, subject: str = "") -> str:
+def _explicit_copy_recipients(text: str, *, hidden: bool) -> str:
+    marker = r"(?:ccn|bcc|copia\s+nascosta)" if hidden else r"(?:cc|copia)"
+    match = re.search(
+        rf"\b{marker}\b\s*:?\s*(.+?)(?=\s+(?:oggetto|subject|testo|corpo)\s*:|$)",
+        text, re.I,
+    )
+    if not match:
+        return ""
+    addresses = re.findall(
+        r"[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9.-]+\.[A-Z]{2,}",
+        match.group(1), re.I,
+    )
+    deduped = list(dict.fromkeys(address.casefold() for address in addresses))
+    return ",".join(deduped)
+
+
+def _email_display(
+    recipient: str, body: str, subject: str = "", *, cc: str = "", bcc: str = ""
+) -> str:
     subject_line = f"\nOggetto: {subject}\n" if subject else ""
-    return f"Bozza per {recipient}:{subject_line}\n{body}\n\nInvio?"
+    copies = (f"CC: {cc}\n" if cc else "") + (f"CCN: {bcc}\n" if bcc else "")
+    return f"Bozza per {recipient}:{subject_line}{copies}\n{body}\n\nInvio?"
 
 
 def _is_reply_request(text: str) -> bool:
