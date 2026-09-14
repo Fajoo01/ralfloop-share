@@ -14,7 +14,7 @@ from ralfloop_agent.providers.gpu_engine_scheduler import (
 )
 
 from .store import TeacherStore
-from .pedagogy import default_learner_profile, profile_from_student, select_pedagogy
+from .pedagogy import SessionMode, default_learner_profile, profile_from_student, select_pedagogy
 
 
 PEDAGOGY_PROMPT = """
@@ -70,10 +70,12 @@ class TeacherService:
         *,
         model_call: ModelCall | None = None,
         grammar_evidence: Callable[[str], dict[str, Any] | None] | None = None,
+        deterministic_core: Any | None = None,
     ) -> None:
         self.store = store
         self.model_call = model_call or ScheduledQwenModel()
         self.grammar_evidence = grammar_evidence
+        self.deterministic_core = deterministic_core
 
     def login(
         self,
@@ -135,6 +137,155 @@ class TeacherService:
             return self.grammar_evidence(text)
         except Exception:
             return None
+
+    def _decision_for(
+        self,
+        session: dict[str, Any],
+        action: str,
+        *,
+        material_supplied: bool = False,
+        show_solution: bool = False,
+    ):
+        student = self.store.student(session["student_id"])
+        learner = profile_from_student(student)
+        decision = select_pedagogy(
+            learner,
+            action=action,
+            subject=session["subject"],
+            topic=session["topic"],
+            material_supplied=material_supplied,
+            show_solution=show_solution,
+        )
+        return student, learner, decision
+
+    def _core_math_check(
+        self,
+        session_id: str,
+        exercise: str,
+        student_answer: str,
+        show_solution: bool,
+    ) -> dict[str, Any] | None:
+        if self.deterministic_core is None:
+            return None
+        session = self.store.session(session_id)
+        scope = f"{session.get('subject', '')} {session.get('topic', '')}".casefold()
+        if not any(word in scope for word in ("mat", "aritmet", "algebr", "fraz", "fisic", "chimic")):
+            return None
+        try:
+            evidence = self.deterministic_core.math_check(exercise, student_answer)
+        except Exception:
+            return None
+        if not evidence.get("recognized") or not evidence.get("answer_recognized"):
+            return None
+        _student, _learner, decision = self._decision_for(
+            session, "check_answer", show_solution=show_solution
+        )
+        correct = bool(evidence.get("equivalent"))
+        if correct:
+            response = "Corretto: la risposta è numericamente equivalente al risultato dell'espressione."
+        elif show_solution:
+            response = f"La risposta non è corretta. Il risultato dell'espressione è {evidence.get('expected')}."
+        else:
+            response = "La risposta non è corretta. Ricontrolla segni, ordine delle operazioni e semplificazione, senza cambiare il risultato a caso."
+        output = {
+            "ok": True,
+            "action": "check_answer",
+            "response": response,
+            "correct": correct,
+            "source_mode": "deterministic_core",
+            "deterministic": True,
+            "core_evidence": evidence,
+            "pedagogy": decision.model_dump(mode="json"),
+        }
+        self.store.event(session_id, "check_answer", {
+            "response": response, "source_mode": "deterministic_core",
+            "strategy": decision.strategy.value, "mode": decision.mode.value,
+            "model_path": "none", "core_tool": "core.math_check",
+        })
+        return output
+
+    def _core_study_plan(
+        self,
+        session_id: str,
+        objective: str,
+        available_minutes: int,
+    ) -> dict[str, Any] | None:
+        if self.deterministic_core is None:
+            return None
+        session = self.store.session(session_id)
+        _student, _learner, decision = self._decision_for(session, "study_plan")
+        mode = (
+            "literacy_l2" if decision.mode is SessionMode.LITERACY_L2
+            else "scholar" if decision.mode is SessionMode.SCHOLAR
+            else "standard"
+        )
+        try:
+            plan = self.deterministic_core.study_plan(available_minutes, mode)
+        except Exception:
+            return None
+        blocks = plan.get("blocks")
+        if not isinstance(blocks, list) or not blocks:
+            return None
+        lines = [f"Obiettivo: {objective}"]
+        for item in blocks:
+            if not isinstance(item, dict):
+                return None
+            lines.append(f"{item.get('order')}. {item.get('label')} — {item.get('minutes')} min")
+        response = "\n".join(lines)
+        output = {
+            "ok": True, "action": "study_plan", "response": response,
+            "source_mode": "deterministic_core", "deterministic": True,
+            "plan": plan, "pedagogy": decision.model_dump(mode="json"),
+        }
+        self.store.event(session_id, "study_plan", {
+            "response": response[:4000], "source_mode": "deterministic_core",
+            "strategy": decision.strategy.value, "mode": decision.mode.value,
+            "model_path": "none", "core_tool": "core.study_plan",
+        })
+        return output
+
+    @staticmethod
+    def _summary_requires_generation(objective: str) -> bool:
+        low = objective.casefold()
+        return any(word in low for word in (
+            "analizza", "analisi", "critica", "confronta", "argomenta",
+            "tesi", "tesina", "discuti", "valuta", "sintesi critica",
+        ))
+
+    def _core_summary(
+        self,
+        session_id: str,
+        material: str,
+        objective: str,
+    ) -> dict[str, Any] | None:
+        if self.deterministic_core is None or len(material) > 60000:
+            return None
+        session = self.store.session(session_id)
+        _student, _learner, decision = self._decision_for(
+            session, "summarize_material", material_supplied=True
+        )
+        if decision.mode in {SessionMode.LITERACY_L2, SessionMode.SCHOLAR}:
+            return None
+        if self._summary_requires_generation(objective):
+            return None
+        try:
+            evidence = self.deterministic_core.extractive_summary(material, max_sentences=5)
+        except Exception:
+            return None
+        response = str(evidence.get("summary") or "").strip()
+        if not response:
+            return None
+        output = {
+            "ok": True, "action": "summarize_material", "response": response,
+            "source_mode": "provided_material", "deterministic": True,
+            "core_evidence": evidence, "pedagogy": decision.model_dump(mode="json"),
+        }
+        self.store.event(session_id, "summarize_material", {
+            "response": response[:4000], "source_mode": "provided_material",
+            "strategy": decision.strategy.value, "mode": decision.mode.value,
+            "model_path": "none", "core_tool": "core.extractive_summary",
+        })
+        return output
 
     def explain(
         self,
@@ -215,7 +366,9 @@ class TeacherService:
         student_answer: str,
         show_solution: bool = False,
     ) -> dict[str, Any]:
-        result = self._teaching_call(
+        result = self._core_math_check(
+            session_id, exercise, student_answer, show_solution
+        ) or self._teaching_call(
             session_id,
             "check_answer",
             {
@@ -272,7 +425,9 @@ class TeacherService:
         objective: str,
         available_minutes: int = 30,
     ) -> dict[str, Any]:
-        return self._teaching_call(
+        return self._core_study_plan(
+            session_id, objective, available_minutes
+        ) or self._teaching_call(
             session_id,
             "study_plan",
             {
@@ -291,7 +446,9 @@ class TeacherService:
         material: str,
         objective: str = "",
     ) -> dict[str, Any]:
-        return self._teaching_call(
+        return self._core_summary(
+            session_id, material, objective
+        ) or self._teaching_call(
             session_id,
             "summarize_material",
             {
@@ -352,6 +509,16 @@ class TeacherService:
         max_chunk_chars: int = 1200,
     ) -> dict[str, Any]:
         self.store.session(session_id)
+        text_profile = None
+        effective_chunk_chars = max_chunk_chars
+        if self.deterministic_core is not None:
+            try:
+                text_profile = self.deterministic_core.text_profile(material)
+                recommended = int(text_profile.get("recommended_chunk_chars") or max_chunk_chars)
+                effective_chunk_chars = min(max_chunk_chars, max(320, recommended))
+            except Exception:
+                text_profile = None
+                effective_chunk_chars = max_chunk_chars
 
         paragraphs = [
             part.strip()
@@ -367,16 +534,16 @@ class TeacherService:
                 paragraph if not current
                 else current + "\n" + paragraph
             )
-            if len(candidate) <= max_chunk_chars:
+            if len(candidate) <= effective_chunk_chars:
                 current = candidate
                 continue
 
             if current:
                 chunks.append(current)
 
-            while len(paragraph) > max_chunk_chars:
-                chunks.append(paragraph[:max_chunk_chars])
-                paragraph = paragraph[max_chunk_chars:]
+            while len(paragraph) > effective_chunk_chars:
+                chunks.append(paragraph[:effective_chunk_chars])
+                paragraph = paragraph[effective_chunk_chars:]
 
             current = paragraph
 
@@ -394,6 +561,8 @@ class TeacherService:
             "source_mode": "provided_material",
             "tts_status": "stub",
             "chunks": chunks,
+            "chunk_chars": effective_chunk_chars,
+            "text_profile": text_profile,
         }
 
     def stream_explain(self, session_id: str, question: str) -> Iterator[dict[str, Any]]:

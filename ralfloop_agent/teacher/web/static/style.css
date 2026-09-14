@@ -3,14 +3,18 @@
 .teacher-avatar{max-width:1080px;margin:.8rem auto 0;padding:.8rem 1rem;display:flex;align-items:center;gap:1rem;background:#fffbed;border:1px solid #cdbd95;border-radius:1rem}
 .teacher-avatar img{width:112px;height:112px;object-fit:cover;border-radius:50%;border:3px solid #292b22;transform-origin:center bottom}
 .teacher-avatar strong{display:block;font-family:Georgia,'Times New Roman',serif;font-size:1.25rem}
-.teacher-avatar span{display:block;color:#62583e}
-.teacher-avatar[data-state=thinking] img{filter:saturate(.7);animation:teacher-thinking .9s ease-in-out infinite alternate}
+
+.teacher-face-rig{display:grid;place-items:stretch;overflow:hidden;border-radius:50%;line-height:0;flex:0 0 auto;--mouth-level:0;--jaw-scale:1;--jaw-shift:0%}
+.teacher-face-rig>img{grid-area:1/1}.teacher-face-base{transform:none!important}
+.teacher-face-rig>.teacher-face-jaw{clip-path:inset(56% 0 0 0);transform-origin:50% 58%!important;transform:translateY(var(--jaw-shift)) scaleY(var(--jaw-scale))!important;border-color:transparent!important;pointer-events:none;will-change:transform}
+.teacher-avatar>div>span{display:block;color:#62583e}
+.teacher-avatar[data-state=thinking] .teacher-face-rig{filter:saturate(.7);animation:teacher-thinking .9s ease-in-out infinite alternate}
 .teacher-avatar[data-state=listening]{border-color:#d9ac4b}
 .teacher-avatar[data-state=speaking]{box-shadow:inset 0 -4px #923326}
 .feedback[data-teacher-avatar-decorated="1"]{display:grid;grid-template-columns:96px minmax(0,1fr);align-items:start;gap:1rem;max-width:none}
 .teacher-avatar-inline{display:flex;align-items:center;justify-content:center;align-self:start}
 .teacher-avatar-inline img{display:block;width:84px;height:84px;object-fit:cover;border-radius:50%;border:3px solid #292b22;transform-origin:center bottom}
-.teacher-avatar-inline[data-state=thinking] img{filter:saturate(.7);animation:teacher-thinking .9s ease-in-out infinite alternate}
+.teacher-avatar-inline[data-state=thinking] .teacher-face-rig{filter:saturate(.7);animation:teacher-thinking .9s ease-in-out infinite alternate}
 .teacher-avatar-inline[data-state=speaking] img{box-shadow:0 0 0 4px rgba(146,51,38,.18)}
 .teacher-feedback-text{display:block;min-width:0;padding-top:.2rem}
 @keyframes teacher-thinking{from{transform:translateY(0)}to{transform:translateY(-3px)}}

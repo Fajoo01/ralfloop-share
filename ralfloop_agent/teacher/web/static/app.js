@@ -4,7 +4,7 @@ const avatarImage=document.querySelector('.brand img');
 const avatar=new BottazziAvatarController({onChange:controller=>{
   if(!avatarImage)return;
   avatarImage.dataset.state=controller.state;
-  avatarImage.style.transform=`scaleY(${1+controller.mouth_level*.06})`;
+  avatarImage.dataset.mouthLevel=String(controller.mouth_level);
 }});
 const main = document.querySelector('#main');
 const notice = document.querySelector('#notice');
@@ -113,7 +113,7 @@ function speakStreamSentence(text){
   const u=new SpeechSynthesisUtterance(text);u.lang='it-IT';u.rate=learnerAccess().text_to_speech?0.92:1;avatar.bindSpeech(u);speechSynthesis.speak(u);
 }
 async function streamHelp(a,mode,question,feedback){
-  tutorVoiceGeneration+=1;stopServerAudio();window.speechSynthesis?.cancel();avatar.reset();avatar.thinking?.();
+  tutorVoiceGeneration+=1;stopServerAudio();window.speechSynthesis?.cancel();avatar.reset();avatar.setState('thinking');
   const live=info('Sto preparando la spiegazione…');feedback.replaceChildren(live);let text='';let finalResult=null;
   const autoSpeak=!!learnerAccess().text_to_speech||home?.profile?.learner_profile?.education_level==='emergent_literacy';
   await apiStream('/activities/'+a.activity_id+'/help/stream',{mode,question},async event=>{
@@ -122,7 +122,7 @@ async function streamHelp(a,mode,question,feedback){
     else if(event.type==='done'){finalResult=event.result||null;}
   });
   if(finalResult){live.textContent=finalResult.feedback||text;if(!autoSpeak)speakTutorFeedback(finalResult);}
-  avatar.reset();
+  if(!autoSpeak||(!window.speechSynthesis?.speaking&&!window.speechSynthesis?.pending))avatar.reset();
   return finalResult;
 }
 function navigate(path){history.pushState({},'',path);render().then(()=>window.scrollTo(0,0)).catch(showError);}

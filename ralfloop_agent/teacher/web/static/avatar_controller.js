@@ -1,15 +1,15 @@
 /* Stable avatar contract; visual skin is intentionally replaceable. */
 export class BottazziAvatarController {
-  constructor({avatar_enabled=true, reduced_motion=globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false, onChange=()=>{}}={}) { this.enabled=avatar_enabled; this.reducedMotion=reduced_motion; this.onChange=onChange; this.state='idle'; this.mouth_level=0; this.frame=null; }
+  constructor({avatar_enabled=true, reduced_motion=globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false, onChange=()=>{}}={}) { this.enabled=avatar_enabled; this.reducedMotion=reduced_motion; this.onChange=onChange; this.state='idle'; this.mouth_level=0; this.smoothedMouth=0; this.frame=null; this.analyser=null; this.samples=null; }
   setState(state) {
     if (!['idle','speaking','listening','thinking','success','error'].includes(state)) throw new Error('invalid_avatar_state');
     this.stop(); this.state=state; if(this.enabled)this.onChange(this);
     if(state==='speaking' && this.enabled && !this.reducedMotion){
-      const tick=t=>{let level=.25+.55*Math.abs(Math.sin(t/110));if(this.analyser){this.analyser.getByteTimeDomainData(this.samples);level=Math.sqrt(this.samples.reduce((s,x)=>s+((x-128)/128)**2,0)/this.samples.length)*4;}this.setMouthLevel(level);this.frame=requestAnimationFrame(tick);};
+      const tick=t=>{let level=.18+.48*Math.abs(Math.sin(t/95));if(this.analyser&&this.samples){this.analyser.getByteTimeDomainData(this.samples);const rms=Math.sqrt(this.samples.reduce((sum,x)=>sum+((x-128)/128)**2,0)/this.samples.length);const target=Math.max(0,Math.min(1,(rms-.012)*7));this.smoothedMouth=this.smoothedMouth*.58+target*.42;level=this.smoothedMouth;}this.setMouthLevel(level);this.frame=requestAnimationFrame(tick);};
       this.frame=requestAnimationFrame(tick);
     }
   }
-  stop(){if(this.frame!==null)cancelAnimationFrame(this.frame);this.frame=null;this.mouth_level=0;}
+  stop(){if(this.frame!==null)cancelAnimationFrame(this.frame);this.frame=null;this.mouth_level=0;this.smoothedMouth=0;}
   setMouthLevel(level) { this.mouth_level=this.enabled&&!this.reducedMotion?Math.max(0,Math.min(1,Number(level)||0)):0; if(this.enabled) this.onChange(this); }
   bindSpeech(utterance){
     for(const event of ['start','resume'])utterance.addEventListener(event,()=>this.setState('speaking'));
@@ -17,7 +17,9 @@ export class BottazziAvatarController {
   }
   bindRecognition(recognition){recognition.addEventListener('start',()=>this.setState('listening'));for(const event of ['end','error'])recognition.addEventListener(event,()=>this.reset());}
   bindAudio(audio){
-    const context=new AudioContext(), source=context.createMediaElementSource(audio);
+    const AudioContextClass=globalThis.AudioContext||globalThis.webkitAudioContext;
+    if(!AudioContextClass){const start=()=>this.setState('speaking'),end=()=>this.reset();audio.addEventListener('playing',start);for(const event of ['pause','ended','error'])audio.addEventListener(event,end);return ()=>{audio.removeEventListener('playing',start);for(const event of ['pause','ended','error'])audio.removeEventListener(event,end);this.reset();};}
+    const context=new AudioContextClass(), source=context.createMediaElementSource(audio);
     const analyser=context.createAnalyser();analyser.fftSize=256;
     this.analyser=analyser;this.samples=new Uint8Array(analyser.fftSize);
     source.connect(analyser);analyser.connect(context.destination);
@@ -34,23 +36,34 @@ export function installBottazziAvatarSurface() {
   const surfaces=()=>[...document.querySelectorAll('[data-teacher-avatar-surface]')];
   if(!source || !surfaces().length) return null;
   const labels={idle:'Pronto',listening:'Ti ascolto',thinking:'Sto pensando…',speaking:'Ti sto parlando',success:'Bene!',error:'Riproviamo'};
+  const rigFace=face=>{
+    if(!face)return null;
+    if(face.parentElement?.classList.contains('teacher-face-rig'))return face.parentElement;
+    const parent=face.parentNode;if(!parent)return null;
+    const rig=document.createElement('span');rig.className='teacher-face-rig';
+    parent.insertBefore(rig,face);rig.append(face);face.classList.add('teacher-face-base');
+    const jaw=face.cloneNode(true);jaw.classList.add('teacher-face-jaw');jaw.alt='';jaw.setAttribute('aria-hidden','true');
+    rig.append(jaw);return rig;
+  };
+  const setRig=(face,state,mouthLevel=0)=>{
+    const rig=rigFace(face);if(!rig)return;
+    const level=state==='speaking'?Math.max(0,Math.min(1,Number(mouthLevel)||0)):0;
+    rig.dataset.state=state;rig.style.setProperty('--mouth-level',String(level));
+    rig.style.setProperty('--jaw-scale',String(1+level*.085));
+    rig.style.setProperty('--jaw-shift',`${(level*1.4).toFixed(3)}%`);
+  };
+  rigFace(source);
   const apply=(state,mouthLevel=0)=>{
-    const selected=labels[state]?state:'idle';
+    const selected=labels[state]?state:'idle';setRig(source,selected,mouthLevel);
     for(const surface of surfaces()){
-      const face=surface.querySelector('img');
+      const face=surface.querySelector('img:not(.teacher-face-jaw)');
       const status=surface.querySelector('[data-teacher-avatar-status]');
       surface.dataset.state=selected;
       if(status)status.textContent=labels[selected];
-      if(face)face.style.transform=selected==='speaking'?`scaleY(${1+Math.max(0,Math.min(1,Number(mouthLevel)||0))*.06})`:'scaleY(1)';
+      setRig(face,selected,mouthLevel);
     }
   };
-  const sync=()=>{
-    const state=source.dataset.state||'idle';
-    const match=/scaleY\(([^)]+)\)/.exec(source.style.transform||'');
-    const scale=match?Number(match[1]):1;
-    const mouth=Math.max(0,(scale-1)/.06);
-    apply(state,mouth);
-  };
+  const sync=()=>apply(source.dataset.state||'idle',Number(source.dataset.mouthLevel||0));
   const decorateFeedback=feedback=>{
     if(!(feedback instanceof HTMLElement) || feedback.dataset.teacherAvatarDecorated==='1')return;
     const text=feedback.textContent||'';
@@ -73,7 +86,7 @@ export function installBottazziAvatarSurface() {
     sync();
   };
   const observer=new MutationObserver(sync);
-  observer.observe(source,{attributes:true,attributeFilter:['data-state','style']});
+  observer.observe(source,{attributes:true,attributeFilter:['data-state','data-mouth-level']});
   const feedbackObserver=new MutationObserver(records=>{
     for(const record of records){
       for(const node of record.addedNodes){

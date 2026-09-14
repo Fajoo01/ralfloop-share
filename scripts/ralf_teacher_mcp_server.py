@@ -18,6 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from ralfloop_agent.teacher.catalog import DESCRIPTIONS, TOOL_MODELS
 from ralfloop_agent.teacher.inference import TeacherInferenceClient
 from ralfloop_agent.teacher.grammar_client import GrammarEvidenceClient
+from ralfloop_agent.teacher.core_client import TeacherCoreClient
 from ralfloop_agent.teacher.service import TeacherService
 from ralfloop_agent.teacher.store import TeacherStore
 from src.mcp_transport import MCP_PROTOCOL_VERSION
@@ -293,6 +294,16 @@ def main() -> int:
         else None
     )
 
+    core_socket = os.getenv(
+        "RALF_TEACHER_CORE_SOCKET",
+        "",
+    ).strip()
+    core_client = (
+        TeacherCoreClient(core_socket)
+        if core_socket
+        else None
+    )
+
     service = TeacherService(
         store,
         model_call=model_call,
@@ -301,6 +312,7 @@ def main() -> int:
             if grammar_client is not None
             else None
         ),
+        deterministic_core=core_client,
     )
     server = TeacherMCPServer(service)
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import shutil
 import subprocess
 
 import pytest
@@ -110,3 +111,23 @@ def test_release_builds_atm_router_from_committed_sources(tmp_path):
     ).read_text(encoding="utf-8")
 
     assert "tools/atm_router/atm-router" in manifest
+
+
+def test_release_builder_compiles_teacher_core_mcp(tmp_path):
+    project = Path(__file__).resolve().parents[1]
+    root = tmp_path / "release-root"
+    (root / "tools").mkdir(parents=True)
+    (root / "third_party").mkdir(parents=True)
+    shutil.copytree(
+        project / "tools" / "teacher_core_mcp",
+        root / "tools" / "teacher_core_mcp",
+        ignore=shutil.ignore_patterns("ralf-teacher-core-mcp", "__pycache__"),
+    )
+    shutil.copytree(project / "third_party" / "jsmn", root / "third_party" / "jsmn")
+    builder = load_builder()
+    builder._build_teacher_core_mcp(root)
+    binary = root / "bin" / "ralf-teacher-core-mcp"
+    assert binary.is_file()
+    assert binary.stat().st_mode & 0o111
+    out = subprocess.check_output([str(binary), "--stdio"], input='', text=True)
+    assert out == ''

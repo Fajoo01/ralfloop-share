@@ -31,6 +31,18 @@ def test_visible_avatar_surface_contract():
     assert 'id="teacher-avatar-status"' in html
     assert '.teacher-avatar[data-state=speaking]' in css
     assert '.teacher-avatar[data-state=thinking]' in css
+    assert '.teacher-face-rig' in css
+    assert '.teacher-face-jaw' in css
+    assert '--jaw-scale' in css
     assert 'installBottazziAvatarSurface' in controller
     assert "thinking:'Sto pensando…'" in controller
     assert "speaking:'Ti sto parlando'" in controller
+    assert "clip-path" in css
+    assert "data-mouth-level" in controller
+
+
+def test_stream_help_enters_real_thinking_state():
+    source = Path('ralfloop_agent/teacher/web/static/app.js').read_text()
+    assert "avatar.setState('thinking')" in source
+    assert "avatar.thinking?.()" not in source
+    assert "avatarImage.dataset.mouthLevel" in source

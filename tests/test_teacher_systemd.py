@@ -13,6 +13,11 @@ MCP = (
     / "deploy/systemd/ralf-teacher-mcp-broker.service"
 ).read_text()
 
+CORE = (
+    ROOT
+    / "deploy/systemd/ralf-teacher-core-mcp.service"
+).read_text()
+
 
 def test_teacher_mcp_is_student_only_and_has_no_ip_network():
     assert "ralf_teacher_mcp_broker.py" in MCP
@@ -125,3 +130,14 @@ def test_teacher_runtime_does_not_import_privileged_capabilities():
     })
 
     assert offenders == []
+
+
+def test_teacher_core_mcp_is_internal_and_sandboxed():
+    assert "ralf-teacher-core-mcp" in CORE
+    assert "--allow-uid 1001" in CORE
+    assert "RestrictAddressFamilies=AF_UNIX" in CORE
+    assert "IPAddressDeny=any" in CORE
+    assert "ProtectSystem=strict" in CORE
+    assert "NoNewPrivileges=yes" in CORE
+    assert "RALF_TEACHER_CORE_SOCKET=/run/ralf-teacher-core/core.sock" in MCP
+    assert "ralf-teacher-core-mcp.service" in MCP

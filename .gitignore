@@ -23,3 +23,5 @@ build/
 *.log
 .DS_Store
 /tools/atm_router/atm-router
+
+/tools/teacher_core_mcp/ralf-teacher-core-mcp
