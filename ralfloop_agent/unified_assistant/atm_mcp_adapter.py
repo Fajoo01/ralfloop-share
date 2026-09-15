@@ -10,7 +10,7 @@ from .meteo_mcp_adapter import MeteoMCPReadOnly
 
 _NAMED_ROUTE_RE = re.compile(
     r"\bda\s+(?P<origin>.+?)\s+"
-    r"(?:a|al|alla|all['’]|in)\s+"
+    r"(?:a|ad|al|alla|all['’]|in)\s+"
     r"(?P<destination>.+?)\s*[?!.]*$",
     re.I,
 )
@@ -24,11 +24,11 @@ _TRAILING_TRANSPORT_QUALIFIER_RE = re.compile(
 _DESTINATION_PATTERNS = (
     re.compile(
         r"\bcome\s+(?:arrivo|vado|posso\s+andare)\s+"
-        r"(?:a|al|alla|all['’]|in)\s+(?P<destination>.+?)\s*[?!.]*$",
+        r"(?:a|ad|al|alla|all['’]|in)\s+(?P<destination>.+?)\s*[?!.]*$",
         re.I,
     ),
     re.compile(
-        r"\bportami\s+(?:a|al|alla|all['’]|in)\s+"
+        r"\bportami\s+(?:a|ad|al|alla|all['’]|in)\s+"
         r"(?P<destination>.+?)\s*[?!.]*$",
         re.I,
     ),
@@ -76,7 +76,7 @@ def _destination(text: str) -> str | None:
     )
     if single:
         value = _clean(single.group(1))
-        if not re.search(r"\s+(?:a|al|alla|all['’]|in)\s+", value, re.I):
+        if not re.search(r"\s+(?:a|ad|al|alla|all['’]|in)\s+", value, re.I):
             value = re.sub(r"^(?:dal|dalla|dallo|dai|dagli|dalle)\s+", "", value, flags=re.I)
             return value if len(value) >= 2 else None
 

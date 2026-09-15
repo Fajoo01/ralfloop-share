@@ -2958,8 +2958,11 @@ def _topology_direct_candidates(
 
 
 def _legacy_stop_snapshot(stop_code: str, lines: list[str]) -> dict[str, Any]:
-    data = _browser_fetch_json(
-        "tpl/stops/" + urllib.parse.quote(stop_code, safe="") + "/linesummary"
+    # Percorso di compatibilità usato quando non è disponibile il provider MCP.
+    # Deve restare bounded: una risposta ATM lenta non può bloccare il planner.
+    data = _tpportal_fetch_json_direct(
+        "tpl/stops/" + urllib.parse.quote(stop_code, safe="") + "/linesummary",
+        timeout=2.2,
     )
     wanted = {str(line) for line in lines}
     arrivals: dict[str, str] = {}
@@ -3854,29 +3857,29 @@ def _build_plan_impl(lat: float, lon: float, destination_name: str) -> dict[str,
         else []
     )
 
-    # Se la topologia locale produce più dirette, oppure una sola diretta
-    # con ETA completo e realtime prendibile, il trip planner remoto non
-    # aggiunge informazione utile. Nessun nome di luogo o linea è codificato.
-    topology_fast_path = (
-        len(direct_topology_options) >= 2
-        or (
-            len(direct_topology_options) == 1
-            and direct_topology_options[0].get("eta_seconds") is not None
-            and direct_topology_options[0].get("wait_source") == "atm_live"
+    # Per tratte brevi una diretta già dimostrata dalla topologia GTFS è
+    # sufficiente per evitare il trip planner remoto. Il realtime migliora
+    # ranking/ETA, ma un suo timeout non deve trasformarsi in decine di secondi.
+    if direct_topology_options:
+        has_live = any(
+            option.get("wait_source") == "atm_live"
+            for option in direct_topology_options
         )
-    )
-    if topology_fast_path:
         return {
             "destination": dest,
             "route_mode": "direct_atm",
-            "route_confidence": "high",
+            "route_confidence": "high" if has_live else "medium",
             "needs_official_route_lookup": False,
             "origin": {"lat": lat, "lon": lon},
             "direct_atm_route": direct_topology_options[0],
             "direct_atm_options": direct_topology_options,
             "official_route_url": _atm_link(lat, lon),
             "atm_nearby_url": _atm_link(lat, lon),
-            "source": "GTFS topology + ATM realtime",
+            "source": (
+                "GTFS topology + ATM realtime"
+                if has_live
+                else "GTFS topology; ATM realtime non disponibile"
+            ),
             "generated_at": int(time.time()),
         }
 

@@ -73,7 +73,8 @@ def test_multiple_topology_directs_return_before_trip_planner(monkeypatch):
     assert result["route_mode"] == "direct_atm"
     assert result["direct_atm_options"] == options
     assert result["direct_atm_route"] is options[0]
-    assert result["source"] == "GTFS topology + ATM realtime"
+    assert result["route_confidence"] == "medium"
+    assert result["source"] == "GTFS topology; ATM realtime non disponibile"
 
 
 def test_topology_candidates_are_ranked_from_data_not_line_names(monkeypatch, tmp_path):
@@ -192,3 +193,40 @@ def test_topology_options_use_provider_batch_once(monkeypatch):
     assert {q["stop_code"] for q in provider.calls[0]} == {"O1", "O2"}
     assert [row["line"] for row in rows] == ["X7", "K2"]
     assert all(row["wait_source"] == "atm_live" for row in rows)
+
+
+def test_legacy_snapshot_uses_short_bounded_timeout(monkeypatch):
+    seen = {}
+
+    def fake_fetch(path, timeout=None):
+        seen["path"] = path
+        seen["timeout"] = timeout
+        return {"Lines": []}
+
+    monkeypatch.setattr(atm, "_tpportal_fetch_json_direct", fake_fetch)
+    result = atm._legacy_stop_snapshot("O1", ["X7"])
+    assert result["status"] == "not_available"
+    assert seen["path"].endswith("tpl/stops/O1/linesummary")
+    assert seen["timeout"] == 2.2
+
+
+def test_single_static_direct_skips_remote_trip_planner(monkeypatch):
+    monkeypatch.setattr(atm, "_resolve_destination", lambda _name: {
+        "name": "shop", "label": "Shop", "lat": 45.501, "lon": 9.201
+    })
+    monkeypatch.setattr(atm, "_local_atm_realtime_route", lambda *_a, **_k: None)
+    option = {
+        "line": "X7", "wait": "n/d", "wait_source": "not_available",
+        "eta_seconds": None,
+    }
+    monkeypatch.setattr(atm, "_topology_direct_options", lambda *_a, **_k: [option])
+    monkeypatch.setattr(
+        atm, "_atm_trip_plan",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("remote trip planner must not run for a known short direct route")
+        ),
+    )
+    result = atm._build_plan_impl(45.500, 9.200, "shop")
+    assert result["route_mode"] == "direct_atm"
+    assert result["route_confidence"] == "medium"
+    assert result["direct_atm_options"] == [option]
