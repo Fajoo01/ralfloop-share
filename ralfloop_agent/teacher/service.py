@@ -14,7 +14,9 @@ from ralfloop_agent.providers.gpu_engine_scheduler import (
 )
 
 from .store import TeacherStore
-from .pedagogy import SessionMode, default_learner_profile, profile_from_student, select_pedagogy
+from .pedagogy import (
+    SessionMode, default_learner_profile, profile_from_student, select_pedagogy,
+)
 
 
 PEDAGOGY_PROMPT = """
@@ -26,6 +28,11 @@ Regole:
 - adatta lessico, esempi e difficoltà all'età e alla classe;
 - non infantilizzare;
 - distingui errori concettuali da errori di calcolo o scrittura;
+- se lo studente porta un controesempio, un'obiezione o segnala che una spiegazione non torna, rispondi PRIMA a quel punto preciso;
+- in quel caso dichiara se l'osservazione è corretta, parzialmente corretta o errata e spiega il perché senza eluderla;
+- se il controesempio mostra che una regola precedente era troppo semplificata, correggi esplicitamente la regola invece di difenderla;
+- distingui una proprietà che può verificarsi da una proprietà definitoria: non usare un singolo indizio superficiale come criterio sufficiente, soprattutto in matematica e scienze;
+- non ripartire dalla lezione generale finché non hai risolto l'obiezione specifica dello studente;
 - preferisci spiegazione, verifica della comprensione, suggerimento,
   procedimento e infine soluzione;
 - non dare automaticamente la risposta finale a un esercizio;
@@ -47,6 +54,34 @@ Regole:
 Restituisci esclusivamente un oggetto JSON.
 Il campo "response" contiene il testo da mostrare allo studente.
 """
+
+
+def _student_turn(payload: dict[str, Any]) -> str:
+    for key in ("question", "concept", "student_attempt", "student_answer"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _student_move(core: Any | None, payload: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
+    text = _student_turn(payload)
+    if not text or core is None:
+        return "neutral", None
+    classify = getattr(core, "classify_turn", None)
+    if not callable(classify):
+        return "neutral", None
+    try:
+        evidence = classify(text)
+    except Exception:
+        return "neutral", None
+    if not isinstance(evidence, dict):
+        return "neutral", None
+    move = str(evidence.get("move") or "neutral")
+    allowed = {"neutral", "question", "confusion", "request_example", "counterexample", "correction"}
+    if move not in allowed:
+        return "neutral", None
+    return move, evidence
 
 
 TEACHER_RESPONSE_SCHEMA = {
@@ -291,12 +326,14 @@ class TeacherService:
         self,
         session_id: str,
         question: str,
+        context: str = "",
     ) -> dict[str, Any]:
         return self._teaching_call(
             session_id,
             "explain",
             {
                 "question": question,
+                "context": context,
                 "instruction": (
                     "Spiega il concetto in modo adatto allo studente. "
                     "Termina con una breve domanda di verifica."
@@ -308,12 +345,14 @@ class TeacherService:
         self,
         session_id: str,
         concept: str,
+        context: str = "",
     ) -> dict[str, Any]:
         return self._teaching_call(
             session_id,
             "explain_differently",
             {
                 "concept": concept,
+                "context": context,
                 "instruction": (
                     "Rispiega con un approccio diverso, preferendo "
                     "un esempio concreto o un'analogia utile."
@@ -565,23 +604,25 @@ class TeacherService:
             "text_profile": text_profile,
         }
 
-    def stream_explain(self, session_id: str, question: str) -> Iterator[dict[str, Any]]:
+    def stream_explain(self, session_id: str, question: str, context: str = "") -> Iterator[dict[str, Any]]:
         yield from self._stream_teaching_call(
             session_id,
             "explain",
             {
                 "question": question,
-                "instruction": "Spiega il concetto in modo adatto allo studente. Termina con una breve domanda di verifica.",
+                "context": context,
+                "instruction": "Spiega il concetto in modo adatto allo studente. Se la domanda contiene un'obiezione o un controesempio, affrontalo prima della spiegazione generale. Termina con una breve domanda di verifica.",
             },
         )
 
-    def stream_explain_differently(self, session_id: str, concept: str) -> Iterator[dict[str, Any]]:
+    def stream_explain_differently(self, session_id: str, concept: str, context: str = "") -> Iterator[dict[str, Any]]:
         yield from self._stream_teaching_call(
             session_id,
             "explain_differently",
             {
                 "concept": concept,
-                "instruction": "Rispiega con un approccio diverso, preferendo un esempio concreto o un'analogia utile.",
+                "context": context,
+                "instruction": "Rispiega con un approccio diverso. Se lo studente sta contestando una regola, valuta prima il suo controesempio e correggi eventuali semplificazioni; poi usa un esempio concreto o un'analogia utile.",
             },
         )
 
@@ -607,6 +648,7 @@ class TeacherService:
         session = self.store.session(session_id)
         student = self.store.student(session["student_id"])
         learner = profile_from_student(student)
+        student_move, turn_evidence = _student_move(self.deterministic_core, payload)
         decision = select_pedagogy(
             learner,
             action=action,
@@ -614,6 +656,7 @@ class TeacherService:
             topic=session["topic"],
             material_supplied=False,
             show_solution=False,
+            student_move=student_move,
         )
         context = {
             "action": action,
@@ -624,8 +667,11 @@ class TeacherService:
             },
             "session": {"subject": session["subject"], "topic": session["topic"]},
             "pedagogy": decision.model_dump(mode="json"),
+            "interaction": {"student_move": student_move},
             "request": payload,
         }
+        if turn_evidence is not None:
+            context["deterministic_evidence"] = {"turn_classification": turn_evidence}
         grammar_context = self._grammar_context(session, payload)
         if grammar_context is not None:
             context["grammar_evidence"] = grammar_context
@@ -680,6 +726,7 @@ class TeacherService:
                 "response": response[:4000],
                 "source_mode": "general_model_knowledge",
                 "strategy": decision.strategy.value,
+                "student_move": student_move,
                 "mode": decision.mode.value,
                 "model_path": decision.model_path.value,
                 "streamed": True,
@@ -697,6 +744,7 @@ class TeacherService:
         student = self.store.student(session["student_id"])
 
         learner = profile_from_student(student)
+        student_move, turn_evidence = _student_move(self.deterministic_core, payload)
         decision = select_pedagogy(
             learner,
             action=action,
@@ -704,6 +752,7 @@ class TeacherService:
             topic=session["topic"],
             material_supplied=("material" in payload or payload.get("source_mode") == "provided_material"),
             show_solution=bool(payload.get("show_solution", False)),
+            student_move=student_move,
         )
         context = {
             "action": action,
@@ -717,8 +766,11 @@ class TeacherService:
                 "topic": session["topic"],
             },
             "pedagogy": decision.model_dump(mode="json"),
+            "interaction": {"student_move": student_move},
             "request": payload,
         }
+        if turn_evidence is not None:
+            context["deterministic_evidence"] = {"turn_classification": turn_evidence}
 
         grammar_context = self._grammar_context(session, payload)
         if grammar_context is not None:
@@ -779,6 +831,7 @@ class TeacherService:
                 "response": response[:4000],
                 "source_mode": output["source_mode"],
                 "strategy": decision.strategy.value,
+                "student_move": student_move,
                 "mode": decision.mode.value,
                 "model_path": decision.model_path.value,
             },

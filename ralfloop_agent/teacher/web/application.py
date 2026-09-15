@@ -29,6 +29,21 @@ def _teacher_text(value, limit=4000):
     return text.replace("**", "").replace("__", "")[:limit]
 
 
+def _activity_teaching_context(entry, content):
+    parts = [
+        f"Argomento: {entry.get('title', '')}",
+        f"Obiettivo: {'; '.join(entry.get('learning_objectives', [])[:2])}",
+        f"Consegna: {content.get('instructions', '')}",
+    ]
+    items = [str(x) for x in content.get("items", [])[:12] if str(x).strip()]
+    choices = [str(x) for x in content.get("choices", [])[:12] if str(x).strip()]
+    if items:
+        parts.append("Elementi visibili: " + "; ".join(items))
+    if choices:
+        parts.append("Scelte visibili: " + "; ".join(choices))
+    return "\n".join(part for part in parts if part.split(":", 1)[-1].strip())[:6000]
+
+
 class LearningApplication:
     def __init__(self, state, teacher, tts=None):
         self.state, self.teacher = state, teacher
@@ -220,12 +235,20 @@ class LearningApplication:
     def _help_request(self, student, activity_id, mode, question):
         row = self.state.owned("activities", student["id"], activity_id)
         content, entry = json.loads(row["content"]), self.curriculum.topics[row["topic"]]
+        student_turn = str(question or "").strip()
+        teaching_context = _activity_teaching_context(entry, content)
         if mode == "hint":
-            name, args = "teacher.hint", {"exercise": content["instructions"], "student_attempt": question}
+            name, args = "teacher.hint", {"exercise": content["instructions"], "student_attempt": student_turn}
         elif mode == "different":
-            name, args = "teacher.explain_differently", {"concept": content["instructions"] + " " + question}
+            name, args = "teacher.explain_differently", {
+                "concept": student_turn or content["instructions"],
+                "context": teaching_context,
+            }
         else:
-            name, args = "teacher.explain", {"question": content["instructions"] + " " + question}
+            name, args = "teacher.explain", {
+                "question": student_turn or "Spiegami la consegna e il concetto necessario per affrontarla.",
+                "context": teaching_context,
+            }
         fallback = content["hints"][0] if content["hints"] else "Rileggi la consegna, un passaggio alla volta."
         return entry, name, args, fallback
 

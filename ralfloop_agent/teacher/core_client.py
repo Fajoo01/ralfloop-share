@@ -10,6 +10,7 @@ TOOLS = {
     "core.extractive_summary",
     "core.study_plan",
     "core.math_check",
+    "core.classify_turn",
 }
 
 
@@ -77,6 +78,15 @@ class TeacherCoreClient:
                 session,
                 "core.math_check",
                 {"text": text[:16000], "answer": answer[:256]},
+            )
+
+    def classify_turn(self, text: str) -> dict[str, Any]:
+        with self._connection() as session:
+            self._surface(session)
+            return self._call(
+                session,
+                "core.classify_turn",
+                {"text": text[:6000]},
             )
 
 

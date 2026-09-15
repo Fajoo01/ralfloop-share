@@ -139,6 +139,22 @@ def test_real_math_learning_flow_with_fake_model(setup):
     with pytest.raises(LookupError): app.answer(other,exercise["activity_id"],"4","stolen-attempt")
 
 
+
+
+def test_help_question_is_not_flattened_into_activity_prompt(setup):
+    _, app, (student, _), _ = setup
+    activity = app.generate(student, "water", "matching")
+    entry, name, args, _ = app._help_request(
+        student, activity["activity_id"], "explain",
+        "ma un fazzoletto prende la forma del contenitore ma non è liquido cosa c'entra il ghiaccio",
+    )
+    assert name == "teacher.explain"
+    assert args["question"].startswith("ma un fazzoletto")
+    assert "Gli stati dell'acqua" in args["context"]
+    assert "Ghiaccio" in args["context"]
+    assert "Acqua nel bicchiere" in args["context"]
+    assert entry["id"] == "water"
+
 def test_ledger_idempotency_double_click_concurrency(setup):
     state, app, (student, _), _ = setup
     a = app.generate(student,"fractions","matching")

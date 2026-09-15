@@ -25,11 +25,13 @@ class StartSessionInput(StrictModel):
 class ExplainInput(StrictModel):
     session_id: str = Field(min_length=1, max_length=128)
     question: str = Field(min_length=1, max_length=12000)
+    context: str = Field(default="", max_length=6000)
 
 
 class ExplainDifferentlyInput(StrictModel):
     session_id: str = Field(min_length=1, max_length=128)
     concept: str = Field(min_length=1, max_length=12000)
+    context: str = Field(default="", max_length=6000)
 
 
 class HintInput(StrictModel):

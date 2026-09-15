@@ -82,6 +82,8 @@ class PedagogyDecision(BaseModel):
             rules.append("Le affermazioni sul materiale devono essere ancorate esclusivamente alle fonti fornite.")
         if not self.allow_final_solution:
             rules.append("Non rivelare la soluzione finale se lo studente può ancora arrivarci con uno scaffolding minimo.")
+        if self.strategy is PedagogyStrategy.ERROR_ANALYSIS:
+            rules.append("Se lo studente porta un controesempio o contesta una regola, affronta prima quel punto specifico: valuta l’osservazione, correggi eventuali semplificazioni e solo dopo ricollega al concetto.")
         if self.micro_check:
             rules.append("Termina con una micro-verifica appropriata alla modalità di accesso.")
         return "\n".join("- " + rule for rule in rules)
@@ -106,8 +108,10 @@ def _mode(profile: LearnerProfile, action: str, material_supplied: bool) -> Sess
     return SessionMode.STANDARD
 
 
-def _strategy(action: str, recent_errors: Iterable[str], mode: SessionMode) -> PedagogyStrategy:
+def _strategy(action: str, recent_errors: Iterable[str], mode: SessionMode, student_move: str = "") -> PedagogyStrategy:
     errors = tuple(recent_errors)
+    if student_move in {"counterexample", "correction"} and action in {"explain", "explain_differently"}:
+        return PedagogyStrategy.ERROR_ANALYSIS
     if mode is SessionMode.LITERACY_L2:
         return PedagogyStrategy.ORAL_REHEARSAL
     if mode is SessionMode.SCHOLAR and action in {"explain", "summarize_material"}:
@@ -138,6 +142,7 @@ def select_pedagogy(
     recent_errors: Iterable[str] = (),
     material_supplied: bool = False,
     show_solution: bool = False,
+    student_move: str = "",
 ) -> PedagogyDecision:
     mode = _mode(profile, action, material_supplied)
     support = profile.accessibility_support
@@ -165,13 +170,15 @@ def select_pedagogy(
     if action in {"summarize_material", "quiz"} and mode is not SessionMode.LITERACY_L2:
         model_path = ModelPath.DEEP
     rationale = [f"education={profile.education_level.value}", f"mode={mode.value}"]
+    if student_move:
+        rationale.append(f"student_move={student_move}")
     if low_literacy:
         rationale.append("emergent_reading_access")
     if support.short_lines or support.line_focus:
         rationale.append("reader_support")
     return PedagogyDecision(
         mode=mode,
-        strategy=_strategy(action, recent_errors, mode),
+        strategy=_strategy(action, recent_errors, mode, student_move),
         model_path=model_path,
         access=access,
         target_sentences=target_sentences,

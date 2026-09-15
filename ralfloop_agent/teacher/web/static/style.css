@@ -33,3 +33,18 @@ main p,.feedback,.activity h1,.reader-text{max-width:var(--reader-column)}
 .reader-settings .toggle{display:flex;align-items:center;gap:.75rem;font-weight:500;padding:.45rem 0;margin:0}
 .reader-settings .toggle input{width:24px;min-height:24px;flex:0 0 auto}
 .scholar-card{border-left:5px solid #923326}
+body.activity-view>.teacher-avatar{display:none}
+.tutor-dialogue{display:grid;grid-template-columns:minmax(150px,190px) minmax(0,1fr);gap:1.2rem;align-items:start;margin:1rem 0 1.2rem;padding:1rem;background:#fffbed;border:1px solid #cdbd95;border-radius:1rem}
+.tutor-person{position:sticky;top:1rem;display:flex;flex-direction:column;align-items:center;gap:.55rem;padding:.7rem;background:#f3e2b8;border:2px solid #8b6f38;border-radius:1rem;text-align:center;transition:background .2s,border-color .2s,box-shadow .2s}
+.tutor-person .teacher-face-rig{border-radius:1rem;box-shadow:0 6px 16px rgba(41,43,34,.18)}
+.tutor-person img{display:block;width:168px;height:168px;object-fit:cover;border-radius:1rem;border:3px solid #292b22;transform-origin:center bottom}
+.tutor-person-meta strong{display:block;font-family:Georgia,'Times New Roman',serif;font-size:1.18rem}
+.tutor-person-status{display:block;margin-top:.15rem;font-size:.9rem;font-weight:700;color:#62583e}
+.tutor-person[data-state=thinking]{background:#fff0bd;border-color:#b17a16;box-shadow:0 0 0 4px rgba(177,122,22,.14)}
+.tutor-person[data-state=thinking] .teacher-face-rig{animation:teacher-thinking .72s ease-in-out infinite alternate}
+.tutor-person[data-state=speaking]{background:#ffe3d8;border-color:#923326;box-shadow:0 0 0 4px rgba(146,51,38,.14)}
+.tutor-person[data-state=speaking] .teacher-face-rig{box-shadow:0 0 0 5px rgba(146,51,38,.18),0 7px 18px rgba(41,43,34,.18)}
+.tutor-conversation{min-width:0}.tutor-conversation h2{margin:.1rem 0 .6rem}.tutor-quick-actions{margin:.2rem 0 .5rem}
+.tutor-feedback:empty{display:none}.tutor-feedback .feedback{position:relative;max-width:none;background:#fff2cf;border-left:5px solid #923326}
+.tutor-question{margin-top:.8rem;padding-top:.8rem;border-top:1px solid #cdbd95}.tutor-question textarea{min-height:118px;background:#fffefa}
+@media(max-width:700px){.tutor-dialogue{grid-template-columns:96px minmax(0,1fr);gap:.75rem;padding:.75rem}.tutor-person{position:sticky;top:.5rem;padding:.45rem}.tutor-person img{width:86px;height:104px;border-radius:.75rem}.tutor-person .teacher-face-rig{border-radius:.75rem}.tutor-person-meta strong{font-size:.95rem}.tutor-person-status{font-size:.72rem}.tutor-quick-actions button{font-size:.85rem;padding:.6rem .7rem}}

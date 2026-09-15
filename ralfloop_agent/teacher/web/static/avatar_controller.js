@@ -66,6 +66,7 @@ export function installBottazziAvatarSurface() {
   const sync=()=>apply(source.dataset.state||'idle',Number(source.dataset.mouthLevel||0));
   const decorateFeedback=feedback=>{
     if(!(feedback instanceof HTMLElement) || feedback.dataset.teacherAvatarDecorated==='1')return;
+    if(feedback.closest('.tutor-dialogue')){feedback.dataset.teacherAvatarDecorated='1';return;}
     const text=feedback.textContent||'';
     const surface=document.createElement('span');
     surface.className='teacher-avatar-inline';
@@ -93,6 +94,7 @@ export function installBottazziAvatarSurface() {
         if(!(node instanceof HTMLElement))continue;
         if(node.matches('p.feedback'))decorateFeedback(node);
         node.querySelectorAll?.('p.feedback').forEach(decorateFeedback);
+        if(node.matches('[data-teacher-avatar-surface]')||node.querySelector?.('[data-teacher-avatar-surface]'))sync();
       }
     }
   });

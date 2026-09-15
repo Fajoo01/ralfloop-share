@@ -37,6 +37,7 @@ def test_core_mcp_real_tools_are_bounded_and_read_only():
             "core.extractive_summary",
             "core.study_plan",
             "core.math_check",
+            "core.classify_turn",
         }
         math = _payload(session.call_tool(
             "core.math_check",
@@ -46,6 +47,24 @@ def test_core_mcp_real_tools_are_bounded_and_read_only():
         assert math["answer_recognized"] is True
         assert math["equivalent"] is True
         assert math["expected"] == 1
+        turn = _payload(session.call_tool(
+            "core.classify_turn",
+            {"text": "ma un fazzoletto prende la forma del contenitore ma non è liquido cosa c'entra il ghiaccio"},
+        ))
+        assert turn["move"] == "counterexample"
+        assert turn["confidence"] >= 0.85
+        confusion = _payload(session.call_tool(
+            "core.classify_turn", {"text": "Non ho capito che cosa significa."}
+        ))
+        assert confusion["move"] == "confusion"
+        example = _payload(session.call_tool(
+            "core.classify_turn", {"text": "Fammi un esempio concreto"}
+        ))
+        assert example["move"] == "request_example"
+        neutral = _payload(session.call_tool(
+            "core.classify_turn", {"text": "Oggi ripasso gli stati della materia."}
+        ))
+        assert neutral["move"] == "neutral"
 
 
 def test_core_mcp_summary_and_text_profile_are_source_bounded():
@@ -95,6 +114,11 @@ class FakeCore:
 
     def text_profile(self, text):
         return {"ok": True, "recommended_chunk_chars": 400}
+
+    def classify_turn(self, text):
+        move = "counterexample" if "c'entra" in text or text.startswith("ma ") else "question"
+        return {"ok": True, "move": move, "signal": "test", "confidence": 0.9,
+                "writes": 0, "external_side_effects": 0}
 
 
 def test_deterministic_math_and_study_plan_bypass_llm(tmp_path):

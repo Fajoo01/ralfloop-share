@@ -426,6 +426,51 @@ static void write_math_check(FILE *out, const char *text, const char *answer) {
     fputs(",\"writes\":0,\"external_side_effects\":0}", out);
 }
 
+
+static unsigned char ascii_fold(unsigned char c) {
+    return (c >= 'A' && c <= 'Z') ? (unsigned char)(c + ('a' - 'A')) : c;
+}
+
+static int contains_ci_ascii(const char *text, const char *needle) {
+    size_t n = strlen(needle);
+    if (!n) return 1;
+    for (const unsigned char *p = (const unsigned char *)text; *p; ++p) {
+        size_t i = 0;
+        while (i < n && p[i] && ascii_fold(p[i]) == ascii_fold((unsigned char)needle[i])) ++i;
+        if (i == n) return 1;
+    }
+    return 0;
+}
+
+static int starts_ci_ascii(const char *text, const char *prefix) {
+    while (*text && isspace((unsigned char)*text)) ++text;
+    for (size_t i = 0; prefix[i]; ++i) {
+        if (!text[i] || ascii_fold((unsigned char)text[i]) != ascii_fold((unsigned char)prefix[i])) return 0;
+    }
+    return 1;
+}
+
+static void write_turn_classification(FILE *out, const char *text) {
+    const char *move = "neutral", *signal = "none";
+    double confidence = 0.55;
+    if (contains_ci_ascii(text, "hai sbagliato") || contains_ci_ascii(text, "sbagliato") || contains_ci_ascii(text, "questo e falso") || contains_ci_ascii(text, "non e vero")) {
+        move = "correction"; signal = "correction_cue"; confidence = 0.94;
+    } else if (contains_ci_ascii(text, "cosa c'entra") || contains_ci_ascii(text, "che c'entra") || contains_ci_ascii(text, "non c'entra") || contains_ci_ascii(text, "non torna") || contains_ci_ascii(text, "eppure") || contains_ci_ascii(text, "invece") || contains_ci_ascii(text, "ma allora") || contains_ci_ascii(text, "allora perche") || contains_ci_ascii(text, "però") || contains_ci_ascii(text, "pero'")) {
+        move = "counterexample"; signal = "counterexample_cue"; confidence = 0.93;
+    } else if (starts_ci_ascii(text, "ma ") && (contains_ci_ascii(text, " non ") || contains_ci_ascii(text, "anche ") || contains_ci_ascii(text, " prende "))) {
+        move = "counterexample"; signal = "contrastive_ma"; confidence = 0.88;
+    } else if (contains_ci_ascii(text, "fammi un esempio") || contains_ci_ascii(text, "fai un esempio") || contains_ci_ascii(text, "esempio concreto")) {
+        move = "request_example"; signal = "example_request"; confidence = 0.96;
+    } else if (contains_ci_ascii(text, "non capisco") || contains_ci_ascii(text, "non ho capito") || contains_ci_ascii(text, "non mi e chiaro") || contains_ci_ascii(text, "che vuol dire") || contains_ci_ascii(text, "cosa significa")) {
+        move = "confusion"; signal = "confusion_cue"; confidence = 0.94;
+    } else if (strchr(text, '?') || starts_ci_ascii(text, "perche ") || starts_ci_ascii(text, "come ") || starts_ci_ascii(text, "cosa ") || starts_ci_ascii(text, "quale ") || starts_ci_ascii(text, "che ")) {
+        move = "question"; signal = "question_form"; confidence = 0.82;
+    }
+    fputs("{\"ok\":true,\"move\":", out); json_text(out, move);
+    fputs(",\"signal\":", out); json_text(out, signal);
+    fprintf(out, ",\"confidence\":%.2f,\"writes\":0,\"external_side_effects\":0}", confidence);
+}
+
 static void write_tools(FILE *out, const char *js, const jsmntok_t *id) {
     result_start(out, js, id);
     fputs("{\"tools\":[", out);
@@ -436,6 +481,8 @@ static void write_tools(FILE *out, const char *js, const jsmntok_t *id) {
     fputs("{\"name\":\"core.study_plan\",\"description\":\"Deterministic pedagogical timeboxing without model inference.\",\"inputSchema\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"minutes\":{\"type\":\"integer\",\"minimum\":10,\"maximum\":240},\"mode\":{\"type\":\"string\",\"enum\":[\"standard\",\"literacy_l2\",\"scholar\"]}},\"required\":[\"minutes\",\"mode\"]}}", out);
     fputs(",", out);
     fputs("{\"name\":\"core.math_check\",\"description\":\"Bounded arithmetic expression recognition and numeric answer equivalence.\",\"inputSchema\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"text\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":16000},\"answer\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":256}},\"required\":[\"text\",\"answer\"]}}", out);
+    fputs(",", out);
+    fputs("{\"name\":\"core.classify_turn\",\"description\":\"Deterministic discourse classification for objections, counterexamples, confusion and questions.\",\"inputSchema\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"text\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":6000}},\"required\":[\"text\"]}}", out);
     fputs("]}}\n", out); fflush(out);
 }
 
@@ -455,6 +502,7 @@ static void tool_result(FILE *out, const char *js, const jsmntok_t *id, const ch
     else if (strcmp(name, "core.extractive_summary") == 0) write_extractive_summary(out, text, number);
     else if (strcmp(name, "core.study_plan") == 0) write_study_plan(out, number, mode);
     else if (strcmp(name, "core.math_check") == 0) write_math_check(out, text, answer);
+    else if (strcmp(name, "core.classify_turn") == 0) write_turn_classification(out, text);
     else { fputs("{\"ok\":false,\"error\":\"POLICY_DENIED\",\"writes\":0,\"external_side_effects\":0}", out); }
     fputs(",\"isError\":false}}\n", out); fflush(out);
 }
@@ -490,9 +538,12 @@ static void dispatch(FILE *out, const char *line) {
     if (name_i < 0 || copy_json_string(line, &toks[name_i], name, sizeof name) != 0 || args_i < 0 || toks[args_i].type != JSMN_OBJECT) {
         tool_error(out, line, id_i >= 0 ? &toks[id_i] : NULL, "INVALID_INPUT"); return;
     }
-    if (strcmp(name, "core.text_profile") == 0 || strcmp(name, "core.extractive_summary") == 0) {
+    if (strcmp(name, "core.text_profile") == 0 || strcmp(name, "core.extractive_summary") == 0 || strcmp(name, "core.classify_turn") == 0) {
         int text_i = obj_get(line, toks, args_i, "text");
         if (text_i < 0 || copy_json_string(line, &toks[text_i], text, sizeof text) != 0) {
+            tool_error(out, line, id_i >= 0 ? &toks[id_i] : NULL, "INVALID_INPUT"); return;
+        }
+        if (strcmp(name, "core.classify_turn") == 0 && strlen(text) > 6000) {
             tool_error(out, line, id_i >= 0 ? &toks[id_i] : NULL, "INVALID_INPUT"); return;
         }
         if (strcmp(name, "core.extractive_summary") == 0) {

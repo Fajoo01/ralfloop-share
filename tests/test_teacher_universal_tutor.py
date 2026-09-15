@@ -137,6 +137,47 @@ def test_service_persists_profile_and_injects_deterministic_policy(tmp_path):
     assert persisted["preferences"]["learner_profile"]["education_level"] == "emergent_literacy"
 
 
+
+
+def test_counterexample_uses_core_mcp_signal_and_error_analysis(tmp_path):
+    captured = {}
+
+    class Core:
+        def classify_turn(self, text):
+            assert "fazzoletto" in text
+            return {"ok": True, "move": "counterexample", "signal": "counterexample_cue",
+                    "confidence": 0.93, "writes": 0, "external_side_effects": 0}
+
+    def model(system_prompt, user_prompt):
+        captured["system"] = system_prompt
+        captured["payload"] = json.loads(user_prompt)
+        return {"response": "Hai ragione sul controesempio: adattarsi al recipiente non basta a definire un liquido."}
+
+    service = TeacherService(TeacherStore(tmp_path / "teacher.sqlite3"), model_call=model, deterministic_core=Core())
+    student = service.login("COUNTEREXAMPLE", "primary", "4")["student"]
+    session = service.start_session(student["student_id"], "scienze", "Gli stati dell'acqua")["session"]
+    result = service.explain(
+        session["session_id"],
+        "ma un fazzoletto prende la forma del contenitore ma non è liquido cosa c'entra il ghiaccio",
+        context="Consegna: associa ghiaccio, acqua nel bicchiere e vapore a solido, liquido e gas.",
+    )
+
+    assert result["pedagogy"]["strategy"] == "error_analysis"
+    assert captured["payload"]["interaction"]["student_move"] == "counterexample"
+    assert captured["payload"]["deterministic_evidence"]["turn_classification"]["signal"] == "counterexample_cue"
+    assert "controesempio" in captured["system"].casefold()
+    assert captured["payload"]["request"]["context"].startswith("Consegna:")
+
+def test_l2_counterexample_keeps_access_mode_but_uses_error_analysis():
+    decision = select_pedagogy(
+        low_literacy_profile(), action="explain", subject="scienze",
+        topic="materia", student_move="counterexample",
+    )
+    assert decision.mode is SessionMode.LITERACY_L2
+    assert decision.strategy.value == "error_analysis"
+    assert decision.access.audio_first is True
+
+
 def test_web_state_persists_profile_and_knowledge_component(tmp_path):
     from ralfloop_agent.teacher.web.state import State
 

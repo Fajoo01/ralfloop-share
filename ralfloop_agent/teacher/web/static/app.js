@@ -132,6 +132,13 @@ function heading(title,sub){main.append(el('p','IL TUO DOPOSCUOLA',{class:'eyebr
 function field(form,label,name,type='text',value=''){const id='field-'+name;form.append(el('label',label,{for:id}));const input=el(type==='textarea'?'textarea':'input',null,{id,name,...(type==='textarea'?{rows:4}:{type}),required:'',maxlength:type==='textarea'?'10000':'256'});input.value=value;form.append(input);return input;}
 function topicName(id){return home?.topics.find(t=>t.id===id)?.title||id;}
 function info(text){return el('p',text,{class:'feedback',role:'status'});}
+function tutorPersonSurface(){
+  const surface=el('aside',null,{class:'tutor-person','data-teacher-avatar-surface':'1','data-state':'idle','aria-label':'Bot-tazzi Teacher'});
+  const face=el('img',null,{src:'/assets/bot-tazzi.jpeg',alt:'Bot-tazzi',width:'180',height:'180'});
+  const meta=el('div',null,{class:'tutor-person-meta'});
+  meta.append(el('strong','Bot-tazzi'),el('span','Pronto',{'data-teacher-avatar-status':'1',class:'tutor-person-status',role:'status','aria-live':'polite'}));
+  surface.append(face,meta);return surface;
+}
 function stats(progress){const row=el('div',null,{class:'stats'});for(const [v,l] of [[progress.xp,'XP guadagnati'],[progress.level,'Livello personale'],[progress.streak,'Giorni di studio']])row.append(add(el('div'),el('strong',String(v)),el('span',l)));return row;}
 async function start(topic,kind){activity=await api('/activities',{topic,...(kind?{activity_type:kind}:{})});navigate('/activity?id='+activity.activity_id);}
 
@@ -209,11 +216,15 @@ async function activityPage(){
     const begin=button('Avvia sfida',()=>{begin.hidden=true;let left=120;const interval=setInterval(()=>{if(!timer.isConnected){clearInterval(interval);return;}left-=1;timer.textContent=left>0?`Tempo: ${Math.floor(left/60)}:${String(left%60).padStart(2,'0')}`:'Tempo concluso. Puoi comunque terminare con calma.';if(left<=0)clearInterval(interval);},1000);});
     section.append(timer,begin,el('small','Il tempo non cambia la valutazione né toglie punti.'));
   }
-  const feedback=el('div',null,{'aria-live':'polite'});
+  const feedback=el('div',null,{class:'tutor-feedback','aria-live':'polite'});
   let attemptKey=crypto.randomUUID();
   if(a.activity_type!=='flashcards'){const send=button('Invia risposta',async()=>{const result=await api('/activities/'+a.activity_id+'/answer',{answer:getter(),request_key:attemptKey});attemptKey=crypto.randomUUID();feedback.replaceChildren(info(result.feedback),el('p',(result.correct?'Risposta corretta. ':'Proviamo insieme. ')+`+${result.xp_awarded} XP`));speakTutorFeedback(result);if(result.correct){send.hidden=true;feedback.append(button('Prossima attività',()=>start(result.next?.topic||a.topic,result.next?.activity_type)),button('Vedi progressi',()=>navigate('/progress'),true));}else{feedback.append(el('p','Puoi correggere la risposta e inviarla di nuovo.'));if(result.attempts>=5){send.hidden=true;feedback.append(button('Nuova attività guidata',()=>start(a.topic,'guided_exercise')));}}});section.append(send);}
-  const help=el('div',null,{class:'row'});for(const [mode,label] of [['hint','Suggerimento'],['different','Spiegamelo diversamente'],['explain','Fammi un esempio']])help.append(button(label,async()=>{await streamHelp(a,mode,'',feedback);},true));section.append(help,feedback);
-  const chat=el('details',null,{class:'card'});chat.append(el('summary','Non ho capito: chiedi al tutor'));const question=field(chat,'La tua domanda','question','textarea');question.maxLength=2000;chat.append(button('Chiedi',async()=>{await streamHelp(a,'explain',question.value,feedback);}));section.append(chat,button('Scegli un’altra attività',()=>navigate('/study'),true));main.append(section);
+  const tutorPanel=el('section',null,{class:'tutor-dialogue','aria-label':'Dialogo con Bot-tazzi'});
+  const conversation=el('div',null,{class:'tutor-conversation'});
+  conversation.append(el('p','PARLANE CON BOT-TAZZI',{class:'eyebrow'}),el('h2','Se qualcosa non torna, dimmelo.'));
+  const help=el('div',null,{class:'row tutor-quick-actions'});for(const [mode,label] of [['hint','Suggerimento'],['different','Spiegamelo diversamente'],['explain','Fammi un esempio']])help.append(button(label,async()=>{await streamHelp(a,mode,'',feedback);},true));conversation.append(help,feedback);
+  const chat=el('section',null,{class:'tutor-question'});const question=field(chat,'La tua domanda o obiezione','question','textarea');question.maxLength=2000;question.placeholder='Es.: un fazzoletto si adatta a un contenitore ma non è un liquido: perché?';chat.append(button('Chiedi a Bot-tazzi',async()=>{await streamHelp(a,'explain',question.value,feedback);}));conversation.append(chat);
+  tutorPanel.append(tutorPersonSurface(),conversation);section.append(tutorPanel,button('Scegli un’altra attività',()=>navigate('/study'),true));main.append(section);
 }
 async function progressPage(badgesOnly=false){
   const p=await api('/progress');heading(badgesOnly?'I tuoi traguardi':'Guarda quanta strada hai fatto');main.append(stats(p));
@@ -263,6 +274,7 @@ async function render(){
   stopServerAudio();
   avatar.reset();
   notice.textContent='';main.replaceChildren(el('p','Un momento…'));const path=location.pathname;
+  document.body.classList.toggle('activity-view',path==='/activity');
   document.querySelectorAll('nav a').forEach(a=>{if(a.getAttribute('href')===path)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});
   if(path==='/login'){main.replaceChildren();login();return;}
   home=await api('/home');applyLearnerAccess();main.replaceChildren();
