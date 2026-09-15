@@ -51,3 +51,14 @@ Do not move semantic explanation, ambiguous grading, Scholar critique or L2 dial
 - Optional local lifecycle management controls only the fixed `ralf-teacher-fish15.service`: cold-start with POST `/v1/health`, then idle stop after 300 s by default.
 - Web installer defaults the helper to the Fish 1.5 venv because the general Teacher venv intentionally does not carry Fish-specific `ormsgpack`.
 - The Fish service unit is installed but disabled for boot when lifecycle management is enabled; student input never controls service names or arbitrary commands.
+
+## Final production canary — 2026-09-15
+
+- Production web release: `55ce9cd0f280f3378878122ec6caa8b5e5debbef`; backend release: `af2894dc3484cbbe29b66208f624f614c40fc157`.
+- Cold-start canary began with `ralf-teacher-fish15.service` inactive and 5586 MiB free VRAM.
+- `FishTTSCache.prepare()` queued in 29.7 ms, started the fixed Fish service, passed `POST /v1/health`, and generated Peppone audio successfully.
+- Resulting WAV: mono 44.1 kHz, 323628 bytes, 3.669 s duration; cold-start-to-ready elapsed 38.572 s.
+- Canary idle timeout stopped Fish at 41.5 s; production idle timeout remains 300 s.
+- Post-canary Fish is inactive and disabled at boot; VRAM returned to 5586 MiB free.
+- Web, inference, deterministic C core, grammar C MCP, and student MCP broker all remained active; web `/health` returned `ok`.
+- Teacher regression before deployment: 195 passed, 3 skipped.
