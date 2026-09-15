@@ -113,7 +113,7 @@
       "verifier_type": "combined",
       "criteria": ["repro", "diff", "targeted_tests", "exit_code"],
       "blocking": true,
-      "judge_provider": null
+      "judge_provider": "bottazzi_motor"
     },
     "external_action": {
       "enabled": true,
