@@ -108,7 +108,9 @@ def _release(root: Path, directory: str, commit: str) -> Path:
     gate.parent.mkdir(parents=True)
     metadata = release / "RELEASE.json"
     metadata.write_text(json.dumps({"commit": commit}), encoding="utf-8")
-    gate.write_text(json.dumps(legacy_gate()), encoding="utf-8")
+    gate_data = legacy_gate()
+    gate_data["tested_commit"] = commit
+    gate.write_text(json.dumps(gate_data), encoding="utf-8")
     rows = []
     for path in (metadata, gate):
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -128,6 +130,20 @@ def _allow_preflight(monkeypatch, production: Path, model: Path) -> None:
         lambda: {"MemAvailable": 8192, "SwapFree": 1024},
     )
 
+
+
+
+def test_gate_marker_rejects_wrong_tested_commit(tmp_path, monkeypatch) -> None:
+    production = tmp_path / "production"
+    candidate = _release(production, "c" * 40, "c" * 40)
+    gate = candidate / ".ralf_run/local_arch_v1/gates.json"
+    data = json.loads(gate.read_text())
+    data["tested_commit"] = "d" * 40
+    gate.write_text(json.dumps(data), encoding="utf-8")
+    allowed, path, blockers = deploy.gate_marker_details(candidate)
+    assert allowed is False
+    assert path is None
+    assert blockers == ["gate_commit_mismatch"]
 
 def test_publish_rejects_release_commit_directory_mismatch(tmp_path, monkeypatch) -> None:
     production = tmp_path / "production"

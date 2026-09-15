@@ -99,6 +99,8 @@ def gate_marker_details(release: Path) -> tuple[bool, str | None, list[str]]:
         data = json.loads(marker.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False, None, ["gate_marker_invalid"]
+    if not isinstance(data, dict) or data.get("tested_commit") != release.resolve().name:
+        return False, None, ["gate_commit_mismatch"]
     return evaluate_quality_gate(data)
 
 

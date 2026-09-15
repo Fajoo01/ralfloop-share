@@ -131,3 +131,37 @@ def test_release_builder_compiles_teacher_core_mcp(tmp_path):
     assert binary.stat().st_mode & 0o111
     out = subprocess.check_output([str(binary), "--stdio"], input='', text=True)
     assert out == ''
+
+
+def test_builder_drops_stale_archived_quality_gate(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init"); git(repo, "config", "user.email", "test@example.invalid"); git(repo, "config", "user.name", "Test")
+    gate = repo / ".ralf_run/local_arch_v1/gates.json"
+    gate.parent.mkdir(parents=True)
+    gate.write_text(json.dumps({"tested_commit": "old"}), encoding="utf-8")
+    (repo / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+    git(repo, "add", "."); git(repo, "commit", "-m", "initial")
+    builder = load_builder()
+    result = builder.build_release(repo, output_root=tmp_path / "releases")
+    release = Path(result["release_dir"])
+    assert not (release / ".ralf_run/local_arch_v1/gates.json").exists()
+
+
+def test_builder_accepts_only_commit_bound_quality_gate(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init"); git(repo, "config", "user.email", "test@example.invalid"); git(repo, "config", "user.name", "Test")
+    (repo / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+    git(repo, "add", "."); git(repo, "commit", "-m", "initial")
+    commit = git(repo, "rev-parse", "HEAD").strip()
+    builder = load_builder()
+    wrong = tmp_path / "wrong.json"
+    wrong.write_text(json.dumps({"tested_commit": "0" * 40}), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="quality_gate_commit_mismatch"):
+        builder.build_release(repo, output_root=tmp_path / "wrong-releases", quality_gate_file=wrong)
+    good = tmp_path / "good.json"
+    good.write_text(json.dumps({"tested_commit": commit, "scoped_tests": True}), encoding="utf-8")
+    result = builder.build_release(repo, output_root=tmp_path / "good-releases", quality_gate_file=good)
+    release = Path(result["release_dir"])
+    assert json.loads((release / ".ralf_run/local_arch_v1/gates.json").read_text())["tested_commit"] == commit

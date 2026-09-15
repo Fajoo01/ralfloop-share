@@ -23,6 +23,7 @@ def build_release(
     output_root: str | Path = DEFAULT_OUTPUT_ROOT,
     current_link: str | Path | None = None,
     previous_release: str | Path | None = None,
+    quality_gate_file: str | Path | None = None,
 ) -> dict[str, Any]:
     repo_path = Path(repo).resolve()
     commit_sha = _git(repo_path, "rev-parse", commit).strip()
@@ -40,6 +41,7 @@ def build_release(
         archive = subprocess.check_output(_git_command(repo_path, "archive", "--format=tar", commit_sha), cwd=repo_path)
         with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as bundle:
             bundle.extractall(temporary, filter="data")
+        _install_quality_gate(temporary, quality_gate_file, commit_sha)
         _build_shell_parser(temporary)
         _build_atm_router(temporary)
         _build_teacher_grammar_mcp(temporary)
@@ -67,6 +69,21 @@ def build_release(
     if current_link:
         publish_current(release, current_link)
     return {**metadata, "release_dir": str(release), "files": len(rows)}
+
+
+def _install_quality_gate(
+    root: Path, source: str | Path | None, commit_sha: str
+) -> None:
+    target = root / ".ralf_run/local_arch_v1/gates.json"
+    if target.exists():
+        target.unlink()
+    if source is None:
+        return
+    data = json.loads(Path(source).read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or data.get("tested_commit") != commit_sha:
+        raise RuntimeError("quality_gate_commit_mismatch")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(data, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
 
 def publish_current(release: str | Path, current_link: str | Path = DEFAULT_CURRENT_LINK) -> None:
@@ -194,6 +211,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--current-link", default=str(DEFAULT_CURRENT_LINK))
     parser.add_argument("--publish", action="store_true")
     parser.add_argument("--record-previous")
+    parser.add_argument("--quality-gate")
     args = parser.parse_args(argv)
     if args.publish:
         raise SystemExit(
@@ -205,6 +223,7 @@ def main(argv: list[str] | None = None) -> int:
         args.output_root,
         None,
         args.record_previous,
+        args.quality_gate,
     )
     print(json.dumps(result, sort_keys=True, indent=2))
     return 0
