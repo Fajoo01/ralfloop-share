@@ -144,3 +144,10 @@ def test_production_venv_initializes_server_through_group_guard(tmp_path):
     finally:
         process.terminate()
         process.wait(timeout=3)
+
+
+def test_deploy_dropin_allows_approval_store_writes():
+    dropin = ROOT / "deploy/systemd/ralf-mailchimp-mcp-broker.service.d/70-approval-store-rw.conf"
+    text = dropin.read_text(encoding="utf-8")
+    assert "[Service]" in text
+    assert "ReadWritePaths=/var/lib/ralfloop" in text
