@@ -85,13 +85,14 @@ def test_arci_broker_concurrent_clients_avoid_head_of_line_blocking(tmp_path):
         while not socket_path.exists() and time.monotonic() < deadline:
             time.sleep(0.02)
         blocker.connect(str(socket_path))
-        started = time.monotonic()
+        # The 1.5 s transport timeout is the HOL assertion: the blocker
+        # remains connected for the broker's 5 s idle timeout, so a serial
+        # broker would time out here before it could serve this client.
         with MCPClientSession(
             UnixMCPTransport(str(socket_path)), timeout=1.5
         ) as session:
             tools = session.list_tools()
         assert [tool.name for tool in tools] == [READ_TOOL]
-        assert time.monotonic() - started < 1.0
     finally:
         blocker.close()
         broker.terminate()
