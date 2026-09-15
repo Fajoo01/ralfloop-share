@@ -99,6 +99,7 @@ def test_fish_cache_is_bounded_async_and_deterministic(tmp_path):
         python=sys.executable,
         helper=helper,
         queue_size=1,
+        min_free_vram_mb=0,
     )
     assert cache.enabled
     assert VOICE_ID == "peppone"
@@ -128,6 +129,7 @@ def test_failed_fish_generation_is_not_requeued_in_a_tight_loop(tmp_path):
         helper=helper,
         queue_size=1,
         failure_backoff_seconds=60,
+        min_free_vram_mb=0,
     )
 
     assert cache.prepare("Ciao") == {"status": "pending"}
@@ -151,3 +153,108 @@ def test_fish_helper_has_no_user_selectable_voice_or_text_argv():
     assert '"latency"' not in source
     assert "TEACHER_FISH_API_KEY" in source
     assert "print(" not in source
+
+
+def test_loopback_fish_defers_before_queue_when_vram_is_low(tmp_path):
+    helper = tmp_path / "helper.py"
+    helper.write_text("raise AssertionError('must not run')\n")
+    cache = FishTTSCache(
+        base_url="http://127.0.0.1:19195",
+        cache_dir=tmp_path / "cache",
+        python=sys.executable,
+        helper=helper,
+        min_free_vram_mb=1024,
+        gpu_free_mb=lambda: 128,
+    )
+    assert cache.prepare("Ciao") == {"status": "unavailable"}
+    assert cache._queue.empty()
+
+
+def test_loopback_fish_allows_queue_when_vram_is_sufficient(tmp_path):
+    helper = tmp_path / "helper.py"
+    helper.write_text("import time;time.sleep(1)\n")
+    cache = FishTTSCache(
+        base_url="http://127.0.0.1:19195",
+        cache_dir=tmp_path / "cache",
+        python=sys.executable,
+        helper=helper,
+        min_free_vram_mb=1024,
+        gpu_free_mb=lambda: 4096,
+    )
+    assert cache.prepare("Ciao") == {"status": "pending"}
+
+
+def test_remote_fish_does_not_apply_local_gpu_gate(tmp_path):
+    helper = tmp_path / "helper.py"
+    helper.write_text("import time;time.sleep(1)\n")
+    cache = FishTTSCache(
+        base_url="https://fish.example.invalid",
+        api_key="test-key",
+        cache_dir=tmp_path / "cache",
+        python=sys.executable,
+        helper=helper,
+        min_free_vram_mb=8192,
+        gpu_free_mb=lambda: 0,
+    )
+    assert cache.prepare("Ciao") == {"status": "pending"}
+
+
+def test_generation_timeout_is_bounded(tmp_path):
+    helper = tmp_path / "helper.py"
+    helper.write_text("pass\n")
+    cache = FishTTSCache(
+        base_url="http://127.0.0.1:19195",
+        cache_dir=tmp_path / "cache",
+        python=sys.executable,
+        helper=helper,
+        generation_timeout_seconds=9999,
+        min_free_vram_mb=0,
+    )
+    assert cache.generation_timeout_seconds == 300.0
+
+
+def test_generation_rechecks_vram_after_queue(tmp_path):
+    helper = tmp_path / "helper.py"
+    helper.write_text("raise AssertionError('must not run')\n")
+    cache = FishTTSCache(
+        base_url="http://127.0.0.1:19195",
+        cache_dir=tmp_path / "cache",
+        python=sys.executable,
+        helper=helper,
+        min_free_vram_mb=1024,
+        gpu_free_mb=lambda: 128,
+    )
+    assert cache._generate("deadbeef", "Ciao") is False
+    assert not (tmp_path / "cache" / "deadbeef.wav").exists()
+
+
+def test_managed_local_fish_starts_only_fixed_service_until_healthy(tmp_path):
+    helper = tmp_path / "helper.py"; helper.write_text("pass\n")
+    controls = []
+    probes = iter([False, True])
+    cache = FishTTSCache(
+        base_url="http://127.0.0.1:19195", cache_dir=tmp_path / "cache",
+        python=sys.executable, helper=helper, manage_local_service=True,
+        min_free_vram_mb=1024, gpu_free_mb=lambda: 4096,
+        service_control=lambda action: controls.append(action) or True,
+        health_probe=lambda: next(probes), startup_wait_seconds=1,
+    )
+    assert cache._ensure_local_service() is True
+    assert controls == ["start"]
+
+
+def test_managed_local_fish_idle_timer_stops_service(tmp_path):
+    helper = tmp_path / "helper.py"; helper.write_text("pass\n")
+    controls = []
+    cache = FishTTSCache(
+        base_url="http://127.0.0.1:19195", cache_dir=tmp_path / "cache",
+        python=sys.executable, helper=helper, manage_local_service=True,
+        idle_stop_seconds=0.05,
+        service_control=lambda action: controls.append(action) or True,
+        health_probe=lambda: True,
+    )
+    cache._schedule_idle_stop()
+    deadline = time.time() + 1
+    while "stop" not in controls and time.time() < deadline:
+        time.sleep(0.01)
+    assert controls == ["stop"]

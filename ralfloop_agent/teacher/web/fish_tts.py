@@ -17,8 +17,11 @@ import subprocess
 import threading
 import time
 from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
+from typing import Callable
 
 VOICE_ID = "peppone"
+FISH_SERVICE = "ralf-teacher-fish15.service"
 CACHE_VERSION = "fish-1.5-peppone-v1"
 log = logging.getLogger("teacher.web.fish_tts")
 
@@ -47,6 +50,14 @@ class FishTTSCache:
         helper: str | Path,
         queue_size: int = 8,
         failure_backoff_seconds: float = 60.0,
+        generation_timeout_seconds: float = 150.0,
+        min_free_vram_mb: int = 0,
+        gpu_free_mb: Callable[[], int | None] | None = None,
+        manage_local_service: bool = False,
+        idle_stop_seconds: float = 300.0,
+        startup_wait_seconds: float = 40.0,
+        service_control: Callable[[str], bool] | None = None,
+        health_probe: Callable[[], bool] | None = None,
     ):
         self.base_url = base_url.strip().rstrip("/")
         self.api_key = api_key.strip()
@@ -54,6 +65,17 @@ class FishTTSCache:
         self.python = python.strip()
         self.helper = Path(helper)
         self.failure_backoff_seconds = max(1.0, float(failure_backoff_seconds))
+        self.generation_timeout_seconds = max(30.0, min(float(generation_timeout_seconds), 300.0))
+        self.min_free_vram_mb = max(0, min(int(min_free_vram_mb), 8192))
+        self._gpu_free_mb = gpu_free_mb or self._nvidia_free_mb
+        self.manage_local_service = bool(manage_local_service) and _loopback_url(self.base_url)
+        self.idle_stop_seconds = max(0.0, min(float(idle_stop_seconds), 3600.0))
+        self.startup_wait_seconds = max(1.0, min(float(startup_wait_seconds), 90.0))
+        self._service_control = service_control or self._systemctl_fish
+        self._health_probe = health_probe or self._fish_health
+        self._idle_timer: threading.Timer | None = None
+        self._service_lock = threading.Lock()
+        self._service_generation = 0
         self._pending: set[str] = set()
         self._failed_until: dict[str, float] = {}
         self._lock = threading.Lock()
@@ -93,7 +115,98 @@ class FishTTSCache:
             ),
             python=os.environ.get("TEACHER_FISH_PYTHON", ""),
             helper=root / "scripts/ralf_teacher_fish_client.py",
+            generation_timeout_seconds=float(os.environ.get("TEACHER_FISH_TIMEOUT_SECONDS", "150")),
+            min_free_vram_mb=int(os.environ.get("TEACHER_FISH_MIN_FREE_VRAM_MB", "1024")),
+            manage_local_service=os.environ.get("TEACHER_FISH_MANAGE_SERVICE", "0").casefold() in {"1", "true", "yes"},
+            idle_stop_seconds=float(os.environ.get("TEACHER_FISH_IDLE_STOP_SECONDS", "300")),
         )
+
+    @staticmethod
+    def _nvidia_free_mb() -> int | None:
+        try:
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+                check=True, text=True, capture_output=True, timeout=2,
+            )
+            return int(result.stdout.splitlines()[0].strip())
+        except (FileNotFoundError, subprocess.SubprocessError, ValueError, IndexError):
+            return None
+
+    def _local_gpu_capacity_ok(self) -> bool:
+        if not _loopback_url(self.base_url) or self.min_free_vram_mb <= 0:
+            return True
+        free = self._gpu_free_mb()
+        return free is None or free >= self.min_free_vram_mb
+
+    def _fish_health(self) -> bool:
+        base = self.base_url[:-7] if self.base_url.endswith("/v1/tts") else self.base_url
+        headers = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        try:
+            request = Request(base.rstrip("/") + "/v1/health", data=b"", headers=headers, method="POST")
+            with urlopen(request, timeout=1.5) as response:
+                return response.status == 200
+        except OSError:
+            return False
+
+    @staticmethod
+    def _systemctl_fish(action: str) -> bool:
+        if action not in {"start", "stop"}:
+            return False
+        try:
+            result = subprocess.run(
+                ["systemctl", "--user", action, FISH_SERVICE],
+                check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=8,
+            )
+            return result.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    def _ensure_local_service(self) -> bool:
+        if not self.manage_local_service:
+            return True
+        if self._health_probe():
+            return True
+        if not self._local_gpu_capacity_ok() or not self._service_control("start"):
+            return False
+        deadline = time.monotonic() + self.startup_wait_seconds
+        while time.monotonic() < deadline:
+            if self._health_probe():
+                return True
+            time.sleep(0.25)
+        return False
+
+    def _cancel_idle_stop(self) -> None:
+        if not self.manage_local_service:
+            return
+        with self._service_lock:
+            self._service_generation += 1
+            if self._idle_timer is not None:
+                self._idle_timer.cancel()
+                self._idle_timer = None
+
+    def _schedule_idle_stop(self) -> None:
+        if not self.manage_local_service or self.idle_stop_seconds <= 0:
+            return
+        with self._service_lock:
+            self._service_generation += 1
+            token = self._service_generation
+            if self._idle_timer is not None:
+                self._idle_timer.cancel()
+            def stop_if_idle() -> None:
+                with self._service_lock:
+                    if token != self._service_generation:
+                        return
+                with self._lock:
+                    busy = bool(self._pending)
+                if busy:
+                    self._schedule_idle_stop()
+                    return
+                self._service_control("stop")
+            self._idle_timer = threading.Timer(self.idle_stop_seconds, stop_if_idle)
+            self._idle_timer.daemon = True
+            self._idle_timer.start()
 
     @staticmethod
     def _normalized(text: str) -> str:
@@ -135,6 +248,10 @@ class FishTTSCache:
             return {"status": "browser_fallback"}
         if self.ready_path(normalized):
             return {"status": "ready"}
+        if not self._local_gpu_capacity_ok():
+            log.info("fish_tts_deferred reason=insufficient_vram")
+            return {"status": "unavailable"}
+        self._cancel_idle_stop()
 
         key = self._key(normalized)
         now = time.monotonic()
@@ -168,11 +285,18 @@ class FishTTSCache:
                     else:
                         self._failed_until[key] = time.monotonic() + self.failure_backoff_seconds
                 self._queue.task_done()
+                self._schedule_idle_stop()
 
     def _generate(self, key: str, text: str) -> bool:
         target = self.cache_dir / f"{key}.wav"
         if self._valid_wav(target):
             return True
+        if not self._local_gpu_capacity_ok():
+            log.info("fish_tts_deferred reason=insufficient_vram_at_generation")
+            return False
+        if not self._ensure_local_service():
+            log.info("fish_tts_deferred reason=local_service_unavailable")
+            return False
         temporary = self.cache_dir / f".{key}.tmp.wav"
         try:
             temporary.unlink(missing_ok=True)
@@ -190,7 +314,7 @@ class FishTTSCache:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 env=env,
-                timeout=43300,
+                timeout=self.generation_timeout_seconds,
                 check=False,
             )
             if result.returncode == 0 and self._valid_wav(temporary):

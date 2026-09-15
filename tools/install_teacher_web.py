@@ -111,10 +111,15 @@ def main():
     db = Path.home() / ".local/state/ralf-teacher-web/student.sqlite3"
     if not config.exists():
         config.write_text(f"TEACHER_WEB_DB={db}\nTEACHER_WEB_ORIGIN=http://127.0.0.1:19139\n")
-    # The installer is already run with the approved Teacher virtualenv. Reuse
-    # that interpreter for the bounded Fish helper without storing any secret.
-    _ensure_env_value(config, "TEACHER_FISH_PYTHON", sys.executable)
+    # Fish helper needs Fish-specific dependencies (notably ormsgpack). Keep it
+    # on the same isolated venv as the pinned Fish 1.5 service, not Teacher's venv.
+    fish_python = Path.home() / ".local/share/ralf-teacher-voice/fish-speech-1.5/.venv/bin/python"
+    _ensure_env_value(config, "TEACHER_FISH_PYTHON", str(fish_python))
     _ensure_env_value(config, "TEACHER_FISH_URL", "http://127.0.0.1:19195")
+    _ensure_env_value(config, "TEACHER_FISH_MIN_FREE_VRAM_MB", "1024")
+    _ensure_env_value(config, "TEACHER_FISH_TIMEOUT_SECONDS", "150")
+    _ensure_env_value(config, "TEACHER_FISH_MANAGE_SERVICE", "1")
+    _ensure_env_value(config, "TEACHER_FISH_IDLE_STOP_SECONDS", "300")
     config.chmod(0o600)
     values = _read_env_file(config)
     db = Path(values.get("TEACHER_WEB_DB", str(db)))
@@ -132,9 +137,14 @@ def main():
     unit = units / "ralf-teacher-web.service"
     previous_unit = unit.read_bytes() if unit.exists() else None
     unit.write_bytes((release / "deploy/systemd/ralf-teacher-web.service").read_bytes())
+    fish_unit_source = release / "deploy/systemd/ralf-teacher-fish15.service"
+    if fish_unit_source.is_file():
+        (units / "ralf-teacher-fish15.service").write_bytes(fish_unit_source.read_bytes())
     publish_current(release,current)
     try:
         subprocess.run(["systemctl","--user","daemon-reload"],check=True)
+        if fish_unit_source.is_file():
+            subprocess.run(["systemctl","--user","disable","ralf-teacher-fish15.service"],check=True)
         subprocess.run(["systemctl","--user","enable","--now","ralf-teacher-web.service"],check=True)
         subprocess.run(["systemctl","--user","restart","ralf-teacher-web.service"],check=True)
         health_request = urllib.request.Request("http://127.0.0.1:19139/health", headers={"Host": health_host})
