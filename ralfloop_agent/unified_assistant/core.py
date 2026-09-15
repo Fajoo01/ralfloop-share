@@ -240,6 +240,7 @@ class UnifiedAssistantCore:
             return self._result(
                 status, message, plan=plan.model_dump(mode="json"),
                 execution=execution.model_dump(mode="json"),
+                tools_executed=True, selected_skill=assignment.skill,
             )
         return self._result(
             "planned" if not plan.requires_clarification else "clarification_required",
