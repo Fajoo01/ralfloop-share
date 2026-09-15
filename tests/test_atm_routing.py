@@ -5,6 +5,19 @@ from datetime import datetime as RealDateTime
 from openshell_backend import atm_telegram as atm
 
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolate_direct_topology(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        atm,
+        "ATM_DIRECT_TOPOLOGY_PATH",
+        tmp_path / "no-runtime-topology.json",
+    )
+    monkeypatch.setattr(atm, "_ATM_DIRECT_TOPOLOGY_CACHE", None)
+
+
 class FixedDateTime(RealDateTime):
     @classmethod
     def now(cls, tz=None):

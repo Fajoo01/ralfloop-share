@@ -132,7 +132,7 @@ def _render(payload: Mapping[str, Any]) -> str:
 class ATMMCPReadOnly(MeteoMCPReadOnly):
     def __init__(self, context: Mapping[str, Any] | None = None) -> None:
         super().__init__(context)
-        self.socket_timeout_s = 8.0
+        self.socket_timeout_s = 4.0
         self.socket_path = os.getenv(
             "RALF_ATM_MCP_SOCKET",
             "/run/ralf-atm-mcp/mcp.sock",
@@ -231,6 +231,60 @@ class ATMMCPReadOnly(MeteoMCPReadOnly):
 
                     inner._cache[key] = response
                     return response
+
+                def batch(
+                    inner,
+                    queries: list[Mapping[str, Any]],
+                ) -> Mapping[str, Mapping[str, Any]]:
+                    normalized = []
+                    for query in queries:
+                        stop_code = str(query.get("stop_code") or "").strip()
+                        if not stop_code:
+                            continue
+                        raw_lines = query.get("lines")
+                        lines = (
+                            [str(item) for item in raw_lines]
+                            if isinstance(raw_lines, list)
+                            else None
+                        )
+                        normalized.append({
+                            "stop_code": stop_code,
+                            "lines": lines,
+                        })
+
+                    if not normalized:
+                        return {}
+
+                    try:
+                        response = self._call(
+                            "atm_realtime_batch",
+                            {"queries": normalized},
+                        )
+                    except Exception:
+                        return {}
+
+                    output: dict[str, Mapping[str, Any]] = {}
+                    for item in response.get("results") or []:
+                        if not isinstance(item, Mapping):
+                            continue
+                        stop_code = str(item.get("stop_code") or "").strip()
+                        if not stop_code:
+                            continue
+                        output[stop_code] = dict(item)
+                        lines = next(
+                            (
+                                query.get("lines")
+                                for query in normalized
+                                if query.get("stop_code") == stop_code
+                            ),
+                            None,
+                        )
+                        key = (
+                            stop_code,
+                            tuple(lines) if lines is not None else None,
+                        )
+                        inner._cache[key] = dict(item)
+                    return output
 
                 def waits(
                     inner,

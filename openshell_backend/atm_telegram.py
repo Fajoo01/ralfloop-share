@@ -9,6 +9,7 @@ import subprocess
 import time
 import urllib.parse
 import contextvars
+import concurrent.futures
 import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -52,6 +53,33 @@ ATM_LOCAL_ROUTER_GRAPH = Path(
 
 ATM_LOCAL_ROUTER_RADIUS_M = 700
 ATM_LOCAL_ROUTER_STOP_LIMIT = 10
+
+ATM_DIRECT_TOPOLOGY_PATH = Path(
+    os.environ.get(
+        "RALFLOOP_ATM_DIRECT_TOPOLOGY",
+        str(DATA_DIR / "atm-direct-topology.json"),
+    )
+)
+ATM_DIRECT_CANDIDATE_LIMIT = max(
+    1,
+    int(os.environ.get("RALFLOOP_ATM_DIRECT_CANDIDATE_LIMIT", "3")),
+)
+ATM_DIRECT_ORIGIN_RADIUS_M = max(
+    100,
+    int(os.environ.get("RALFLOOP_ATM_DIRECT_ORIGIN_RADIUS_M", "850")),
+)
+ATM_DIRECT_DEST_RADIUS_M = max(
+    100,
+    int(os.environ.get("RALFLOOP_ATM_DIRECT_DEST_RADIUS_M", "950")),
+)
+ATM_DIRECT_ACCESS_SLACK_M = max(
+    0,
+    int(os.environ.get("RALFLOOP_ATM_DIRECT_ACCESS_SLACK_M", "250")),
+)
+ATM_DIRECT_MAX_STOPS = max(
+    1,
+    int(os.environ.get("RALFLOOP_ATM_DIRECT_MAX_STOPS", "8")),
+)
 # LOCAL_ATM_ROUTER_CONFIG_END
 
 router = APIRouter(prefix="/atm-telegram", tags=["atm-telegram"])
@@ -2593,6 +2621,29 @@ def _official_trip_has_transit(trip_plan: dict[str, Any] | None) -> bool:
     return False if saw_leg else bool(summary.get("steps") and not summary.get("walk_m"))
 
 
+def _official_trip_is_direct(trip_plan: dict[str, Any] | None) -> bool:
+    """True quando GiroMilano propone una sola salita su un mezzo pubblico."""
+    if not _official_trip_has_transit(trip_plan):
+        return False
+
+    raw = (trip_plan or {}).get("raw") or {}
+    actions = raw.get("Actions") or raw.get("actions") or []
+    if not isinstance(actions, list):
+        return False
+
+    boardings = 0
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        leg = action.get("Leg") or action.get("leg") or {}
+        if not isinstance(leg, dict):
+            continue
+        journeys = leg.get("Journeys") or leg.get("journeys") or []
+        if isinstance(journeys, list) and journeys:
+            boardings += 1
+
+    return boardings == 1
+
 
 # ATM_ROUTE_RANKING_HELPER_START
 def _rank_atm_route_candidates(
@@ -2722,6 +2773,397 @@ def _atm_wait_seconds(value: Any) -> int | None:
         return None
 
     return int(match.group(1)) * 60
+
+
+_ATM_DIRECT_TOPOLOGY_CACHE: tuple[tuple[str, int, int], dict[str, Any]] | None = None
+
+
+def _load_atm_direct_topology() -> dict[str, Any] | None:
+    global _ATM_DIRECT_TOPOLOGY_CACHE
+
+    path = ATM_DIRECT_TOPOLOGY_PATH
+    if not path.is_file():
+        return None
+
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+
+    key = (str(path.resolve()), int(stat.st_mtime_ns), int(stat.st_size))
+    if _ATM_DIRECT_TOPOLOGY_CACHE and _ATM_DIRECT_TOPOLOGY_CACHE[0] == key:
+        return _ATM_DIRECT_TOPOLOGY_CACHE[1]
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+    if not isinstance(payload, dict) or not isinstance(payload.get("patterns"), list):
+        return None
+
+    _ATM_DIRECT_TOPOLOGY_CACHE = (key, payload)
+    return payload
+
+
+def _topology_direct_candidates(
+    origin_lat: float,
+    origin_lon: float,
+    dest_lat: float,
+    dest_lon: float,
+    *,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    payload = _load_atm_direct_topology()
+    if not payload:
+        return []
+
+    best_by_line: dict[str, dict[str, Any]] = {}
+
+    for pattern in payload.get("patterns") or []:
+        if not isinstance(pattern, dict):
+            continue
+
+        line = _line_label(pattern.get("line"))
+        direction = str(pattern.get("direction") or "").strip()
+        stops = pattern.get("stops") or []
+        if not line or not isinstance(stops, list) or len(stops) < 2:
+            continue
+
+        origin_points: list[tuple[int, int, dict[str, Any]]] = []
+        dest_points: list[tuple[int, int, dict[str, Any]]] = []
+
+        for index, stop in enumerate(stops):
+            if not isinstance(stop, dict):
+                continue
+            try:
+                slat = float(stop["lat"])
+                slon = float(stop["lon"])
+            except (KeyError, TypeError, ValueError):
+                continue
+
+            origin_distance = _distance_m(origin_lat, origin_lon, slat, slon)
+            if origin_distance <= ATM_DIRECT_ORIGIN_RADIUS_M:
+                origin_points.append((index, origin_distance, stop))
+
+            dest_distance = _distance_m(dest_lat, dest_lon, slat, slon)
+            if dest_distance <= ATM_DIRECT_DEST_RADIUS_M:
+                dest_points.append((index, dest_distance, stop))
+
+        pattern_best: dict[str, Any] | None = None
+
+        for origin_index, origin_distance, origin_stop in origin_points:
+            for dest_index, dest_distance, dest_stop in dest_points:
+                if origin_index >= dest_index:
+                    continue
+
+                stops_count = dest_index - origin_index
+                if stops_count > ATM_DIRECT_MAX_STOPS:
+                    continue
+
+                departure_s = origin_stop.get("departure_s")
+                if departure_s is None:
+                    departure_s = origin_stop.get("arrival_s")
+                arrival_s = dest_stop.get("arrival_s")
+                if arrival_s is None:
+                    arrival_s = dest_stop.get("departure_s")
+
+                travel_seconds = None
+                try:
+                    travel_value = int(arrival_s) - int(departure_s)
+                    if 0 < travel_value <= 3 * 3600:
+                        travel_seconds = travel_value
+                except (TypeError, ValueError):
+                    pass
+
+                access_m = int(origin_distance + dest_distance)
+                candidate = {
+                    "line": line,
+                    "direction": direction,
+                    "origin_stop_code": str(origin_stop.get("id") or "").strip(),
+                    "origin_stop_name": str(origin_stop.get("name") or "fermata").strip(),
+                    "origin_stop_lat": float(origin_stop["lat"]),
+                    "origin_stop_lon": float(origin_stop["lon"]),
+                    "origin_distance_m": int(origin_distance),
+                    "dest_stop_code": str(dest_stop.get("id") or "").strip(),
+                    "dest_stop_name": str(dest_stop.get("name") or "fermata").strip(),
+                    "dest_stop_lat": float(dest_stop["lat"]),
+                    "dest_stop_lon": float(dest_stop["lon"]),
+                    "dest_distance_m": int(dest_distance),
+                    "access_m": access_m,
+                    "stops_count": stops_count,
+                    "travel_seconds": travel_seconds,
+                    "topology_feed_version": str(payload.get("feed_version") or ""),
+                    "topology_surface_end_date": str(payload.get("surface_end_date") or ""),
+                }
+
+                if pattern_best is None:
+                    pattern_best = candidate
+                    continue
+
+                old_key = (
+                    int(pattern_best["access_m"]),
+                    int(pattern_best["stops_count"]),
+                    int(pattern_best.get("travel_seconds") or 10**9),
+                )
+                new_key = (
+                    access_m,
+                    stops_count,
+                    int(travel_seconds or 10**9),
+                )
+                if new_key < old_key:
+                    pattern_best = candidate
+
+        if pattern_best is None:
+            continue
+
+        old = best_by_line.get(line)
+        if old is None:
+            best_by_line[line] = pattern_best
+            continue
+
+        old_key = (
+            int(old["access_m"]),
+            int(old["stops_count"]),
+            int(old.get("travel_seconds") or 10**9),
+        )
+        new_key = (
+            int(pattern_best["access_m"]),
+            int(pattern_best["stops_count"]),
+            int(pattern_best.get("travel_seconds") or 10**9),
+        )
+        if new_key < old_key:
+            best_by_line[line] = pattern_best
+
+    ranked = sorted(
+        best_by_line.values(),
+        key=lambda item: (
+            int(item["access_m"]),
+            int(item["stops_count"]),
+            int(item.get("travel_seconds") or 10**9),
+            str(item["line"]),
+        ),
+    )
+    if not ranked:
+        return []
+
+    best_access = int(ranked[0]["access_m"])
+    useful = [
+        item
+        for item in ranked
+        if int(item["access_m"]) <= best_access + ATM_DIRECT_ACCESS_SLACK_M
+    ]
+
+    return useful[: max(1, int(limit or ATM_DIRECT_CANDIDATE_LIMIT))]
+
+
+def _legacy_stop_snapshot(stop_code: str, lines: list[str]) -> dict[str, Any]:
+    data = _browser_fetch_json(
+        "tpl/stops/" + urllib.parse.quote(stop_code, safe="") + "/linesummary"
+    )
+    wanted = {str(line) for line in lines}
+    arrivals: dict[str, str] = {}
+    observations: list[dict[str, str]] = []
+
+    for row in (data or {}).get("Lines") or []:
+        if not isinstance(row, dict):
+            continue
+        line_obj = row.get("Line") or {}
+        if not isinstance(line_obj, dict):
+            continue
+        line = _line_label(line_obj.get("LineCode") or line_obj.get("LineId"))
+        wait = str(row.get("WaitMessage") or "").strip()
+        if not line or not wait or (wanted and line not in wanted):
+            continue
+        direction = str(row.get("Direction") if row.get("Direction") is not None else "").strip()
+        observations.append({
+            "line": line,
+            "direction": direction,
+            "journey_pattern_id": str(row.get("JourneyPatternId") or "").strip(),
+            "wait": wait,
+        })
+        previous = arrivals.get(line)
+        if previous is None:
+            arrivals[line] = wait
+        else:
+            old_s = _atm_wait_seconds(previous)
+            new_s = _atm_wait_seconds(wait)
+            if new_s is not None and (old_s is None or new_s < old_s):
+                arrivals[line] = wait
+
+    return {
+        "ok": bool(arrivals),
+        "status": "ok" if arrivals else "not_available",
+        "stop_code": stop_code,
+        "arrivals": arrivals,
+        "observations": observations,
+        "source": "atm_tpportal_linesummary",
+    }
+
+
+def _topology_direct_options(
+    origin_lat: float,
+    origin_lon: float,
+    dest_lat: float,
+    dest_lon: float,
+    *,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    candidates = _topology_direct_candidates(
+        origin_lat,
+        origin_lon,
+        dest_lat,
+        dest_lon,
+        limit=limit,
+    )
+    if not candidates:
+        return []
+
+    provider = _ATM_REALTIME_PROVIDER.get()
+    grouped: dict[str, list[str]] = {}
+    for candidate in candidates:
+        code = str(candidate.get("origin_stop_code") or "").strip()
+        line = str(candidate.get("line") or "").strip()
+        if code and line:
+            grouped.setdefault(code, []).append(line)
+
+    def fetch(item: tuple[str, list[str]]) -> tuple[str, dict[str, Any]]:
+        code, lines = item
+        unique_lines = sorted(set(lines))
+        try:
+            if provider is not None:
+                payload = provider.snapshot(code, unique_lines)
+                if isinstance(payload, dict):
+                    return code, dict(payload)
+            return code, _legacy_stop_snapshot(code, unique_lines)
+        except Exception:
+            return code, {
+                "ok": False,
+                "status": "not_available",
+                "arrivals": {},
+                "observations": [],
+                "source": "atm_realtime_unavailable",
+            }
+
+    snapshots: dict[str, dict[str, Any]] = {}
+    items = list(grouped.items())
+    batch_method = getattr(provider, "batch", None) if provider is not None else None
+    if items and callable(batch_method):
+        queries = [
+            {
+                "stop_code": code,
+                "lines": sorted(set(lines)),
+            }
+            for code, lines in items
+        ]
+        try:
+            batch_payload = batch_method(queries)
+        except Exception:
+            batch_payload = {}
+        if isinstance(batch_payload, dict):
+            for code, payload in batch_payload.items():
+                if isinstance(payload, dict):
+                    snapshots[str(code)] = dict(payload)
+
+    missing_items = [
+        item for item in items if item[0] not in snapshots
+    ]
+    if len(missing_items) == 1:
+        code, payload = fetch(missing_items[0])
+        snapshots[code] = payload
+    elif missing_items:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(3, len(missing_items))
+        ) as pool:
+            for code, payload in pool.map(fetch, missing_items):
+                snapshots[code] = payload
+
+    def matching_wait(candidate: dict[str, Any]) -> str:
+        code = str(candidate.get("origin_stop_code") or "")
+        line = str(candidate.get("line") or "")
+        direction = str(candidate.get("direction") or "")
+        payload = snapshots.get(code) or {}
+        exact: list[str] = []
+        same_line: list[str] = []
+
+        for observation in payload.get("observations") or []:
+            if not isinstance(observation, dict):
+                continue
+            if _line_label(observation.get("line")) != line:
+                continue
+            wait = str(observation.get("wait") or "").strip()
+            if not wait:
+                continue
+            same_line.append(wait)
+            obs_direction = str(observation.get("direction") or "").strip()
+            if direction and obs_direction == direction:
+                exact.append(wait)
+
+        choices = exact or same_line
+        if choices:
+            choices.sort(key=lambda value: _atm_wait_seconds(value) if _atm_wait_seconds(value) is not None else 10**9)
+            return choices[0]
+
+        arrivals = payload.get("arrivals") or {}
+        return str(arrivals.get(line) or "").strip() if isinstance(arrivals, dict) else ""
+
+    now = datetime.now()
+    for candidate in candidates:
+        wait = matching_wait(candidate)
+        wait_seconds = _atm_wait_seconds(wait)
+        origin_walk_seconds = int(math.ceil(max(0, int(candidate["origin_distance_m"])) / 1.33))
+        final_walk_seconds = int(math.ceil(max(0, int(candidate["dest_distance_m"])) / 1.33))
+        travel_seconds = candidate.get("travel_seconds")
+        try:
+            travel_seconds = int(travel_seconds) if travel_seconds is not None else None
+        except (TypeError, ValueError):
+            travel_seconds = None
+
+        catchable = (
+            wait_seconds is not None
+            and wait_seconds >= origin_walk_seconds
+        )
+        eta_seconds = (
+            int(wait_seconds + travel_seconds + final_walk_seconds)
+            if catchable and travel_seconds is not None
+            else None
+        )
+
+        candidate["wait"] = wait or "n/d"
+        candidate["wait_seconds"] = wait_seconds
+        candidate["wait_source"] = (
+            "atm_live"
+            if catchable
+            else "atm_live_too_soon"
+            if wait_seconds is not None
+            else "not_available"
+        )
+        candidate["origin_walk_seconds"] = origin_walk_seconds
+        candidate["final_walk_m"] = int(candidate["dest_distance_m"])
+        candidate["final_walk_seconds"] = final_walk_seconds
+        candidate["catchable"] = catchable
+        candidate["eta_seconds"] = eta_seconds
+        candidate["departure_at"] = (
+            now + timedelta(seconds=wait_seconds)
+            if catchable and wait_seconds is not None
+            else None
+        )
+        candidate["destination_arrival_at"] = (
+            now + timedelta(seconds=eta_seconds)
+            if eta_seconds is not None
+            else None
+        )
+        candidate["source"] = "GTFS topology + ATM realtime"
+
+    candidates.sort(
+        key=lambda item: (
+            0 if item.get("catchable") and item.get("eta_seconds") is not None else 1,
+            int(item.get("eta_seconds") or 10**9),
+            int(item.get("access_m") or 10**9),
+            str(item.get("line") or ""),
+        )
+    )
+    return candidates[: max(1, int(limit or ATM_DIRECT_CANDIDATE_LIMIT))]
 
 
 def _local_atm_router_json(
@@ -3400,20 +3842,44 @@ def _build_plan_impl(lat: float, lon: float, destination_name: str) -> dict[str,
     # LOCAL_ATM_REALTIME_BUILD_PLAN_END
 
     short_destination = _distance_m(lat, lon, dlat, dlon) <= 1800
-    # FAST_PATH_AUMAI_ATM_DIRECT_START
-    dest_key = str((dest.get("name") or dest.get("label") or "")).lower().strip()
-    if dest_key == "aumai":
-        direct_atm_options = _atm_direct_fallback_options(lat, lon, dlat, dlon, ["51", "53", "44", "56"])
-        if direct_atm_options:
-            return {
-                "destination": dest,
-                "route_mode": "nearby_departures_fallback",
-                "origin_lat": lat,
-                "origin_lon": lon,
-                "direct_atm_options": direct_atm_options,
-                "official_route_url": _atm_link(lat, lon),
-            }
-    # FAST_PATH_AUMAI_ATM_DIRECT_END
+    direct_topology_options = (
+        _topology_direct_options(
+            lat,
+            lon,
+            dlat,
+            dlon,
+            limit=ATM_DIRECT_CANDIDATE_LIMIT,
+        )
+        if short_destination
+        else []
+    )
+
+    # Se la topologia locale produce più dirette, oppure una sola diretta
+    # con ETA completo e realtime prendibile, il trip planner remoto non
+    # aggiunge informazione utile. Nessun nome di luogo o linea è codificato.
+    topology_fast_path = (
+        len(direct_topology_options) >= 2
+        or (
+            len(direct_topology_options) == 1
+            and direct_topology_options[0].get("eta_seconds") is not None
+            and direct_topology_options[0].get("wait_source") == "atm_live"
+        )
+    )
+    if topology_fast_path:
+        return {
+            "destination": dest,
+            "route_mode": "direct_atm",
+            "route_confidence": "high",
+            "needs_official_route_lookup": False,
+            "origin": {"lat": lat, "lon": lon},
+            "direct_atm_route": direct_topology_options[0],
+            "direct_atm_options": direct_topology_options,
+            "official_route_url": _atm_link(lat, lon),
+            "atm_nearby_url": _atm_link(lat, lon),
+            "source": "GTFS topology + ATM realtime",
+            "generated_at": int(time.time()),
+        }
+
     official_label = str(dest.get("label") or dest.get("name") or destination_name)
     trip_t0 = time.monotonic()
     trip_plan = _atm_trip_plan(lat, lon, dlat, dlon, official_label)
@@ -3426,8 +3892,35 @@ def _build_plan_impl(lat: float, lon: float, destination_name: str) -> dict[str,
         trip_plan = _atm_trip_plan(lat, lon, dlat, dlon, official_label)
 
     if trip_plan and _official_trip_has_transit(trip_plan):
-        # GiroMilano non vince automaticamente: confrontiamo
-        # anche diretto ATM e superficie -> metro.
+        # Un itinerario ufficiale con una sola salita e realtime già
+        # disponibile non ha bisogno della costosissima esplorazione
+        # di fermate/linee alternative e delle relative chiamate HTTP seriali.
+        if _official_trip_is_direct(trip_plan):
+            return {
+                "route_mode": "official_atm_trip",
+                "route_confidence": "high",
+                "needs_official_route_lookup": False,
+                "destination": dest,
+                "origin": {"lat": lat, "lon": lon},
+                "official_route": trip_plan,
+                "direct_atm_options": [],
+                "one_transfer_options": [],
+                "route_candidates": [
+                    {
+                        "kind": "official_atm_trip",
+                        "eta_seconds": (trip_plan.get("summary") or {}).get("eta_seconds"),
+                        "option": trip_plan,
+                    }
+                ],
+                "osm_route_url": _maps_link(lat, lon, dlat, dlon),
+                "atm_nearby_url": _atm_link(lat, lon),
+                "official_route_url": _atm_link(lat, lon),
+                "source": "GiroMilano ATM direct fast path",
+                "generated_at": int(time.time()),
+            }
+
+        # Solo i percorsi con cambi/ambiguità entrano nel confronto
+        # più costoso con alternative di superficie e metro.
         ranking_origin_stops = _nearby_stops(lat, lon)
 
         if not ranking_origin_stops:
@@ -3544,6 +4037,22 @@ def _build_plan_impl(lat: float, lon: float, destination_name: str) -> dict[str,
             "atm_nearby_url": _atm_link(lat, lon),
             "official_route_url": _atm_link(lat, lon),
             "source": "GiroMilano ATM via browser CDP",
+            "generated_at": int(time.time()),
+        }
+
+    if direct_topology_options:
+        return {
+            "destination": dest,
+            "route_mode": "direct_atm",
+            "route_confidence": "medium",
+            "needs_official_route_lookup": False,
+            "origin": {"lat": lat, "lon": lon},
+            "direct_atm_route": direct_topology_options[0],
+            "direct_atm_options": direct_topology_options,
+            "official_route": trip_plan,
+            "official_route_url": _atm_link(lat, lon),
+            "atm_nearby_url": _atm_link(lat, lon),
+            "source": "GTFS topology + ATM realtime",
             "generated_at": int(time.time()),
         }
 
@@ -3895,6 +4404,38 @@ def render_reply(plan: dict[str, Any]) -> str:
     # LOCAL_ATM_REALTIME_RENDER_END
 
     if route_mode == "direct_atm":
+        direct_options = list(plan.get("direct_atm_options") or [])
+        if len(direct_options) > 1:
+            shown = direct_options[:ATM_DIRECT_CANDIDATE_LIMIT]
+            out = [str(dest.get("label") or dest.get("name") or "Destinazione")]
+            out.append(
+                "Dirette utili: "
+                + ", ".join(str(item.get("line") or "?") for item in shown)
+            )
+            out.append(
+                "Attese reali: "
+                + ", ".join(
+                    f"{item.get('line')}: {item.get('wait') or 'n/d'}"
+                    for item in shown
+                )
+            )
+            for item in shown:
+                line_name = str(item.get("line") or "").strip()
+                origin_name = str(item.get("origin_stop_name") or "fermata").strip()
+                dest_name = str(item.get("dest_stop_name") or "fermata").strip()
+                stops_count = item.get("stops_count")
+                detail = f"{line_name}: {origin_name} → {dest_name}"
+                if stops_count:
+                    detail += f" ({stops_count} fermate)"
+                arrival = hhmm(item.get("destination_arrival_at"))
+                if arrival:
+                    detail += f", arrivo stimato {arrival}"
+                out.append(detail)
+            out.append(
+                f"ATM: {plan.get('official_route_url') or plan.get('atm_nearby_url')}"
+            )
+            return "\n".join(out)
+
         route = plan.get("direct_atm_route") or {}
         line = str(route.get("line") or "").strip()
         wait = str(route.get("wait") or "").strip()
@@ -3946,6 +4487,34 @@ def render_reply(plan: dict[str, Any]) -> str:
                 out.append(f"Tempo totale stimato: {eta_min} min")
             except Exception:
                 pass
+
+        alternatives = [
+            item
+            for item in (plan.get("direct_atm_options") or [])
+            if item is not route
+            and str(item.get("line") or "").strip()
+            != line
+        ][:2]
+        if alternatives:
+            out.append("Alternative dirette:")
+            for alternative in alternatives:
+                alt_line = str(alternative.get("line") or "").strip()
+                alt_wait = str(alternative.get("wait") or "").strip()
+                alt_source = str(alternative.get("wait_source") or "").strip()
+                alt_origin = str(alternative.get("origin_stop_name") or "fermata").strip()
+                alt_stops = alternative.get("stops_count")
+                details = [f"{alt_line} da {alt_origin}"]
+                if alt_wait and alt_wait.lower() != "n/d":
+                    if alt_source == "atm_live_too_soon":
+                        details.append(f"{alt_wait}, troppo vicino per raggiungerlo")
+                    else:
+                        details.append(f"attesa {alt_wait}")
+                if alt_stops:
+                    details.append(f"{alt_stops} fermate")
+                alt_arrival = hhmm(alternative.get("destination_arrival_at"))
+                if alt_arrival:
+                    details.append(f"arrivo {alt_arrival}")
+                out.append("- " + " · ".join(details))
 
         out.append(
             f"ATM: {plan.get('official_route_url') or plan.get('atm_nearby_url')}"

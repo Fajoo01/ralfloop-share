@@ -17,6 +17,9 @@ DEFAULT_GTFS = Path(
 DEFAULT_GRAPH = Path(
     "/home/sibilla-cumana/ralfloop_data/atm_telegram/atm-router-current.bin"
 )
+DEFAULT_TOPOLOGY = Path(
+    "/home/sibilla-cumana/ralfloop_data/atm_telegram/atm-direct-topology.json"
+)
 
 
 def run(cmd: list[str], *, timeout: int) -> subprocess.CompletedProcess[str]:
@@ -33,11 +36,13 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--gtfs", type=Path, default=DEFAULT_GTFS)
     parser.add_argument("--graph", type=Path, default=DEFAULT_GRAPH)
+    parser.add_argument("--topology", type=Path, default=DEFAULT_TOPOLOGY)
     parser.add_argument("--date", default=date.today().isoformat())
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
     builder = root / "tools/atm_router/build_graph.py"
+    topology_builder = root / "scripts/build_atm_direct_topology.py"
     router = root / "tools/atm_router/atm-router"
 
     if not args.gtfs.is_file():
@@ -49,7 +54,11 @@ def main() -> int:
     if not router.is_file():
         raise SystemExit(f"router non trovato: {router}")
 
+    if not topology_builder.is_file():
+        raise SystemExit(f"topology builder non trovato: {topology_builder}")
+
     args.graph.parent.mkdir(parents=True, exist_ok=True)
+    args.topology.parent.mkdir(parents=True, exist_ok=True)
 
     fd, tmp_name = tempfile.mkstemp(
         prefix=".atm-router-",
@@ -59,6 +68,15 @@ def main() -> int:
     os.close(fd)
     tmp = Path(tmp_name)
     tmp.unlink(missing_ok=True)
+
+    topo_fd, topo_name = tempfile.mkstemp(
+        prefix=".atm-topology-",
+        suffix=".json",
+        dir=str(args.topology.parent),
+    )
+    os.close(topo_fd)
+    tmp_topology = Path(topo_name)
+    tmp_topology.unlink(missing_ok=True)
 
     try:
         built = run(
@@ -132,19 +150,49 @@ def main() -> int:
                 "validazione fallita: nessuna fermata"
             )
 
+        topology = run(
+            [
+                sys.executable,
+                str(topology_builder),
+                "--gtfs",
+                str(args.gtfs),
+                "--output",
+                str(tmp_topology),
+            ],
+            timeout=300,
+        )
+        sys.stdout.write(topology.stdout)
+        sys.stderr.write(topology.stderr)
+        if topology.returncode != 0:
+            raise SystemExit(
+                f"build topologia fallita rc={topology.returncode}"
+            )
+        try:
+            topology_payload = json.loads(
+                tmp_topology.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError) as exc:
+            raise SystemExit(f"topologia non valida: {exc}")
+        if len(topology_payload.get("patterns") or []) < 10:
+            raise SystemExit("topologia non valida: pattern insufficienti")
+
         os.chmod(tmp, 0o664)
+        os.chmod(tmp_topology, 0o664)
         os.replace(tmp, args.graph)
+        os.replace(tmp_topology, args.topology)
 
         print(
             "ATM_GRAPH_REFRESH_OK "
             f"date={args.date} "
-            f"bytes={args.graph.stat().st_size}"
+            f"bytes={args.graph.stat().st_size} "
+            f"topology_patterns={len(topology_payload.get('patterns') or [])}"
         )
 
         return 0
 
     finally:
         tmp.unlink(missing_ok=True)
+        tmp_topology.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
