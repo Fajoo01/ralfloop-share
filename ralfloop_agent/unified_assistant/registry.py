@@ -198,7 +198,19 @@ class UnifiedRegistryFacade:
         whatsapp_socket = Path("/run/ralf-whatsapp-mcp/mcp.sock")
         mailchimp_socket = Path("/run/ralf-mailchimp-mcp/mcp.sock")
         meteo_socket = Path("/run/ralf-meteo-mcp/mcp.sock")
+        editorial_socket = Path("/tmp/ralf-editorial-mcp/mcp.sock")
         rows = [UnifiedToolSpec(
+            id="editorial.flyer.mcp",
+            capabilities=("flyer_create", "flyer_update", "flyer_projects", "flyer_brief", "flyer_review", "flyer_marketing_review", "flyer_media_review", "flyer_render"),
+            input_schema="strict editorial MCP schemas; project-bound files only",
+            output_schema="brief, marketing score, provenance, HTML, PDF, PNG and preflight",
+            classification=PolicyClass.AUTO_WRITE,
+            side_effect_class="local_project_filesystem_write",
+            availability="available" if _observable_path_exists(editorial_socket) else "constrained:broker_unavailable",
+            health="Unix stdio relay + exact eight-tool allowlist",
+            verification_method="strict MCP tool discovery; local A4 PDF/PNG/HTML output; no email/print/shell/browser",
+            source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "editorial_mcp_adapter.py"),
+        ), UnifiedToolSpec(
             id="google_workspace.gmail.read_only",
             capabilities=("google_workspace.gmail.search", "google_workspace.gmail.read", "google_workspace.gmail.thread"),
             input_schema="EmailSearchIntent",

@@ -222,6 +222,25 @@ class UnifiedAssistantCore:
             return self._compose_email(text, plan.model_dump(mode="json"))
         if assignment.domain == "home":
             return self._handle_home(text, plan.model_dump(mode="json"))
+        if self.dag_executor is not None and assignment.skill in self.dag_executor.adapters:
+            inputs = {"user.goal": text}
+            if self.dag_input_provider is not None:
+                inputs.update(self.dag_input_provider(text))
+            execution = self.dag_executor.execute(plan, inputs=inputs)
+            artifact = execution.artifacts[-1] if execution.artifacts else None
+            payload = artifact.payload if artifact is not None else {}
+            message = str(payload.get("message") or (
+                "Operazione completata." if execution.status == "completed" else "Operazione bloccata."
+            ))
+            status = (
+                str(artifact.status) if artifact is not None and artifact.status in {
+                    "completed", "clarification_required", "unavailable", "draft"
+                } else ("completed" if execution.status == "completed" else "blocked")
+            )
+            return self._result(
+                status, message, plan=plan.model_dump(mode="json"),
+                execution=execution.model_dump(mode="json"),
+            )
         return self._result(
             "planned" if not plan.requires_clarification else "clarification_required",
             "Piano validato." if not plan.requires_clarification else "Serve specificare obiettivo o dominio.",
