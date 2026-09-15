@@ -3051,7 +3051,8 @@ def _topology_direct_options(
     snapshots: dict[str, dict[str, Any]] = {}
     items = list(grouped.items())
     batch_method = getattr(provider, "batch", None) if provider is not None else None
-    if items and callable(batch_method):
+    batch_attempted = bool(items and callable(batch_method))
+    if batch_attempted:
         queries = [
             {
                 "stop_code": code,
@@ -3068,7 +3069,11 @@ def _topology_direct_options(
                 if isinstance(payload, dict):
                     snapshots[str(code)] = dict(payload)
 
-    missing_items = [
+    # Se il provider dichiara il batch, il risultato (anche parziale/vuoto) è
+    # definitivo per questa iterazione. Evita di raddoppiare il timeout con
+    # snapshot singoli delle stesse fermate. Il fallback singolo serve solo a
+    # provider legacy che non implementano batch().
+    missing_items = [] if batch_attempted else [
         item for item in items if item[0] not in snapshots
     ]
     if len(missing_items) == 1:

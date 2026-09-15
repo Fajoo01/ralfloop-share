@@ -230,3 +230,30 @@ def test_single_static_direct_skips_remote_trip_planner(monkeypatch):
     assert result["route_mode"] == "direct_atm"
     assert result["route_confidence"] == "medium"
     assert result["direct_atm_options"] == [option]
+
+
+def test_empty_provider_batch_does_not_retry_single_snapshots(monkeypatch):
+    candidate = {
+        "line": "X7", "direction": "0", "origin_stop_code": "O1",
+        "origin_stop_name": "Origin", "origin_stop_lat": 45.5,
+        "origin_stop_lon": 9.2, "origin_distance_m": 20,
+        "dest_stop_code": "D1", "dest_stop_name": "Dest",
+        "dest_stop_lat": 45.501, "dest_stop_lon": 9.201,
+        "dest_distance_m": 30, "access_m": 50, "stops_count": 2,
+        "travel_seconds": 180,
+    }
+    monkeypatch.setattr(atm, "_topology_direct_candidates", lambda *_a, **_k: [dict(candidate)])
+
+    class Provider:
+        def batch(self, _queries):
+            return {}
+        def snapshot(self, *_a, **_k):
+            raise AssertionError("batch provider must not be retried with snapshot")
+
+    token = atm._ATM_REALTIME_PROVIDER.set(Provider())
+    try:
+        rows = atm._topology_direct_options(45.5, 9.2, 45.501, 9.201)
+    finally:
+        atm._ATM_REALTIME_PROVIDER.reset(token)
+    assert len(rows) == 1
+    assert rows[0]["wait_source"] == "not_available"
