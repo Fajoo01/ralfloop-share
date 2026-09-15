@@ -71,19 +71,42 @@ def build_release(
     return {**metadata, "release_dir": str(release), "files": len(rows)}
 
 
+QUALITY_GATE_BUNDLE = (
+    "gates.json",
+    "regression-comparison.json",
+    "model-verification.json",
+    "canary.json",
+    "architecture-benchmark-v2.json",
+    "functiongemma-real-canary.json",
+)
+
+
 def _install_quality_gate(
     root: Path, source: str | Path | None, commit_sha: str
 ) -> None:
-    target = root / ".ralf_run/local_arch_v1/gates.json"
-    if target.exists():
-        target.unlink()
+    target_root = root / ".ralf_run/local_arch_v1"
+    if target_root.exists():
+        shutil.rmtree(target_root)
     if source is None:
         return
-    data = json.loads(Path(source).read_text(encoding="utf-8"))
-    if not isinstance(data, dict) or data.get("tested_commit") != commit_sha:
-        raise RuntimeError("quality_gate_commit_mismatch")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(data, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    source_path = Path(source)
+    if source_path.name != "gates.json":
+        raise RuntimeError("quality_gate_filename_invalid")
+    source_root = source_path.parent
+    parsed: dict[str, dict[str, Any]] = {}
+    for name in QUALITY_GATE_BUNDLE:
+        path = source_root / name
+        if not path.is_file():
+            raise RuntimeError(f"quality_gate_bundle_missing:{name}")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or data.get("tested_commit") != commit_sha:
+            raise RuntimeError(f"quality_gate_commit_mismatch:{name}")
+        parsed[name] = data
+    target_root.mkdir(parents=True, exist_ok=True)
+    for name, data in parsed.items():
+        (target_root / name).write_text(
+            json.dumps(data, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+        )
 
 
 def publish_current(release: str | Path, current_link: str | Path = DEFAULT_CURRENT_LINK) -> None:
