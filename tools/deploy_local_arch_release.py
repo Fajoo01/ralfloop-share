@@ -169,24 +169,34 @@ def port_free(port: int) -> bool:
             return False
 
 
+def _functiongemma_proxy_listener_owned() -> bool:
+    listeners = subprocess.run(
+        ["ss", "-ltnp"], check=False, text=True, capture_output=True,
+    ).stdout
+    for line in listeners.splitlines():
+        if "127.0.0.1:19104" not in line or 'users:(("socat"' not in line:
+            continue
+        match = __import__("re").search(r"pid=(\d+)", line)
+        if match is None:
+            return os.geteuid() == 0
+        try:
+            status = Path(f"/proc/{match.group(1)}/status").read_text(encoding="utf-8")
+        except OSError:
+            return False
+        uid_line = next((item for item in status.splitlines() if item.startswith("Uid:")), "")
+        fields = uid_line.split()
+        if len(fields) < 2:
+            return False
+        return os.geteuid() == 0 or int(fields[1]) == os.geteuid()
+    return False
+
+
 def functiongemma_endpoint_check() -> bool:
-    """Semantic port gate: free in local mode, proxy-owned in distributed mode."""
+    """Semantic port gate: free locally, owned loopback proxy + health when distributed."""
     if os.environ.get("RALF_FUNCTIONGEMMA_PROXY_EXPECTED") != "1":
         return port_free(19104)
-    if os.geteuid() != 0 and subprocess.run(
-        ["systemctl", "--user", "is-active", "--quiet", "ralf-functiongemma-proxy.service"],
-        check=False,
-    ).returncode != 0:
+    if not _functiongemma_proxy_listener_owned():
         return False
-    if os.geteuid() == 0:
-        listeners = subprocess.run(
-            ["ss", "-ltnp"], check=False, text=True, capture_output=True,
-        ).stdout
-        if not any(
-            "127.0.0.1:19104" in line and 'users:(("socat"' in line
-            for line in listeners.splitlines()
-        ):
-            return False
     try:
         with urlopen("http://127.0.0.1:19104/health", timeout=2) as response:
             return response.status == 200

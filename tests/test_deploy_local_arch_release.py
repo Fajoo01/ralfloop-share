@@ -95,11 +95,23 @@ def test_candidate_error_blocks() -> None:
     assert_blocked(data)
 
 
-def test_distributed_endpoint_requires_proxy(monkeypatch) -> None:
+def test_distributed_endpoint_requires_owned_proxy(monkeypatch) -> None:
     monkeypatch.setenv("RALF_FUNCTIONGEMMA_PROXY_EXPECTED", "1")
-    monkeypatch.setattr(deploy, "port_free", lambda port: False)
-    monkeypatch.setattr(deploy.subprocess, "run", lambda *args, **kwargs: type("R", (), {"returncode": 1})())
+    monkeypatch.setattr(deploy, "_functiongemma_proxy_listener_owned", lambda: False)
     assert deploy.functiongemma_endpoint_check() is False
+
+
+def test_distributed_endpoint_accepts_owned_healthy_proxy(monkeypatch) -> None:
+    monkeypatch.setenv("RALF_FUNCTIONGEMMA_PROXY_EXPECTED", "1")
+    monkeypatch.setattr(deploy, "_functiongemma_proxy_listener_owned", lambda: True)
+
+    class Response:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+
+    monkeypatch.setattr(deploy, "urlopen", lambda *args, **kwargs: Response())
+    assert deploy.functiongemma_endpoint_check() is True
 
 
 def _release(root: Path, directory: str, commit: str) -> Path:
