@@ -26,7 +26,8 @@ _INFRA_RE = re.compile(r"\b(?:agentcpm|servizi[oa]?|spazio\s+libero|disco|server
 _CODE_RE = re.compile(r"\b(?:codice|repository|repo|bug|debug|test|stacktrace)\b", re.I)
 _DOCUMENT_RE = re.compile(r"\b(?:pdf|document[oi]|allegat[oi]|estrai)\b", re.I)
 _RESEARCH_RE = re.compile(r"\b(?:ricerca|cerca\s+sul\s+web|fonti|deep\s+research)\b", re.I)
-_MEDIA_RE = re.compile(r"\b(?:video|audio|immagine|locandina|ffmpeg|sottotitol[oi])\b", re.I)
+_EDITORIAL_RE = re.compile(r"\b(?:volantin[oi]|flyer|locandin[ae]|manifest[oi]|poster)\b", re.I)
+_MEDIA_RE = re.compile(r"\b(?:video|audio|immagine|ffmpeg|sottotitol[oi])\b", re.I)
 _ATM_RE = re.compile(
     r"\b(?:atm|giromilano|mezzi\s+pubblici|trasporto\s+pubblico)\b"
     r"|\bcome\s+(?:arrivo|vado|posso\s+andare)\b"
@@ -374,6 +375,8 @@ class UnifiedPlanner:
             return self._single(goal, "documents", "documents.extract", PolicyClass.READ)
         if _CODE_RE.search(goal):
             return self._single(goal, "code", "code.inspect", PolicyClass.READ)
+        if _EDITORIAL_RE.search(goal):
+            return self._single(goal, "editorial", "editorial.flyer", PolicyClass.AUTO_WRITE)
         if _MEDIA_RE.search(goal):
             return self._single(goal, "media", "media.compose", PolicyClass.AUTO_WRITE)
         return self._clarification("domain_unresolved")

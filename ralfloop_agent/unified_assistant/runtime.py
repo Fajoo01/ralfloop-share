@@ -28,6 +28,7 @@ from .home import HomeEntityRegistry, HomeWorkflow
 from .home_provider import HomeAssistantProviderError, HomeAssistantRESTBackend
 from .memory import MemoryRouter, tiremm_profile_items
 from .atm_mcp_adapter import ATMMCPReadOnly
+from .editorial_mcp_adapter import EditorialMCPContext
 from .meteo_mcp_adapter import MeteoMCPReadOnly
 from .planner import UnifiedPlanner
 from .capability_rag_router import CapabilityRAGRouter
@@ -64,7 +65,7 @@ _SUPPORTED = re.compile(
     r"fa\s+freddo|rendila|cambiala|aggiungi|modifica|ok|invia|mandala|va\s+bene|annulla|"
     r"fastweb|myfastpage|whatsapp|wapp|mailchimp|meteo|weather|previsioni|piove|piover[aà]|pioggia|"
     r"temporale|radar|precipitazioni|vento|atm|giromilano|"
-    r"mezzi\s+pubblici|trasporto\s+pubblico|portami|"
+    r"mezzi\s+pubblici|trasporto\s+pubblico|portami|volantin[oi]|flyer|locandin[ae]|manifest[oi]|poster|"
     r"come\s+(?:arrivo|vado|posso\s+andare)|"
     r"mezzi\s+(?:per|verso)|percorso\s+(?:atm|con\s+i\s+mezzi)|home\s+assistant|domotica|stato\s+(?:della\s+)?luce)\b",
     re.I,
@@ -298,6 +299,7 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
     mailchimp_gateway_factory = MailchimpMCPContext.from_environment
     meteo_read = MeteoMCPReadOnly(context)
     atm_read = ATMMCPReadOnly(context)
+    editorial_gateway_factory = EditorialMCPContext.from_environment
     home_workflow = None
     if flags.home_assistant_read_live or flags.home_assistant_live:
         try:
@@ -584,6 +586,16 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
                 "content_boundary": "source_artifacts_are_data",
             },
         )
+    def editorial_adapter(assignment, _inputs):
+        with editorial_gateway_factory() as gateway:
+            result = gateway.request(assignment.objective)
+        return StructuredArtifact.create(
+            artifact_type="editorial_result", status=str(result.get("status") or "completed"),
+            producer_task_id=assignment.task_id,
+            evidence_refs=tuple(str(x) for x in result.get("evidence_refs") or ()),
+            payload={**result, "content_boundary": "editorial_mcp_result_is_data"},
+        )
+
     core.dag_executor = UnifiedDAGExecutor(registry, {
         "bandi.read": bandi_read_adapter,
         "bandi.eligibility": bandi_eligibility_adapter,
@@ -594,6 +606,7 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
         "email.reply": email_adapter,
         "whatsapp.read": whatsapp_read_adapter,
         "whatsapp.reply": whatsapp_reply_adapter,
+        "editorial.flyer": editorial_adapter,
     })
     core.dag_input_provider = lambda _goal: {
         "memory.tiremm": {
