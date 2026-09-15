@@ -11,6 +11,7 @@ TOOLS = {
     "core.study_plan",
     "core.math_check",
     "core.classify_turn",
+    "core.concept_evidence",
 }
 
 
@@ -87,6 +88,15 @@ class TeacherCoreClient:
                 session,
                 "core.classify_turn",
                 {"text": text[:6000]},
+            )
+
+    def concept_evidence(self, topic: str) -> dict[str, Any]:
+        with self._connection() as session:
+            self._surface(session)
+            return self._call(
+                session,
+                "core.concept_evidence",
+                {"topic": topic[:300]},
             )
 
 

@@ -11,6 +11,10 @@ Group=bandi
 WorkingDirectory=/home/sibilla-cumana/ralfloop-production/current
 Environment=PYTHONPATH=/home/sibilla-cumana/ralfloop-production/current
 EnvironmentFile=/etc/ralfloop/fast-chat.env
+Environment=RALF_TEACHER_CPU_FALLBACK=1
+Environment=RALF_TEACHER_CPU_FALLBACK_URL=http://127.0.0.1:11434
+Environment=RALF_TEACHER_CPU_FALLBACK_MODEL=gemma3:4b
+Environment=RALF_TEACHER_CPU_FALLBACK_TIMEOUT=75
 
 RuntimeDirectory=ralf-teacher-inference
 RuntimeDirectoryMode=0750

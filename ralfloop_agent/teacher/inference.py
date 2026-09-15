@@ -7,8 +7,10 @@ import socket
 import threading
 import time
 from typing import Any, Callable, Iterator
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
-from .service import ScheduledQwenModel
+from .service import ScheduledQwenModel, TEACHER_RESPONSE_SCHEMA
 
 
 DEFAULT_SOCKET = Path(
@@ -142,58 +144,183 @@ class TeacherInferenceClient:
         return None
 
 
-class SharedTeacherInferenceEngine:
-    """
-    Un solo ScheduledQwenModel / una sola lease GPU.
+class OllamaCpuTeacherFallback:
+    """CPU-only, loopback-only fallback for grounded fast Teacher requests."""
 
-    Tutte le richieste degli studenti vengono serializzate qui.
-    """
+    def __init__(
+        self,
+        *,
+        base_url: str | None = None,
+        model: str | None = None,
+        timeout: float | None = None,
+    ) -> None:
+        self.base_url = (base_url or os.getenv(
+            "RALF_TEACHER_CPU_FALLBACK_URL", "http://127.0.0.1:11434"
+        )).rstrip("/")
+        parsed = urlparse(self.base_url)
+        if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"} or parsed.port != 11434:
+            raise RuntimeError("teacher_cpu_fallback_url_denied")
+        self.model = model or os.getenv("RALF_TEACHER_CPU_FALLBACK_MODEL", "gemma3:4b")
+        self.timeout = float(timeout if timeout is not None else os.getenv("RALF_TEACHER_CPU_FALLBACK_TIMEOUT", "75"))
+        if not 10.0 <= self.timeout <= 180.0:
+            raise RuntimeError("teacher_cpu_fallback_timeout_invalid")
+
+    @staticmethod
+    def allowed(user_prompt: str) -> bool:
+        try:
+            payload = json.loads(user_prompt)
+        except (TypeError, json.JSONDecodeError):
+            return False
+        if not isinstance(payload, dict):
+            return False
+        pedagogy = payload.get("pedagogy")
+        if isinstance(pedagogy, dict) and pedagogy.get("model_path") == "deep":
+            return False
+        deterministic = payload.get("deterministic_evidence")
+        guarded = isinstance(deterministic, dict) and isinstance(deterministic.get("concept_evidence"), dict)
+        grammar = isinstance(payload.get("grammar_evidence"), dict)
+        return guarded or grammar
+
+    @staticmethod
+    def _parse_content(text: str) -> dict[str, Any]:
+        if len(text) > 131072:
+            raise RuntimeError("teacher_cpu_fallback_response_too_large")
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("teacher_cpu_fallback_malformed_json") from exc
+        if not isinstance(value, dict) or set(value) - {"response", "correct"}:
+            raise RuntimeError("teacher_cpu_fallback_invalid_result")
+        response = value.get("response")
+        if not isinstance(response, str) or not response.strip():
+            raise RuntimeError("teacher_cpu_fallback_invalid_result")
+        result: dict[str, Any] = {"response": response.strip(), "_inference_path": "ollama_cpu"}
+        if isinstance(value.get("correct"), bool):
+            result["correct"] = value["correct"]
+        return result
+
+    def infer(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
+        if not self.allowed(user_prompt):
+            raise RuntimeError("teacher_cpu_fallback_not_grounded")
+        strict = (
+            system_prompt.rstrip()
+            + "\n\nFALLBACK CPU: usa deterministic_evidence e grammar_evidence come guardrail fattuali. "
+            + "Non contraddirli. Se l'evidenza non basta, esplicita il limite invece di inventare. "
+            + "Restituisci esclusivamente JSON conforme allo schema richiesto."
+        )
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": strict},
+                {"role": "user", "content": user_prompt},
+            ],
+            "stream": False,
+            "format": TEACHER_RESPONSE_SCHEMA,
+            "keep_alive": "30s",
+            "options": {
+                "num_gpu": 0,
+                "num_ctx": 4096,
+                "num_predict": 512,
+                "temperature": 0,
+            },
+        }
+        request = Request(
+            self.base_url + "/api/chat",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=self.timeout) as response:
+            body = response.read(262145)
+        if len(body) > 262144:
+            raise RuntimeError("teacher_cpu_fallback_wire_too_large")
+        try:
+            envelope = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("teacher_cpu_fallback_invalid_envelope") from exc
+        content = envelope.get("message", {}).get("content") if isinstance(envelope, dict) else None
+        if not isinstance(content, str):
+            raise RuntimeError("teacher_cpu_fallback_invalid_envelope")
+        return self._parse_content(content)
+
+    def stream(self, system_prompt: str, user_prompt: str) -> Iterator[dict[str, Any]]:
+        result = self.infer(system_prompt, user_prompt)
+        yield {"type": "delta", "text": result["response"]}
+        yield {"type": "done", "result": result, "metadata": {"fallback": "ollama_cpu"}, "model_path": "cpu_fallback"}
+
+    def close(self) -> None:
+        return None
+
+
+class SharedTeacherInferenceEngine:
+    """One shared GPU backend with a grounded CPU-only emergency path."""
 
     SHARED_SESSION_ID = "teacher-shared-engine"
 
     def __init__(
         self,
         backend_factory: Callable[[], Any] = ScheduledQwenModel,
+        fallback_factory: Callable[[], Any] | None = None,
     ) -> None:
         self.backend_factory = backend_factory
+        if fallback_factory is None and os.getenv("RALF_TEACHER_CPU_FALLBACK", "0") == "1":
+            fallback_factory = OllamaCpuTeacherFallback
+        self._fallback = fallback_factory() if fallback_factory is not None else None
         self._backend: Any | None = None
         self._last_activity = 0.0
         self._lock = threading.Lock()
 
-    def infer(
+    def _ensure_backend_locked(self) -> None:
+        if self._backend is not None:
+            return
+        backend = self.backend_factory()
+        try:
+            backend.ensure_session(self.SHARED_SESSION_ID)
+        except Exception:
+            closer = getattr(backend, "close", None)
+            if callable(closer):
+                closer()
+            raise
+        self._backend = backend
+
+    def _fallback_allowed(self, user_prompt: str) -> bool:
+        fallback = self._fallback
+        if fallback is None:
+            return False
+        allowed = getattr(fallback, "allowed", None)
+        return bool(allowed(user_prompt)) if callable(allowed) else True
+
+    def _fallback_infer_locked(
         self,
         system_prompt: str,
         user_prompt: str,
+        primary_error: Exception,
     ) -> dict[str, Any]:
-        with self._lock:
-            if self._backend is None:
-                self._backend = self.backend_factory()
-                self._backend.ensure_session(
-                    self.SHARED_SESSION_ID
-                )
+        fallback = self._fallback
+        if fallback is None or not self._fallback_allowed(user_prompt):
+            raise primary_error
+        try:
+            result = fallback.infer(system_prompt, user_prompt)
+        except Exception:
+            raise primary_error
+        self._last_activity = time.monotonic()
+        return result
 
+    def infer(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
+        with self._lock:
             try:
-                result = self._backend(
-                    system_prompt,
-                    user_prompt,
-                )
+                self._ensure_backend_locked()
+                result = self._backend(system_prompt, user_prompt)
                 self._last_activity = time.monotonic()
                 return result
-            except Exception:
-                # Fail closed: non lasciare una lease GPU dubbia.
+            except Exception as exc:
                 self._close_locked()
-                raise
+                return self._fallback_infer_locked(system_prompt, user_prompt, exc)
 
-    def stream(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-    ) -> Iterator[dict[str, Any]]:
+    def stream(self, system_prompt: str, user_prompt: str) -> Iterator[dict[str, Any]]:
         with self._lock:
-            if self._backend is None:
-                self._backend = self.backend_factory()
-                self._backend.ensure_session(self.SHARED_SESSION_ID)
             try:
+                self._ensure_backend_locked()
                 streamer = getattr(self._backend, "stream", None)
                 if not callable(streamer):
                     result = self._backend(system_prompt, user_prompt)
@@ -202,9 +329,24 @@ class SharedTeacherInferenceEngine:
                 else:
                     yield from streamer(system_prompt, user_prompt)
                 self._last_activity = time.monotonic()
-            except Exception:
+                return
+            except Exception as exc:
                 self._close_locked()
-                raise
+                fallback = self._fallback
+                if fallback is None or not self._fallback_allowed(user_prompt):
+                    raise
+                try:
+                    fallback_stream = getattr(fallback, "stream", None)
+                    if callable(fallback_stream):
+                        yield from fallback_stream(system_prompt, user_prompt)
+                    else:
+                        result = fallback.infer(system_prompt, user_prompt)
+                        yield {"type": "delta", "text": str(result.get("response") or "")}
+                        yield {"type": "done", "result": result, "metadata": {"fallback": "cpu"}, "model_path": "cpu_fallback"}
+                    self._last_activity = time.monotonic()
+                    return
+                except Exception:
+                    raise exc
 
     def release_if_idle(
         self,
@@ -215,12 +357,9 @@ class SharedTeacherInferenceEngine:
         with self._lock:
             if self._backend is None:
                 return False
-
             current = time.monotonic() if now is None else now
-
             if current - self._last_activity < idle_timeout:
                 return False
-
             self._close_locked()
             return True
 
@@ -228,16 +367,23 @@ class SharedTeacherInferenceEngine:
         backend = self._backend
         self._backend = None
         self._last_activity = 0.0
-
         if backend is not None:
-            backend.close()
+            closer = getattr(backend, "close", None)
+            if callable(closer):
+                closer()
 
     def close(self) -> None:
         with self._lock:
             self._close_locked()
+            fallback = self._fallback
+            if fallback is not None:
+                closer = getattr(fallback, "close", None)
+                if callable(closer):
+                    closer()
 
 
 __all__ = [
     "SharedTeacherInferenceEngine",
     "TeacherInferenceClient",
+    "OllamaCpuTeacherFallback",
 ]

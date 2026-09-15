@@ -45,6 +45,7 @@ Regole:
   informazioni assenti dal materiale;
 - non inventare fonti;
 - se il contesto contiene grammar_evidence, trattalo come evidenza lessicale/sintattica read-only: più analisi dello stesso token sono alternative contestuali, non scegliere arbitrariamente;
+- se deterministic_evidence contiene concept_evidence, trattala come evidenza concettuale curata e read-only: non contraddirla e usala per correggere semplificazioni o misconcezioni;
 - nei dati grammaticali, i frame valenziali approvati sono evidenza scolastica più forte; i pattern T-PAS sono candidati semantici utili ma non una decisione automatica sul contesto;
 - rispondi nella lingua usata dallo studente salvo richiesta diversa.
 - prima di rispondere, rileggi e correggi ortografia, grammatica, concordanze, forme verbali, accenti e punteggiatura;
@@ -82,6 +83,21 @@ def _student_move(core: Any | None, payload: dict[str, Any]) -> tuple[str, dict[
     if move not in allowed:
         return "neutral", None
     return move, evidence
+
+
+def _concept_evidence(core: Any | None, topic: str) -> dict[str, Any] | None:
+    if core is None or not topic.strip():
+        return None
+    lookup = getattr(core, "concept_evidence", None)
+    if not callable(lookup):
+        return None
+    try:
+        evidence = lookup(topic.strip())
+    except Exception:
+        return None
+    if not isinstance(evidence, dict) or evidence.get("found") is not True:
+        return None
+    return evidence
 
 
 TEACHER_RESPONSE_SCHEMA = {
@@ -670,8 +686,14 @@ class TeacherService:
             "interaction": {"student_move": student_move},
             "request": payload,
         }
+        deterministic_evidence: dict[str, Any] = {}
         if turn_evidence is not None:
-            context["deterministic_evidence"] = {"turn_classification": turn_evidence}
+            deterministic_evidence["turn_classification"] = turn_evidence
+        concept_evidence = _concept_evidence(self.deterministic_core, session["topic"])
+        if concept_evidence is not None:
+            deterministic_evidence["concept_evidence"] = concept_evidence
+        if deterministic_evidence:
+            context["deterministic_evidence"] = deterministic_evidence
         grammar_context = self._grammar_context(session, payload)
         if grammar_context is not None:
             context["grammar_evidence"] = grammar_context
@@ -769,8 +791,14 @@ class TeacherService:
             "interaction": {"student_move": student_move},
             "request": payload,
         }
+        deterministic_evidence: dict[str, Any] = {}
         if turn_evidence is not None:
-            context["deterministic_evidence"] = {"turn_classification": turn_evidence}
+            deterministic_evidence["turn_classification"] = turn_evidence
+        concept_evidence = _concept_evidence(self.deterministic_core, session["topic"])
+        if concept_evidence is not None:
+            deterministic_evidence["concept_evidence"] = concept_evidence
+        if deterministic_evidence:
+            context["deterministic_evidence"] = deterministic_evidence
 
         grammar_context = self._grammar_context(session, payload)
         if grammar_context is not None:

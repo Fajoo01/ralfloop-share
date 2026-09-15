@@ -1,5 +1,8 @@
 from pathlib import Path
+import os
+import signal
 import subprocess
+import time
 
 from ralfloop_agent.teacher.service import TeacherService
 from ralfloop_agent.teacher.store import TeacherStore
@@ -9,12 +12,13 @@ from src.mcp_transport import MCPClientSession, StdioMCPTransport
 ROOT = Path(__file__).resolve().parents[1]
 CORE_DIR = ROOT / "tools" / "teacher_core_mcp"
 BINARY = CORE_DIR / "ralf-teacher-core-mcp"
+CONCEPTS = ROOT / "ralfloop_agent" / "teacher" / "data" / "concept_evidence.tsv"
 
 
 def _session():
     subprocess.run(["make", "-C", str(CORE_DIR)], check=True, capture_output=True)
     return MCPClientSession(
-        StdioMCPTransport([str(BINARY), "--stdio"]),
+        StdioMCPTransport([str(BINARY), "--stdio", "--concepts", str(CONCEPTS)]),
         timeout=3,
         client_name="teacher-core-test",
     )
@@ -38,6 +42,7 @@ def test_core_mcp_real_tools_are_bounded_and_read_only():
             "core.study_plan",
             "core.math_check",
             "core.classify_turn",
+            "core.concept_evidence",
         }
         math = _payload(session.call_tool(
             "core.math_check",
@@ -65,7 +70,36 @@ def test_core_mcp_real_tools_are_bounded_and_read_only():
             "core.classify_turn", {"text": "Oggi ripasso gli stati della materia."}
         ))
         assert neutral["move"] == "neutral"
+        concept = _payload(session.call_tool(
+            "core.concept_evidence", {"topic": "Gli stati dell'acqua"}
+        ))
+        assert concept["found"] is True
+        assert "flessibile" in concept["evidence"]
+        assert "non basta" in concept["evidence"]
+        assert "contenitore" in concept["misconceptions"]
 
+
+
+def test_core_mcp_idle_sigterm_is_graceful(tmp_path):
+    subprocess.run(["make", "-C", str(CORE_DIR)], check=True, capture_output=True)
+    socket_path = tmp_path / "core.sock"
+    process = subprocess.Popen(
+        [str(BINARY), "--socket", str(socket_path)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        deadline = time.monotonic() + 2.0
+        while not socket_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert socket_path.exists()
+        started = time.monotonic()
+        process.send_signal(signal.SIGTERM)
+        assert process.wait(timeout=1.5) == 0
+        assert time.monotonic() - started < 1.2
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=1)
 
 def test_core_mcp_summary_and_text_profile_are_source_bounded():
     text = (
@@ -119,6 +153,16 @@ class FakeCore:
         move = "counterexample" if "c'entra" in text or text.startswith("ma ") else "question"
         return {"ok": True, "move": move, "signal": "test", "confidence": 0.9,
                 "writes": 0, "external_side_effects": 0}
+
+    def concept_evidence(self, topic):
+        if topic == "Gli stati dell'acqua":
+            return {
+                "ok": True, "found": True, "topic": topic,
+                "evidence": "Un solido può essere flessibile; un liquido fluisce spontaneamente.",
+                "misconceptions": "Adattarsi al contenitore non basta a definire un liquido.",
+                "writes": 0, "external_side_effects": 0,
+            }
+        return {"ok": True, "found": False, "topic": topic, "writes": 0, "external_side_effects": 0}
 
 
 def test_deterministic_math_and_study_plan_bypass_llm(tmp_path):

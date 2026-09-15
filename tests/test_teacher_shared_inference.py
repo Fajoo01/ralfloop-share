@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import os
 from pathlib import Path
 import socket
@@ -7,7 +9,11 @@ import subprocess
 import sys
 import time
 
+import pytest
+
+import ralfloop_agent.teacher.inference as inference_module
 from ralfloop_agent.teacher.inference import (
+    OllamaCpuTeacherFallback,
     SharedTeacherInferenceEngine,
     TeacherInferenceClient,
 )
@@ -63,6 +69,110 @@ def test_shared_engine_uses_one_backend_for_multiple_requests():
     engine.close()
     assert backend.closed is True
 
+
+
+class FailingSharedBackend:
+    instances = []
+
+    def __init__(self):
+        self.closed = False
+        self.__class__.instances.append(self)
+
+    def ensure_session(self, session_id):
+        raise RuntimeError("gpu_busy")
+
+    def close(self):
+        self.closed = True
+
+
+class FakeCpuFallback:
+    def __init__(self):
+        self.calls = 0
+
+    @staticmethod
+    def allowed(user_prompt):
+        payload = json.loads(user_prompt)
+        return payload.get("pedagogy", {}).get("model_path") != "deep" and bool(
+            payload.get("deterministic_evidence", {}).get("concept_evidence")
+        )
+
+    def infer(self, system_prompt, user_prompt):
+        self.calls += 1
+        return {"response": "fallback grounded", "_inference_path": "test_cpu"}
+
+    def stream(self, system_prompt, user_prompt):
+        result = self.infer(system_prompt, user_prompt)
+        yield {"type": "delta", "text": result["response"]}
+        yield {"type": "done", "result": result, "metadata": {"fallback": "cpu"}, "model_path": "cpu_fallback"}
+
+    def close(self):
+        return None
+
+
+def _guarded_prompt(path="fast"):
+    return json.dumps({
+        "pedagogy": {"model_path": path},
+        "deterministic_evidence": {"concept_evidence": {"found": True, "evidence": "guard"}},
+        "request": {"question": "test"},
+    })
+
+
+def test_shared_engine_falls_back_only_for_grounded_fast_requests():
+    FailingSharedBackend.instances.clear()
+    engine = SharedTeacherInferenceEngine(
+        backend_factory=FailingSharedBackend,
+        fallback_factory=FakeCpuFallback,
+    )
+    result = engine.infer("system", _guarded_prompt())
+    assert result["response"] == "fallback grounded"
+    assert FailingSharedBackend.instances[-1].closed is True
+    with pytest.raises(RuntimeError, match="gpu_busy"):
+        engine.infer("system", _guarded_prompt("deep"))
+    engine.close()
+
+
+def test_shared_engine_stream_uses_cpu_fallback_after_gpu_failure():
+    engine = SharedTeacherInferenceEngine(
+        backend_factory=FailingSharedBackend,
+        fallback_factory=FakeCpuFallback,
+    )
+    events = list(engine.stream("system", _guarded_prompt()))
+    assert [event["type"] for event in events] == ["delta", "done"]
+    assert events[-1]["model_path"] == "cpu_fallback"
+    engine.close()
+
+
+def test_ollama_cpu_fallback_is_loopback_cpu_only_and_schema_bound(monkeypatch):
+    captured = {}
+
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def read(self, limit=-1):
+            return json.dumps({"message": {"content": json.dumps({"response": "Risposta curata"})}}).encode()
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["payload"] = json.loads(request.data)
+        captured["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr(inference_module, "urlopen", fake_urlopen)
+    fallback = OllamaCpuTeacherFallback(timeout=30)
+    result = fallback.infer("system", _guarded_prompt())
+    assert result["response"] == "Risposta curata"
+    assert captured["url"] == "http://127.0.0.1:11434/api/chat"
+    assert captured["payload"]["model"] == "gemma3:4b"
+    assert captured["payload"]["options"]["num_gpu"] == 0
+    assert captured["payload"]["format"]["required"] == ["response"]
+    assert captured["payload"]["keep_alive"] == "30s"
+
+
+def test_ollama_cpu_fallback_rejects_external_endpoint_and_ungrounded_prompt():
+    with pytest.raises(RuntimeError, match="url_denied"):
+        OllamaCpuTeacherFallback(base_url="http://example.com:11434")
+    fallback = OllamaCpuTeacherFallback(timeout=30)
+    assert fallback.allowed(json.dumps({"pedagogy": {"model_path": "fast"}})) is False
 
 def test_inference_client_session_methods_do_not_control_gpu(tmp_path):
     client = TeacherInferenceClient(
@@ -241,3 +351,11 @@ for line in sys.stdin:
     finally:
         broker.terminate()
         broker.wait(timeout=5)
+
+
+
+def test_teacher_inference_unit_declares_grounded_cpu_fallback():
+    unit = Path("deploy/systemd/ralf-teacher-inference.service").read_text()
+    assert "RALF_TEACHER_CPU_FALLBACK=1" in unit
+    assert "RALF_TEACHER_CPU_FALLBACK_MODEL=gemma3:4b" in unit
+    assert "RALF_TEACHER_CPU_FALLBACK_URL=http://127.0.0.1:11434" in unit

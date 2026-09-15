@@ -148,6 +148,13 @@ def test_counterexample_uses_core_mcp_signal_and_error_analysis(tmp_path):
             return {"ok": True, "move": "counterexample", "signal": "counterexample_cue",
                     "confidence": 0.93, "writes": 0, "external_side_effects": 0}
 
+        def concept_evidence(self, topic):
+            assert topic == "Gli stati dell'acqua"
+            return {"ok": True, "found": True, "topic": topic,
+                    "evidence": "Un liquido fluisce spontaneamente; deformarsi non basta.",
+                    "misconceptions": "Il ghiaccio è solo l'esempio dello stato solido dell'acqua.",
+                    "writes": 0, "external_side_effects": 0}
+
     def model(system_prompt, user_prompt):
         captured["system"] = system_prompt
         captured["payload"] = json.loads(user_prompt)
@@ -165,6 +172,7 @@ def test_counterexample_uses_core_mcp_signal_and_error_analysis(tmp_path):
     assert result["pedagogy"]["strategy"] == "error_analysis"
     assert captured["payload"]["interaction"]["student_move"] == "counterexample"
     assert captured["payload"]["deterministic_evidence"]["turn_classification"]["signal"] == "counterexample_cue"
+    assert "fluisce" in captured["payload"]["deterministic_evidence"]["concept_evidence"]["evidence"]
     assert "controesempio" in captured["system"].casefold()
     assert captured["payload"]["request"]["context"].startswith("Consegna:")
 

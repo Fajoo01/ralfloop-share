@@ -5,6 +5,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <math.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -25,6 +26,7 @@
 #define MAX_SUMMARY_SENTENCES 8
 
 static volatile sig_atomic_t g_stop;
+static const char *g_concepts_path;
 static void on_signal(int sig) { (void)sig; g_stop = 1; }
 
 static int tok_eq(const char *js, const jsmntok_t *t, const char *s) {
@@ -450,6 +452,58 @@ static int starts_ci_ascii(const char *text, const char *prefix) {
     return 1;
 }
 
+static int equal_ci_ascii(const char *left, const char *right) {
+    while (*left && *right) {
+        if (ascii_fold((unsigned char)*left) != ascii_fold((unsigned char)*right)) return 0;
+        ++left; ++right;
+    }
+    return *left == 0 && *right == 0;
+}
+
+static char *trim_ascii_space(char *text) {
+    while (*text && isspace((unsigned char)*text)) ++text;
+    char *end = text + strlen(text);
+    while (end > text && isspace((unsigned char)end[-1])) --end;
+    *end = 0;
+    return text;
+}
+
+static void write_concept_evidence(FILE *out, const char *topic) {
+    FILE *input = g_concepts_path ? fopen(g_concepts_path, "r") : NULL;
+    if (!input) {
+        fputs("{\"ok\":true,\"found\":false,\"topic\":", out); json_text(out, topic);
+        fputs(",\"source\":\"curated_concept_evidence_v1\",\"writes\":0,\"external_side_effects\":0}", out);
+        return;
+    }
+    char line[16384];
+    while (fgets(line, sizeof line, input)) {
+        size_t length = strlen(line);
+        if (length && line[length - 1] != '\n' && !feof(input)) {
+            int ch; while ((ch = fgetc(input)) != '\n' && ch != EOF) {}
+            continue;
+        }
+        char *first = strchr(line, '\t');
+        if (!first) continue;
+        *first++ = 0;
+        char *second = strchr(first, '\t');
+        if (!second) continue;
+        *second++ = 0;
+        char *key = trim_ascii_space(line);
+        char *evidence = trim_ascii_space(first);
+        char *misconceptions = trim_ascii_space(second);
+        if (!equal_ci_ascii(key, topic)) continue;
+        fclose(input);
+        fputs("{\"ok\":true,\"found\":true,\"topic\":", out); json_text(out, key);
+        fputs(",\"evidence\":", out); json_text(out, evidence);
+        fputs(",\"misconceptions\":", out); json_text(out, misconceptions);
+        fputs(",\"source\":\"curated_concept_evidence_v1\",\"writes\":0,\"external_side_effects\":0}", out);
+        return;
+    }
+    fclose(input);
+    fputs("{\"ok\":true,\"found\":false,\"topic\":", out); json_text(out, topic);
+    fputs(",\"source\":\"curated_concept_evidence_v1\",\"writes\":0,\"external_side_effects\":0}", out);
+}
+
 static void write_turn_classification(FILE *out, const char *text) {
     const char *move = "neutral", *signal = "none";
     double confidence = 0.55;
@@ -483,6 +537,8 @@ static void write_tools(FILE *out, const char *js, const jsmntok_t *id) {
     fputs("{\"name\":\"core.math_check\",\"description\":\"Bounded arithmetic expression recognition and numeric answer equivalence.\",\"inputSchema\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"text\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":16000},\"answer\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":256}},\"required\":[\"text\",\"answer\"]}}", out);
     fputs(",", out);
     fputs("{\"name\":\"core.classify_turn\",\"description\":\"Deterministic discourse classification for objections, counterexamples, confusion and questions.\",\"inputSchema\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"text\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":6000}},\"required\":[\"text\"]}}", out);
+    fputs(",", out);
+    fputs("{\"name\":\"core.concept_evidence\",\"description\":\"Read-only curated concept evidence for factual guarding before model inference.\",\"inputSchema\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"topic\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":300}},\"required\":[\"topic\"]}}", out);
     fputs("]}}\n", out); fflush(out);
 }
 
@@ -503,6 +559,7 @@ static void tool_result(FILE *out, const char *js, const jsmntok_t *id, const ch
     else if (strcmp(name, "core.study_plan") == 0) write_study_plan(out, number, mode);
     else if (strcmp(name, "core.math_check") == 0) write_math_check(out, text, answer);
     else if (strcmp(name, "core.classify_turn") == 0) write_turn_classification(out, text);
+    else if (strcmp(name, "core.concept_evidence") == 0) write_concept_evidence(out, text);
     else { fputs("{\"ok\":false,\"error\":\"POLICY_DENIED\",\"writes\":0,\"external_side_effects\":0}", out); }
     fputs(",\"isError\":false}}\n", out); fflush(out);
 }
@@ -538,7 +595,12 @@ static void dispatch(FILE *out, const char *line) {
     if (name_i < 0 || copy_json_string(line, &toks[name_i], name, sizeof name) != 0 || args_i < 0 || toks[args_i].type != JSMN_OBJECT) {
         tool_error(out, line, id_i >= 0 ? &toks[id_i] : NULL, "INVALID_INPUT"); return;
     }
-    if (strcmp(name, "core.text_profile") == 0 || strcmp(name, "core.extractive_summary") == 0 || strcmp(name, "core.classify_turn") == 0) {
+    if (strcmp(name, "core.concept_evidence") == 0) {
+        int topic_i = obj_get(line, toks, args_i, "topic");
+        if (topic_i < 0 || copy_json_string(line, &toks[topic_i], text, sizeof text) != 0 || strlen(text) > 300) {
+            tool_error(out, line, id_i >= 0 ? &toks[id_i] : NULL, "INVALID_INPUT"); return;
+        }
+    } else if (strcmp(name, "core.text_profile") == 0 || strcmp(name, "core.extractive_summary") == 0 || strcmp(name, "core.classify_turn") == 0) {
         int text_i = obj_get(line, toks, args_i, "text");
         if (text_i < 0 || copy_json_string(line, &toks[text_i], text, sizeof text) != 0) {
             tool_error(out, line, id_i >= 0 ? &toks[id_i] : NULL, "INVALID_INPUT"); return;
@@ -596,6 +658,14 @@ static int serve_unix(const char *path, uid_t allow_uid) {
     if (chmod(path, 0660) != 0) { perror("chmod"); close(fd); unlink(path); return 1; }
     if (listen(fd, 16) != 0) { perror("listen"); close(fd); unlink(path); return 1; }
     while (!g_stop) {
+        struct pollfd listener = {.fd = fd, .events = POLLIN, .revents = 0};
+        int ready = poll(&listener, 1, 250);
+        if (ready < 0) { if (errno == EINTR) continue; perror("poll"); break; }
+        if (ready == 0) continue;
+        if (!(listener.revents & POLLIN)) {
+            if (listener.revents & (POLLERR | POLLHUP | POLLNVAL)) break;
+            continue;
+        }
         int client = accept(fd, NULL, NULL);
         if (client < 0) { if (errno == EINTR) continue; perror("accept"); break; }
         struct timeval io_timeout = {.tv_sec = 5, .tv_usec = 0};
@@ -617,7 +687,7 @@ static int serve_unix(const char *path, uid_t allow_uid) {
 }
 
 static void usage(const char *argv0) {
-    fprintf(stderr, "usage: %s [--stdio | --socket PATH [--allow-uid UID]]\n", argv0);
+    fprintf(stderr, "usage: %s [--stdio | --socket PATH [--allow-uid UID]] [--concepts PATH]\n", argv0);
 }
 
 int main(int argc, char **argv) {
@@ -625,6 +695,7 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--socket") && i + 1 < argc) sock = argv[++i];
         else if (!strcmp(argv[i], "--allow-uid") && i + 1 < argc) allow_uid = (uid_t)strtoul(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--concepts") && i + 1 < argc) g_concepts_path = argv[++i];
         else if (!strcmp(argv[i], "--stdio")) stdio_mode = 1;
         else { usage(argv[0]); return 2; }
     }
