@@ -71,3 +71,13 @@ def test_systemd_unit_is_restartable_and_gated():
     assert "bottazzi_motor_judge_service wait-ready --timeout 180" in unit
     assert "Restart=on-failure" in unit
     assert "KillMode=mixed" in unit
+
+
+def test_backend_dropin_shares_bounded_judge_environment():
+    dropin = Path("deploy/systemd/ralfloop-backend-bottazzi-motor-judge.conf").read_text()
+    env = Path("deploy/systemd/bottazzi-motor-judge.env.example").read_text()
+    assert "EnvironmentFile=/etc/ralfloop/bottazzi-motor-judge.env" in dropin
+    assert "BOTTAZZI_MOTOR_MAX_TOKENS=64" in env
+    assert "BOTTAZZI_MOTOR_JUDGE_TOKENS=64" in env
+    assert "BOTTAZZI_MOTOR_AUDIT_PATH=/home/sibilla-cumana/" in env
+    assert "/home/bandi/" not in env
