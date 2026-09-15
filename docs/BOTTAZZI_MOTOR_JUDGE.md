@@ -45,3 +45,23 @@ Judge workload profile used for the successful pipeline canary:
 - frame-direct expert pack I/O
 
 The live pipeline dossier was 279 prompt tokens. DeepSeek returned `REQUEST_REVIEW`, confidence `0.86`, risk `MEDIUM`; the deterministic gate blocked progression because evidence was incomplete. Total model request time was 123.878 s, including 47 generated tokens at 0.87 token/s.
+
+## Service deployment
+
+The judge sidecar is designed to run as a separate systemd service on `127.0.0.1:19196`.
+It never replaces or restarts the production DeepSeek service on `19194`.
+
+Deployment assets:
+
+- `deploy/systemd/bottazzi-motor-judge.service`
+- `deploy/systemd/bottazzi-motor-judge.env.example`
+- `ralfloop_agent.integration.bottazzi_motor_judge_service`
+
+Copy the env example to `/etc/ralfloop/bottazzi-motor-judge.env` and review the binary,
+model and expert-pack paths before enabling the unit. The launcher rejects production ports,
+checks all three artifacts, binds loopback only, and uses the validated `128` prefill / `768 MiB`
+staging profile by default.
+
+The service uses `Restart=on-failure`, a dedicated DS4 lock file, and waits for the judge listener
+to become reachable before systemd marks startup complete. Ralfloop itself remains fail-closed if
+the judge sidecar is unavailable.
