@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
+import socket
 import subprocess
 import sys
 import time
@@ -63,3 +65,34 @@ def test_arci_systemd_candidate_is_read_only_and_loopback_bounded():
     assert "ProtectHome=read-only" in unit
     assert "IPAddressDeny=any" in unit
     assert "IPAddressAllow=localhost" in unit
+
+
+def test_arci_broker_concurrent_clients_avoid_head_of_line_blocking(tmp_path):
+    socket_path = tmp_path / "mcp-concurrent.sock"
+    server = Path("scripts/ralf_arci_mcp_server.py").resolve()
+    env = dict(os.environ)
+    env["RALF_MCP_IDLE_TIMEOUT"] = "5"
+    env["RALF_MCP_MAX_CLIENTS"] = "2"
+    broker = subprocess.Popen([
+        sys.executable,
+        "scripts/ralf_arci_mcp_broker.py",
+        "--socket", str(socket_path),
+        "--command", str(server),
+    ], env=env)
+    blocker = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        deadline = time.monotonic() + 3
+        while not socket_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        blocker.connect(str(socket_path))
+        started = time.monotonic()
+        with MCPClientSession(
+            UnixMCPTransport(str(socket_path)), timeout=1.5
+        ) as session:
+            tools = session.list_tools()
+        assert [tool.name for tool in tools] == [READ_TOOL]
+        assert time.monotonic() - started < 1.0
+    finally:
+        blocker.close()
+        broker.terminate()
+        broker.wait(timeout=3)

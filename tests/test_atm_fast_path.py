@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import json
 from datetime import datetime as RealDateTime
 
@@ -257,3 +259,11 @@ def test_empty_provider_batch_does_not_retry_single_snapshots(monkeypatch):
         atm._ATM_REALTIME_PROVIDER.reset(token)
     assert len(rows) == 1
     assert rows[0]["wait_source"] == "not_available"
+
+
+def test_atm_broker_dropin_enables_bounded_concurrency():
+    dropin = Path(
+        "deploy/systemd/ralf-atm-mcp-broker.service.d/95-atm-concurrency.conf"
+    ).read_text(encoding="utf-8")
+    assert "RALF_MCP_IDLE_TIMEOUT=5" in dropin
+    assert "RALF_MCP_MAX_CLIENTS=4" in dropin
