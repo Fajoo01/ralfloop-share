@@ -177,6 +177,17 @@ class FishTTSCache:
             time.sleep(0.25)
         return False
 
+    def warmup(self) -> bool:
+        """Start the fixed local Fish service in the background when capacity allows."""
+        if not self.enabled or not self.manage_local_service or not self._local_gpu_capacity_ok():
+            return False
+        self._cancel_idle_stop()
+        def run() -> None:
+            if self._ensure_local_service():
+                self._schedule_idle_stop()
+        threading.Thread(target=run, name="teacher-fish-warmup", daemon=True).start()
+        return True
+
     def _cancel_idle_stop(self) -> None:
         if not self.manage_local_service:
             return

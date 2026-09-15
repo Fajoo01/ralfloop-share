@@ -258,3 +258,24 @@ def test_managed_local_fish_idle_timer_stops_service(tmp_path):
     while "stop" not in controls and time.time() < deadline:
         time.sleep(0.01)
     assert controls == ["stop"]
+
+
+def test_managed_local_fish_warmup_is_nonblocking_and_starts_service(tmp_path):
+    helper = tmp_path / "helper.py"; helper.write_text("pass\n")
+    controls = []
+    cache = FishTTSCache(
+        base_url="http://127.0.0.1:19195", cache_dir=tmp_path / "cache",
+        python=sys.executable, helper=helper, manage_local_service=True,
+        min_free_vram_mb=1024, gpu_free_mb=lambda: 4096,
+        service_control=lambda action: controls.append(action) or True,
+        health_probe=lambda: bool(controls), idle_stop_seconds=60,
+    )
+    started = time.perf_counter()
+    assert cache.warmup() is True
+    assert time.perf_counter() - started < 0.2
+    deadline = time.time() + 1
+    while "start" not in controls and time.time() < deadline:
+        time.sleep(0.01)
+    assert controls and controls[0] == "start"
+    if cache._idle_timer is not None:
+        cache._idle_timer.cancel()

@@ -49,8 +49,8 @@ export function installBottazziAvatarSurface() {
     const rig=rigFace(face);if(!rig)return;
     const level=state==='speaking'?Math.max(0,Math.min(1,Number(mouthLevel)||0)):0;
     rig.dataset.state=state;rig.style.setProperty('--mouth-level',String(level));
-    rig.style.setProperty('--jaw-scale',String(1+level*.085));
-    rig.style.setProperty('--jaw-shift',`${(level*1.4).toFixed(3)}%`);
+    rig.style.setProperty('--jaw-scale',String(1+level*.15));
+    rig.style.setProperty('--jaw-shift',`${(level*2.4).toFixed(3)}%`);
   };
   rigFace(source);
   const apply=(state,mouthLevel=0)=>{

@@ -8,16 +8,18 @@
 .teacher-face-rig>img{grid-area:1/1}.teacher-face-base{transform:none!important}
 .teacher-face-rig>.teacher-face-jaw{clip-path:inset(56% 0 0 0);transform-origin:50% 58%!important;transform:translateY(var(--jaw-shift)) scaleY(var(--jaw-scale))!important;border-color:transparent!important;pointer-events:none;will-change:transform}
 .teacher-avatar>div>span{display:block;color:#62583e}
-.teacher-avatar[data-state=thinking] .teacher-face-rig{filter:saturate(.7);animation:teacher-thinking .9s ease-in-out infinite alternate}
+.teacher-avatar[data-state=thinking]{border-color:#b17a16;background:#fff3c9;box-shadow:0 0 0 3px rgba(177,122,22,.16)}
+.teacher-avatar[data-state=thinking] .teacher-face-rig{filter:saturate(.75);animation:teacher-thinking .72s ease-in-out infinite alternate}
 .teacher-avatar[data-state=listening]{border-color:#d9ac4b}
-.teacher-avatar[data-state=speaking]{box-shadow:inset 0 -4px #923326}
+.teacher-avatar[data-state=speaking]{border-color:#923326;background:#fff0df;box-shadow:inset 0 -5px #923326,0 0 0 3px rgba(146,51,38,.14)}
 .feedback[data-teacher-avatar-decorated="1"]{display:grid;grid-template-columns:96px minmax(0,1fr);align-items:start;gap:1rem;max-width:none}
 .teacher-avatar-inline{display:flex;align-items:center;justify-content:center;align-self:start}
 .teacher-avatar-inline img{display:block;width:84px;height:84px;object-fit:cover;border-radius:50%;border:3px solid #292b22;transform-origin:center bottom}
-.teacher-avatar-inline[data-state=thinking] .teacher-face-rig{filter:saturate(.7);animation:teacher-thinking .9s ease-in-out infinite alternate}
-.teacher-avatar-inline[data-state=speaking] img{box-shadow:0 0 0 4px rgba(146,51,38,.18)}
+.teacher-avatar-inline[data-state=thinking]{background:#fff3c9;border-radius:50%}
+.teacher-avatar-inline[data-state=thinking] .teacher-face-rig{filter:saturate(.75);animation:teacher-thinking .72s ease-in-out infinite alternate}
+.teacher-avatar-inline[data-state=speaking] .teacher-face-rig{box-shadow:0 0 0 5px rgba(146,51,38,.22)}
 .teacher-feedback-text{display:block;min-width:0;padding-top:.2rem}
-@keyframes teacher-thinking{from{transform:translateY(0)}to{transform:translateY(-3px)}}
+@keyframes teacher-thinking{from{transform:translateY(1px) rotate(-1deg)}to{transform:translateY(-7px) rotate(1deg)}}
 @media(max-width:600px){.teacher-avatar{margin:.5rem .8rem 0}.teacher-avatar img{width:88px;height:88px}.feedback[data-teacher-avatar-decorated="1"]{grid-template-columns:68px minmax(0,1fr);gap:.7rem}.teacher-avatar-inline img{width:60px;height:60px}}
 :root{--reader-font-scale:1;--reader-line-spacing:1.55;--reader-column:72ch}
 body{font-size:calc(18px * var(--reader-font-scale));line-height:var(--reader-line-spacing)}

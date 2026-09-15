@@ -229,7 +229,14 @@ def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", sec
 
     @app.post("/api/activities")
     def generate(data: Generate, profile=Depends(student)):
-        return locked(profile, learning.generate, data.topic, data.activity_type)
+        result = locked(profile, learning.generate, data.topic, data.activity_type)
+        try:
+            warmup = getattr(fish, "warmup", None)
+            if callable(warmup):
+                warmup()
+        except Exception as exc:
+            log.info("fish_tts_warmup_skipped error_class=%s", type(exc).__name__)
+        return result
 
     @app.get("/api/activities/{activity_id}")
     def activity(activity_id: str, profile=Depends(student)):

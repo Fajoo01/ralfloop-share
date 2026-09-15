@@ -67,7 +67,7 @@ class FeedbackVoiceRegistry:
         *,
         ttl_seconds: float = 1800.0,
         max_entries: int = 512,
-        ready_wait_seconds: float = 30.0,
+        ready_wait_seconds: float = 75.0,
         ready_poll_seconds: float = 0.25,
     ):
         self.fish = fish

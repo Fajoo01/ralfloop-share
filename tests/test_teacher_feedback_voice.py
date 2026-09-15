@@ -86,3 +86,8 @@ def test_malformed_voice_handle_is_rejected():
 
     with pytest.raises(LookupError):
         registry.prepare("student-a", "not-a-handle")
+
+
+def test_default_wait_window_covers_real_cold_start():
+    registry = FeedbackVoiceRegistry(FakeFish("pending"))
+    assert registry.ready_wait_seconds >= 60.0
