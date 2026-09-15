@@ -220,6 +220,8 @@ def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any]
             connectors.append("google_workspace.gmail")
         if any(item.domain == "whatsapp" for item in plan.assignments):
             connectors.append("whatsapp.web.mcp")
+        if any(item.domain == "mailchimp" for item in plan.assignments):
+            connectors.append("mailchimp.marketing")
     return {
         "task_mode": task_mode,
         "mode": task_mode,

@@ -65,6 +65,7 @@ def valid_tools():
     tools.extend([
         SimpleNamespace(name="mailchimp_create_approved_campaign", input_schema=protected),
         SimpleNamespace(name="mailchimp_send_approved_campaign", input_schema=protected),
+        SimpleNamespace(name="mailchimp_subscribe_approved_member", input_schema=protected),
     ])
     return tools
 

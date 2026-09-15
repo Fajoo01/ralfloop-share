@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -212,6 +213,8 @@ class UnifiedAssistantCore:
             )
         if assignment.skill in {"mailchimp.campaign.create", "mailchimp.campaign.send"}:
             return self._prepare_mailchimp_campaign(assignment, plan.model_dump(mode="json"))
+        if assignment.skill == "mailchimp.member.subscribe":
+            return self._prepare_mailchimp_member_subscribe(assignment, plan.model_dump(mode="json"))
         if assignment.skill in {"whatsapp.compose", "whatsapp.reply"}:
             return self._compose_whatsapp(
                 text, plan.model_dump(mode="json"),
@@ -253,6 +256,50 @@ class UnifiedAssistantCore:
         pending = self.conversation.stage(
             domain="mailchimp", action=action, policy=PolicyClass.CONFIRM_WRITE,
             payload=dict(payload), displayed_text=display,
+        )
+        return self._result(
+            "draft_pending_approval", display,
+            selected_skill=assignment.skill, pending_id=pending.pending_id,
+            draft_version=pending.version, draft_digest=pending.payload_digest,
+            writes=0, sends=0,
+        )
+
+    def _prepare_mailchimp_member_subscribe(self, assignment, plan: dict[str, Any]) -> UnifiedAssistantResult:
+        if not self.flags.mailchimp_campaign_live:
+            return self._result(
+                "denied", "Mailchimp protected workflow disabled; no provider mutation executed.",
+                plan=plan, writes=0, sends=0,
+            )
+        list_id = str(
+            assignment.arguments.get("list_id")
+            or os.getenv("RALF_MAILCHIMP_DEFAULT_LIST_ID", "")
+        ).strip()
+        email_address = str(assignment.arguments.get("email_address") or "").strip().casefold()
+        if not list_id:
+            return self._result(
+                "clarification_required",
+                "Serve il list_id dell'audience Mailchimp oppure RALF_MAILCHIMP_DEFAULT_LIST_ID.",
+                plan=plan, writes=0, sends=0,
+            )
+        if not email_address:
+            return self._result(
+                "clarification_required", "Serve l'indirizzo email da iscrivere.",
+                plan=plan, writes=0, sends=0,
+            )
+        payload = {
+            "list_id": list_id,
+            "email_address": email_address,
+            "first_name": str(assignment.arguments.get("first_name") or "").strip(),
+            "last_name": str(assignment.arguments.get("last_name") or "").strip(),
+            "provider_identity": "mailchimp.marketing",
+        }
+        display = (
+            f"Iscrizione Mailchimp pronta per {email_address} sulla lista {list_id}: "
+            "richiedere approval separata."
+        )
+        pending = self.conversation.stage(
+            domain="mailchimp", action="mailchimp_member_subscribe",
+            policy=PolicyClass.CONFIRM_WRITE, payload=payload, displayed_text=display,
         )
         return self._result(
             "draft_pending_approval", display,
@@ -1166,15 +1213,21 @@ class UnifiedAssistantCore:
             status = str(result.get("status") or "failed")
             self._audit(
                 domain="mailchimp", intent=pending.action,
-                skill=("mailchimp.campaign.create" if pending.action == "mailchimp_campaign_create"
-                       else "mailchimp.campaign.send"),
+                skill=(
+                    "mailchimp.campaign.create" if pending.action == "mailchimp_campaign_create"
+                    else "mailchimp.campaign.send" if pending.action == "mailchimp_campaign_send"
+                    else "mailchimp.member.subscribe"
+                ),
                 policy=pending.policy, target=str(pending.payload.get("list_id") or ""),
                 verification=status, pending=pending,
                 tool="mailchimp.marketing.approval_bound", tool_result=status,
             )
-            if status in {"executed", "already_executed"}:
+            if status in {"executed", "already_executed", "already_subscribed"}:
                 self.conversation.clear("mailchimp")
-            elif status in {"CREATE_UNCERTAIN", "SEND_UNCERTAIN", "EXECUTION_UNCERTAIN"}:
+            elif status in {
+                "CREATE_UNCERTAIN", "SEND_UNCERTAIN", "SUBSCRIBE_UNCERTAIN",
+                "EXECUTION_UNCERTAIN", "MEMBER_REQUIRES_RECONSENT",
+            }:
                 self.conversation.clear("mailchimp")
             return self._result(status, "Workflow Mailchimp completato." if status == "executed"
                                 else "Workflow Mailchimp non eseguito o non verificato.", result=result)

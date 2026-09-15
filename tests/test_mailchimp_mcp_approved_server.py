@@ -164,3 +164,25 @@ def test_server_send_needs_new_exact_approval(tmp_path):
     assert result["state"] == "SENT"
     assert client.send_calls == 1
     assert db.get_request(request_id)["status"] == "consumed"
+
+
+def test_client_empty_ok_accepts_empty_success_body(monkeypatch):
+    class EmptyResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def read(self, _limit):
+            return b""
+
+    monkeypatch.setattr(SERVER, "urlopen", lambda *_args, **_kwargs: EmptyResponse())
+    client = SERVER.MailchimpClient("fake-us1", "us1")
+
+    assert client._request(
+        "campaigns/campaign_1/actions/send",
+        method="POST",
+        body={},
+        empty_ok=True,
+    ) == {}

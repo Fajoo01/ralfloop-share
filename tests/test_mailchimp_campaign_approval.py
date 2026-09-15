@@ -384,5 +384,7 @@ def test_registry_separates_read_and_approval_bound_capabilities():
     assert all(cap.endswith(".read") or cap == "mailchimp.ping" for cap in read.capabilities)
     assert protected.classification.value == "CONFIRM_WRITE"
     assert protected.capabilities == (
-        "mailchimp.campaign.create.approved", "mailchimp.campaign.send.approved"
+        "mailchimp.campaign.create.approved",
+        "mailchimp.campaign.send.approved",
+        "mailchimp.member.subscribe.approved",
     )

@@ -23,6 +23,7 @@ READ_TOOLS = frozenset({
 PROTECTED_TOOLS = frozenset({
     "mailchimp_create_approved_campaign",
     "mailchimp_send_approved_campaign",
+    "mailchimp_subscribe_approved_member",
 })
 ALL_TOOLS = READ_TOOLS | PROTECTED_TOOLS
 
@@ -238,10 +239,11 @@ class MailchimpApprovedMCPWorkflow:
     def execute_send(self, request_id: str, scope: Mapping[str, Any]) -> dict[str, Any]:
         return self._execute("mailchimp_send_approved_campaign", request_id, scope)
 
+    def execute_subscribe(self, request_id: str, scope: Mapping[str, Any]) -> dict[str, Any]:
+        return self._execute("mailchimp_subscribe_approved_member", request_id, scope)
+
     def _execute(self, tool: str, request_id: str, scope: Mapping[str, Any]) -> dict[str, Any]:
-        computed = {"action", "version", "artifact_sha256", "body_sha256"}
-        if tool == "mailchimp_create_approved_campaign":
-            computed.add("html_sha256")
+        computed = {"action", "version", "artifact_sha256", "body_sha256", "html_sha256"}
         arguments = {
             key: value for key, value in scope.items()
             if key not in computed

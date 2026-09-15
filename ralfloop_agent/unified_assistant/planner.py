@@ -80,6 +80,15 @@ _MAILCHIMP_SEND_CAMPAIGN_RE = re.compile(
     r"\b(?:invia|send)\b.*\bcampagna\b.*\bmailchimp\b|"
     r"\bmailchimp\b.*\b(?:invia|send)\b.*\bcampagna\b", re.I,
 )
+_MAILCHIMP_SUBSCRIBE_MEMBER_RE = re.compile(
+    r"\b(?:aggiungi|iscrivi|subscribe)\b.*\b(?:mailchimp|mailing\s+list|newsletter|audience)\b|"
+    r"\b(?:mailchimp|mailing\s+list|newsletter|audience)\b.*\b(?:aggiungi|iscrivi|subscribe)\b",
+    re.I,
+)
+_MAILCHIMP_LIST_ALIAS_RE = re.compile(r"\b(?:mailing\s+list|newsletter)\b", re.I)
+_MAILCHIMP_EMAIL_RE = re.compile(
+    r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}\b", re.I
+)
 _MAILCHIMP_AUDIENCE_RE = re.compile(
     r"\b(?:audience|audiences|liste?|pubblico|contatti)\b",
     re.I,
@@ -173,6 +182,31 @@ class UnifiedPlanner:
             return self._denied("fastweb_portal_mutation_denied")
         if _FASTWEB_RE.search(goal) and _FASTWEB_COMPARE_RE.search(goal):
             return self._fastweb_compare_plan(goal)
+
+        mailchimp_subscribe = _MAILCHIMP_SUBSCRIBE_MEMBER_RE.search(goal)
+        email_match = _MAILCHIMP_EMAIL_RE.search(goal)
+        if mailchimp_subscribe and email_match is not None and (
+            _MAILCHIMP_RE.search(goal) or _MAILCHIMP_LIST_ALIAS_RE.search(goal)
+        ):
+            list_id_match = _MAILCHIMP_LIST_ID_RE.search(goal)
+            return AssistantPlan(
+                intent="mailchimp.member.subscribe",
+                domains=("mailchimp",),
+                assignments=(self._assignment(
+                    domain="mailchimp", skill="mailchimp.member.subscribe",
+                    objective=goal, input_refs=("user.goal",),
+                    output_ref="artifact.mailchimp_member_subscribe_approval",
+                    policy=PolicyClass.CONFIRM_WRITE,
+                    arguments={
+                        "action": "mailchimp_member_subscribe",
+                        "email_address": email_match.group(0).casefold(),
+                        **(
+                            {"list_id": list_id_match.group("list_id")}
+                            if list_id_match else {}
+                        ),
+                    },
+                ),),
+            )
 
         if _MAILCHIMP_RE.search(goal):
             if _MAILCHIMP_CREATE_CAMPAIGN_RE.search(goal):

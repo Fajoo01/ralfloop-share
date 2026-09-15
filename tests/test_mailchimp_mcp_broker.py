@@ -92,7 +92,8 @@ def test_production_venv_initializes_server_through_uid_guard(tmp_path):
             UnixMCPTransport(str(socket_path)), timeout=3
         ) as session:
             tools = session.list_tools()
-        assert len(tools) == 10
+        assert len(tools) == 11
+        assert "mailchimp_subscribe_approved_member" in {tool.name for tool in tools}
         assert socket_path.stat().st_mode & 0o777 == 0o600
         assert socket.socket(socket.AF_UNIX).family == socket.AF_UNIX
     finally:

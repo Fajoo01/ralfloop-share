@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any, Callable, Mapping, Protocol
 
 from ralfloop_agent.domains.domain_approval import (
@@ -17,6 +18,7 @@ from .conversation import PendingAction, approval_matches, payload_matches
 
 CREATE_ACTION = "mailchimp_campaign_create"
 SEND_ACTION = "mailchimp_campaign_send"
+SUBSCRIBE_ACTION = "mailchimp_member_subscribe"
 
 
 def _sha(value: str) -> str:
@@ -92,11 +94,43 @@ def build_mailchimp_campaign_send_scope(payload: Mapping[str, Any]) -> dict[str,
     }
 
 
+_EMAIL_ADDRESS_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _normalize_email_address(value: Any) -> str:
+    email = str(value or "").strip().casefold()
+    if not email or len(email) > 320 or _EMAIL_ADDRESS_RE.fullmatch(email) is None:
+        raise ValueError("mailchimp_member_email_invalid")
+    return email
+
+
+def build_mailchimp_member_subscribe_scope(payload: Mapping[str, Any]) -> dict[str, Any]:
+    artifact = {
+        "action": SUBSCRIBE_ACTION,
+        "version": 1,
+        "list_id": str(payload.get("list_id") or "").strip(),
+        "email_address": _normalize_email_address(payload.get("email_address")),
+        "first_name": str(payload.get("first_name") or "").strip(),
+        "last_name": str(payload.get("last_name") or "").strip(),
+        "provider_identity": str(payload.get("provider_identity") or "mailchimp.marketing"),
+    }
+    if not artifact["list_id"] or not artifact["provider_identity"]:
+        raise ValueError("mailchimp_member_scope_incomplete")
+    artifact_sha256 = _canonical_digest(artifact)
+    return {
+        **artifact,
+        "artifact_sha256": artifact_sha256,
+        "execution_id": "mcsubscribe_" + artifact_sha256[:24],
+    }
+
+
 class MailchimpCampaignProvider(Protocol):
     def validate_create(self, scope: Mapping[str, Any]) -> None: ...
     def create_campaign(self, scope: Mapping[str, Any]) -> Mapping[str, Any]: ...
     def read_campaign(self, campaign_id: str) -> Mapping[str, Any]: ...
     def send_campaign(self, campaign_id: str) -> None: ...
+    def read_member(self, list_id: str, email_address: str) -> Mapping[str, Any] | None: ...
+    def subscribe_member(self, scope: Mapping[str, Any]) -> Mapping[str, Any]: ...
 
 
 def campaign_fingerprint(campaign: Mapping[str, Any]) -> str:
@@ -200,6 +234,75 @@ class MailchimpCampaignWorkflow:
                     "campaign_id": campaign_id, "retry_allowed": False}
         return result
 
+    def execute_subscribe(self, request_id: str, current_scope: Mapping[str, Any]) -> dict[str, Any]:
+        checked = self._approved(request_id, SUBSCRIBE_ACTION, current_scope)
+        if checked is not None:
+            return checked
+        list_id = str(current_scope.get("list_id") or "")
+        email_address = str(current_scope.get("email_address") or "")
+        try:
+            before = self.provider.read_member(list_id, email_address)
+        except Exception:
+            return {"status": "SOURCE_UNAVAILABLE", "subscribed": False, "retry_allowed": True}
+        if before is not None:
+            member_status = str(before.get("status") or "")
+            if member_status != "subscribed":
+                self.store.mark_stale(request_id, ["mailchimp_member_requires_reconsent"])
+                return {
+                    "status": "MEMBER_REQUIRES_RECONSENT",
+                    "subscribed": False, "retry_allowed": False,
+                    "member_status": member_status,
+                }
+            claim = self.store.claim_execution(request_id, action=SUBSCRIBE_ACTION)
+            if not claim.get("claimed"):
+                return {"status": str(claim.get("status")), "subscribed": True, "retry_allowed": False}
+            result = {
+                "status": "already_subscribed", "state": "SUBSCRIBED",
+                "subscribed": True, "email_address": email_address,
+                "list_id": list_id, "writes": 0, "retry_allowed": False,
+            }
+            finalized = self.store.finish_claimed_execution(
+                request_id, action=SUBSCRIBE_ACTION, success=True, result=result,
+            )
+            if finalized.get("status") != "consumed":
+                return {"status": "EXECUTION_UNCERTAIN", "subscribed": True, "retry_allowed": False}
+            return result
+        claim = self.store.claim_execution(request_id, action=SUBSCRIBE_ACTION)
+        if not claim.get("claimed"):
+            return {"status": str(claim.get("status")), "subscribed": False, "retry_allowed": False}
+        try:
+            self.provider.subscribe_member(current_scope)
+            after = self.provider.read_member(list_id, email_address)
+            if (
+                after is None
+                or str(after.get("list_id") or list_id) != list_id
+                or str(after.get("email_address") or "").casefold() != email_address.casefold()
+                or str(after.get("status") or "") != "subscribed"
+            ):
+                raise RuntimeError("subscribe_postcondition_mismatch")
+        except Exception:
+            failed = {
+                "status": "SUBSCRIBE_UNCERTAIN", "subscribed": False,
+                "retry_allowed": False,
+            }
+            self.store.finish_claimed_execution(
+                request_id, action=SUBSCRIBE_ACTION, success=False, result=failed,
+            )
+            return failed
+        result = {
+            "status": "executed", "state": "SUBSCRIBED", "subscribed": True,
+            "email_address": email_address, "list_id": list_id,
+            "provider_evidence": dict(after), "writes": 1, "retry_allowed": False,
+        }
+        finalized = self.store.finish_claimed_execution(
+            request_id, action=SUBSCRIBE_ACTION, success=True, result=result,
+        )
+        if finalized.get("status") != "consumed":
+            return {"status": "EXECUTION_UNCERTAIN", "subscribed": True,
+                    "email_address": email_address, "list_id": list_id,
+                    "retry_allowed": False}
+        return result
+
     def reconcile(self, request_id: str, *, action: str, campaign_id: str) -> dict[str, Any]:
         row = self.store.get_request(request_id)
         if row is None or row.get("action") != action:
@@ -296,8 +399,13 @@ class UnifiedMailchimpApprovalCoordinator:
             raise ValueError("mailchimp_pending_required")
         payload = {**pending.payload, "draft_id": pending.pending_id,
                    "draft_version": pending.version, "payload_digest": pending.payload_digest}
-        return (build_mailchimp_campaign_create_scope(payload) if pending.action == CREATE_ACTION
-                else build_mailchimp_campaign_send_scope(payload))
+        if pending.action == CREATE_ACTION:
+            return build_mailchimp_campaign_create_scope(payload)
+        if pending.action == SEND_ACTION:
+            return build_mailchimp_campaign_send_scope(payload)
+        if pending.action == SUBSCRIBE_ACTION:
+            return build_mailchimp_member_subscribe_scope(payload)
+        raise ValueError("mailchimp_pending_action_denied")
 
 
 class UnifiedMailchimpApprovalExecutor:
@@ -313,12 +421,14 @@ class UnifiedMailchimpApprovalExecutor:
             return workflow.execute_create(str(pending.approval_ref), scope)
         if pending.action == SEND_ACTION:
             return workflow.execute_send(str(pending.approval_ref), scope)
+        if pending.action == SUBSCRIBE_ACTION:
+            return workflow.execute_subscribe(str(pending.approval_ref), scope)
         return {"status": "POLICY_DENIED", "retry_allowed": False}
 
 
 __all__ = [
-    "CREATE_ACTION", "SEND_ACTION", "MailchimpCampaignWorkflow",
+    "CREATE_ACTION", "SEND_ACTION", "SUBSCRIBE_ACTION", "MailchimpCampaignWorkflow",
     "UnifiedMailchimpApprovalCoordinator", "UnifiedMailchimpApprovalExecutor",
     "build_mailchimp_campaign_create_scope", "build_mailchimp_campaign_send_scope",
-    "campaign_fingerprint",
+    "build_mailchimp_member_subscribe_scope", "campaign_fingerprint",
 ]

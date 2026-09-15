@@ -325,9 +325,10 @@ class UnifiedRegistryFacade:
             capabilities=(
                 "mailchimp.campaign.create.approved",
                 "mailchimp.campaign.send.approved",
+                "mailchimp.member.subscribe.approved",
             ),
-            input_schema="exact canonical campaign scope + approval_request_id + execution_id",
-            output_schema="verified campaign state; no generic provider mutation",
+            input_schema="exact canonical Mailchimp scope + approval_request_id + execution_id",
+            output_schema="verified campaign/member state; no generic provider mutation",
             classification=PolicyClass.CONFIRM_WRITE,
             side_effect_class="confirmation_required",
             availability="constrained:approval_and_provider_required",
