@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from ralfloop_agent.integration.capability_adapter import route_task
 from ralfloop_agent.models.result_envelope import ResultEnvelope
+from ralfloop_agent.integration.verification_judge import run_verification_judge, verification_blocks
 from src import audit
 from src.confirmation import get_confirmation
 from src.executor import ShellExecutor
@@ -52,6 +53,14 @@ def run_capability_reasoning_cycle(user_goal: str, context: dict | None = None) 
             diff=evidence.stdout or "",
             tests=["pending: run targeted tests before patch"],
         )
+        candidate_answer = "patch_allowed requires repro, diff and tests"
+        judge_trace = run_verification_judge(
+            user_goal, route, patch, candidate_answer, {**context, "task_id": task_id}
+        )
+        patch_meta = {**meta}
+        if judge_trace is not None:
+            patch_meta["verification_judge"] = judge_trace
+        answer = "verification_judge_blocked" if verification_blocks(route, judge_trace) else candidate_answer
         envelope = ResultEnvelope(
             route=route,
             evidence=patch,
@@ -60,8 +69,8 @@ def run_capability_reasoning_cycle(user_goal: str, context: dict | None = None) 
             verification_policy=route.verification_policy,
             collaboration_trace=collaboration_trace,
             jury_trace=collaboration_trace,
-            answer="patch_allowed requires repro, diff and tests",
-            meta=meta,
+            answer=answer,
+            meta=patch_meta,
         )
         audit.log_operation("reasoning_cycle_patch_allowed", envelope.model_dump(mode="json"))
         return envelope
