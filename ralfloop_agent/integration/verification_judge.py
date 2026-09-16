@@ -7,6 +7,7 @@ from ralfloop_agent.integration.bottazzi_motor_judge import (
     JudgeCase,
     JudgeOutcome,
 )
+from ralfloop_agent.unified_assistant.judge_context import collect_judge_context
 from src.models import CapabilityRoute, Evidence, PatchEvidence
 
 
@@ -36,6 +37,9 @@ def build_verification_case(
         ])
     for item in list(context.get("judge_facts") or [])[:20]:
         facts.append(str(item)[:1000])
+    judge_context = context.get("judge_context") or {}
+    for item in list(judge_context.get("facts") or [])[:12]:
+        facts.append(str(item)[:1000])
 
     rules = [f"criterion:{item}" for item in route.verification_policy.criteria]
     rules.extend([
@@ -49,8 +53,10 @@ def build_verification_case(
         rules=rules,
         candidate_actions=["PASS", "REQUEST_REVIEW", "REJECT"],
         candidate_answer=candidate_answer,
+        evidence_refs=[str(item)[:1000] for item in list(judge_context.get("evidence_refs") or [])[:16]],
         side_effect_intent=route.mode == "external_action",
         human_confirmation=bool(context.get("human_confirmation")),
+        metadata={"retrieval_context": dict(judge_context.get("metadata") or {})},
     )
 
 
@@ -67,6 +73,16 @@ def run_verification_judge(
         return None
     if policy.judge_provider != "bottazzi_motor":
         return None
+    context = dict(context or {})
+    if "judge_context" not in context:
+        try:
+            context["judge_context"] = collect_judge_context(user_goal).as_dict()
+        except Exception as exc:
+            context["judge_context"] = {
+                "facts": [f"judge_context_status=unavailable:{type(exc).__name__}"],
+                "evidence_refs": [],
+                "metadata": {"status": "unavailable"},
+            }
     case = build_verification_case(user_goal, route, evidence, candidate_answer, context)
     outcome: JudgeOutcome = (judge or BotTazziMotorJudge()).judge(case)
     return outcome.model_dump()
