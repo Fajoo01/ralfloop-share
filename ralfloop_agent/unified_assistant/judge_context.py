@@ -55,10 +55,14 @@ def _query_attempts(goal: str, domain: str) -> tuple[str, ...]:
     generic = {
         "fix", "bug", "problema", "issue", "sistemare", "controlla",
         "controllare", "verifica", "verificare", "dobbiamo", "questa", "questo",
+        "concreto", "test", "tests", "patch",
     }
+    domain_key = domain.casefold()
     words = [
         token for token in re.findall(r"[\wÀ-ÿ-]+", goal, flags=re.UNICODE)
-        if len(token) >= 4 and token.casefold() not in generic
+        if len(token) >= 4
+        and token.casefold() not in generic
+        and token.casefold() != domain_key
     ]
     attempts = list(words[:4])
     if domain and domain not in {"knowledge", "documents"}:
