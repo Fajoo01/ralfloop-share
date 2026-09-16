@@ -1,0 +1,16 @@
+[Unit]
+Description=Ralf Gemma4 multimodal reviewer via llama.cpp
+After=network.target
+[Service]
+Type=simple
+User=bandi
+Group=bandi
+ExecStart=/opt/ralf/llama/bin/llama-server --model /var/lib/ralf-models/gemma4-12b/model.gguf --mmproj /var/lib/ralf-models/gemma4-12b/mmproj.gguf --alias gemma4-vision --host 127.0.0.1 --port 19112 --ctx-size 1024 --threads 8 --threads-batch 8 --parallel 1 --n-gpu-layers 0 --no-mmproj-offload --jinja --no-webui
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+[Install]
+WantedBy=multi-user.target

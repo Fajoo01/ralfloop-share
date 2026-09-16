@@ -25,8 +25,8 @@ FRAME_CACHE_FILE = os.environ.get("BOTTAZZI_GARDEN_FRAME_CACHE_FILE", "").strip(
 FRAME_CACHE_MAX_AGE_SECONDS = float(os.environ.get("BOTTAZZI_GARDEN_FRAME_CACHE_MAX_AGE_SECONDS", "15"))
 MEOWGRAM_URL = "http://127.0.0.1:18127/send_photo"
 MEOWGRAM_FILE_URL = "http://127.0.0.1:18127/send_file"
-OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
-VISION_MODEL = os.environ.get("BOTTAZZI_GARDEN_VISION_MODEL", "llama3.2-vision:latest")
+VISION_BASE_URL = os.environ.get("BOTTAZZI_GARDEN_VISION_BASE_URL", "http://127.0.0.1:19112").rstrip("/")
+VISION_MODEL = os.environ.get("BOTTAZZI_GARDEN_VISION_MODEL", "gemma4-vision")
 BASE = Path(os.environ.get("BOTTAZZI_GARDEN_BASE", "/opt/bottazzi-garden")).resolve()
 YOLO_MODEL_MANIFEST = Path(
     os.environ.get("BOTTAZZI_GARDEN_YOLO_MANIFEST", str(BASE / "garden_model_manifest.json"))
@@ -1479,6 +1479,8 @@ def validate_with_vision(img_path: Path, hits):
         needs_vision = True
     if not needs_vision and garden_fp_fn_requires_vision(hits):
         needs_vision = True
+    if not needs_vision and any(str(h.get("supervisor_reason") or "") in {"single_frame_requires_vision", "no_motion_baseline_requires_vision"} for h in hits):
+        needs_vision = True
 
     if not needs_vision:
         return True, {"skipped": True, "reason": "dnn_detection"}
@@ -1506,21 +1508,35 @@ def validate_with_vision(img_path: Path, hits):
             "additionalProperties": False,
         }
 
+        content = [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + b64}},
+        ]
+        payload = {
+            "model": VISION_MODEL,
+            "messages": [{"role": "user", "content": content}],
+            "stream": False,
+            "temperature": 0,
+            "max_tokens": int(os.environ.get("BOTTAZZI_GARDEN_VISION_MAX_TOKENS", "64")),
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+        if os.environ.get("BOTTAZZI_GARDEN_VISION_JSON_SCHEMA", "1") != "0":
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "garden_verdict", "strict": True, "schema": vision_json_schema},
+            }
+        else:
+            payload["response_format"] = {"type": "json_object"}
         r = requests.post(
-            OLLAMA_URL,
-            json={
-                "model": VISION_MODEL,
-                "prompt": prompt,
-                "images": [b64],
-                "stream": False,
-                "format": vision_json_schema if os.environ.get("BOTTAZZI_GARDEN_VISION_JSON_SCHEMA", "1") != "0" else "json",
-                "keep_alive": os.environ.get("BOTTAZZI_GARDEN_VISION_KEEP_ALIVE", "0s"),
-                "options": {"temperature": 0, "num_predict": 120},
-            },
-            timeout=float(os.environ.get("BOTTAZZI_GARDEN_VISION_TIMEOUT_SECONDS", "70")),
+            f"{VISION_BASE_URL}/v1/chat/completions",
+            json=payload,
+            timeout=float(os.environ.get("BOTTAZZI_GARDEN_VISION_TIMEOUT_SECONDS", "90")),
         )
         r.raise_for_status()
-        text = (r.json().get("response") or "").strip()
+        body = r.json()
+        text = (((body.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+        if not text:
+            text = (((body.get("choices") or [{}])[0].get("message") or {}).get("reasoning_content") or "").strip()
         start, end = text.find("{"), text.rfind("}")
         data = json.loads(text[start:end + 1]) if start >= 0 and end >= start else {"raw": text}
         human_value = data.get("human")
@@ -1567,7 +1583,7 @@ def validate_with_vision(img_path: Path, hits):
         return human_value, data
     except Exception as e:
         # VISION_FAIL_OPEN_DNN_HITS_PATCH_20260613
-        # Se la vision/Ollama fallisce ma c'è una hit DNN/persona, non perdere il passaggio reale.
+        # Se la vision remota fallisce ma c'è una hit DNN/persona, non perdere il passaggio reale.
         # Il fail-closed resta per motion_fallback puro.
         has_yolo_hit = any(str(h.get("detector", "")).startswith("yolo") for h in (hits or []))
         if has_yolo_hit and VISION_VALIDATE_YOLO:
