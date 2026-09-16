@@ -10,8 +10,9 @@ Group=bandi
 
 WorkingDirectory=/home/sibilla-cumana/ralfloop-production/current
 Environment=PYTHONPATH=/home/sibilla-cumana/ralfloop-production/current
+LoadCredential=teacher-bridge.token:/etc/ralfloop/teacher-bridge.token
 
-ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_teacher_tcp_bridge.py --bind 10.252.14.138 --port 19138 --unix-socket /run/ralf-teacher-mcp/mcp.sock --token-file /etc/ralfloop/teacher-bridge.token --allow-cidr 10.252.14.0/24 --max-clients 6
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_teacher_tcp_bridge.py --bind 10.252.14.138 --port 19138 --unix-socket /run/ralf-teacher-mcp/mcp.sock --token-file %d/teacher-bridge.token --allow-cidr 10.252.14.0/24 --max-clients 6
 
 Restart=on-failure
 RestartSec=2
