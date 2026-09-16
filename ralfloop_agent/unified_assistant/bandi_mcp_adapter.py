@@ -69,7 +69,7 @@ class BandiMCPContext:
     def request(self, objective: str) -> dict[str, Any]:
         lowered = objective.casefold()
         refs = tuple(dict.fromkeys(match.upper() for match in _BANDO_REF_RE.findall(objective)))
-        fresh = bool(re.search(r"\b(?:cerca|trova|scopri|ricerca|aggiorna|nuov[ioe]|adesso|oggi|ora)\b", lowered))
+        fresh = bool(re.search(r"\b(?:cerc\w*|trov\w*|scopr\w*|ricerc\w*|aggiorn\w*|nuov[ioe]|adesso|oggi|ora)\b", lowered))
         review = bool(re.search(r"\b(?:valuta|ammissibil|compatibil|conviene|requisit|scaden|analizz|verifica)\b", lowered))
         list_only = bool(re.search(r"\b(?:lista|elenca|quali|aperti|opportunit[aà])\b", lowered))
 
@@ -93,6 +93,12 @@ class BandiMCPContext:
                 raw = self.call("bandi_research_now", {"focus": objective[:500], "limit": 10})
 
         items = list(raw.get("items") or [])
+        if not refs and (fresh or list_only or (not review and not refs)):
+            visible = _broad_visible_items(items)
+            raw["raw_item_count"] = len(items)
+            raw["excluded_irrelevant_count"] = len(items) - len(visible)
+            raw["items"] = visible
+            items = visible
         if review and len(items) == 1 and items[0].get("call_key"):
             detail = self.call("bandi_get_opportunity", {"call_key": str(items[0]["call_key"])})
             raw["selected_opportunity"] = detail.get("opportunity")
@@ -102,6 +108,18 @@ class BandiMCPContext:
         raw["requested_bando_refs"] = list(refs)
         raw["operation"] = "reference_lookup" if refs else "fresh_research" if fresh else "review" if review else "latest"
         return raw
+
+
+def _broad_visible_items(items: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    visible: list[Mapping[str, Any]] = []
+    for item in items:
+        fit = str(item.get("tiremm_compatibility") or "").casefold()
+        score = int(item.get("score") or 0)
+        if fit == "ineligible":
+            continue
+        if fit.startswith("compatible") or fit.startswith("conditional") or score >= 70:
+            visible.append(item)
+    return visible
 
 
 def _message(payload: Mapping[str, Any]) -> str:
