@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata: {name: gemma-vision, namespace: ralf-routing}
+spec:
+  selector: {matchLabels: {app: gemma-vision}}
+  template:
+    metadata: {labels: {app: gemma-vision}}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector: {workload-role: compute, ralf-gemma-vision: ready}
+      containers:
+      - name: gemma-vision
+        image: ubuntu:24.04
+        command: [/opt/ralf/bin/llama-server]
+        args: [--model,/models/model.gguf,--mmproj,/models/mmproj.gguf,--alias,gemma4-vision,--host,0.0.0.0,--port,"19112",--ctx-size,"1024",--threads,"8",--threads-batch,"8",--parallel,"1",--n-gpu-layers,"0",--no-mmproj-offload,--jinja,--no-webui]
+        ports: [{name: http, containerPort: 19112}]
+        readinessProbe: {httpGet: {path: /health, port: http}, periodSeconds: 5, failureThreshold: 12}
+        resources: {requests: {cpu: "2", memory: 4Gi}, limits: {cpu: "10", memory: 12Gi}}
+        securityContext: {runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+        env: [{name: LD_LIBRARY_PATH, value: /opt/ralf/bin:/host-libs}]
+        volumeMounts:
+        - {name: llama, mountPath: /opt/ralf/bin, readOnly: true}
+        - {name: model, mountPath: /models, readOnly: true}
+        - {name: libs, mountPath: /host-libs, readOnly: true}
+      volumes:
+      - {name: llama, hostPath: {path: /opt/ralf/llama/bin, type: Directory}}
+      - {name: model, hostPath: {path: /var/lib/ralf-models/gemma4-12b, type: Directory}}
+      - {name: libs, hostPath: {path: /usr/lib/x86_64-linux-gnu, type: Directory}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: gemma-vision, namespace: ralf-routing}
+spec:
+  selector: {app: gemma-vision}
+  ports: [{name: http, port: 19112, targetPort: http}]

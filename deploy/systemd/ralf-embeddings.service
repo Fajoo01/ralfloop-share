@@ -1,0 +1,16 @@
+[Unit]
+Description=Ralf Qwen3 embeddings OpenAI-compatible llama.cpp service
+After=network.target
+[Service]
+Type=simple
+User=bandi
+Group=bandi
+ExecStart=/opt/ralf/llama/bin/llama-server --model /var/lib/ralf-models/qwen3-embedding-4b/model.gguf --alias qwen3-embedding-4b --host 127.0.0.1 --port 19111 --ctx-size 2048 --threads 4 --threads-batch 4 --parallel 1 --n-gpu-layers 0 --embedding --pooling last --no-webui --metrics
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+[Install]
+WantedBy=multi-user.target

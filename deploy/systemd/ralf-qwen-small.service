@@ -1,0 +1,16 @@
+[Unit]
+Description=Ralf Qwen small OpenAI-compatible llama.cpp service
+After=network.target
+[Service]
+Type=simple
+User=bandi
+Group=bandi
+ExecStart=/opt/ralf/llama/bin/llama-server --model /var/lib/ralf-models/qwen2.5-3b/model.gguf --alias qwen2.5-3b --host 127.0.0.1 --port 19110 --ctx-size 4096 --threads 4 --threads-batch 4 --parallel 1 --n-gpu-layers 0 --jinja --no-webui --metrics
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+[Install]
+WantedBy=multi-user.target
