@@ -189,7 +189,20 @@ class UnifiedRegistryFacade:
     def _runtime_adapters(self) -> list[UnifiedToolSpec]:
         entities = json.loads(self.home_entities_path.read_text(encoding="utf-8"))
         entity_count = len(entities.get("entities") or [])
-        home_status = "available" if entity_count else "constrained:no_registered_entities"
+        home_provider = os.getenv("RALFLOOP_HOME_PROVIDER", "home_assistant").strip().casefold()
+        home_status = (
+            "constrained:provider_replaced_by_tuya_mcp"
+            if home_provider == "tuya_mcp"
+            else "available" if entity_count else "constrained:no_registered_entities"
+        )
+        tuya_socket = Path(os.getenv("RALF_TUYA_MCP_SOCKET", "/run/ralf-tuya-mcp/mcp.sock"))
+        tuya_status = (
+            "available"
+            if home_provider == "tuya_mcp" and _observable_path_exists(tuya_socket)
+            else "constrained:broker_unavailable"
+            if home_provider == "tuya_mcp"
+            else "constrained:not_selected"
+        )
         gmail_socket = Path("/run/ralf-google-workspace-mcp/mcp.sock")
         whatsapp_scopes = json.loads(self.whatsapp_scopes_path.read_text(encoding="utf-8"))
         whatsapp_work_profile = (
@@ -371,6 +384,17 @@ class UnifiedRegistryFacade:
             source_registry=str(
                 PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "mailchimp_campaign.py"
             ),
+        ), UnifiedToolSpec(
+            id="tuya.home.mcp",
+            capabilities=("home.state.read", "home.service.call"),
+            input_schema="strict Tuya MCP schemas over Home Assistant-owned Tuya entities",
+            output_schema="Tuya device/entity inventory, state, and verified service readback",
+            classification=PolicyClass.PROTECTED,
+            side_effect_class="mixed_read_and_policy_gated_write",
+            availability=tuya_status,
+            health="Unix MCP broker + Tuya ownership verification + Home Assistant readback",
+            verification_method="Tuya registry ownership; service allowlist; read before/write/read after",
+            source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "tuya_mcp.py"),
         ), UnifiedToolSpec(
             id="home_assistant.adapter",
             capabilities=("home.state.read", "home.service.call"),

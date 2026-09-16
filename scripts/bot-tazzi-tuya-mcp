@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd /home/sibilla-cumana/ralf-memory-rag/current
+exec /home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python \
+  /home/sibilla-cumana/ralf-memory-rag/current/scripts/ralf_tuya_mcp_server.py

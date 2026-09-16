@@ -12,6 +12,7 @@
     {"id":"jellyfin","socket":"/run/ralf-jellyfin-mcp/mcp.sock"},
     {"id":"amule","socket":"/run/ralf-amule-mcp/mcp.sock"},
     {"id":"teacher","socket":"/run/ralf-teacher-mcp/mcp.sock"},
+    {"id":"tuya","socket":"/run/ralf-tuya-mcp/mcp.sock"},
     {"id":"whatsapp","socket":"/run/ralf-whatsapp-mcp/mcp.sock"}
   ]
 }

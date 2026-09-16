@@ -1,0 +1,27 @@
+[Unit]
+Description=Bot-tazzi Tuya MCP broker via Home Assistant
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sibilla-cumana
+Group=ralf-mcp
+WorkingDirectory=/home/sibilla-cumana/ralf-memory-rag/current
+UMask=0007
+RuntimeDirectory=ralf-tuya-mcp
+RuntimeDirectoryMode=0770
+Environment=TZ=Europe/Rome
+Environment=TUYA_HA_CONFIG_DIR=/home/sibilla-cumana/homeassistant/config
+Environment=HA_ENV_FILE=/home/sibilla-cumana/.secrets/homeassistant.env
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralf-memory-rag/current/scripts/ralf_tuya_mcp_broker.py --socket /run/ralf-tuya-mcp/mcp.sock --allow-uid 1000 --allow-uid 1001 --command /home/sibilla-cumana/ralf-memory-rag/current/scripts/bot-tazzi-tuya-mcp --idle-timeout 120
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

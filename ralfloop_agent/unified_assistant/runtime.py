@@ -30,6 +30,7 @@ from .executor import StructuredArtifact, UnifiedDAGExecutor
 from .fastweb_portal import FastwebPortalReadOnly
 from .home import HomeEntityRegistry, HomeWorkflow
 from .home_provider import HomeAssistantProviderError, HomeAssistantRESTBackend
+from .tuya_mcp_adapter import TuyaMCPHomeBackend, TuyaMCPProviderError
 from .memory import MemoryRouter, tiremm_profile_items
 from .atm_mcp_adapter import ATMMCPReadOnly
 from .editorial_mcp_adapter import EditorialMCPContext
@@ -223,6 +224,9 @@ def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any]
         connectors.append("jellyfin.identity.mcp.read")
     if "education.tutor" in skills:
         connectors.append("teacher.student.mcp")
+    if any(skill in {"home.read", "home.control"} for skill in skills):
+        home_provider = os.getenv("RALFLOOP_HOME_PROVIDER", "home_assistant").strip().casefold()
+        connectors.append("tuya.home.mcp" if home_provider == "tuya_mcp" else "home_assistant.adapter")
     if not all_read and any(item.domain == "jellyfin" for item in plan.assignments):
         connectors.append("jellyfin.identity.mcp.write")
     return {
@@ -306,11 +310,17 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
     home_workflow = None
     if flags.home_assistant_read_live or flags.home_assistant_live:
         try:
+            provider = os.getenv("RALFLOOP_HOME_PROVIDER", "home_assistant").strip().casefold()
+            backend = (
+                TuyaMCPHomeBackend.from_environment()
+                if provider == "tuya_mcp"
+                else HomeAssistantRESTBackend.from_environment()
+            )
             home_workflow = HomeWorkflow(
                 HomeEntityRegistry.load(DEFAULT_HOME_ENTITIES),
-                HomeAssistantRESTBackend.from_environment(),
+                backend,
             )
-        except (OSError, ValueError, HomeAssistantProviderError):
+        except (OSError, ValueError, HomeAssistantProviderError, TuyaMCPProviderError):
             home_workflow = None
     approval_coordinator = None
     approval_executor = None
