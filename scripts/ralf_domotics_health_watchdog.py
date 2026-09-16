@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import time
@@ -80,10 +81,39 @@ def reload_tuya(config_dir: str, env_file: str) -> dict[str, Any]:
     return {"attempted": len(entry_ids), "results": results, "ok": bool(results) and all(x["ok"] for x in results)}
 
 
+def append_transition_events(path: Path, event: Mapping[str, Any]) -> int:
+    kinds = (
+        ("new_unavailable", "DOMOTICS_ENTITY_UNAVAILABLE"),
+        ("recovered", "DOMOTICS_ENTITY_RECOVERED"),
+        ("new_missing", "DOMOTICS_ENTITY_MISSING"),
+        ("returned_missing", "DOMOTICS_ENTITY_RETURNED"),
+    )
+    rows: list[dict[str, Any]] = []
+    ts = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    for field, event_type in kinds:
+        for entity_id in event.get(field) or []:
+            identity = f"{event_type}|{entity_id}|{ts}"
+            rows.append({
+                "event_id": "domotics_" + hashlib.sha256(identity.encode()).hexdigest()[:20],
+                "ts": ts,
+                "source": "domotics_watchdog",
+                "event": event_type,
+                "entity_id": entity_id,
+            })
+    if not rows:
+        return 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+    return len(rows)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--socket", default="/run/ralf-tuya-mcp/mcp.sock")
     parser.add_argument("--state", default="/var/lib/ralf-domotics-watchdog/state.json")
+    parser.add_argument("--events", default="/var/lib/ralf-domotics-watchdog/events.jsonl")
     parser.add_argument("--ha-config-dir", default="/home/sibilla-cumana/homeassistant/config")
     parser.add_argument("--ha-env-file", default="/home/sibilla-cumana/.secrets/homeassistant.env")
     parser.add_argument("--persistence", type=int, default=2)
@@ -151,6 +181,7 @@ def main() -> int:
             event["post_reload_health"] = fetch_health(args.socket).get("state_health") or {}
             event["reload_candidates"] = {}
 
+    event["transition_events_appended"] = 0 if baseline else append_transition_events(Path(args.events), event)
     write_state(state_path, event)
     print(json.dumps(event, ensure_ascii=False))
     return 0

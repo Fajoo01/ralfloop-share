@@ -1,0 +1,12 @@
+[Unit]
+Description=Correlate Bot-tazzi surveillance/domotics activity every 30 seconds
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=30s
+AccuracySec=5s
+Persistent=true
+Unit=bottazzi-activity-correlator.service
+
+[Install]
+WantedBy=timers.target
