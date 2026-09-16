@@ -199,7 +199,19 @@ class UnifiedRegistryFacade:
         mailchimp_socket = Path("/run/ralf-mailchimp-mcp/mcp.sock")
         meteo_socket = Path("/run/ralf-meteo-mcp/mcp.sock")
         editorial_socket = Path("/tmp/ralf-editorial-mcp/mcp.sock")
+        bandi_socket = Path("/tmp/ralf-bandi-mcp/mcp.sock")
         rows = [UnifiedToolSpec(
+            id="bandi.research.mcp",
+            capabilities=("bandi_research_now", "bandi_latest", "bandi_search_latest", "bandi_get_opportunity"),
+            input_schema="strict Bandi MCP schemas; read-only discovery/review",
+            output_schema="ranked opportunities, deadlines, scores, criticalities, citations and persisted report refs",
+            classification=PolicyClass.READ,
+            side_effect_class="none",
+            availability="available" if _observable_path_exists(bandi_socket) else "constrained:broker_unavailable",
+            health="Unix MCP broker + exact four-tool allowlist",
+            verification_method="official-source-first bounded research; persisted report provenance; writes=0; sends=0",
+            source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "bandi_mcp_adapter.py"),
+        ), UnifiedToolSpec(
             id="editorial.flyer.mcp",
             capabilities=("flyer_create", "flyer_update", "flyer_projects", "flyer_brief", "flyer_review", "flyer_marketing_review", "flyer_media_review", "flyer_render"),
             input_schema="strict editorial MCP schemas; project-bound files only",

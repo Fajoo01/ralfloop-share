@@ -465,6 +465,8 @@ def detect_document_change(previous: AvailableDocument | None, current: Availabl
 
 def _document_type(label: str, href: str) -> tuple[str, bool]:
     value = f"{label} {href}".casefold()
+    if "/servizio/comunicazioni/" in value or any(token in value for token in ("infoday", "webinar", "evento informativo")):
+        return "related_document", False
     if any(token in value for token in ("proroga", "rettifica", "modifica", "decreto")):
         return "official_amendment", True
     if "faq" in value:

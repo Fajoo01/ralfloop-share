@@ -19,7 +19,9 @@ _HOME_RE = re.compile(
     r"temperatura|quanto\s+fa|fa\s+caldo|fa\s+freddo)\b",
     re.I,
 )
-_GRANT_RE = re.compile(r"\b(?:band[oi]|grant|contribut[oi]|finanziament[oi]|candidatur[ae])\b", re.I)
+_GRANT_RE = re.compile(r"\b(?:band[oi]|grant|contribut[oi]|finanziament[oi]|candidatur[ae]|opportunit[aà])\b", re.I)
+_GRANT_DISCOVER_RE = re.compile(r"\b(?:cerca(?:mi|re)?|trova(?:mi|re)?|scopri|ricerca|aggiorna|nuov[ioe]|apert[ioe]|opportunit[aà]|segnala)\b", re.I)
+_GRANT_REVIEW_RE = re.compile(r"\b(?:valuta|analizza|verifica|ammissibil|compatibil|conviene|requisit|scaden|budget|cofinanzi)\w*\b", re.I)
 _TIREMM_RE = re.compile(r"\b(?:tiremm|associazione|aps|partner|progetto)\b", re.I)
 _RELATIONAL_RE = re.compile(r"\b(?:rsc|abc|relazional[ei]|formula\s+loop)\b", re.I)
 _INFRA_RE = re.compile(r"\b(?:agentcpm|servizi[oa]?|spazio\s+libero|disco|server|amule)\b", re.I)
@@ -366,7 +368,14 @@ class UnifiedPlanner:
         if _RELATIONAL_RE.search(goal):
             return self._single(goal, "personal_relational", "personal_relational.analyze", PolicyClass.READ)
         if grant:
-            return self._single(goal, "bandi", "bandi.eligibility" if tiremm else "bandi.read", PolicyClass.READ)
+            skill = (
+                "bandi.research"
+                if _GRANT_DISCOVER_RE.search(goal)
+                else "bandi.eligibility"
+                if tiremm and _GRANT_REVIEW_RE.search(goal)
+                else "bandi.read"
+            )
+            return self._single(goal, "bandi", skill, PolicyClass.READ)
         if _INFRA_RE.search(goal):
             return self._single(goal, "infrastructure", "infrastructure.inspect", PolicyClass.READ)
         if _RESEARCH_RE.search(goal):
@@ -399,14 +408,14 @@ class UnifiedPlanner:
 
     def _grant_email_plan(self, goal: str, *, include_tiremm: bool) -> AssistantPlan:
         assignments = [self._assignment(
-            domain="bandi", skill="bandi.read", objective="Retrieve and validate grant requirements.",
+            domain="bandi", skill="bandi.read", objective=goal,
             input_refs=("user.goal",), output_ref="artifact.grant_evidence", policy=PolicyClass.READ,
         )]
         previous = assignments[-1].task_id
         if include_tiremm:
             assignments.append(self._assignment(
                 domain="bandi", skill="bandi.eligibility",
-                objective="Compare verified Tiremm facts with grant requirements.",
+                objective=goal,
                 input_refs=("artifact.grant_evidence", "memory.tiremm"),
                 output_ref="artifact.eligibility", depends_on=(previous,), policy=PolicyClass.READ,
             ))

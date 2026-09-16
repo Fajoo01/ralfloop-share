@@ -87,6 +87,16 @@ PRIMARY_DOMAINS = {
     "funding-tenders.ec.europa.eu",
     "ec.europa.eu",
 }
+DIRECT_DISCOVERY_URLS = (
+    ("regione_terzo_settore", "https://www.bandi.regione.lombardia.it/servizi/servizio/bandi/terzo-settore-volontariato"),
+    ("regione_clima", "https://www.bandi.regione.lombardia.it/servizi/servizio/bandi/ambiente-territorio/clima"),
+    ("regione_politiche_sociali", "https://www.bandi.regione.lombardia.it/servizi/servizio/bandi/politiche-sociali"),
+    ("regione_istruzione", "https://www.bandi.regione.lombardia.it/servizi/servizio/bandi/istruzione-formazione-lavoro"),
+    ("regione_cultura", "https://www.bandi.regione.lombardia.it/servizi/servizio/bandi/cultura-turismo-sport"),
+)
+MAX_DISCOVERED_DETAILS_PER_LISTING = 5
+
+
 QUERY_FAMILIES = (
     ("municipio", "site:comune.milano.it Municipio 2 bando associazioni contributi 2026"),
     ("comune", "site:comune.milano.it bando contributi APS ETS cultura giovani inclusione 2026"),
@@ -114,7 +124,7 @@ class WeeklyConfig:
     engines: str = DEFAULT_ENGINES
     timeout_sec: float = 18.0
     max_results_per_query: int = 5
-    max_primary_fetches: int = 30
+    max_primary_fetches: int = 45
     max_bytes: int = 15_000_000
     semantic_retrieval_enabled: bool = True
     semantic_minimum_documents: int = 2
@@ -132,7 +142,7 @@ class WeeklyConfig:
             engines=os.getenv("RALFLOOP_SEARXNG_ENGINES", DEFAULT_ENGINES),
             timeout_sec=float(os.getenv("BANDI_WEEKLY_TIMEOUT_SEC", "18")),
             max_results_per_query=int(os.getenv("BANDI_WEEKLY_RESULTS_PER_QUERY", "5")),
-            max_primary_fetches=int(os.getenv("BANDI_WEEKLY_MAX_PRIMARY_FETCHES", "30")),
+            max_primary_fetches=int(os.getenv("BANDI_WEEKLY_MAX_PRIMARY_FETCHES", "45")),
             max_bytes=int(os.getenv("BANDI_WEEKLY_MAX_BYTES", "15000000")),
             semantic_retrieval_enabled=os.getenv("BANDI_SEMANTIC_RETRIEVAL_ENABLED", "1") == "1",
             semantic_minimum_documents=int(os.getenv("BANDI_SEMANTIC_MIN_DOCUMENTS", "2")),
@@ -341,6 +351,32 @@ def _raw_html(fetched: Any) -> str | None:
         return None
 
 
+def _discover_detail_links(raw_html: str | None, base_url: str, *, limit: int = MAX_DISCOVERED_DETAILS_PER_LISTING) -> list[dict[str, str]]:
+    if not raw_html:
+        return []
+    soup = BeautifulSoup(raw_html, "html.parser")
+    base_host = _domain(base_url)
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for node in soup.find_all("a", href=True):
+        href = canonical_url(urllib.parse.urljoin(base_url, str(node.get("href") or "")))
+        if _domain(href) != base_host:
+            continue
+        path = urllib.parse.urlparse(href).path
+        if "/servizi/servizio/bandi/dettaglio/" not in path and "/servizi/servizio/catalogo/dettaglio/" not in path:
+            continue
+        if href in seen:
+            continue
+        title = re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
+        if not title or title.casefold() in {"scopri di più", "fai domanda"}:
+            continue
+        seen.add(href)
+        out.append({"url": href, "title": title[:500]})
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _default_semantic_invoke() -> Any:
     manager = ModelToolManager(ModelToolRegistry.load())
 
@@ -466,25 +502,27 @@ def _status_and_deadline(text: str, today: date) -> tuple[str, str | None, int |
     low = text.lower()
     deadline = _labeled_deadline(text, today)
     days = (deadline - today).days if deadline else None
-    if any(
+    strong_closed = any(
         term in low
         for term in (
             "bando chiuso",
             "avviso chiuso",
-            "scaduto",
             "non più possibile presentare",
             "stato: aggiudicato",
             "stato aggiudicato",
-            "approvazione della graduatoria",
         )
-    ):
+    )
+    weak_closed = any(term in low for term in ("scaduto", "approvazione della graduatoria"))
+    if strong_closed:
+        status = "closed"
+    elif deadline and deadline >= today:
+        status = "open"
+    elif deadline and deadline < today:
+        status = "expired"
+    elif weak_closed:
         status = "closed"
     elif any(term in low for term in ("prossima apertura", "sarà pubblicato", "annunciato")):
         status = "announced"
-    elif deadline and deadline < today:
-        status = "expired"
-    elif deadline and deadline >= today:
-        status = "open"
     elif "aperto" in low and any(term in low for term in APPLICATION_TERMS):
         status = "open"
     else:
@@ -518,8 +556,13 @@ def _call_rejection_reason(search_row: dict[str, Any], text: str, today: date) -
     if any(term in title for term in NON_CALL_TITLE_TERMS):
         return "historical_result_or_non_call_document"
     title_or_snippet = " ".join((title, snippet))
-    explicit_call = any(term in title_or_snippet for term in CALL_TERMS) or any(
-        term in text[:30_000].lower() for term in ("bando pubblico", "avviso pubblico", "invito a presentare")
+    path = urllib.parse.urlparse(str(search_row.get("url") or "")).path
+    official_detail = _is_primary_domain(str(search_row.get("url") or "")) and (
+        "/servizi/servizio/bandi/dettaglio/" in path
+        or "/servizi/servizio/catalogo/dettaglio/" in path
+    )
+    explicit_call = official_detail or any(term in title_or_snippet for term in CALL_TERMS) or any(
+        term in text[:30_000].lower() for term in ("bando pubblico", "avviso pubblico", "invito a presentare", "chi può partecipare", "come partecipare")
     )
     if not explicit_call:
         return "primary_source_not_call_like"
@@ -549,12 +592,32 @@ def _project_candidate(themes: list[str]) -> str:
     return mapping.get(themes[0], "Attività territoriale APS coerente col bando") if themes else "Da definire dopo verifica requisiti"
 
 
+def _tiremm_eligibility_fit(evidence: list[str]) -> tuple[str, str]:
+    text = " ".join(evidence).casefold()
+    if not text:
+        return "needs_review", "beneficiary_evidence_missing"
+    strong = any(token in text for token in ("aps", "ets", "runts", "terzo settore", "non profit", "no profit"))
+    restricted = (
+        ("pro loco", "pro_loco_only"),
+        ("associazioni sportive dilettantistiche", "asd_only"),
+        ("associazione sportiva dilettantistica", "asd_only"),
+    )
+    for token, reason in restricted:
+        if token in text:
+            return "ineligible", reason
+    if strong:
+        return "compatible", "aps_ets_explicit"
+    if "associazion" in text:
+        return "needs_review", "generic_association_only"
+    return "needs_review", "beneficiary_class_unclear"
+
+
 def _score(opportunity: dict[str, Any]) -> tuple[int, list[dict[str, Any]]]:
     rules: list[dict[str, Any]] = []
-    evidence = " ".join(opportunity.get("beneficiaries_evidence", [])).lower()
-    eligible = any(term in evidence for term in ELIGIBILITY_TERMS)
-    points = 25 if eligible else 5
-    rules.append({"rule": "aps_ets_eligibility", "points": points, "reason": "explicit" if eligible else "not_explicit"})
+    evidence_rows = list(opportunity.get("beneficiaries_evidence", []) or [])
+    fit, fit_reason = _tiremm_eligibility_fit(evidence_rows)
+    points = 25 if fit == "compatible" else 8 if fit == "needs_review" else 0
+    rules.append({"rule": "aps_ets_eligibility", "points": points, "reason": fit_reason})
     territory = opportunity.get("territory", "")
     territory_points = {"Milano Municipio 2": 20, "Milano": 18, "Lombardia": 15, "Italia": 10, "Unione europea": 6}.get(territory, 2)
     rules.append({"rule": "territorial_fit", "points": territory_points, "reason": territory})
@@ -583,7 +646,9 @@ def _score(opportunity: dict[str, Any]) -> tuple[int, list[dict[str, Any]]]:
     completeness_points = 5 if completeness == 3 else completeness
     rules.append({"rule": "source_completeness", "points": completeness_points, "reason": completeness})
     score = max(0, min(100, sum(int(item["points"]) for item in rules)))
-    if opportunity.get("status") in {"closed", "expired"}:
+    if opportunity.get("tiremm_compatibility") == "ineligible":
+        score = min(score, 20)
+    elif opportunity.get("status") in {"closed", "expired"}:
         score = min(score, 39)
     elif opportunity.get("status") == "unknown":
         score = min(score, 59)
@@ -607,6 +672,7 @@ def _build_opportunity(search_row: dict[str, Any], fetched: Any, text: str, toda
     status, deadline, days = _status_and_deadline(text, today)
     themes = _themes(text)
     beneficiary_evidence = _eligibility_evidence(text)
+    eligibility_fit, eligibility_reason = _tiremm_eligibility_fit(beneficiary_evidence)
     partnership_evidence = _evidence_snippets(text, ("partenariato", "partnership", "capofila", "partner"), 2)
     document_evidence = _evidence_snippets(text, ("statuto", "bilancio", "runts", "formulario", "allegato"), 4)
     opportunity: dict[str, Any] = {
@@ -633,12 +699,17 @@ def _build_opportunity(search_row: dict[str, Any], fetched: Any, text: str, toda
         "eligible_costs_evidence": _evidence_snippets(text, ("spese ammissibili", "costi ammissibili", "personale", "attrezzature"), 4),
         "project_duration_evidence": _evidence_snippets(text, ("durata del progetto", "mesi", "avvio delle attività"), 3),
         "themes": themes,
-        "tiremm_compatibility": "compatible" if beneficiary_evidence and themes else "needs_review",
+        "tiremm_compatibility": eligibility_fit if themes else "needs_review",
+        "eligibility_reason": eligibility_reason,
         "candidate_project": _project_candidate(themes),
         "criticalities": [],
         "required_documents_evidence": document_evidence,
         "next_action": "Aprire il regolamento completo e verificare eleggibilità, budget e scadenza",
-        "why_tiremm_should_apply": "APS RUNTS con attività territoriali coerenti" if beneficiary_evidence and themes else "Compatibilità da confermare sui requisiti completi",
+        "why_tiremm_should_apply": (
+            "APS RUNTS con attività territoriali coerenti" if eligibility_fit == "compatible" and themes
+            else "Soggetto beneficiario non compatibile con Tiremm Innanz APS" if eligibility_fit == "ineligible"
+            else "Compatibilità da confermare sui requisiti completi"
+        ),
         "next_three_actions": [
             "Verificare requisiti soggettivi e territoriali nel regolamento",
             "Stimare progetto, budget e cofinanziamento realistici",
@@ -659,8 +730,12 @@ def _build_opportunity(search_row: dict[str, Any], fetched: Any, text: str, toda
     opportunity["priority"] = _priority(score)
     if status in {"closed", "expired"}:
         opportunity["criticalities"].append("call_not_open")
-    if not beneficiary_evidence:
+    if eligibility_fit == "ineligible":
+        opportunity["criticalities"].append("beneficiary_class_excludes_tiremm")
+    elif not beneficiary_evidence:
         opportunity["criticalities"].append("beneficiaries_not_explicitly_extracted")
+    elif eligibility_fit == "needs_review":
+        opportunity["criticalities"].append("beneficiary_class_needs_review")
     if not deadline:
         opportunity["criticalities"].append("deadline_not_extracted")
     return opportunity
@@ -745,6 +820,7 @@ def run_weekly(
     fetcher: Any | None = None,
     semantic_invoke: Any | None = None,
     today: date | None = None,
+    extra_queries: tuple[tuple[str, str], ...] = (),
 ) -> RunResult:
     config = config or WeeklyConfig.from_env()
     today = today or date.today()
@@ -768,6 +844,7 @@ def run_weekly(
     discarded: list[dict[str, Any]] = []
     opportunities: list[dict[str, Any]] = []
     try:
+        use_verified_direct_discovery = provider is None and fetcher is None
         provider = provider or SearxngSearchProvider(
             config.searxng_url,
             timeout_sec=config.timeout_sec,
@@ -792,7 +869,7 @@ def run_weekly(
                 })
         discovered: dict[str, dict[str, Any]] = {}
         successful_queries = 0
-        for family, query in QUERY_FAMILIES:
+        for family, query in (*QUERY_FAMILIES, *extra_queries):
             try:
                 results = provider.search(query, limit=config.max_results_per_query)
                 successful_queries += 1
@@ -819,11 +896,34 @@ def run_weekly(
                 }
         if successful_queries == 0:
             raise RuntimeError("bandi_search_backend_unavailable")
-        primary_rows = [row for row in discovered.values() if _is_primary_domain(row["url"])]
+        if use_verified_direct_discovery:
+            for family, url in DIRECT_DISCOVERY_URLS:
+                canonical = canonicalize_url(url)
+                if canonical not in discovered:
+                    discovered[canonical] = {
+                        "url": canonical, "title": family.replace("_", " "), "snippet": "",
+                        "publisher": "Regione Lombardia", "family": "verified_listing", "queries": ["direct_verified_listing"],
+                    }
+                    metrics.sources_discovered += 1
+        direct_rank = {canonicalize_url(url): index for index, (_family, url) in enumerate(DIRECT_DISCOVERY_URLS)}
+        primary_rows = sorted(
+            (row for row in discovered.values() if _is_primary_domain(row["url"])),
+            key=lambda row: (
+                0 if row.get("family") == "verified_listing" else 1,
+                direct_rank.get(row["url"], 999),
+                row.get("title") or "",
+            ),
+        )
+        queued_urls = {row["url"] for row in primary_rows}
         for row in discovered.values():
             if not _is_primary_domain(row["url"]):
                 discarded.append({"title": row["title"], "url": row["url"], "reason": "discovery_only_no_primary_confirmation"})
-        for row in primary_rows[: config.max_primary_fetches]:
+        primary_index = 0
+        processed_primary = 0
+        while primary_index < len(primary_rows) and processed_primary < config.max_primary_fetches:
+            row = primary_rows[primary_index]
+            primary_index += 1
+            processed_primary += 1
             try:
                 fetched = fetcher.fetch(row["url"])
             except Exception as exc:
@@ -841,6 +941,17 @@ def run_weekly(
                 metrics.failed_sources += 1
                 errors.append({"stage": "parse", "subject": row["url"], "reason": parse_status})
                 continue
+            if use_verified_direct_discovery and fetched.content_type == "text/html":
+                for detail in _discover_detail_links(_raw_html(fetched), str(fetched.final_url or fetched.url)):
+                    if detail["url"] in queued_urls:
+                        continue
+                    queued_urls.add(detail["url"])
+                    primary_rows.append({
+                        "url": detail["url"], "title": detail["title"], "snippet": "",
+                        "publisher": row.get("publisher") or _domain(detail["url"]),
+                        "family": "listing_detail", "queries": [row["url"]],
+                    })
+                    metrics.sources_discovered += 1
             rejection_reason = _call_rejection_reason(row, text, today)
             if rejection_reason:
                 discarded.append({"title": row["title"], "url": row["url"], "reason": rejection_reason})

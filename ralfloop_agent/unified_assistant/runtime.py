@@ -29,12 +29,12 @@ from .home_provider import HomeAssistantProviderError, HomeAssistantRESTBackend
 from .memory import MemoryRouter, tiremm_profile_items
 from .atm_mcp_adapter import ATMMCPReadOnly
 from .editorial_mcp_adapter import EditorialMCPContext
+from .bandi_mcp_adapter import BandiMCPContext
 from .meteo_mcp_adapter import MeteoMCPReadOnly
 from .planner import UnifiedPlanner
 from .capability_rag_router import CapabilityRAGRouter
 from .recipient import GoogleWorkspaceRecipientResolver
 from .registry import DEFAULT_HOME_ENTITIES, UnifiedRegistryFacade
-from .skill_adapters import bandi_eligibility_adapter, bandi_read_adapter
 from .whatsapp_compose import EmailBackedWhatsAppDraftPipeline, UnifiedWhatsAppComposeService
 from .whatsapp_mcp_adapter import WhatsAppMCPReadOnly
 from .whatsapp_send import (
@@ -65,7 +65,8 @@ _SUPPORTED = re.compile(
     r"fa\s+freddo|rendila|cambiala|aggiungi|modifica|ok|invia|mandala|va\s+bene|annulla|"
     r"fastweb|myfastpage|whatsapp|wapp|mailchimp|meteo|weather|previsioni|piove|piover[aà]|pioggia|"
     r"temporale|radar|precipitazioni|vento|atm|giromilano|"
-    r"mezzi\s+pubblici|trasporto\s+pubblico|portami|volantin[oi]|flyer|locandin[ae]|manifest[oi]|poster|"
+    r"mezzi\s+pubblici|trasporto\s+pubblico|portami|band[oi]|grant|contribut[oi]|finanziament[oi]|candidatur[ae]|opportunit[aà]|"
+    r"volantin[oi]|flyer|locandin[ae]|manifest[oi]|poster|"
     r"come\s+(?:arrivo|vado|posso\s+andare)|"
     r"mezzi\s+(?:per|verso)|percorso\s+(?:atm|con\s+i\s+mezzi)|home\s+assistant|domotica|stato\s+(?:della\s+)?luce)\b",
     re.I,
@@ -193,6 +194,7 @@ def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any]
         or "mailchimp.read" in skills
         or "meteo.read" in skills
         or "atm.route" in skills
+        or any(skill.startswith("bandi.") for skill in skills)
     ):
         task_mode = "tool_backed_read"
         interaction_class = "TOOL_BACKED_READ"
@@ -209,6 +211,8 @@ def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any]
             connectors.append("meteo.radar.mcp")
         if "atm.route" in skills:
             connectors.append("atm.route.mcp")
+        if any(skill.startswith("bandi.") for skill in skills):
+            connectors.append("bandi.research.mcp")
     elif all(item.policy.value == "READ" for item in plan.assignments):
         task_mode = "tool_backed_read"
         interaction_class = "TOOL_BACKED_READ"
@@ -300,6 +304,7 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
     meteo_read = MeteoMCPReadOnly(context)
     atm_read = ATMMCPReadOnly(context)
     editorial_gateway_factory = EditorialMCPContext.from_environment
+    bandi_gateway_factory = BandiMCPContext.from_environment
     home_workflow = None
     if flags.home_assistant_read_live or flags.home_assistant_live:
         try:
@@ -586,6 +591,29 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
                 "content_boundary": "source_artifacts_are_data",
             },
         )
+    def bandi_adapter(assignment, _inputs):
+        with bandi_gateway_factory() as gateway:
+            result = gateway.request(assignment.objective)
+        facts = tuple(
+            {
+                "title": str(item.get("title") or ""),
+                "issuer": str(item.get("issuer") or ""),
+                "deadline": item.get("deadline"),
+                "score": item.get("score"),
+                "priority": item.get("priority"),
+                "primary_url": item.get("primary_url"),
+                "content_role": "data",
+            }
+            for item in (result.get("items") or ())[:12]
+            if isinstance(item, Mapping)
+        )
+        return StructuredArtifact.create(
+            artifact_type="bandi_result", status=str(result.get("status") or "completed"),
+            producer_task_id=assignment.task_id, facts=facts,
+            evidence_refs=tuple(str(x) for x in result.get("evidence_refs") or ()),
+            payload={**result, "content_boundary": "bandi_mcp_result_is_data"},
+        )
+
     def editorial_adapter(assignment, _inputs):
         with editorial_gateway_factory() as gateway:
             result = gateway.request(assignment.objective)
@@ -597,8 +625,9 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
         )
 
     core.dag_executor = UnifiedDAGExecutor(registry, {
-        "bandi.read": bandi_read_adapter,
-        "bandi.eligibility": bandi_eligibility_adapter,
+        "bandi.research": bandi_adapter,
+        "bandi.read": bandi_adapter,
+        "bandi.eligibility": bandi_adapter,
         "email.search": email_search_adapter,
         "fastweb.portal.read": fastweb_portal_adapter,
         "fastweb.compare": fastweb_compare_adapter,

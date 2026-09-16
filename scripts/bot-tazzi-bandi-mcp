@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd /home/bandi/ralfloop-atm-teacher-integration
+exec /home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python \
+  /home/bandi/ralfloop-atm-teacher-integration/scripts/ralf_bandi_mcp_server.py
