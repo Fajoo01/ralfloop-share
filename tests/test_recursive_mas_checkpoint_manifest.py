@@ -134,12 +134,3 @@ def test_native_worker_env_uses_dedicated_cache_and_drops_tokens(monkeypatch, tm
     assert env["HF_HUB_OFFLINE"] == "1"
     assert "HF_TOKEN" not in env
 
-
-def test_main_plugin_sha_unchanged_if_present():
-    plugin = Path("/home/sibilla-cumana/gatto/cat/plugins/ralfloop_bridge/main_plugin.py")
-    if not plugin.exists():
-        pytest.skip("active Cheshire plugin not present")
-
-    digest = hashlib.sha256(plugin.read_bytes()).hexdigest()
-
-    assert digest == "ea941a7d8d33843fc8829561af72aa9e82129262c7f61ef8b95f7a153c1d21a6"

@@ -30,7 +30,7 @@ domain and must not execute a real canary.
 - The only lab execution is `bandi execute-approved --dry-run`.
 - Do not run `bandi promote`.
 - Do not execute a real canary.
-- Do not restart Cheshire, RecursiveMAS, SearXNG, or Docker for this lab.
+- Do not restart RecursiveMAS, SearXNG, Docker, or unrelated production runtimes for this lab.
 
 ## 3. Runtime layout
 
@@ -466,9 +466,7 @@ Never run `execute-approved` without `--dry-run` during this lab.
 
 Before and after the lab:
 
-- Cheshire plugin SHA must be unchanged.
 - `ralfloop-recursive-mas.service` must not be restarted.
-- `cheshire_cat_v2_core` must not be restarted.
 - `ralfloop_searxng` must not be restarted.
 - No `recursive_mas_worker.py` process should remain.
 - No domain should be promoted.
@@ -485,7 +483,7 @@ ralfloop-backend.service
 meowgram.service
 ```
 
-It must not touch Cheshire, RecursiveMAS, SearXNG, Docker, or domain data.
+It must not touch RecursiveMAS, SearXNG, Docker, unrelated production runtimes, or domain data.
 
 Rollback shape:
 

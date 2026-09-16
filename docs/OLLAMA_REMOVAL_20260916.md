@@ -19,7 +19,7 @@
 ## Remaining runtime callers
 1. Garden detector/deferred reviewer: migrate image `/api/generate` to OpenAI multimodal Gemma service.
 2. ABC formula semantic extraction: migrate to `OpenAICompatRuntime` on port 19110.
-3. Cheshire bridge: replace `_ollama_generate` planner/coder/final calls with OpenAI-compatible generation.
+3. Removed legacy external-agent bridge: no model-runtime migration remains for that component.
 4. Draft service: replace `OllamaDraftBackend` with llama-server/OpenAI-compatible backend.
 5. `local_arch_tools_v1.json`: replace `ollama_on_demand` entries with ports 19110/19111.
 6. llama.cpp resource gate/GPU handoff still probes Ollama `/api/ps`; remove after production Ollama caller count reaches zero.

@@ -383,10 +383,3 @@ def test_lab_api_status_and_error_codes(monkeypatch):
     assert client.post("/lab/recursive-mas/run", json={"goal": "x"}).status_code == 504
     assert client.post("/lab/recursive-mas/run", json={"goal": "x", "python_path": "/bad"}).status_code == 422
 
-
-def test_main_plugin_sha_unchanged_if_present():
-    plugin = Path("/home/sibilla-cumana/gatto/cat/plugins/ralfloop_bridge/main_plugin.py")
-    if not plugin.exists():
-        pytest.skip("active Cheshire runtime not mounted")
-    digest = subprocess.check_output(["sha256sum", str(plugin)], text=True).split()[0]
-    assert digest == "ea941a7d8d33843fc8829561af72aa9e82129262c7f61ef8b95f7a153c1d21a6"

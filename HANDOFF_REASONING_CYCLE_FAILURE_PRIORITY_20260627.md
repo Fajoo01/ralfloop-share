@@ -38,7 +38,7 @@ Verifica:
 
 Non toccati:
 - ralfloop_agent/core/*
-- runtime Cheshire Cat
+- runtime esterno legacy
 - openshell_backend/app.py
 - host-visible
 - stable_snapshots

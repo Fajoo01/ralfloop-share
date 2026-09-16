@@ -140,7 +140,7 @@ Non e' ancora collegato a:
 openshell_backend/app.py
 ralfloop_agent/core/capability_router.py
 result_envelope unico
-Cheshire Cat bridge runtime
+legacy external-agent bridge runtime
 ```
 
 Motivo: i file `ralfloop_agent/core/*` sono protetti da permessi/ACL e non sono stati modificati.
@@ -171,7 +171,7 @@ route_task / CapabilityRoute
 3. Dove deve vivere il middleware conferme:
    - in OpenShell backend;
    - nel core Ralfloop;
-   - nel bridge Cheshire;
+   - nel bridge esterno legacy;
    - o in uno strato condiviso?
 4. Come mantenere priorita' Skills > MCP in modo testabile?
 5. Come garantire che `external_action` non esegua mai send/upload senza conferma?

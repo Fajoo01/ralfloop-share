@@ -93,7 +93,7 @@ def test_runtime_boundary_keeps_node_experimental():
     packet = run_reasoning_cycle(
         user_goal="Implement reasoning cycle node",
         observations=["Existing baseline remains active."],
-        constraints=["NON toccare runtime attivo Cheshire Cat"],
+        constraints=["NON toccare runtime attivo di produzione"],
     )
 
     assert packet.selected_next_action["action_type"] == "write_experimental_module"

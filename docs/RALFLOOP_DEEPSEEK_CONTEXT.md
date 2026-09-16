@@ -10,7 +10,6 @@ Questo documento serve per dare a DeepSeek un quadro tecnico compatto del sistem
 - architettura locale;
 - loop operativo;
 - backend OpenShell;
-- integrazione Cheshire Cat;
 - skill specialistiche;
 - motori LLM locali;
 - problemi aperti;
@@ -152,7 +151,6 @@ sandbox_probe_stream
 Spec riferimento:
 
 ```text
-integrations/cheshire_cat/ralfloop_bridge/specs/ralfloop_v1_spec.md
 ```
 
 Classi task:
@@ -195,58 +193,9 @@ Retry policy:
 - retry su errori concreti;
 - hint strutturati: `syntax_error`, `permission_error`, `timeout`, `runtime_error`, `missing_path`, ecc.
 
-## 5. Cheshire Cat bridge
+## 5. Legacy external-agent bridge
 
-Cartella:
-
-```text
-integrations/cheshire_cat/ralfloop_bridge/
-```
-
-File principali:
-
-```text
-main_plugin.py
-next_task_templates.py
-settings.py
-tools.py
-plugin.json
-rag/
-specs/
-```
-
-Flusso desiderato:
-
-```text
-chat utente
--> plugin Cheshire Cat
--> planner LLM
--> coder LLM
--> judge LLM
--> OpenShell backend se serve esecuzione
--> artifact persistiti
--> risposta finale
-```
-
-RAG separata per ruolo:
-
-```text
-ralfloop_planner
-ralfloop_coder
-ralfloop_judge
-```
-
-Cartella host-visible:
-
-```text
-/ralfloop_tmp
-```
-
-Vincolo storico importante:
-
-- host-visible non e' baseline stabile;
-- non va reintrodotto nel runtime attivo senza test;
-- non usare `/ralfloop_tmp` per file shell generici se non richiesto.
+Removed from the active architecture. Routing, policy and provider ownership now stay inside Ralfloop.
 
 ## 6. Planner e provider LLM
 
@@ -974,7 +923,6 @@ Rollback
 Ralfloop oggi e':
 
 - orchestratore locale con backend OpenShell;
-- bridge Cheshire Cat planner/coder/judge;
 - policy e sandbox;
 - skill domain-specific;
 - ABC Formula Loop deterministico;

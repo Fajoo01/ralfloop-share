@@ -1,68 +1,29 @@
 # Ralfloop + OpenShell Agent
 
-## Cosè
+## Cos'è
 
-Snapshot condivisibile del lavoro su Ralfloop + OpenShell Agent
-e dellintegrazione con Cheshire Cat tramite il plugin ralfloop_bridge.
+Repository del core Ralfloop/Bot-tazzi: backend OpenShell, routing per domini,
+provider locali, MCP, workflow e test di integrazione.
 
-## Plugin
+## Runtime AI locale
 
-Il plugin si trova in:
-`integrations/cheshire_cat/ralfloop_bridge/`
+Il percorso locale standard usa `llama.cpp` / `llama-server` con API
+OpenAI-compatible. I servizi specialistici devono dipendere dal provider
+canonico, non da shell agent esterne.
 
-File principali:
-- `main_plugin.py`
-- `plugin.json`
-- `settings.py`
-- `settings.example.json`
-- `tools.py`
-- `requirements.txt`
-- `rag/`
-- `rag_addons/`
-- `specs/`
+## Componenti principali
 
-## Handoff
-
-- `handoff/NEXT_SESSION_START_HERE.md`
-- `handoff/HANDOFF_BASELINE_OK_20260407.json`
-
-## Stato attuale
-
-- baseline verificata
-- shell ok
-- calculation ok
-- host-visible non attivo nel runtime corrente
-
-## Cosa non contiene
-
-- runtime completo gia installato
-- settings.json reale
-- credenziali o token
-- log, backup sporchi, snapshot intermedi
-
-## Cosa non toccare
-
-- non reinserire host-visible nel runtime attivo
-- non rimettere stable_snapshots nel package del plugin
-- non mischiare baseline stabile ed esperimenti
-
-## Installazione minima
-
-1. Copiare il plugin nella cartella plugin di Cheshire Cat.
-2. Creare settings.json locale partendo da settings.example.json.
-3. Verificare dipendenze e percorsi locali.
-4. Riavviare Cheshire Cat.
-5. Testare in ambiente controllato.
-
-
-## Codice core incluso
-
-Oltre al plugin Cheshire Cat, questa repo include anche il codice principale dello scaffold locale:
-
-- `openshell_backend/app.py`
+- `openshell_backend/`
 - `ralfloop_agent/`
-- `config/project.json`
-- `pyproject.toml`
-- `tests_scaffold/`
+- `config/`
+- `integrations/`
+- `deploy/`
+- `tests/`
 
-Quindi la repo non contiene solo il bridge/plugin, ma anche il core agente e il backend emersi nello scaffold locale.
+## Principi
+
+- routing e policy restano in Ralfloop;
+- le azioni protette richiedono i gate previsti dal dominio;
+- i modelli specialistici sono advisory o estrattori quando dichiarato;
+- nessun runtime esterno deve diventare implicitamente source of truth;
+- credenziali, token, embedding biometrici e dati locali non vanno nel repository.

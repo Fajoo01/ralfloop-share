@@ -41,7 +41,6 @@
 | `ralfloop_agent/models/result_envelope.py` | contratto payload |
 | `ralfloop_agent/nodes/reasoning.py` | orchestrazione MVP |
 | `ralfloop_agent/integration/capability_adapter.py` | compatibilita legacy |
-| `ralfloop_agent/integration/cheshire_v2_adapter.py` | adapter Cheshire v2 lab |
 | `tests/test_*` | test |
 
 `src/recursive_mas.py` non esegue modelli e non esegue RecursiveLink: e' solo wrapper deprecato verso `text_mas_proxy`.
@@ -151,7 +150,6 @@ Il judge non autorizza side effect, non sostituisce test/exit code/soglie e non 
 
 ## Runtime
 
-- Nessuna modifica al runtime Cheshire Cat attivo.
 - Nessuna attivazione nel runtime attivo.
 - Nessun download automatico.
 - Nessun modello caricato in import, route-only, startup FastAPI o manifest.

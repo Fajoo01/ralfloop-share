@@ -55,7 +55,7 @@ EXTERNAL_ACTION_TERMS = (
     "send",
     "servizio remoto",
 )
-RUNTIME_TERMS = ("runtime", "cheshire", "baseline", "core", "produzione")
+RUNTIME_TERMS = ("runtime", "baseline", "core", "produzione")
 
 
 @dataclass(frozen=True)
