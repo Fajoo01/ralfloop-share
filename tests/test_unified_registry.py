@@ -10,7 +10,7 @@ def test_facade_reuses_existing_registries_and_exposes_required_domains():
     required = {
         "email", "home", "tiremm", "bandi", "projects", "research", "documents",
         "knowledge", "calendar", "contacts", "infrastructure", "code", "media",
-        "personal_relational", "general_assistant",
+        "personal_relational", "general_assistant", "runts", "arci", "jellyfin", "education",
     }
 
     assert required <= set(registry.domains)
@@ -49,6 +49,14 @@ def test_facade_derives_tools_without_parallel_executor_registry():
     assert tools["abc_formula_loop"].source_registry.endswith("config/domain_capability_mapping.yaml")
     assert tools["deep_web_research_agentcpm_v1"].source_registry.endswith("config/model_tools.json")
     assert tools["home_assistant.adapter"].availability == "available"
+    memory = tools["memory.operational.mcp"]
+    assert memory.classification == "READ"
+    assert "memory.documents.search" in memory.capabilities
+    assert "memory.entities.read" in memory.capabilities
+    assert tools["arci.read_only.mcp"].classification == "READ"
+    assert tools["jellyfin.identity.mcp.write"].classification == "PROTECTED"
+    visual = tools["visual.memory.local"]
+    assert visual.availability == "constrained:text_regions_only"
     ds4 = tools["deepseek_v4_flash.semantic_critic"]
     assert ds4.capabilities == ("semantic_critic",)
     assert "HIGH_ONLY" in ds4.verification_method

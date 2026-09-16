@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "providers": [
+    {"id":"memory","socket":"/run/ralf-memory-mcp/mcp.sock"},
+    {"id":"google_workspace","socket":"/run/ralf-google-workspace-mcp/mcp.sock"},
+    {"id":"arci","socket":"/run/ralf-arci-mcp/mcp.sock"},
+    {"id":"atm","socket":"/run/ralf-atm-mcp/mcp.sock"},
+    {"id":"mailchimp","socket":"/run/ralf-mailchimp-mcp/mcp.sock"},
+    {"id":"media","socket":"/run/ralf-media-mcp/mcp.sock"},
+    {"id":"meteo","socket":"/run/ralf-meteo-mcp/mcp.sock"},
+    {"id":"jellyfin","socket":"/run/ralf-jellyfin-mcp/mcp.sock"},
+    {"id":"amule","socket":"/run/ralf-amule-mcp/mcp.sock"},
+    {"id":"teacher","socket":"/run/ralf-teacher-mcp/mcp.sock"},
+    {"id":"whatsapp","socket":"/run/ralf-whatsapp-mcp/mcp.sock"}
+  ]
+}

@@ -361,6 +361,107 @@ class UnifiedRegistryFacade:
             verification_method="read before + write + read after",
             source_registry=str(self.home_entities_path),
         )]
+        rows.extend([
+            UnifiedToolSpec(
+                id="memory.operational.mcp",
+                capabilities=(
+                    "memory.documents.search", "memory.timeline.read",
+                    "memory.practices.read", "memory.entities.read",
+                ),
+                input_schema="strict semantic Memory MCP schemas",
+                output_schema="provenance-bearing operational memory records",
+                classification=PolicyClass.READ,
+                side_effect_class="none",
+                availability=(
+                    "available" if _observable_path_exists(Path("/run/ralf-memory-mcp/mcp.sock"))
+                    else "constrained:broker_unavailable"
+                ),
+                health="Unix MCP broker + SQLite query_only source",
+                verification_method="read-only MCP allowlist + source refs/content hashes",
+                source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "memory_mcp.py"),
+            ),
+            UnifiedToolSpec(
+                id="arci.read_only.mcp",
+                capabilities=(
+                    "arci.organization.read", "arci.members.read",
+                    "arci.cards.read", "arci.membership.verify",
+                ),
+                input_schema="strict semantic ARCI MCP schemas",
+                output_schema="authenticated ARCI records with read-only semantics",
+                classification=PolicyClass.READ, side_effect_class="none",
+                availability=(
+                    "available" if _observable_path_exists(Path("/run/ralf-arci-mcp/mcp.sock"))
+                    else "constrained:broker_unavailable"
+                ),
+                health="Unix MCP broker + authenticated source",
+                verification_method="tool allowlist + provider provenance; side_effects=0",
+                source_registry=str(PROJECT_ROOT / "scripts" / "ralf_arci_mcp_server.py"),
+            ),
+            UnifiedToolSpec(
+                id="jellyfin.identity.mcp.read",
+                capabilities=("jellyfin.identity.list", "jellyfin.identity.search"),
+                input_schema="Jellyfin semantic identity queries",
+                output_schema="candidate identities with observed library evidence",
+                classification=PolicyClass.READ, side_effect_class="none",
+                availability=(
+                    "available" if _observable_path_exists(Path("/run/ralf-jellyfin-mcp/mcp.sock"))
+                    else "constrained:broker_unavailable"
+                ),
+                health="Unix MCP broker + Jellyfin provider readback",
+                verification_method="read-only discovery + item provenance",
+                source_registry="/home/bandi/bot-tazzi/scripts/ralf_jellyfin_mcp_server.py",
+            ),
+            UnifiedToolSpec(
+                id="jellyfin.identity.mcp.write",
+                capabilities=("jellyfin.identity.apply", "jellyfin.library.refresh", "jellyfin.deduplicate"),
+                input_schema="approved Jellyfin identity/library mutation",
+                output_schema="provider result requiring post-action verification",
+                classification=PolicyClass.PROTECTED, side_effect_class="protected",
+                availability="constrained:policy_gate_required",
+                health="Unix MCP broker + provider readback",
+                verification_method="explicit mutation policy + post-action Jellyfin readback",
+                source_registry="/home/bandi/bot-tazzi/scripts/ralf_jellyfin_mcp_server.py",
+            ),
+            UnifiedToolSpec(
+                id="teacher.student.mcp",
+                capabilities=("teacher.explain", "teacher.exercise", "teacher.quiz", "teacher.progress"),
+                input_schema="student-only Teacher MCP schemas",
+                output_schema="bounded didactic result",
+                classification=PolicyClass.READ, side_effect_class="none",
+                availability=(
+                    "available" if _observable_path_exists(Path("/run/ralf-teacher-mcp/mcp.sock"))
+                    else "constrained:broker_unavailable"
+                ),
+                health="isolated student MCP broker",
+                verification_method="student-only capability boundary; no administrative tools",
+                source_registry=str(PROJECT_ROOT / "scripts" / "ralf_teacher_mcp_server.py"),
+            ),
+            UnifiedToolSpec(
+                id="visual.memory.local",
+                capabilities=("visual_document_retrieval",),
+                input_schema="document artifact + query",
+                output_schema="page/region evidence with provenance",
+                classification=PolicyClass.READ, side_effect_class="none",
+                availability="constrained:text_regions_only",
+                health="VisualRagWorker present; visual embedding backend not promoted",
+                verification_method="source hash + page/region provenance; ColSmol backend pending benchmark",
+                source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "local_arch" / "media.py"),
+            ),
+            UnifiedToolSpec(
+                id="amule.books.mcp",
+                capabilities=("amule.books.search", "amule.books.download", "amule.queue.read"),
+                input_schema="semantic aMule book query/queue request",
+                output_schema="search results, queue state or requested download",
+                classification=PolicyClass.PROTECTED, side_effect_class="mixed_read_and_write",
+                availability=(
+                    "available" if _observable_path_exists(Path("/run/ralf-amule-mcp/mcp.sock"))
+                    else "constrained:broker_unavailable"
+                ),
+                health="Unix MCP broker",
+                verification_method="search/queue read; downloads subject to workflow policy",
+                source_registry="/run/ralf-amule-mcp/mcp.sock",
+            ),
+        ])
         if self.semantic_judge_path.exists():
             raw = json.loads(self.semantic_judge_path.read_text(encoding="utf-8"))
             runtime = raw.get("deepseek_runtime") or {}
