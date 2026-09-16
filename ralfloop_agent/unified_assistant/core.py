@@ -240,10 +240,14 @@ class UnifiedAssistantCore:
                     "completed", "clarification_required", "unavailable", "draft"
                 } else ("completed" if execution.status == "completed" else "blocked")
             )
+            tool_executed = (
+                execution.status == "completed"
+                and status not in {"clarification_required", "unavailable", "blocked"}
+            )
             return self._result(
                 status, message, plan=plan.model_dump(mode="json"),
                 execution=execution.model_dump(mode="json"),
-                tools_executed=True, selected_skill=assignment.skill,
+                tools_executed=tool_executed, selected_skill=assignment.skill,
             )
         return self._result(
             "planned" if not plan.requires_clarification else "clarification_required",

@@ -559,3 +559,24 @@ def test_email_working_memory_never_contains_personal_relational():
     assert "Private relationship history" not in dumped
     excluded = {item.item_id: item.reason for item in working.memory_trace.excluded_items}
     assert excluded["mem.personal"] == "namespace_not_allowed_for_domain"
+
+
+def test_generic_dag_clarification_does_not_claim_tool_execution():
+    core, _, _, _ = build_core()
+
+    def needs_context(assignment, _inputs):
+        return StructuredArtifact.create(
+            artifact_type="grant_context",
+            status="clarification_required",
+            producer_task_id=assignment.task_id,
+            payload={"message": "Serve altro contesto."},
+        )
+
+    core.dag_executor = UnifiedDAGExecutor(
+        core.planner.registry,
+        {"bandi.read": needs_context},
+    )
+    result = core.handle("Controlla questo bando")
+
+    assert result.status == "clarification_required"
+    assert result.data["tools_executed"] is False
