@@ -98,6 +98,21 @@ class EditorialMCPContext:
             if str(project).casefold() in folded:
                 brief = self.payload("flyer_brief", {"project": project})
                 return str(project), brief if isinstance(brief, dict) else None, [str(x) for x in projects]
+
+        raw_wanted = {token for token in re.findall(r"[a-z0-9à-ÿ]+", folded) if len(token) > 2}
+        slug_matches: list[str] = []
+        for project in projects:
+            slug_tokens = {
+                token for token in re.findall(r"[a-z0-9à-ÿ]+", str(project).casefold())
+                if len(token) > 2 and token not in _GENERIC and not token.isdigit()
+            }
+            if raw_wanted & slug_tokens:
+                slug_matches.append(str(project))
+        if len(slug_matches) == 1:
+            project = slug_matches[0]
+            brief = self.payload("flyer_brief", {"project": project})
+            return project, brief if isinstance(brief, dict) else None, [str(x) for x in projects]
+
         wanted = _tokens(objective)
         ranked: list[tuple[int, str, dict[str, Any] | None]] = []
         for project in projects:
