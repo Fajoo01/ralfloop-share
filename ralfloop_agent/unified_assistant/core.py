@@ -20,6 +20,9 @@ from .email_search import EmailSearchResult
 from .executor import UnifiedDAGExecutor
 from .fastweb_portal import FastwebPortalResult
 from .home import HomeIntentParser, HomePreparedAction, HomeWorkflow
+from .jellyfin_identity_write import (
+    JELLYFIN_APPLY_ACTION, prepare_jellyfin_identity_payload,
+)
 from .memory import MemoryRouter
 from .planner import UnifiedPlanner
 from .whatsapp_web import WhatsAppReadResult
@@ -104,6 +107,8 @@ class UnifiedAssistantCore:
         approval_executor: ApprovalBoundExecutor | None = None,
         whatsapp_approval_executor: ApprovalBoundExecutor | None = None,
         mailchimp_approval_executor: ApprovalBoundExecutor | None = None,
+        jellyfin_identity_provider: Any | None = None,
+        jellyfin_approval_executor: ApprovalBoundExecutor | None = None,
         home_workflow: HomeWorkflow | None = None,
         dag_executor: UnifiedDAGExecutor | None = None,
         dag_input_provider: Callable[[str], Mapping[str, Any]] | None = None,
@@ -126,6 +131,8 @@ class UnifiedAssistantCore:
         self.approval_executor = approval_executor
         self.whatsapp_approval_executor = whatsapp_approval_executor
         self.mailchimp_approval_executor = mailchimp_approval_executor
+        self.jellyfin_identity_provider = jellyfin_identity_provider
+        self.jellyfin_approval_executor = jellyfin_approval_executor
         self.home_workflow = home_workflow
         self.dag_executor = dag_executor
         self.dag_input_provider = dag_input_provider
@@ -211,6 +218,8 @@ class UnifiedAssistantCore:
                 assignment,
                 plan.model_dump(mode="json"),
             )
+        if assignment.skill == "jellyfin.apply_identity":
+            return self._prepare_jellyfin_identity(assignment, plan.model_dump(mode="json"))
         if assignment.skill in {"mailchimp.campaign.create", "mailchimp.campaign.send"}:
             return self._prepare_mailchimp_campaign(assignment, plan.model_dump(mode="json"))
         if assignment.skill == "mailchimp.member.subscribe":
@@ -240,15 +249,69 @@ class UnifiedAssistantCore:
                     "completed", "clarification_required", "unavailable", "draft"
                 } else ("completed" if execution.status == "completed" else "blocked")
             )
+            tool_executed = (
+                execution.status == "completed"
+                and status not in {"clarification_required", "unavailable", "blocked"}
+            )
             return self._result(
                 status, message, plan=plan.model_dump(mode="json"),
                 execution=execution.model_dump(mode="json"),
-                tools_executed=True, selected_skill=assignment.skill,
+                tools_executed=tool_executed, selected_skill=assignment.skill,
+            )
+        if assignment.policy is not PolicyClass.READ:
+            return self._result(
+                "unavailable",
+                "Azione non eseguita: manca un executor approval-bound per questa capability.",
+                plan=plan.model_dump(mode="json"),
+                tools_executed=False, selected_skill=assignment.skill,
+                required_policy=assignment.policy.value,
             )
         return self._result(
             "planned" if not plan.requires_clarification else "clarification_required",
             "Piano validato." if not plan.requires_clarification else "Serve specificare obiettivo o dominio.",
             plan=plan.model_dump(mode="json"),
+        )
+
+    def _prepare_jellyfin_identity(self, assignment, plan: dict[str, Any]) -> UnifiedAssistantResult:
+        if not self.flags.jellyfin_identity_write_live:
+            return self._result(
+                "unavailable",
+                "Azione non eseguita: workflow Jellyfin approval-bound non abilitato.",
+                plan=plan, writes=0, tools_executed=False,
+                selected_skill="jellyfin.apply_identity", required_policy="PROTECTED",
+            )
+        required = {"item_id", "provider", "provider_id"}
+        if not required.issubset(assignment.arguments) or self.jellyfin_identity_provider is None:
+            return self._result(
+                "clarification_required",
+                "Serve una proposta Jellyfin esatta con item_id, provider e provider_id verificati; nessuna approval creata.",
+                plan=plan, writes=0, tools_executed=False,
+            )
+        try:
+            payload = prepare_jellyfin_identity_payload(
+                self.jellyfin_identity_provider, assignment.arguments,
+            )
+        except ValueError as exc:
+            return self._result(
+                "clarification_required", str(exc), plan=plan, writes=0, tools_executed=True,
+            )
+        except Exception:
+            return self._result(
+                "unavailable", "Jellyfin non disponibile; nessuna approval creata.",
+                plan=plan, writes=0, tools_executed=False,
+            )
+        display = (
+            f"Jellyfin: applicare a {payload['name'] or payload['item_id']} "
+            f"l'identità {payload['provider']}={payload['provider_id']}?"
+        )
+        pending = self.conversation.stage(
+            domain="jellyfin", action=JELLYFIN_APPLY_ACTION, policy=PolicyClass.PROTECTED,
+            payload=payload, displayed_text=display,
+        )
+        return self._result(
+            "protected_approval_required", display, plan=plan,
+            pending_id=pending.pending_id, pending_domain="jellyfin",
+            selected_skill="jellyfin.apply_identity", tools_executed=True, writes=0,
         )
 
     def _prepare_mailchimp_campaign(self, assignment, plan: dict[str, Any]) -> UnifiedAssistantResult:
@@ -1256,6 +1319,30 @@ class UnifiedAssistantCore:
                 self.conversation.clear("mailchimp")
             return self._result(status, "Workflow Mailchimp completato." if status == "executed"
                                 else "Workflow Mailchimp non eseguito o non verificato.", result=result)
+        if pending.domain == "jellyfin":
+            if not self.flags.jellyfin_identity_write_live:
+                return self._result("disabled", "Jellyfin identity write workflow disabled.", writes=0)
+            if not approval_matches(pending) or self.jellyfin_approval_executor is None:
+                return self._result(
+                    "approval_required", "Approvazione Jellyfin esplicita e hash-bound richiesta.", writes=0,
+                )
+            result = self.jellyfin_approval_executor.execute(pending)
+            status = str(result.get("status") or "failed")
+            self._audit(
+                domain="jellyfin", intent=pending.action, skill="jellyfin.apply_identity",
+                policy=pending.policy, target=str(pending.payload.get("item_id") or ""),
+                verification=status, pending=pending,
+                tool="jellyfin.identity.mcp.write", tool_result=status,
+            )
+            if status in {"EXECUTED_VERIFIED", "already_executed", "DRAFT_CHANGED",
+                          "EXECUTION_UNCERTAIN", "APPROVAL_INVALID"}:
+                self.conversation.clear("jellyfin")
+            return self._result(
+                status,
+                "Identità Jellyfin applicata e verificata." if status == "EXECUTED_VERIFIED"
+                else "Identità Jellyfin non applicata o non verificata.",
+                result=result,
+            )
         if pending.domain == "home":
             prepared = self._home_prepared.get(pending.pending_id)
             if prepared is None and self.home_workflow is not None:

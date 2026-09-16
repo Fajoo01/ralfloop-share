@@ -373,7 +373,10 @@ def test_gmail_whatsapp_reply_plan_passes_only_structured_artifacts():
     assert all(item.content_is_data for item in plan.assignments)
 
 
-def test_multi_domain_executor_reaches_email_pending_without_send():
+def test_multi_domain_executor_reaches_email_pending_without_send(monkeypatch, tmp_path):
+    socket = tmp_path / "bandi.sock"
+    socket.touch()
+    monkeypatch.setenv("RALF_BANDI_MCP_SOCKET", str(socket))
     core, manager, pipeline, approvals = build_core()
     seen = []
 
@@ -594,3 +597,36 @@ def test_email_working_memory_never_contains_personal_relational():
     assert "Private relationship history" not in dumped
     excluded = {item.item_id: item.reason for item in working.memory_trace.excluded_items}
     assert excluded["mem.personal"] == "namespace_not_allowed_for_domain"
+
+
+def test_generic_dag_clarification_does_not_claim_tool_execution(monkeypatch, tmp_path):
+    socket = tmp_path / "bandi.sock"
+    socket.touch()
+    monkeypatch.setenv("RALF_BANDI_MCP_SOCKET", str(socket))
+    core, _, _, _ = build_core()
+
+    def needs_context(assignment, _inputs):
+        return StructuredArtifact.create(
+            artifact_type="grant_context",
+            status="clarification_required",
+            producer_task_id=assignment.task_id,
+            payload={"message": "Serve altro contesto."},
+        )
+
+    core.dag_executor = UnifiedDAGExecutor(
+        core.planner.registry,
+        {"bandi.read": needs_context},
+    )
+    result = core.handle("Controlla questo bando")
+
+    assert result.status == "clarification_required"
+    assert result.data["tools_executed"] is False
+
+
+def test_unhandled_protected_skill_fails_closed_without_executor():
+    core, _, _, _ = build_core()
+    result = core.handle("applica identità film Jellyfin")
+    assert result.status == "unavailable"
+    assert result.data["tools_executed"] is False
+    assert result.data["selected_skill"] == "jellyfin.apply_identity"
+    assert result.data["required_policy"] == "PROTECTED"

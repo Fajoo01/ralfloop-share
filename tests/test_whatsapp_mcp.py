@@ -83,3 +83,17 @@ def test_server_denies_unknown_mutation_and_read_has_zero_writes():
     assert read["structuredContent"]["sends"] == 0
     assert denied["structuredContent"]["status"] == "POLICY_DENIED"
     assert denied["structuredContent"]["side_effects"] == 0
+
+
+def test_whatsapp_systemd_unit_uses_shared_group_broker():
+    from pathlib import Path
+
+    unit = Path("deploy/systemd/ralf-whatsapp-mcp-broker.service").read_text()
+    assert "Group=ralf-mcp" in unit
+    assert "RuntimeDirectoryMode=2770" in unit
+    assert "--allow-group ralf-mcp" in unit
+    assert "ralf_arci_mcp_broker.py" in unit
+    assert "ralf_whatsapp_mcp_server.py" in unit
+    assert "/opt/ralfloop" not in unit
+    assert "ProtectSystem=strict" in unit
+    assert "IPAddressAllow=localhost" in unit
