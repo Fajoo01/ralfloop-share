@@ -66,3 +66,10 @@ Nessuna modifica di questo blocco è ancora stata applicata all'apertura fisica 
 - L'auto-training storico basato su giudizio Gemma resta materiale di review e non viene assunto come ground truth.
 - I crop di debug InsightFace sono disabilitati di default; attivabili solo esplicitamente via env.
 - Per armare il cancello resta necessaria un'identità in allowlist (`fabio` di default) e il consenso multi-frame; la voce resta il secondo consenso per l'apertura fisica.
+
+## Canary presenza: migrazione v2
+Il primo deploy del correlatore v2 ha evidenziato un problema di migrazione: i track storici venivano considerati nuovi e 13 eventi `presence_correlator_v2` sono stati generati retroattivamente.
+I timer sono stati fermati, i dati post-canary salvati in backup e sono stati rimossi esclusivamente i 13 record v2 appena creati. Gli stati derivati sono stati ricostruiti dall'ultimo evento valido precedente.
+Stato ripristinato: Fabio `inside`, Arianna `outside`, Maria `inside`, nessun `pending_exit` spurio.
+Correzione: `v2_cutover_ts` viene inizializzato alla prima esecuzione; senza `BOTTAZZI_PRESENCE_BACKFILL=1` vengono elaborati solo passage con timestamp di elaborazione uguale o successivo al cutover.
+Canary dopo fix: prima/mid/dopo = 53/53/53 righe in `presence_events.jsonl`; nessun backfill e nessuna mutazione di stato.

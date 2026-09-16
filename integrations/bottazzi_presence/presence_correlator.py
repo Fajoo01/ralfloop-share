@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 import json
+import os
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
 try:
-    from .presence_logic import correlate_passage_face
+    from .presence_logic import correlate_passage_face, should_process_passage
 except ImportError:
-    from presence_logic import correlate_passage_face
+    from presence_logic import correlate_passage_face, should_process_passage
 
 GARDEN_EVENTS = Path("/opt/bottazzi-garden/events.jsonl")
 CITOFONO_EVENTS = Path("/opt/bottazzi-citofono/events.jsonl")
@@ -214,8 +215,15 @@ def resolve_pending_exits():
         save_registry(reg)
 
 def main():
-    resolve_pending_exits()
     state = load_state()
+    backfill = os.environ.get("BOTTAZZI_PRESENCE_BACKFILL", "0").strip().lower() in {"1", "true", "yes", "on"}
+    if not backfill and not state.get("v2_cutover_ts"):
+        state["v2_cutover_ts"] = datetime.now().isoformat(timespec="seconds")
+        state["v2_initialized"] = True
+        save_state(state)
+        print(json.dumps({"source":"presence_correlator_v2","event":"v2_cutover_initialized","cutover_ts":state["v2_cutover_ts"]}, ensure_ascii=False))
+        return
+    resolve_pending_exits()
     emitted = set(state.get("emitted", []))
     faces = {f.get("event_id"): f for f in load_citofono_faces() if f.get("event_id")}
     passages = []
@@ -229,6 +237,8 @@ def main():
                 passages.append(ev)
 
     for passage in passages[-5000:]:
+        if not should_process_passage(passage, state.get("v2_cutover_ts"), backfill=backfill):
+            continue
         face = faces.get(passage.get("citofono_event_id"))
         if not face:
             continue
