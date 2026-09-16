@@ -6,6 +6,7 @@ from typing import Any, Mapping
 
 from src.mcp_transport import MCPClientSession, UnixMCPTransport
 
+from .bandi_live_mcp import BandiLiveMCPContext
 from .contracts import PlanAssignment
 from .executor import StructuredArtifact
 
@@ -68,6 +69,47 @@ def _memory_queries(goal: str, domain: str = "") -> tuple[str, ...]:
         attempts.append(domain)
     return tuple(dict.fromkeys(attempts))[:5]
 
+
+
+def bandi_discovery_adapter(
+    assignment: PlanAssignment, _inputs: Mapping[str, Any]
+) -> StructuredArtifact:
+    goal = assignment.objective.strip()
+    with BandiLiveMCPContext(timeout=8.0) as bandi:
+        payload = bandi.search(goal, limit=8)
+        items = _rows(payload.get("items") or ())
+        if not items:
+            payload = bandi.latest(limit=8)
+            items = _rows(payload.get("items") or ())
+    facts = tuple({
+        "call_key": str(row.get("call_key") or ""),
+        "title": _safe_text(row.get("title"), 180),
+        "issuer": _safe_text(row.get("issuer"), 120),
+        "deadline": _safe_text(row.get("deadline"), 80),
+        "priority": _safe_text(row.get("priority"), 40),
+        "content_role": "data",
+    } for row in items[:8])
+    refs = tuple(dict.fromkeys(
+        str(row.get("primary_url") or row.get("call_key") or "")
+        for row in items[:8]
+        if row.get("primary_url") or row.get("call_key")
+    ))
+    message = (
+        f"Bandi disponibili: {len(items)}. "
+        + "; ".join(item["title"] for item in facts[:5] if item.get("title"))
+        if items else "Nessun bando trovato nel report persistito corrente."
+    )
+    return StructuredArtifact.create(
+        artifact_type="bandi_discovery", status="completed",
+        producer_task_id=assignment.task_id, facts=facts, evidence_refs=refs,
+        payload={
+            "message": message,
+            "report_status": payload.get("status"),
+            "freshness": payload.get("freshness"),
+            "content_boundary": "bandi_persisted_report_is_data",
+            "side_effects": 0, "writes": 0, "sends": 0,
+        },
+    )
 
 def runts_context_adapter(
     assignment: PlanAssignment, _inputs: Mapping[str, Any]
@@ -242,7 +284,7 @@ def knowledge_retrieve_adapter(
     )
 
 __all__ = [
-    "arci_context_adapter", "education_tutor_adapter",
+    "arci_context_adapter", "bandi_discovery_adapter", "education_tutor_adapter",
     "jellyfin_identify_adapter", "knowledge_retrieve_adapter",
     "runts_context_adapter",
 ]

@@ -30,6 +30,7 @@ LEAF_READ_SKILLS = frozenset(
         "arci.context",
         "jellyfin.identify",
         "education.tutor",
+        "bandi.discovery",
     }
 )
 
@@ -112,6 +113,7 @@ CAPABILITY_HINTS: dict[str, tuple[str, ...]] = {
     "arci.context": ("arci", "tessera arci", "circolo arci", "profilo arci"),
     "jellyfin.identify": ("jellyfin", "film non identificati", "film da identificare", "metadata film"),
     "education.tutor": ("insegnante", "tutor", "spiegami", "quiz", "esercizio didattico"),
+    "bandi.discovery": ("bandi aperti", "bandi disponibili", "opportunita finanziamento", "contributi aps", "finanziamenti tiremm", "grant opportunities"),
 }
 
 # One shared lexical/phrase hit is noise; domain-bearing queries in this

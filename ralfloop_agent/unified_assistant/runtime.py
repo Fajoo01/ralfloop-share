@@ -37,7 +37,7 @@ from .registry import DEFAULT_HOME_ENTITIES, UnifiedRegistryFacade
 from .skill_adapters import bandi_eligibility_adapter, bandi_read_adapter
 from .safe_mcp_read_adapters import (
     arci_context_adapter, education_tutor_adapter, jellyfin_identify_adapter,
-    knowledge_retrieve_adapter, runts_context_adapter,
+    bandi_discovery_adapter, knowledge_retrieve_adapter, runts_context_adapter,
 )
 from .whatsapp_compose import EmailBackedWhatsAppDraftPipeline, UnifiedWhatsAppComposeService
 from .whatsapp_mcp_adapter import WhatsAppMCPReadOnly
@@ -72,7 +72,7 @@ _SUPPORTED = re.compile(
     r"mezzi\s+pubblici|trasporto\s+pubblico|portami|volantin[oi]|flyer|locandin[ae]|manifest[oi]|poster|"
     r"come\s+(?:arrivo|vado|posso\s+andare)|"
     r"mezzi\s+(?:per|verso)|percorso\s+(?:atm|con\s+i\s+mezzi)|home\s+assistant|domotica|stato\s+(?:della\s+)?luce|"
-    r"runts|arci|jellyfin|insegnante|tutor|quiz|esercizio\s+didattico|memoria\s+operativa)\b",
+    r"runts|arci|jellyfin|bandi|bando|grant|finanziament[oi]|contribut[oi]|insegnante|tutor|quiz|esercizio\s+didattico|memoria\s+operativa)\b",
     re.I,
 )
 
@@ -203,6 +203,7 @@ def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any]
         or "arci.context" in skills
         or "jellyfin.identify" in skills
         or "education.tutor" in skills
+        or "bandi.discovery" in skills
     ):
         task_mode = "tool_backed_read"
         interaction_class = "TOOL_BACKED_READ"
@@ -227,6 +228,8 @@ def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any]
             connectors.append("jellyfin.identity.mcp.read")
         if "education.tutor" in skills:
             connectors.append("teacher.student.mcp")
+        if "bandi.discovery" in skills:
+            connectors.append("bandi.research.mcp.read")
     elif all(item.policy.value == "READ" for item in plan.assignments):
         task_mode = "tool_backed_read"
         interaction_class = "TOOL_BACKED_READ"
@@ -630,6 +633,7 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
         "arci.context": arci_context_adapter,
         "jellyfin.identify": jellyfin_identify_adapter,
         "education.tutor": education_tutor_adapter,
+        "bandi.discovery": bandi_discovery_adapter,
     })
     core.dag_input_provider = lambda _goal: {
         "memory.tiremm": {

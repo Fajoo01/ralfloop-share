@@ -54,6 +54,8 @@ def test_facade_derives_tools_without_parallel_executor_registry():
     assert "memory.documents.search" in memory.capabilities
     assert "memory.entities.read" in memory.capabilities
     assert tools["arci.read_only.mcp"].classification == "READ"
+    assert tools["bandi.research.mcp.read"].classification == "READ"
+    assert tools["bandi.research.mcp.refresh"].classification == "AUTO_WRITE"
     assert tools["jellyfin.identity.mcp.write"].classification == "PROTECTED"
     visual = tools["visual.memory.local"]
     assert visual.availability == "constrained:text_regions_only"

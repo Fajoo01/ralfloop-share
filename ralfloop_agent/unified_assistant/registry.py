@@ -391,6 +391,38 @@ class UnifiedRegistryFacade:
                 source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "memory_mcp.py"),
             ),
             UnifiedToolSpec(
+                id="bandi.research.mcp.read",
+                capabilities=(
+                    "bandi.latest.read", "bandi.search.read",
+                    "bandi.opportunity.read",
+                ),
+                input_schema="strict semantic Bandi MCP persisted-report reads",
+                output_schema="source-backed grant opportunities with call keys and provenance",
+                classification=PolicyClass.READ, side_effect_class="none",
+                availability=(
+                    "available" if _observable_path_exists(Path("/tmp/ralf-bandi-mcp/mcp.sock"))
+                    else "constrained:broker_unavailable"
+                ),
+                health="Unix MCP broker + persisted Bandi report",
+                verification_method="tools/list allowlist + persisted report/source URL evidence; zero mutation",
+                source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "bandi_live_mcp.py"),
+            ),
+            UnifiedToolSpec(
+                id="bandi.research.mcp.refresh",
+                capabilities=("bandi.research.refresh",),
+                input_schema="bounded research focus + result limit",
+                output_schema="persisted refreshed report with source provenance",
+                classification=PolicyClass.AUTO_WRITE,
+                side_effect_class="local_state_write_and_network_read",
+                availability=(
+                    "available" if _observable_path_exists(Path("/tmp/ralf-bandi-mcp/mcp.sock"))
+                    else "constrained:broker_unavailable"
+                ),
+                health="Unix MCP broker + bounded official-source-first research",
+                verification_method="fresh report persistence + source URLs + run status; not eligible for READ auto-route",
+                source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "bandi_live_mcp.py"),
+            ),
+            UnifiedToolSpec(
                 id="arci.read_only.mcp",
                 capabilities=(
                     "arci.organization.read", "arci.members.read",

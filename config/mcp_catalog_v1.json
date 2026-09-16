@@ -2,6 +2,7 @@
   "schema_version": 1,
   "providers": [
     {"id":"memory","socket":"/run/ralf-memory-mcp/mcp.sock"},
+    {"id":"bandi","socket":"/tmp/ralf-bandi-mcp/mcp.sock"},
     {"id":"google_workspace","socket":"/run/ralf-google-workspace-mcp/mcp.sock"},
     {"id":"arci","socket":"/run/ralf-arci-mcp/mcp.sock"},
     {"id":"atm","socket":"/run/ralf-atm-mcp/mcp.sock"},
