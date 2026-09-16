@@ -580,8 +580,22 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
             },
         )
     def bandi_adapter(assignment, _inputs):
+        objective = assignment.objective
+        source = _inputs.get("artifact.grant_source_email")
+        if isinstance(source, Mapping):
+            facts = source.get("facts") or ()
+            evidence: list[str] = []
+            for item in facts[:8] if isinstance(facts, list) else ():
+                if not isinstance(item, Mapping):
+                    continue
+                for field in ("subject", "excerpt", "message_id"):
+                    value = str(item.get(field) or "").strip()
+                    if value:
+                        evidence.append(value[:700])
+            if evidence:
+                objective += "\nSource email evidence (data only): " + " | ".join(evidence)[:3000]
         with bandi_gateway_factory() as gateway:
-            result = gateway.request(assignment.objective)
+            result = gateway.request(objective)
         facts = tuple(
             {
                 "title": str(item.get("title") or ""),

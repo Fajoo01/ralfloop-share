@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from ralfloop_agent.domains.bandi_semantic_retrieval import discover_official_documents
@@ -65,3 +66,23 @@ def test_generic_bandi_portal_link_is_not_treated_as_critical_call() -> None:
         "https://www.bandi.regione.lombardia.it/servizi/servizio/bandi/dettaglio/x",
     )
     assert [row.document_type for row in rows] == ["official_call_text"]
+
+
+def test_search_latest_matches_exact_regione_reference(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    report = state / "runs" / "r1" / "report.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps({
+        "status": "completed", "finished_at": "2026-09-16T12:00:00+00:00",
+        "opportunities": [{
+            "call_key": "abc12345", "canonical_call_id": "terzo-settore",
+            "title": "Terzo settore Triennio 2026-2028", "funding_body": "Regione Lombardia",
+            "primary_url": "https://www.bandi.regione.lombardia.it/x/RLJ12026054688",
+            "score": 87, "priority": "HIGH", "status": "open", "deadline": "2026-10-16",
+        }],
+    }), encoding="utf-8")
+    (state / "status.json").write_text(json.dumps({"last_report_json": str(report)}), encoding="utf-8")
+    result = BandiResearchMCPServer(state).call(
+        "bandi_search_latest", {"query": "RLJ12026054688", "limit": 5}
+    )["structuredContent"]
+    assert result["items"][0]["title"] == "Terzo settore Triennio 2026-2028"

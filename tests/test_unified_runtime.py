@@ -101,7 +101,7 @@ def test_arci_appello_is_unified_grant_email_route(monkeypatch):
     assert route["skills_used"] == [
         "email.search", "bandi.read", "bandi.eligibility", "email.compose"
     ]
-    assert route["mcp_used"] == ["google_workspace.gmail"]
+    assert route["mcp_used"] == ["google_workspace.gmail", "bandi.research.mcp"]
     assert route["requires_confirmation"] is True
 
 

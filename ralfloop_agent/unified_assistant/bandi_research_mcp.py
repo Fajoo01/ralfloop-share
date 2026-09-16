@@ -195,6 +195,7 @@ def _search_opportunities(rows: list[dict[str, Any]], query: str, limit: int) ->
     for row in rows:
         text = json.dumps({
             "title": row.get("title"), "issuer": row.get("funding_body"),
+            "primary_url": row.get("primary_url"), "canonical_call_id": row.get("canonical_call_id"),
             "territory": row.get("territory"), "themes": row.get("themes"),
             "candidate_project": row.get("candidate_project"),
             "why": row.get("why_tiremm_should_apply"),

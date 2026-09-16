@@ -8,6 +8,8 @@ from typing import Any, Mapping
 
 from src.mcp_transport import MCPClientSession, MCPProtocolError, UnixMCPTransport
 
+_BANDO_REF_RE = re.compile(r"\bRL[A-Z]\d{8,16}\b", re.I)
+
 BANDI_TOOLS = frozenset({
     "bandi_research_now",
     "bandi_latest",
@@ -66,11 +68,16 @@ class BandiMCPContext:
 
     def request(self, objective: str) -> dict[str, Any]:
         lowered = objective.casefold()
+        refs = tuple(dict.fromkeys(match.upper() for match in _BANDO_REF_RE.findall(objective)))
         fresh = bool(re.search(r"\b(?:cerca|trova|scopri|ricerca|aggiorna|nuov[ioe]|adesso|oggi|ora)\b", lowered))
         review = bool(re.search(r"\b(?:valuta|ammissibil|compatibil|conviene|requisit|scaden|analizz|verifica)\b", lowered))
         list_only = bool(re.search(r"\b(?:lista|elenca|quali|aperti|opportunit[aà])\b", lowered))
 
-        if fresh:
+        if refs:
+            raw = self.call("bandi_search_latest", {"query": " ".join(refs), "limit": 5})
+            if not raw.get("items"):
+                raw = self.call("bandi_research_now", {"focus": objective[:500], "limit": 10})
+        elif fresh:
             raw = self.call("bandi_research_now", {"focus": objective[:500], "limit": 10})
         elif review:
             raw = self.call("bandi_search_latest", {"query": objective[:500], "limit": 5})
@@ -92,7 +99,8 @@ class BandiMCPContext:
 
         raw["message"] = _message(raw)
         raw["evidence_refs"] = _evidence_refs(raw)
-        raw["operation"] = "fresh_research" if fresh else "review" if review else "latest"
+        raw["requested_bando_refs"] = list(refs)
+        raw["operation"] = "reference_lookup" if refs else "fresh_research" if fresh else "review" if review else "latest"
         return raw
 
 
