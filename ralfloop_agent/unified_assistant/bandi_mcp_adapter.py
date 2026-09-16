@@ -35,14 +35,14 @@ def _payload(result: Mapping[str, Any]) -> dict[str, Any]:
 
 
 class BandiMCPContext:
-    def __init__(self, socket_path: str = "/tmp/ralf-bandi-mcp/mcp.sock", timeout: float = 240):
+    def __init__(self, socket_path: str = "/run/ralf-bandi-mcp/mcp.sock", timeout: float = 240):
         self.socket_path = socket_path
         self.timeout = timeout
         self.session: MCPClientSession | None = None
 
     @classmethod
     def from_environment(cls) -> "BandiMCPContext":
-        return cls(os.getenv("RALF_BANDI_MCP_SOCKET", "/tmp/ralf-bandi-mcp/mcp.sock"))
+        return cls(os.getenv("RALF_BANDI_MCP_SOCKET", "/run/ralf-bandi-mcp/mcp.sock"))
 
     def __enter__(self) -> "BandiMCPContext":
         self.session = MCPClientSession(
@@ -111,14 +111,43 @@ def _message(payload: Mapping[str, Any]) -> str:
         if status == "no_report":
             return "Non c'è ancora un report bandi persistito; la ricerca fresca non ha prodotto un report utilizzabile."
         return "Nessun bando compatibile trovato nelle fonti verificate per questa ricerca."
+    if len(items) == 1:
+        item = items[0]
+        title = str(item.get("title") or "senza titolo")
+        issuer = str(item.get("issuer") or "ente non indicato")
+        deadline = str(item.get("deadline") or "da verificare")
+        score = item.get("score")
+        priority = str(item.get("priority") or "")
+        fit = str(item.get("tiremm_compatibility") or "da verificare")
+        why = str(item.get("why_tiremm_should_apply") or "").strip()
+        project = str(item.get("candidate_project") or "").strip()
+        critical = [str(x) for x in item.get("criticalities") or () if str(x)]
+        actions = [str(x) for x in item.get("next_three_actions") or () if str(x)]
+        url = str(item.get("primary_url") or "").strip()
+        lines = [
+            f"Bando: {title} — {issuer}",
+            f"Scadenza: {deadline}. Score di priorità: {score if score is not None else '?'} {priority}. Compatibilità Tiremm: {fit}.",
+        ]
+        if why:
+            lines.append(f"Perché: {why}.")
+        if project:
+            lines.append(f"Progetto Tiremm candidato: {project}.")
+        lines.append("Criticità: " + ("; ".join(critical) if critical else "nessuna criticità bloccante rilevata nelle fonti verificate."))
+        if actions:
+            lines.append("Prossime azioni: " + " | ".join(actions[:3]))
+        if url:
+            lines.append(f"Fonte primaria: {url}")
+        return "\n".join(lines)
     lines = [f"Bandi: {len(items)} opportunità rilevanti ({status})."]
     for item in items[:5]:
         title = str(item.get("title") or "senza titolo")
-        issuer = str(item.get("issuer") or "ente non indicato")
-        deadline = str(item.get("deadline") or "scadenza da verificare")
+        deadline = str(item.get("deadline") or "da verificare")
         score = item.get("score")
         priority = str(item.get("priority") or "")
-        lines.append(f"- {title} — {issuer}; scadenza {deadline}; punteggio {score if score is not None else '?'} {priority}".rstrip())
+        fit = str(item.get("tiremm_compatibility") or "da verificare")
+        lines.append(
+            f"- {title}; scadenza {deadline}; score di priorità {score if score is not None else '?'} {priority}; Tiremm: {fit}"
+        )
     return "\n".join(lines)
 
 

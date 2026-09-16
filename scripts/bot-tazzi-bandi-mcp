@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd /home/bandi/ralfloop-atm-teacher-integration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 exec /home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python \
-  /home/bandi/ralfloop-atm-teacher-integration/scripts/ralf_bandi_mcp_server.py
+  "$PROJECT_ROOT/scripts/ralf_bandi_mcp_server.py"

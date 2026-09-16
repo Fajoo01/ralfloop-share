@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -199,7 +200,7 @@ class UnifiedRegistryFacade:
         mailchimp_socket = Path("/run/ralf-mailchimp-mcp/mcp.sock")
         meteo_socket = Path("/run/ralf-meteo-mcp/mcp.sock")
         editorial_socket = Path("/tmp/ralf-editorial-mcp/mcp.sock")
-        bandi_socket = Path("/tmp/ralf-bandi-mcp/mcp.sock")
+        bandi_socket = Path(os.getenv("RALF_BANDI_MCP_SOCKET", "/run/ralf-bandi-mcp/mcp.sock"))
         rows = [UnifiedToolSpec(
             id="bandi.research.mcp",
             capabilities=("bandi_research_now", "bandi_latest", "bandi_search_latest", "bandi_get_opportunity"),
