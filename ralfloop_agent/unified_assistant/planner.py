@@ -4,6 +4,7 @@ import hashlib
 import re
 
 from .contracts import AssistantPlan, PlanAssignment, PolicyClass
+from .capability_rag_router import LEAF_READ_SKILLS
 from .email_search import is_email_search_request, plan_email_search
 from .registry import UnifiedRegistryFacade
 
@@ -28,6 +29,14 @@ _DOCUMENT_RE = re.compile(r"\b(?:pdf|document[oi]|allegat[oi]|estrai)\b", re.I)
 _RESEARCH_RE = re.compile(r"\b(?:ricerca|cerca\s+sul\s+web|fonti|deep\s+research)\b", re.I)
 _EDITORIAL_RE = re.compile(r"\b(?:volantin[oi]|flyer|locandin[ae]|manifest[oi]|poster)\b", re.I)
 _MEDIA_RE = re.compile(r"\b(?:video|audio|immagine|ffmpeg|sottotitol[oi])\b", re.I)
+_JELLYFIN_RE = re.compile(r"\bjellyfin\b", re.I)
+_JELLYFIN_MUTATION_RE = re.compile(
+    r"\b(?:applica|modifica|aggiorna|refresh|deduplica|elimina|rimuovi|correggi)\b", re.I
+)
+_ARCI_RE = re.compile(r"\barci\b", re.I)
+_ARCI_MUTATION_RE = re.compile(
+    r"\b(?:modifica|aggiorna|elimina|rimuovi|aggiungi|iscrivi|crea|invia)\b", re.I
+)
 _ATM_RE = re.compile(
     r"\b(?:atm|giromilano|mezzi\s+pubblici|trasporto\s+pubblico)\b"
     r"|\bcome\s+(?:arrivo|vado|posso\s+andare)\b"
@@ -341,13 +350,14 @@ class UnifiedPlanner:
         if _HOME_RE.search(goal):
             skill = "home.read" if re.search(r"\b(?:temperatura|fa\s+caldo|fa\s+freddo|stato|quanto)\b", goal, re.I) and not re.search(r"\b(?:accendi|spegni|apri|chiudi|imposta|metti|porta)\b", goal, re.I) else "home.control"
             return self._single(goal, "home", skill, PolicyClass.READ if skill == "home.read" else PolicyClass.AUTO_WRITE)
+        if _JELLYFIN_RE.search(goal) and _JELLYFIN_MUTATION_RE.search(goal):
+            return self._single(goal, "jellyfin", "jellyfin.apply_identity", PolicyClass.PROTECTED)
+        if _ARCI_RE.search(goal) and _ARCI_MUTATION_RE.search(goal):
+            return self._denied("arci_mutation_not_available")
         if self.capability_router is not None:
             proposal = self.capability_router.route(goal)
-            if proposal is not None and proposal.get("skill") in {
-                "atm.route", "meteo.read", "email.search", "whatsapp.read",
-                "mailchimp.read", "fastweb.portal.read", "home.read",
-            }:
-                skill = proposal["skill"]
+            if proposal is not None and proposal.get("skill") in LEAF_READ_SKILLS:
+                skill = str(proposal["skill"])
                 if skill == "email.search":
                     search = plan_email_search(goal)
                     if search is None:
@@ -361,7 +371,7 @@ class UnifiedPlanner:
                             arguments={"organization": search.organization, "concept": search.concept, "queries": list(search.queries)},
                         ),),
                     )
-                domain = "home" if skill == "home.read" else "general_assistant"
+                domain = str(proposal.get("domain") or "general_assistant")
                 return self._single(goal, domain, skill, PolicyClass.READ)
         if _RELATIONAL_RE.search(goal):
             return self._single(goal, "personal_relational", "personal_relational.analyze", PolicyClass.READ)

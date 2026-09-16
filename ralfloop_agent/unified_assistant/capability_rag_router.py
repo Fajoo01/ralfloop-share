@@ -25,6 +25,11 @@ LEAF_READ_SKILLS = frozenset(
         "mailchimp.read",
         "fastweb.portal.read",
         "home.read",
+        "knowledge.retrieve",
+        "runts.context",
+        "arci.context",
+        "jellyfin.identify",
+        "education.tutor",
     }
 )
 
@@ -102,6 +107,11 @@ CAPABILITY_HINTS: dict[str, tuple[str, ...]] = {
         "temperatura casa",
         "stato dispositivo",
     ),
+    "knowledge.retrieve": ("memoria", "documenti memoria", "cosa sappiamo", "ricorda documento"),
+    "runts.context": ("runts", "pratica runts", "registro terzo settore", "bilancio runts"),
+    "arci.context": ("arci", "tessera arci", "circolo arci", "profilo arci"),
+    "jellyfin.identify": ("jellyfin", "film non identificati", "film da identificare", "metadata film"),
+    "education.tutor": ("insegnante", "tutor", "spiegami", "quiz", "esercizio didattico"),
 }
 
 # One shared lexical/phrase hit is noise; domain-bearing queries in this
@@ -286,6 +296,12 @@ class CapabilityRAGIndex:
                 score += 4.0
             if skill_id == "atm.route" and "portami" in normalized:
                 score += 8.0
+            # An explicit communication channel outranks a named organization/domain.
+            # Example: "cerca la mail di ARCI" is Gmail evidence about ARCI, not ARCI portal data.
+            if query_terms & {"mail", "email", "gmail", "posta"} and skill_id != "email.search":
+                score -= 12.0
+            if query_terms & {"whatsapp", "wapp"} and skill_id != "whatsapp.read":
+                score -= 12.0
             if score < min_score:
                 continue
             providers = tuple(

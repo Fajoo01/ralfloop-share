@@ -35,6 +35,10 @@ from .capability_rag_router import CapabilityRAGRouter
 from .recipient import GoogleWorkspaceRecipientResolver
 from .registry import DEFAULT_HOME_ENTITIES, UnifiedRegistryFacade
 from .skill_adapters import bandi_eligibility_adapter, bandi_read_adapter
+from .safe_mcp_read_adapters import (
+    arci_context_adapter, education_tutor_adapter, jellyfin_identify_adapter,
+    knowledge_retrieve_adapter, runts_context_adapter,
+)
 from .whatsapp_compose import EmailBackedWhatsAppDraftPipeline, UnifiedWhatsAppComposeService
 from .whatsapp_mcp_adapter import WhatsAppMCPReadOnly
 from .whatsapp_send import (
@@ -67,7 +71,8 @@ _SUPPORTED = re.compile(
     r"temporale|radar|precipitazioni|vento|atm|giromilano|"
     r"mezzi\s+pubblici|trasporto\s+pubblico|portami|volantin[oi]|flyer|locandin[ae]|manifest[oi]|poster|"
     r"come\s+(?:arrivo|vado|posso\s+andare)|"
-    r"mezzi\s+(?:per|verso)|percorso\s+(?:atm|con\s+i\s+mezzi)|home\s+assistant|domotica|stato\s+(?:della\s+)?luce)\b",
+    r"mezzi\s+(?:per|verso)|percorso\s+(?:atm|con\s+i\s+mezzi)|home\s+assistant|domotica|stato\s+(?:della\s+)?luce|"
+    r"runts|arci|jellyfin|insegnante|tutor|quiz|esercizio\s+didattico|memoria\s+operativa)\b",
     re.I,
 )
 
@@ -193,6 +198,11 @@ def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any]
         or "mailchimp.read" in skills
         or "meteo.read" in skills
         or "atm.route" in skills
+        or "knowledge.retrieve" in skills
+        or "runts.context" in skills
+        or "arci.context" in skills
+        or "jellyfin.identify" in skills
+        or "education.tutor" in skills
     ):
         task_mode = "tool_backed_read"
         interaction_class = "TOOL_BACKED_READ"
@@ -209,6 +219,14 @@ def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any]
             connectors.append("meteo.radar.mcp")
         if "atm.route" in skills:
             connectors.append("atm.route.mcp")
+        if "knowledge.retrieve" in skills or "runts.context" in skills:
+            connectors.append("memory.operational.mcp")
+        if "arci.context" in skills:
+            connectors.append("arci.read_only.mcp")
+        if "jellyfin.identify" in skills:
+            connectors.append("jellyfin.identity.mcp.read")
+        if "education.tutor" in skills:
+            connectors.append("teacher.student.mcp")
     elif all(item.policy.value == "READ" for item in plan.assignments):
         task_mode = "tool_backed_read"
         interaction_class = "TOOL_BACKED_READ"
@@ -607,6 +625,11 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
         "whatsapp.read": whatsapp_read_adapter,
         "whatsapp.reply": whatsapp_reply_adapter,
         "editorial.flyer": editorial_adapter,
+        "knowledge.retrieve": knowledge_retrieve_adapter,
+        "runts.context": runts_context_adapter,
+        "arci.context": arci_context_adapter,
+        "jellyfin.identify": jellyfin_identify_adapter,
+        "education.tutor": education_tutor_adapter,
     })
     core.dag_input_provider = lambda _goal: {
         "memory.tiremm": {

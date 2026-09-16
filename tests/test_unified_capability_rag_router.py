@@ -82,7 +82,7 @@ def test_functiongemma_reranks_retrieved_logical_capabilities_only():
         client=FakeFunctionGemma(),
     )
 
-    result = router.route("cerca messaggi posta")
+    result = router.route("messaggi posta")
 
     assert result is not None
     assert result["skill"] == "email.search"
