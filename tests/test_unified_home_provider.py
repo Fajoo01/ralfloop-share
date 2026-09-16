@@ -28,6 +28,8 @@ class FakeHA:
         if path == "/api/services/light/turn_on":
             self.state = {**self.state, "state": "on"}
             return [self.state]
+        if path == "/api/services/homeassistant/reload_config_entry":
+            return {"ok": payload == {"entry_id": "tuya-entry"}}
         raise AssertionError(path)
 
 
@@ -65,3 +67,16 @@ def test_environment_file_loads_without_exposing_token(tmp_path):
 
     assert backend.base_url == "http://ha.local"
     assert "top-secret" not in repr({"base_url": backend.base_url})
+
+
+def test_rest_provider_reload_config_entry_is_explicit_and_validated():
+    fake = FakeHA()
+    backend = HomeAssistantRESTBackend("http://ha.local", "secret-not-output", requester=fake)
+
+    result = backend.reload_config_entry("tuya-entry")
+    assert result == {"ok": True}
+    assert fake.calls[-1] == (
+        "POST", "/api/services/homeassistant/reload_config_entry", {"entry_id": "tuya-entry"}
+    )
+    with pytest.raises(HomeAssistantProviderError, match="home_config_entry_invalid"):
+        backend.reload_config_entry("bad entry/id")

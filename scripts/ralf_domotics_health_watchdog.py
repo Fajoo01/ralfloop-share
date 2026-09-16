@@ -4,10 +4,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any, Mapping
 
 from src.mcp_transport import MCPClientSession, UnixMCPTransport
+from ralfloop_agent.unified_assistant.home_provider import HomeAssistantRESTBackend
+from ralfloop_agent.unified_assistant.tuya_mcp import TuyaHARegistry
 
 
 def load_state(path: Path) -> dict[str, Any]:
@@ -44,45 +47,110 @@ def fetch_health(socket_path: str) -> dict[str, Any]:
 def entity_ids(rows: Any) -> set[str]:
     if not isinstance(rows, list):
         return set()
-    return {
-        str(row.get("entity_id"))
-        for row in rows
-        if isinstance(row, Mapping) and row.get("entity_id")
-    }
+    return {str(row.get("entity_id")) for row in rows if isinstance(row, Mapping) and row.get("entity_id")}
+
+
+def degraded_device_keys(rows: Any) -> set[str]:
+    if not isinstance(rows, list):
+        return set()
+    result = set()
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        device_id = str(row.get("device_id") or "").strip()
+        entities = row.get("entities") or []
+        if device_id:
+            result.add("device:" + device_id)
+        elif entities:
+            result.add("entity:" + str(entities[0]))
+    return result
+
+
+def reload_tuya(config_dir: str, env_file: str) -> dict[str, Any]:
+    registry = TuyaHARegistry(config_dir)
+    backend = HomeAssistantRESTBackend.from_environment(env_file=env_file, timeout=20.0)
+    entry_ids = sorted(registry.config_entry_ids())
+    results = []
+    for entry_id in entry_ids:
+        try:
+            backend.reload_config_entry(entry_id)
+            results.append({"entry_id": entry_id, "ok": True})
+        except Exception as exc:
+            results.append({"entry_id": entry_id, "ok": False, "error": type(exc).__name__})
+    return {"attempted": len(entry_ids), "results": results, "ok": bool(results) and all(x["ok"] for x in results)}
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--socket", default="/run/ralf-tuya-mcp/mcp.sock")
     parser.add_argument("--state", default="/var/lib/ralf-domotics-watchdog/state.json")
+    parser.add_argument("--ha-config-dir", default="/home/sibilla-cumana/homeassistant/config")
+    parser.add_argument("--ha-env-file", default="/home/sibilla-cumana/.secrets/homeassistant.env")
+    parser.add_argument("--persistence", type=int, default=2)
+    parser.add_argument("--reload-cooldown", type=float, default=1800.0)
+    parser.add_argument("--post-reload-wait", type=float, default=8.0)
+    parser.add_argument("--no-reload", action="store_true")
     args = parser.parse_args()
+
     state_path = Path(args.state)
     previous = load_state(state_path)
     health = fetch_health(args.socket)
     state_health = health.get("state_health") or {}
     current_unavailable = entity_ids(state_health.get("unavailable_entities"))
     current_missing = entity_ids(state_health.get("missing_entities"))
+    current_degraded_devices = degraded_device_keys(state_health.get("degraded_devices"))
     previous_unavailable = set(previous.get("unavailable_entities") or [])
     previous_missing = set(previous.get("missing_entities") or [])
+    previous_degraded_devices = set(previous.get("degraded_device_keys") or [])
     baseline = not bool(previous.get("initialized"))
+
+    prior_candidates = previous.get("reload_candidates") or {}
+    candidates: dict[str, int] = {}
+    if not baseline:
+        for key in current_degraded_devices:
+            if key in previous_degraded_devices:
+                if key in prior_candidates:
+                    candidates[key] = int(prior_candidates[key]) + 1
+            else:
+                candidates[key] = 1
+
+    now = time.time()
+    last_reload = float(previous.get("last_reload_epoch") or 0.0)
+    persistent = sorted(k for k, count in candidates.items() if count >= max(1, args.persistence))
+    reload_due = bool(persistent) and now - last_reload >= max(0.0, args.reload_cooldown) and not args.no_reload
+
     event = {
         "initialized": True,
         "status": "baseline_initialized" if baseline else "steady",
         "availability": health.get("availability"),
-        "counts": {
-            key: int(state_health.get(key) or 0)
-            for key in ("available", "unavailable", "unknown", "missing")
-        },
+        "counts": {key: int(state_health.get(key) or 0) for key in ("available", "unavailable", "unknown", "missing")},
         "new_unavailable": [] if baseline else sorted(current_unavailable - previous_unavailable),
         "recovered": [] if baseline else sorted(previous_unavailable - current_unavailable),
         "new_missing": [] if baseline else sorted(current_missing - previous_missing),
         "returned_missing": [] if baseline else sorted(previous_missing - current_missing),
+        "new_degraded_devices": [] if baseline else sorted(current_degraded_devices - previous_degraded_devices),
+        "recovered_devices": [] if baseline else sorted(previous_degraded_devices - current_degraded_devices),
         "unavailable_entities": sorted(current_unavailable),
         "missing_entities": sorted(current_missing),
+        "degraded_device_keys": sorted(current_degraded_devices),
         "degraded_devices": state_health.get("degraded_devices") or [],
+        "reload_candidates": candidates,
+        "persistent_reload_candidates": persistent,
+        "last_reload_epoch": last_reload,
+        "reload_due": reload_due,
     }
-    if not baseline and any(event[key] for key in ("new_unavailable", "recovered", "new_missing", "returned_missing")):
+    if not baseline and any(event[key] for key in ("new_unavailable", "recovered", "new_missing", "returned_missing", "new_degraded_devices", "recovered_devices")):
         event["status"] = "changed"
+
+    if reload_due:
+        event["reload"] = reload_tuya(args.ha_config_dir, args.ha_env_file)
+        event["last_reload_epoch"] = now
+        event["status"] = "reload_attempted"
+        if event["reload"].get("ok"):
+            time.sleep(max(0.0, min(args.post_reload_wait, 30.0)))
+            event["post_reload_health"] = fetch_health(args.socket).get("state_health") or {}
+            event["reload_candidates"] = {}
+
     write_state(state_path, event)
     print(json.dumps(event, ensure_ascii=False))
     return 0
