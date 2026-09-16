@@ -10,6 +10,7 @@ Group=ralf-mcp
 StateDirectory=ralf-domotics-watchdog
 UMask=0007
 WorkingDirectory=/home/sibilla-cumana/ralf-memory-rag/current
+Environment=PYTHONPATH=/home/sibilla-cumana/ralf-memory-rag/current
 ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralf-memory-rag/current/scripts/ralf_domotics_health_watchdog.py --socket /run/ralf-tuya-mcp/mcp.sock --state /var/lib/ralf-domotics-watchdog/state.json
 NoNewPrivileges=true
 ProtectSystem=strict
