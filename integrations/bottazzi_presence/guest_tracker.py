@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import re
 from datetime import datetime
@@ -10,6 +11,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 from insightface.app import FaceAnalysis
+
+try:
+    from .presence_logic import should_process_passage
+except ImportError:
+    from presence_logic import should_process_passage
 
 BASE = Path("/opt/bottazzi-presence")
 CITOFONO_EVENTS = Path("/opt/bottazzi-citofono/events.jsonl")
@@ -215,16 +221,31 @@ def claimed_passage_for_citofono(citofono_event_id: str | None) -> dict | None:
 
 def process(limit: int = 80):
     reg = load_json(REGISTRY, {"guests": {}, "processed": []})
+    backfill = os.environ.get("BOTTAZZI_GUEST_BACKFILL", "0").strip().lower() in {"1", "true", "yes", "on"}
+    if not backfill and not reg.get("v2_cutover_ts"):
+        reg["v2_cutover_ts"] = datetime.now().isoformat(timespec="seconds")
+        reg["v2_initialized"] = True
+        save_registry(reg)
+        print(json.dumps({"source":"guest_tracker","event":"v2_cutover_initialized","cutover_ts":reg["v2_cutover_ts"]}, ensure_ascii=False))
+        return False
     processed = set(reg.setdefault("processed", []))
-    known = load_known()
-    face_app = app()
-    changed = False
+    candidates = []
     for ev in load_jsonl(CITOFONO_EVENTS)[-limit:]:
         if ev.get("event") != "camera_wake_face_burst":
             continue
         event_id = ev.get("event_id")
         if not event_id or event_id in processed:
             continue
+        if not should_process_passage(ev, reg.get("v2_cutover_ts"), backfill=backfill):
+            continue
+        candidates.append(ev)
+    if not candidates:
+        return False
+    known = load_known()
+    face_app = app()
+    changed = False
+    for ev in candidates:
+        event_id = ev.get("event_id")
         claim = claimed_passage_for_citofono(event_id)
         if claim:
             emit({

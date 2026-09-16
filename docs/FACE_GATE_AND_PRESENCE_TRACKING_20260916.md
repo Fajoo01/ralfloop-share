@@ -73,3 +73,14 @@ I timer sono stati fermati, i dati post-canary salvati in backup e sono stati ri
 Stato ripristinato: Fabio `inside`, Arianna `outside`, Maria `inside`, nessun `pending_exit` spurio.
 Correzione: `v2_cutover_ts` viene inizializzato alla prima esecuzione; senza `BOTTAZZI_PRESENCE_BACKFILL=1` vengono elaborati solo passage con timestamp di elaborazione uguale o successivo al cutover.
 Canary dopo fix: prima/mid/dopo = 53/53/53 righe in `presence_events.jsonl`; nessun backfill e nessuna mutazione di stato.
+
+## Deploy face gate e guest tracker
+- Backup face: `/home/sibilla-cumana/bottazzi-face/backups/refine-20260916-221549`.
+- Backup watcher: `/opt/bottazzi-poller/backups/refine-20260916-221549`.
+- DB InsightFace locale unificato attivo: Fabio 7, Maria 2, Arianna 18 embedding; il file biometrico resta escluso da Git.
+- Canary Fabio su immagine citofono nota: InsightFace score `0.5763`, margin `0.5418`.
+- Canary consenso su due immagini reali Fabio: `authorized=true`, reason `multiframe_consensus_with_insightface`.
+- Watcher live: allowlist `fabio`, 2 fps, 10 frame, wake delay 0.8 s; al riavvio baseline `idle`, nessun `gate_armed_until` creato.
+- Nessun consenso vocale preesistente era attivo durante il deploy.
+- Guest tracker v2: cutover `2026-09-16T22:18:43`; canary 45/45/45 righe, quindi nessun backfill.
+- Timer attivi: passage tracker, presence correlator e guest tracker.
