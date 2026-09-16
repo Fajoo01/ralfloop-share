@@ -1,0 +1,68 @@
+{
+  "event_supervisor": {
+    "enabled": true,
+    "target_classes": [
+      "person"
+    ],
+    "buffer_seconds": 5,
+    "frame_health": {
+      "max_frame_gap_ms": 6500,
+      "duplicate_frame_threshold": 0.985,
+      "freeze_duration_ms": 2000,
+      "severe_lag_blocks_single_frame_person": true,
+      "min_motion_score": 0.01
+    },
+    "tracker": {
+      "enabled": true,
+      "type": "auto",
+      "preferred": "bytetrack",
+      "fallback": "iou",
+      "iou_match_threshold": 0.3,
+      "lost_tolerance_frames": 5
+    },
+    "person_fast": {
+      "enabled": true,
+      "min_confidence": 0.5,
+      "min_hits": 2,
+      "time_window_ms": 2000,
+      "require_motion": true,
+      "min_motion_score": 0.04,
+      "block_if_severe_lag": false,
+      "block_if_frozen": true,
+      "motion_fallback_min_hits": 999,
+      "median_threshold": 0.55,
+      "single_frame_vision_confidence": 0.82,
+      "single_frame_vision_motion_score": 0.025,
+      "min_local_motion_score": 0.012
+    },
+    "person_slow": {
+      "enabled": true,
+      "min_confidence": 0.5,
+      "min_hits": 2,
+      "min_duration_ms": 500,
+      "require_track": true,
+      "min_local_motion_score": 0.006,
+      "min_track_speed": 1.0
+    },
+    "person_box_filter": {
+      "min_box_area_ratio": 0.01,
+      "max_box_area_ratio": 0.8
+    },
+    "alerts": {
+      "global_cooldown_seconds": 45,
+      "per_track_cooldown_seconds": 90,
+      "per_zone_cooldown_seconds": 60
+    },
+    "zones": {
+      "critical": [],
+      "ignore": [],
+      "shadow": [],
+      "lines": []
+    },
+    "gui": {
+      "enabled": true,
+      "host": "127.0.0.1",
+      "port": 8501
+    }
+  }
+}
