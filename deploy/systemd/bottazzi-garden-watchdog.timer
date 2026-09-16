@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Bot-tazzi Garden Camera Watchdog every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=60s
+AccuracySec=10s
+Persistent=true
+Unit=bottazzi-garden-watchdog.service
+
+[Install]
+WantedBy=timers.target

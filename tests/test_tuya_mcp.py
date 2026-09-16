@@ -108,3 +108,21 @@ def test_tuya_service_allowlist_and_readback(tmp_path):
     assert bad_data["isError"] is True
     assert bad_data["structuredContent"]["status"] == "tuya_service_data_not_allowlisted"
     assert len(backend.calls) == 1
+
+
+def test_tuya_health_reports_owned_entity_availability(tmp_path):
+    backend = FakeBackend()
+    backend.states["light.cucina"] = {
+        "entity_id": "light.cucina", "state": "unavailable", "attributes": {}
+    }
+    server = TuyaMCPServer(registry=_registry(tmp_path), backend=backend)
+
+    payload = server.call("tuya_health", {})["structuredContent"]
+    assert payload["status"] == "completed"
+    assert payload["availability"] == "degraded"
+    assert payload["state_health"]["unavailable"] == 1
+    assert payload["state_health"]["missing"] == 0
+    assert payload["state_health"]["unavailable_entities"][0]["entity_id"] == "light.cucina"
+    assert payload["state_health"]["degraded_devices"][0]["device_id"] == "dev1"
+    assert payload["writes"] == 0
+    assert payload["sends"] == 0

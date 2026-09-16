@@ -1,0 +1,8 @@
+[Unit]
+Description=Bot-tazzi Garden Camera Watchdog
+After=docker.service bottazzi-garden-stream-warmer.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/bottazzi-garden/garden_watchdog.py

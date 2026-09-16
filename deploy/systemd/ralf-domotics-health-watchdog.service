@@ -1,0 +1,18 @@
+[Unit]
+Description=Ralf Tuya/Home Assistant availability watchdog
+After=ralf-tuya-mcp-broker.service
+Requires=ralf-tuya-mcp-broker.service
+
+[Service]
+Type=oneshot
+User=sibilla-cumana
+Group=ralf-mcp
+StateDirectory=ralf-domotics-watchdog
+UMask=0007
+WorkingDirectory=/home/sibilla-cumana/ralf-memory-rag/current
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralf-memory-rag/current/scripts/ralf_domotics_health_watchdog.py --socket /run/ralf-tuya-mcp/mcp.sock --state /var/lib/ralf-domotics-watchdog/state.json
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX

@@ -101,6 +101,7 @@ GRAB_RETRY_SLEEP_SECONDS = float(os.environ.get("BOTTAZZI_GARDEN_GRAB_RETRY_SLEE
 GRAB_FAILURE_BACKOFF_SECONDS = float(os.environ.get("BOTTAZZI_GARDEN_GRAB_FAILURE_BACKOFF_SECONDS", "12"))
 STREAM_RECOVERY_FAILURES = 3
 STREAM_RECOVERY_COOLDOWN_SECONDS = 180.0
+STREAM_RECOVERY_OWNER = os.getenv("BOTTAZZI_GARDEN_STREAM_RECOVERY_OWNER", "detector").strip().lower()
 COOLDOWN_SECONDS = 60
 MIN_CONFIDENCE_WEIGHT = 0.65
 MIN_PERSON_HEIGHT = 85
@@ -2018,6 +2019,7 @@ def main():
         "camera_stream": CAMERA_STREAM,
         "frame_cache_file": FRAME_CACHE_FILE,
         "frame_cache_max_age_seconds": FRAME_CACHE_MAX_AGE_SECONDS,
+        "stream_recovery_owner": STREAM_RECOVERY_OWNER,
         "check_seconds": CHECK_SECONDS,
         "frame_timeout_seconds": FRAME_TIMEOUT_SECONDS,
         "max_grab_attempts": MAX_GRAB_ATTEMPTS,
@@ -2259,13 +2261,21 @@ def main():
             now_mono = time.monotonic()
             if consecutive_grab_failures >= STREAM_RECOVERY_FAILURES and (now_mono - last_stream_recovery_ts) >= STREAM_RECOVERY_COOLDOWN_SECONDS:
                 last_stream_recovery_ts = now_mono
-                log({"event": "stream_stale_or_grab_fail_recovery", "consecutive": consecutive_grab_failures, "cooldown_seconds": STREAM_RECOVERY_COOLDOWN_SECONDS, "action": "docker_restart_go2rtc"})
-                try:
-                    proc = subprocess.run(["docker", "restart", "go2rtc"], text=True, capture_output=True, timeout=30)
-                    log({"event": "stream_recovery_action_result", "cmd": "docker restart go2rtc", "returncode": proc.returncode, "stdout": proc.stdout.strip(), "stderr": proc.stderr.strip()})
-                    time.sleep(3.0)
-                except Exception as exc:
-                    log({"event": "stream_recovery_action_error", "cmd": "docker restart go2rtc", "error": repr(exc)})
+                if STREAM_RECOVERY_OWNER == "watchdog":
+                    log({
+                        "event": "stream_recovery_delegated",
+                        "consecutive": consecutive_grab_failures,
+                        "owner": "watchdog",
+                        "action": "none",
+                    })
+                else:
+                    log({"event": "stream_stale_or_grab_fail_recovery", "consecutive": consecutive_grab_failures, "cooldown_seconds": STREAM_RECOVERY_COOLDOWN_SECONDS, "action": "docker_restart_go2rtc"})
+                    try:
+                        proc = subprocess.run(["docker", "restart", "go2rtc"], text=True, capture_output=True, timeout=30)
+                        log({"event": "stream_recovery_action_result", "cmd": "docker restart go2rtc", "returncode": proc.returncode, "stdout": proc.stdout.strip(), "stderr": proc.stderr.strip()})
+                        time.sleep(3.0)
+                    except Exception as exc:
+                        log({"event": "stream_recovery_action_error", "cmd": "docker restart go2rtc", "error": repr(exc)})
             time.sleep(backoff)
             continue
 

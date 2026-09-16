@@ -1,0 +1,12 @@
+[Unit]
+Description=Check Tuya/Home Assistant entity availability every 2 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=15s
+Persistent=true
+Unit=ralf-domotics-health-watchdog.service
+
+[Install]
+WantedBy=timers.target

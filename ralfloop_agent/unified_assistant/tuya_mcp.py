@@ -204,11 +204,16 @@ class TuyaMCPServer:
         health = self.backend.health()
         entities = self.registry.entities()
         devices = self.registry.devices()
+        live = self.backend.list_entities()
+        state_health = _summarize_entity_health(entities, devices, live)
+        degraded = bool(state_health["unavailable"] or state_health["missing"])
         return {
             "status": "completed",
+            "availability": "degraded" if degraded else "healthy",
             "home_assistant": health,
             "tuya_devices": len(devices),
             "tuya_entities": len(entities),
+            "state_health": state_health,
             "writes": 0,
             "sends": 0,
         }
@@ -291,6 +296,74 @@ class TuyaMCPServer:
             "writes": 1,
             "sends": 0,
         }
+
+
+def _summarize_entity_health(
+    entities: tuple[dict[str, Any], ...],
+    devices: tuple[dict[str, Any], ...],
+    live_rows: tuple[dict[str, Any], ...],
+) -> dict[str, Any]:
+    live = {str(row.get("entity_id") or ""): row for row in live_rows if isinstance(row, Mapping)}
+    device_names = {
+        str(row.get("device_id") or ""): str(row.get("name") or "")
+        for row in devices if isinstance(row, Mapping)
+    }
+    unavailable: list[dict[str, Any]] = []
+    unknown: list[dict[str, Any]] = []
+    missing: list[dict[str, Any]] = []
+    available = 0
+    for entity in entities:
+        entity_id = str(entity.get("entity_id") or "")
+        if not entity_id:
+            continue
+        device_id = str(entity.get("device_id") or "")
+        row = live.get(entity_id)
+        item = {
+            "entity_id": entity_id,
+            "device_id": device_id or None,
+            "device_name": device_names.get(device_id) or None,
+        }
+        if row is None:
+            item["state"] = "missing"
+            missing.append(item)
+            continue
+        state = str(row.get("state") or "").casefold()
+        item["state"] = state or "unknown"
+        if state == "unavailable":
+            unavailable.append(item)
+        elif state == "unknown" or not state:
+            unknown.append(item)
+        else:
+            available += 1
+    degraded_devices: dict[str, dict[str, Any]] = {}
+    for item in unavailable + missing:
+        device_id = str(item.get("device_id") or "")
+        key = device_id or f"entity:{item['entity_id']}"
+        row = degraded_devices.setdefault(key, {
+            "device_id": device_id or None,
+            "device_name": item.get("device_name"),
+            "entity_count": 0,
+            "unavailable": 0,
+            "missing": 0,
+            "entities": [],
+        })
+        row["entity_count"] += 1
+        row[str(item["state"])] += 1
+        row["entities"].append(item["entity_id"])
+    grouped = sorted(
+        degraded_devices.values(),
+        key=lambda row: (-int(row["entity_count"]), str(row.get("device_name") or "")),
+    )
+    return {
+        "available": available,
+        "unavailable": len(unavailable),
+        "unknown": len(unknown),
+        "missing": len(missing),
+        "unavailable_entities": unavailable[:50],
+        "unknown_entities": unknown[:50],
+        "missing_entities": missing[:50],
+        "degraded_devices": grouped[:50],
+    }
 
 
 def _entity_id_schema() -> dict[str, Any]:
