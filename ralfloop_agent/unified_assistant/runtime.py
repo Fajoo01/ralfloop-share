@@ -22,6 +22,10 @@ from .email_send import UnifiedEmailApprovalCoordinator, UnifiedGmailApprovalExe
 from .mailchimp_campaign import (
     UnifiedMailchimpApprovalCoordinator, UnifiedMailchimpApprovalExecutor,
 )
+from .jellyfin_identity_write import (
+    JellyfinIdentityMCPProvider, UnifiedJellyfinApprovalCoordinator,
+    UnifiedJellyfinApprovalExecutor,
+)
 from .executor import StructuredArtifact, UnifiedDAGExecutor
 from .fastweb_portal import FastwebPortalReadOnly
 from .home import HomeEntityRegistry, HomeWorkflow
@@ -129,7 +133,7 @@ def _has_single_approvable_pending(context: Mapping[str, Any]) -> bool:
     ]
     return (
         len(active) == 1
-        and active[0].domain in {"email", "whatsapp", "mailchimp"}
+        and active[0].domain in {"email", "whatsapp", "mailchimp", "jellyfin"}
         and active[0].policy.value in {"CONFIRM_WRITE", "PROTECTED"}
         and bool(active[0].approval_ref)
         and payload_matches(active[0])
@@ -244,6 +248,8 @@ def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any]
             connectors.append("whatsapp.web.mcp")
         if any(item.domain == "mailchimp" for item in plan.assignments):
             connectors.append("mailchimp.marketing")
+        if any(item.domain == "jellyfin" for item in plan.assignments):
+            connectors.append("jellyfin.identity.mcp.write")
     return {
         "task_mode": task_mode,
         "mode": task_mode,
@@ -336,7 +342,15 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
     whatsapp_approval_executor = None
     mailchimp_approval_coordinator = None
     mailchimp_approval_executor = None
-    if flags.email_assistant_live or flags.whatsapp_assistant_live or flags.mailchimp_campaign_live:
+    jellyfin_approval_coordinator = None
+    jellyfin_approval_executor = None
+    jellyfin_identity_provider = (
+        JellyfinIdentityMCPProvider() if flags.jellyfin_identity_write_live else None
+    )
+    if (
+        flags.email_assistant_live or flags.whatsapp_assistant_live
+        or flags.mailchimp_campaign_live or flags.jellyfin_identity_write_live
+    ):
         policy = DomainApprovalPolicy.from_env()
         if policy.enabled:
             approval_store = DomainApprovalStore(policy=policy)
@@ -363,21 +377,30 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
                 mailchimp_approval_executor = UnifiedMailchimpApprovalExecutor(
                     lambda: MailchimpApprovedMCPWorkflow(),
                 )
+            if flags.jellyfin_identity_write_live and jellyfin_identity_provider is not None:
+                jellyfin_approval_coordinator = UnifiedJellyfinApprovalCoordinator(
+                    approval_store, policy=policy,
+                )
+                jellyfin_approval_executor = UnifiedJellyfinApprovalExecutor(
+                    approval_store, jellyfin_identity_provider, write_enabled=True,
+                )
     previous_email = conversation.state.pending.email
     previous_whatsapp = conversation.state.pending.whatsapp
     previous_mailchimp = conversation.state.pending.mailchimp
+    previous_jellyfin = conversation.state.pending.jellyfin
     approval_transition: dict[str, Any] = {}
-    if any((approval_coordinator, whatsapp_approval_coordinator, mailchimp_approval_coordinator)) and _is_positive_confirmation(text):
+    if any((approval_coordinator, whatsapp_approval_coordinator, mailchimp_approval_coordinator, jellyfin_approval_coordinator)) and _is_positive_confirmation(text):
         active = [
             item for name in PENDING_DOMAINS
             if (item := getattr(conversation.state.pending, name)) is not None
         ]
-        if len(active) == 1 and active[0].domain in {"email", "whatsapp", "mailchimp"}:
+        if len(active) == 1 and active[0].domain in {"email", "whatsapp", "mailchimp", "jellyfin"}:
             pending = active[0]
             coordinator = ({
                 "email": approval_coordinator,
                 "whatsapp": whatsapp_approval_coordinator,
                 "mailchimp": mailchimp_approval_coordinator,
+                "jellyfin": jellyfin_approval_coordinator,
             })[pending.domain]
             if coordinator is not None:
                 approval_transition = coordinator.approve(
@@ -424,6 +447,8 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
         approval_executor=approval_executor,
         whatsapp_approval_executor=whatsapp_approval_executor,
         mailchimp_approval_executor=mailchimp_approval_executor,
+        jellyfin_identity_provider=jellyfin_identity_provider,
+        jellyfin_approval_executor=jellyfin_approval_executor,
         home_workflow=home_workflow,
         memory_router=memory,
     )
@@ -645,6 +670,7 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
     current_email = conversation.state.pending.email
     current_whatsapp = conversation.state.pending.whatsapp
     current_mailchimp = conversation.state.pending.mailchimp
+    current_jellyfin = conversation.state.pending.jellyfin
     if (
         approval_coordinator is not None
         and result.status == "draft_pending_approval"
@@ -727,6 +753,35 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
                 "approval_request_id": current_mailchimp.approval_ref,
                 "approval_expires_at": current_mailchimp.expires_at,
             })
+    if (
+        jellyfin_approval_coordinator is not None
+        and result.status == "protected_approval_required"
+        and current_jellyfin is not None
+        and not current_jellyfin.approval_ref
+    ):
+        if previous_jellyfin and previous_jellyfin.approval_ref:
+            jellyfin_approval_coordinator.cancel(previous_jellyfin)
+        approval_transition = jellyfin_approval_coordinator.request(
+            current_jellyfin, requested_by=f"unified:{session_id}"
+        )
+        if approval_transition.get("status") == "pending":
+            current_jellyfin = conversation.attach_approval_request(
+                domain="jellyfin", pending_id=current_jellyfin.pending_id,
+                payload_digest=current_jellyfin.payload_digest,
+                approval_ref=str(approval_transition["request_id"]),
+                created_at=int(approval_transition["created_at"]),
+                expires_at=int(approval_transition["expires_at"]),
+            )
+            result.data.update({
+                "approval_request_id": current_jellyfin.approval_ref,
+                "approval_expires_at": current_jellyfin.expires_at,
+            })
+    elif (
+        jellyfin_approval_coordinator is not None
+        and result.status == "cancelled"
+        and previous_jellyfin is not None
+    ):
+        approval_transition = jellyfin_approval_coordinator.cancel(previous_jellyfin)
     if approval_transition:
         result.data["approval_transition"] = dict(approval_transition)
     session_adapter.save(session_id, conversation)

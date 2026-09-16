@@ -441,7 +441,7 @@ class UnifiedRegistryFacade:
             ),
             UnifiedToolSpec(
                 id="jellyfin.identity.mcp.read",
-                capabilities=("jellyfin.identity.list", "jellyfin.identity.search"),
+                capabilities=("jellyfin.identity.list", "jellyfin.identity.search", "jellyfin.identity.get"),
                 input_schema="Jellyfin semantic identity queries",
                 output_schema="candidate identities with observed library evidence",
                 classification=PolicyClass.READ, side_effect_class="none",
@@ -451,7 +451,7 @@ class UnifiedRegistryFacade:
                 ),
                 health="Unix MCP broker + Jellyfin provider readback",
                 verification_method="read-only discovery + item provenance",
-                source_registry="/home/bandi/bot-tazzi/scripts/ralf_jellyfin_mcp_server.py",
+                source_registry=str(PROJECT_ROOT / "scripts" / "ralf_jellyfin_identity_mcp_server.py"),
             ),
             UnifiedToolSpec(
                 id="jellyfin.identity.mcp.write",
@@ -462,7 +462,7 @@ class UnifiedRegistryFacade:
                 availability="constrained:policy_gate_required",
                 health="Unix MCP broker + provider readback",
                 verification_method="explicit mutation policy + post-action Jellyfin readback",
-                source_registry="/home/bandi/bot-tazzi/scripts/ralf_jellyfin_mcp_server.py",
+                source_registry=str(PROJECT_ROOT / "scripts" / "ralf_jellyfin_identity_mcp_server.py"),
             ),
             UnifiedToolSpec(
                 id="teacher.student.mcp",

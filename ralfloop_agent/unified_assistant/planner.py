@@ -33,6 +33,23 @@ _JELLYFIN_RE = re.compile(r"\bjellyfin\b", re.I)
 _JELLYFIN_MUTATION_RE = re.compile(
     r"\b(?:applica|modifica|aggiorna|refresh|deduplica|elimina|rimuovi|correggi)\b", re.I
 )
+_JELLYFIN_ITEM_ID_RE = re.compile(r"\b(?:item[_ -]?id|jellyfin[_ -]?id)\s*[:=]\s*(?P<value>[a-f0-9]{32,64})\b", re.I)
+_JELLYFIN_PROVIDER_RE = re.compile(r"\bprovider\s*[:=]\s*(?P<value>tmdb|imdb)\b", re.I)
+_JELLYFIN_PROVIDER_ID_RE = re.compile(r"\bprovider[_ -]?id\s*[:=]\s*(?P<value>[A-Za-z0-9_-]{1,64})\b", re.I)
+_JELLYFIN_YEAR_RE = re.compile(r"\byear\s*[:=]\s*(?P<value>18\d{2}|19\d{2}|20\d{2})\b", re.I)
+
+
+def _jellyfin_apply_args(goal: str) -> dict[str, object]:
+    args: dict[str, object] = {}
+    for key, pattern in (("item_id", _JELLYFIN_ITEM_ID_RE), ("provider", _JELLYFIN_PROVIDER_RE), ("provider_id", _JELLYFIN_PROVIDER_ID_RE)):
+        match = pattern.search(goal)
+        if match:
+            args[key] = match.group("value")
+    year = _JELLYFIN_YEAR_RE.search(goal)
+    if year:
+        args["year"] = int(year.group("value"))
+    return args
+
 _ARCI_RE = re.compile(r"\barci\b", re.I)
 _ARCI_MUTATION_RE = re.compile(
     r"\b(?:modifica|aggiorna|elimina|rimuovi|aggiungi|iscrivi|crea|invia)\b", re.I
@@ -351,7 +368,10 @@ class UnifiedPlanner:
             skill = "home.read" if re.search(r"\b(?:temperatura|fa\s+caldo|fa\s+freddo|stato|quanto)\b", goal, re.I) and not re.search(r"\b(?:accendi|spegni|apri|chiudi|imposta|metti|porta)\b", goal, re.I) else "home.control"
             return self._single(goal, "home", skill, PolicyClass.READ if skill == "home.read" else PolicyClass.AUTO_WRITE)
         if _JELLYFIN_RE.search(goal) and _JELLYFIN_MUTATION_RE.search(goal):
-            return self._single(goal, "jellyfin", "jellyfin.apply_identity", PolicyClass.PROTECTED)
+            return self._single(
+                goal, "jellyfin", "jellyfin.apply_identity", PolicyClass.PROTECTED,
+                arguments=_jellyfin_apply_args(goal),
+            )
         if _ARCI_RE.search(goal) and _ARCI_MUTATION_RE.search(goal):
             return self._denied("arci_mutation_not_available")
         if self.capability_router is not None:
@@ -458,13 +478,16 @@ class UnifiedPlanner:
             domains=("tiremm", "whatsapp"), assignments=(email, whatsapp, reply),
         )
 
-    def _single(self, goal: str, domain: str, skill: str, policy: PolicyClass) -> AssistantPlan:
+    def _single(
+        self, goal: str, domain: str, skill: str, policy: PolicyClass,
+        *, arguments: dict | None = None,
+    ) -> AssistantPlan:
         return AssistantPlan(
             intent=skill,
             domains=(domain,),
             assignments=(self._assignment(
                 domain=domain, skill=skill, objective=goal, input_refs=("user.goal",),
-                output_ref=f"artifact.{domain}", policy=policy,
+                output_ref=f"artifact.{domain}", policy=policy, arguments=arguments,
             ),),
         )
 

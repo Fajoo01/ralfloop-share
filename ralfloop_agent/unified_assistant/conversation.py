@@ -13,7 +13,7 @@ from ralfloop_agent.cli.session_store import SessionStore
 from .contracts import PolicyClass
 
 
-PENDING_DOMAINS = ("email", "whatsapp", "mailchimp", "runts", "home", "infrastructure", "bandi", "clarification")
+PENDING_DOMAINS = ("email", "whatsapp", "mailchimp", "jellyfin", "runts", "home", "infrastructure", "bandi", "clarification")
 CONFIRM_WORDS = frozenset({
     "ok", "invia", "mandala", "sì invia", "si invia", "va bene",
     "confermo", "approvo", "procedi",
@@ -25,7 +25,7 @@ class PendingAction(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     pending_id: str = Field(pattern=r"^pending_[a-f0-9]{16}$")
-    domain: Literal["email", "whatsapp", "mailchimp", "runts", "home", "infrastructure", "bandi", "clarification"]
+    domain: Literal["email", "whatsapp", "mailchimp", "jellyfin", "runts", "home", "infrastructure", "bandi", "clarification"]
     action: str = Field(min_length=1, max_length=96)
     policy: PolicyClass
     payload: dict[str, Any]
@@ -44,6 +44,7 @@ class PendingByDomain(BaseModel):
     email: PendingAction | None = None
     whatsapp: PendingAction | None = None
     mailchimp: PendingAction | None = None
+    jellyfin: PendingAction | None = None
     runts: PendingAction | None = None
     home: PendingAction | None = None
     infrastructure: PendingAction | None = None
