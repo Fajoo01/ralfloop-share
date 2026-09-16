@@ -118,7 +118,28 @@ def arci_context_adapter(
         if re.search(r"\b(?:tesser[ae]|card|campagna)\b", goal)
         else "arci_read_organization_profile"
     )
-    result = _call("arci", tool, {})
+    try:
+        result = _call("arci", tool, {})
+    except Exception:
+        return StructuredArtifact.create(
+            artifact_type="arci_context", status="unavailable",
+            producer_task_id=assignment.task_id,
+            payload={
+                "message": "ARCI temporaneamente non disponibile; nessun dato è stato modificato.",
+                "tool": tool,
+                "content_boundary": "arci_provider_unavailable_no_write",
+            },
+        )
+    if isinstance(result, Mapping) and result.get("ok") is False:
+        return StructuredArtifact.create(
+            artifact_type="arci_context", status="unavailable",
+            producer_task_id=assignment.task_id,
+            payload={
+                "message": "ARCI temporaneamente non disponibile; nessun dato è stato modificato.",
+                "tool": tool,
+                "content_boundary": "arci_provider_unavailable_no_write",
+            },
+        )
     rows = _rows(result)
     row = rows[0] if rows else {}
     if tool == "arci_read_organization_profile":

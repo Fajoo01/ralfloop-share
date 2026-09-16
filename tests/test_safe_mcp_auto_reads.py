@@ -78,3 +78,13 @@ def test_teacher_without_session_never_calls_mcp(monkeypatch):
     artifact = adapters.education_tutor_adapter(assignment, {"user.goal": assignment.objective})
     assert artifact.status == "clarification_required"
     assert calls == []
+
+
+def test_arci_provider_failure_is_unavailable_not_blocked(monkeypatch):
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("transient")
+    monkeypatch.setattr(adapters, "_call", fail)
+    assignment = _planner().plan("profilo ARCI del circolo").assignments[0]
+    artifact = adapters.arci_context_adapter(assignment, {"user.goal": assignment.objective})
+    assert artifact.status == "unavailable"
+    assert "temporaneamente non disponibile" in artifact.payload["message"]
