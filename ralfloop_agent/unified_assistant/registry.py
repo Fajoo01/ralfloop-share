@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -196,6 +197,10 @@ class UnifiedRegistryFacade:
             and whatsapp_scopes.get("default_namespace") == "tiremm"
         )
         whatsapp_socket = Path("/run/ralf-whatsapp-mcp/mcp.sock")
+        whatsapp_write_enabled = (
+            os.getenv("RALFLOOP_WHATSAPP_ASSISTANT_LIVE", "0") == "1"
+            and os.getenv("RALFLOOP_ENABLE_TELEGRAM_APPROVAL_GATE", "0") == "1"
+        )
         mailchimp_socket = Path("/run/ralf-mailchimp-mcp/mcp.sock")
         meteo_socket = Path("/run/ralf-meteo-mcp/mcp.sock")
         editorial_socket = Path("/tmp/ralf-editorial-mcp/mcp.sock")
@@ -254,8 +259,13 @@ class UnifiedRegistryFacade:
             classification=PolicyClass.CONFIRM_WRITE,
             side_effect_class="confirmation_required",
             availability=(
-                "available" if whatsapp_socket.exists() and whatsapp_work_profile
-                else "constrained:broker_not_started"
+                "available"
+                if whatsapp_socket.exists() and whatsapp_work_profile and whatsapp_write_enabled
+                else (
+                    "constrained:write_feature_disabled"
+                    if whatsapp_socket.exists() and whatsapp_work_profile
+                    else "constrained:broker_not_started"
+                )
             ),
             health="Unix MCP broker + approval store",
             verification_method="hash/version/chat/message binding + CAS + outbound readback",

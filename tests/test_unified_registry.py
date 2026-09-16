@@ -113,3 +113,20 @@ def test_feature_flags_are_independent_and_default_off(monkeypatch):
     assert flags.home_assistant_live
     assert not flags.email_assistant_live
     assert not flags.semantic_judge_allow_normal
+
+
+def test_whatsapp_write_registry_requires_live_flag_and_approval_gate(monkeypatch):
+    import ralfloop_agent.unified_assistant.registry as registry_mod
+
+    original_exists = registry_mod.Path.exists
+    monkeypatch.setattr(registry_mod.Path, "exists", lambda self: True if str(self).endswith("/run/ralf-whatsapp-mcp/mcp.sock") else original_exists(self))
+    monkeypatch.setenv("RALFLOOP_WHATSAPP_ASSISTANT_LIVE", "0")
+    monkeypatch.setenv("RALFLOOP_ENABLE_TELEGRAM_APPROVAL_GATE", "0")
+    tools = {item.id: item for item in registry_mod.UnifiedRegistryFacade().list_tools()}
+    assert tools["whatsapp.web.mcp"].availability == "available"
+    assert tools["whatsapp.web.mcp.write"].availability == "constrained:write_feature_disabled"
+
+    monkeypatch.setenv("RALFLOOP_WHATSAPP_ASSISTANT_LIVE", "1")
+    monkeypatch.setenv("RALFLOOP_ENABLE_TELEGRAM_APPROVAL_GATE", "1")
+    tools = {item.id: item for item in registry_mod.UnifiedRegistryFacade().list_tools()}
+    assert tools["whatsapp.web.mcp.write"].availability == "available"
