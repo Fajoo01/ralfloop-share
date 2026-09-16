@@ -249,6 +249,14 @@ class UnifiedAssistantCore:
                 execution=execution.model_dump(mode="json"),
                 tools_executed=tool_executed, selected_skill=assignment.skill,
             )
+        if assignment.policy is not PolicyClass.READ:
+            return self._result(
+                "unavailable",
+                "Azione non eseguita: manca un executor approval-bound per questa capability.",
+                plan=plan.model_dump(mode="json"),
+                tools_executed=False, selected_skill=assignment.skill,
+                required_policy=assignment.policy.value,
+            )
         return self._result(
             "planned" if not plan.requires_clarification else "clarification_required",
             "Piano validato." if not plan.requires_clarification else "Serve specificare obiettivo o dominio.",

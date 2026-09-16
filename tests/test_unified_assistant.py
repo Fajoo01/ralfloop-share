@@ -580,3 +580,12 @@ def test_generic_dag_clarification_does_not_claim_tool_execution():
 
     assert result.status == "clarification_required"
     assert result.data["tools_executed"] is False
+
+
+def test_unhandled_protected_skill_fails_closed_without_executor():
+    core, _, _, _ = build_core()
+    result = core.handle("applica identità film Jellyfin")
+    assert result.status == "unavailable"
+    assert result.data["tools_executed"] is False
+    assert result.data["selected_skill"] == "jellyfin.apply_identity"
+    assert result.data["required_policy"] == "PROTECTED"
