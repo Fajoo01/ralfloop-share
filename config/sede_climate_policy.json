@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "site": "sede",
+  "timezone": "Europe/Rome",
+  "calendar": {
+    "account": "fabio@tiremminnanz.com",
+    "calendar_id": "fabio@tiremminnanz.com",
+    "empty_location_means_sede": true,
+    "location_markers": [
+      "tiremm innanz",
+      "via privata federico jarach",
+      "jarach, 8"
+    ],
+    "remote_markers": [
+      "online",
+      "google meet",
+      "meet.google.com",
+      "zoom",
+      "teams"
+    ]
+  },
+  "comfort": {
+    "heat_below_c": 19.0,
+    "heat_target_c": 20.0,
+    "cool_above_c": 26.0,
+    "cool_target_c": 25.0,
+    "deadband_c": 0.5
+  },
+  "timing": {
+    "min_lead_minutes": 30,
+    "max_lead_minutes": 120,
+    "heat_rate_c_per_hour": 2.0,
+    "cool_rate_c_per_hour": 2.0,
+    "buffer_minutes": 15,
+    "post_event_grace_minutes": 15
+  },
+  "actuators": {
+    "cooling_entity": "climate.air_conditioner",
+    "heating_preferred": "climate.termostato",
+    "heating_fallback_entity": "climate.air_conditioner"
+  },
+  "dry_run": true,
+  "boiler_thermostat": {
+    "entity_id": "climate.termostato",
+    "device_id": "4d6e28e56ac48135839f2a0c5419d052",
+    "tuya_device_id": "bfeb4c4533acfae1b4u7sj",
+    "product_id": "4jdveazecxcrdbgq",
+    "ha_to_physical_multiplier": 5.0,
+    "min_temperature_c": 5.0,
+    "max_temperature_c": 35.0,
+    "step_c": 0.5,
+    "calibration_bias_c": 0.0
+  }
+}
