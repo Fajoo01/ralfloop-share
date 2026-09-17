@@ -84,6 +84,34 @@ def recovery_eligible_devices(rows: Any, site_health: Mapping[str, Any]) -> tupl
     return eligible, sorted(suppressed)
 
 
+def previous_degraded_sets(previous: Mapping[str, Any]) -> tuple[set[str], set[str]]:
+    stored = set(previous.get("degraded_device_keys") or [])
+    if "recovery_eligible_device_keys" in previous:
+        return stored, set(previous.get("recovery_eligible_device_keys") or [])
+    # Migration from the first site-aware state format, where degraded_device_keys
+    # accidentally contained only recovery-eligible devices.
+    suppressed = set(previous.get("recovery_suppressed_site_offline") or [])
+    return stored | suppressed, stored
+
+
+def next_reload_candidates(
+    current_eligible: set[str],
+    previous_eligible: set[str],
+    prior_candidates: Mapping[str, Any],
+    *,
+    baseline: bool,
+) -> dict[str, int]:
+    if baseline:
+        return {}
+    candidates: dict[str, int] = {}
+    for key in current_eligible:
+        if key not in previous_eligible:
+            candidates[key] = 1
+        elif key in prior_candidates:
+            candidates[key] = int(prior_candidates[key]) + 1
+    return candidates
+
+
 def reload_tuya(config_dir: str, env_file: str) -> dict[str, Any]:
     registry = TuyaHARegistry(config_dir)
     backend = HomeAssistantRESTBackend.from_environment(env_file=env_file, timeout=20.0)
@@ -156,24 +184,21 @@ def main() -> int:
     previous_entity_sites = {str(k): str(v) for k, v in (previous.get("entity_sites") or {}).items()}
     transition_entity_sites = {**previous_entity_sites, **current_entity_sites}
     site_health = state_health.get("site_health") or {}
+    all_degraded_device_sites = degraded_device_sites(state_health.get("degraded_devices"))
+    current_degraded_devices = set(all_degraded_device_sites)
     eligible_device_sites, suppressed_offline_devices = recovery_eligible_devices(
         state_health.get("degraded_devices"), site_health
     )
-    current_degraded_devices = set(eligible_device_sites)
+    current_recovery_eligible = set(eligible_device_sites)
     previous_unavailable = set(previous.get("unavailable_entities") or [])
     previous_missing = set(previous.get("missing_entities") or [])
-    previous_degraded_devices = set(previous.get("degraded_device_keys") or [])
+    previous_degraded_devices, previous_recovery_eligible = previous_degraded_sets(previous)
     baseline = not bool(previous.get("initialized"))
 
     prior_candidates = previous.get("reload_candidates") or {}
-    candidates: dict[str, int] = {}
-    if not baseline:
-        for key in current_degraded_devices:
-            if key in previous_degraded_devices:
-                if key in prior_candidates:
-                    candidates[key] = int(prior_candidates[key]) + 1
-            else:
-                candidates[key] = 1
+    candidates = next_reload_candidates(
+        current_recovery_eligible, previous_recovery_eligible, prior_candidates, baseline=baseline
+    )
 
     now = time.time()
     last_reload = float(previous.get("last_reload_epoch") or 0.0)
@@ -194,6 +219,7 @@ def main() -> int:
         "unavailable_entities": sorted(current_unavailable),
         "missing_entities": sorted(current_missing),
         "degraded_device_keys": sorted(current_degraded_devices),
+        "recovery_eligible_device_keys": sorted(current_recovery_eligible),
         "degraded_devices": state_health.get("degraded_devices") or [],
         "site_health": site_health,
         "offline_sites": sorted(
