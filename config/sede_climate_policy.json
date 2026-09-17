@@ -195,6 +195,10 @@
     "decision": {
       "minimum_relative_saving": 0.05,
       "stale_bill_warn_days": 45
+    },
+    "price_snapshot": {
+      "path": "/var/lib/ralfloop/sede-climate/energy-price-snapshot.json",
+      "max_age_hours": 1080.0
     }
   }
 }

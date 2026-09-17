@@ -9,6 +9,8 @@ from integrations.bottazzi_climate.calendar_mcp import CalendarReadResult
 from integrations.bottazzi_climate.energy_economics import (
     EnergyEconomicsContext,
     _interpolate,
+    _load_price_snapshot,
+    _price_band,
     _tariff_accounting,
 )
 from integrations.bottazzi_climate.meteo import OutdoorWeatherContext, parse_meteo_context
@@ -34,6 +36,8 @@ def energy(source: str, cop: float, hp_cost: float, gas_cost: float = 0.104) -> 
         preferred_heating_source=source, relative_saving=0.25,
         cop_source="test_curve", price_band="included_fixed",
         bill_stale_days=48, writes=0, sends=0, accounting_source="test",
+        electricity_price_source="test", gas_price_source="test",
+        price_snapshot_status="fresh", price_snapshot_age_hours=1.0,
     )
 
 
@@ -131,3 +135,42 @@ def test_runtime_keeps_boiler_when_economics_prefers_gas(tmp_path):
     assert plan["heating_source"] == "boiler"
     assert plan["economics_preferred_heating_source"] == "boiler"
     assert result["energy_economics"]["preferred_heating_source"] == "boiler"
+
+
+def test_fresh_price_snapshot_overrides_bill_baseline(tmp_path):
+    p = policy(); cfg = p["energy_economics"]
+    snap = tmp_path / "prices.json"
+    cfg["price_snapshot"] = {"path": str(snap), "max_age_hours": 48}
+    now = datetime(2026, 9, 17, 16, 45, tzinfo=TZ)
+    snap.write_text(json.dumps({
+        "schema_version": 1, "observed_at": now.isoformat(),
+        "source": "test-live-prices",
+        "electricity_marginal_eur_per_kwh_below_threshold": 0.25,
+        "gas_marginal_eur_per_smc": 1.20,
+    }))
+    value, status, age = _load_price_snapshot(cfg, now)
+    band, price, source = _price_band(cfg["electricity"], 100.0, value)
+    assert status == "fresh" and age == 0.0
+    assert band == "included_fixed" and price == 0.25
+    assert source == "test-live-prices"
+    assert value["gas_marginal_eur_per_smc"] == 1.20
+
+
+def test_stale_price_snapshot_falls_back_to_verified_bill(tmp_path):
+    p = policy(); cfg = p["energy_economics"]
+    snap = tmp_path / "prices.json"
+    cfg["price_snapshot"] = {"path": str(snap), "max_age_hours": 24}
+    now = datetime(2026, 9, 17, 16, 45, tzinfo=TZ)
+    snap.write_text(json.dumps({
+        "schema_version": 1,
+        "observed_at": (now - timedelta(hours=30)).isoformat(),
+        "source": "stale-test",
+        "electricity_marginal_eur_per_kwh_below_threshold": 0.01,
+    }))
+    value, status, age = _load_price_snapshot(cfg, now)
+    band, price, source = _price_band(cfg["electricity"], 100.0, value)
+    assert status == "stale" and age > 24
+    assert value == {}
+    assert band == "included_fixed"
+    assert price == cfg["electricity"]["marginal_eur_per_kwh_below_threshold"]
+    assert source == cfg["electricity"]["price_source"]

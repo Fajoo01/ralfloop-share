@@ -35,6 +35,10 @@ class EnergyEconomicsContext:
     writes: int
     sends: int
     accounting_source: str | None
+    electricity_price_source: str | None
+    gas_price_source: str | None
+    price_snapshot_status: str | None
+    price_snapshot_age_hours: float | None
 
 
 def _structured(result: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -157,10 +161,65 @@ def _tariff_accounting(
     return consumed, remaining, state, stale_days, source
 
 
-def _price_band(cfg: Mapping[str, Any], remaining_kwh: float) -> tuple[str, float]:
+def _positive(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0.0 else None
+
+
+def _load_price_snapshot(
+    cfg: Mapping[str, Any], now: datetime,
+) -> tuple[dict[str, Any], str, float | None]:
+    snap_cfg = cfg.get("price_snapshot")
+    if not isinstance(snap_cfg, Mapping):
+        return {}, "disabled", None
+    path_text = str(snap_cfg.get("path") or "").strip()
+    if not path_text:
+        return {}, "disabled", None
+    raw = _load_state(Path(path_text).expanduser())
+    if not raw:
+        return {}, "missing", None
+    if int(raw.get("schema_version") or 0) != 1:
+        return {}, "invalid_schema", None
+    observed_text = str(raw.get("observed_at") or "")
+    try:
+        observed = datetime.fromisoformat(observed_text)
+    except ValueError:
+        return {}, "invalid_timestamp", None
+    if observed.tzinfo is None or now.tzinfo is None:
+        return {}, "invalid_timestamp", None
+    age_hours = max((now - observed.astimezone(now.tzinfo)).total_seconds() / 3600.0, 0.0)
+    valid_until_text = str(raw.get("valid_until") or "").strip()
+    if valid_until_text:
+        try:
+            valid_until = datetime.fromisoformat(valid_until_text)
+        except ValueError:
+            return {}, "invalid_valid_until", age_hours
+        if valid_until.tzinfo is None or now > valid_until.astimezone(now.tzinfo):
+            return {}, "expired", age_hours
+    max_age = float(snap_cfg.get("max_age_hours", 1080.0))
+    if age_hours > max(max_age, 0.0):
+        return {}, "stale", age_hours
+    return raw, "fresh", age_hours
+
+
+def _price_band(
+    cfg: Mapping[str, Any], remaining_kwh: float, snapshot: Mapping[str, Any],
+) -> tuple[str, float, str]:
     if remaining_kwh > 0.0:
-        return "included_fixed", float(cfg["marginal_eur_per_kwh_below_threshold"])
-    return "indexed_reference", float(cfg["marginal_eur_per_kwh_above_threshold_reference"])
+        key = "electricity_marginal_eur_per_kwh_below_threshold"
+        fallback_key = "marginal_eur_per_kwh_below_threshold"
+        band = "included_fixed"
+    else:
+        key = "electricity_marginal_eur_per_kwh_above_threshold"
+        fallback_key = "marginal_eur_per_kwh_above_threshold_reference"
+        band = "indexed_reference"
+    override = _positive(snapshot.get(key))
+    if override is not None:
+        return band, override, str(snapshot.get("source") or "price_snapshot")
+    return band, float(cfg[fallback_key]), str(cfg.get("price_source") or "configured_bill_baseline")
 
 
 def _choose_source(
@@ -182,7 +241,7 @@ def fetch_energy_economics(
 ) -> EnergyEconomicsContext:
     cfg = policy.get("energy_economics")
     if not isinstance(cfg, Mapping) or not cfg.get("enabled", False):
-        return EnergyEconomicsContext("disabled", None, None, None, None, None, None, None, None, None, None, None, None, None, None, 0, 0, None)
+        return EnergyEconomicsContext("disabled", None, None, None, None, None, None, None, None, None, None, None, None, None, None, 0, 0, None, None, None, None, None)
     elec = cfg["electricity"]
     gas = cfg["gas"]
     hp = cfg["heat_pump"]
@@ -217,9 +276,17 @@ def fetch_energy_economics(
     )
     if persist:
         _write_state(path, next_state)
-    band, electricity_price = _price_band(elec, remaining)
+    snapshot, snapshot_status, snapshot_age = _load_price_snapshot(cfg, now)
+    band, electricity_price, electricity_price_source = _price_band(elec, remaining, snapshot)
     gas_kwh_per_smc = float(gas["pcs_kwh_per_smc"]) * float(gas["boiler_efficiency"])
-    gas_cost = float(gas["marginal_eur_per_smc"]) / gas_kwh_per_smc
+    gas_override = _positive(snapshot.get("gas_marginal_eur_per_smc"))
+    gas_price_per_smc = gas_override if gas_override is not None else float(gas["marginal_eur_per_smc"])
+    gas_price_source = (
+        str(snapshot.get("source") or "price_snapshot")
+        if gas_override is not None
+        else str(gas.get("price_source") or "configured_bill_baseline")
+    )
+    gas_cost = gas_price_per_smc / gas_kwh_per_smc
     cop = None if outdoor_temperature_c is None else _interpolate(hp["cop_curve"], float(outdoor_temperature_c))
     hp_cost = None if cop is None or cop <= 0 else electricity_price / cop
     break_even = electricity_price / gas_cost if gas_cost > 0 else None
@@ -250,6 +317,10 @@ def fetch_energy_economics(
         writes=0,
         sends=0,
         accounting_source=accounting_source,
+        electricity_price_source=electricity_price_source,
+        gas_price_source=gas_price_source,
+        price_snapshot_status=snapshot_status,
+        price_snapshot_age_hours=snapshot_age,
     )
 
 
@@ -263,4 +334,6 @@ def unavailable_energy_context(status: str) -> EnergyEconomicsContext:
         preferred_heating_source=None, relative_saving=None,
         cop_source=None, price_band=None, bill_stale_days=None,
         writes=0, sends=0, accounting_source=None,
+        electricity_price_source=None, gas_price_source=None,
+        price_snapshot_status=None, price_snapshot_age_hours=None,
     )
