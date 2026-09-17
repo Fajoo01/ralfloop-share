@@ -34,7 +34,7 @@ class FakeClient:
             "campaign_id": "campaign_1", "list_id": scope["list_id"],
             "subject": scope["subject"], "from_name": scope["from_name"],
             "reply_to": scope["reply_to"], "content_sha256": scope["body_sha256"],
-            "html_sha256": scope["html_sha256"],
+            "html_sha256": scope["html_sha256"], "content_verified": True,
             "sent": False, "provider_status": "save",
         }
         return dict(self.campaign)
@@ -126,7 +126,14 @@ def test_client_puts_exact_approved_html_and_plain_text():
             if path.endswith("/content") and kwargs.get("method") == "PUT":
                 return {}
             if path.endswith("/content"):
-                return {"html": create_scope()["html_body"], "plain_text": "Body"}
+                html = create_scope()["html_body"].replace(
+                    "</body></html>",
+                    '<center id="canspamBarWrapper">Mailchimp footer</center></body></html>',
+                )
+                return {
+                    "html": html,
+                    "plain_text": "Body\n==============================================\nUnsubscribe",
+                }
             return {
                 "id": "campaign_1", "status": "save",
                 "recipients": {"list_id": "audience_1"},
@@ -144,7 +151,7 @@ def test_client_puts_exact_approved_html_and_plain_text():
         "campaigns/campaign_1/content",
         {"method": "PUT", "body": {"plain_text": "Body", "html": scope["html_body"]}},
     )
-    assert observed["html_sha256"] == scope["html_sha256"]
+    assert observed["content_verified"] is True
 
 
 def test_server_send_needs_new_exact_approval(tmp_path):

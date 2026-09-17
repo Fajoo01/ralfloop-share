@@ -390,7 +390,21 @@ class MailchimpClient:
             f"campaigns/{campaign_id}/content", method="PUT",
             body={"plain_text": scope["body_text"], "html": scope["html_body"]},
         )
-        return self.get_campaign(campaign_id)
+        info = self._request(f"campaigns/{campaign_id}")
+        content = self._request(f"campaigns/{campaign_id}/content")
+        observed = self._campaign_view(info, content)
+        plain = str(content.get("plain_text") or "")
+        html_content = str(content.get("html") or "")
+        expected_html_prefix = str(scope["html_body"]).rstrip()
+        if expected_html_prefix.endswith("</html>"):
+            expected_html_prefix = expected_html_prefix[:-7].rstrip()
+        if expected_html_prefix.endswith("</body>"):
+            expected_html_prefix = expected_html_prefix[:-7].rstrip()
+        observed["content_verified"] = (
+            plain.startswith(str(scope["body_text"]))
+            and html_content.startswith(expected_html_prefix)
+        )
+        return observed
 
     def send_campaign(self, campaign_id: str) -> dict[str, Any]:
         self._request(
@@ -802,8 +816,7 @@ class MailchimpMCPServer:
                         expected = {
                             "list_id": scope["list_id"], "subject": scope["subject"],
                             "from_name": scope["from_name"], "reply_to": scope["reply_to"],
-                            "content_sha256": scope["body_sha256"],
-                            "html_sha256": scope["html_sha256"], "sent": False,
+                            "content_verified": True, "sent": False,
                         }
                         if any(observed.get(key) != value for key, value in expected.items()):
                             raise RuntimeError("create_postcondition_mismatch")
