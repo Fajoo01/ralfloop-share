@@ -47,9 +47,34 @@ class TuyaStateBackend(Protocol):
 
 
 class TuyaHARegistry:
-    def __init__(self, config_dir: str | Path) -> None:
+    def __init__(self, config_dir: str | Path, *, site_map_file: str | Path | None = None) -> None:
         self.config_dir = Path(config_dir)
         self.storage = self.config_dir / ".storage"
+        self.site_map_file = Path(site_map_file or os.getenv(
+            "TUYA_SITE_MAP_FILE",
+            "/home/sibilla-cumana/ralf-memory-rag/current/config/tuya_sites.json",
+        ))
+
+    def _device_sites(self) -> dict[str, str]:
+        try:
+            payload = json.loads(self.site_map_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        sites = payload.get("sites") if isinstance(payload, Mapping) else None
+        if not isinstance(sites, Mapping):
+            return {}
+        result: dict[str, str] = {}
+        for site, spec in sites.items():
+            site_name = str(site or "").strip().casefold()
+            if not site_name or not site_name.replace("_", "").replace("-", "").isalnum():
+                continue
+            if not isinstance(spec, Mapping):
+                continue
+            for device_id in spec.get("device_ids") or []:
+                value = str(device_id or "").strip()
+                if value:
+                    result[value] = site_name
+        return result
     def _load(self, name: str) -> dict[str, Any]:
         path = self.storage / name
         try:
@@ -74,6 +99,7 @@ class TuyaHARegistry:
 
     def entities(self, *, include_disabled: bool = False) -> tuple[dict[str, Any], ...]:
         ids = self.config_entry_ids()
+        device_sites = self._device_sites()
         payload = self._load("core.entity_registry")
         rows = payload.get("data", {}).get("entities", [])
         result: list[dict[str, Any]] = []
@@ -89,6 +115,7 @@ class TuyaHARegistry:
                 "entity_id": entity_id,
                 "domain": entity_id.split(".", 1)[0],
                 "device_id": row.get("device_id"),
+                "site": device_sites.get(str(row.get("device_id") or ""), "unassigned"),
                 "name": row.get("name") or row.get("original_name"),
                 "original_name": row.get("original_name"),
                 "disabled_by": row.get("disabled_by"),
@@ -98,6 +125,7 @@ class TuyaHARegistry:
 
     def devices(self) -> tuple[dict[str, Any], ...]:
         ids = self.config_entry_ids()
+        device_sites = self._device_sites()
         entities = self.entities(include_disabled=True)
         counts: dict[str, int] = {}
         for row in entities:
@@ -117,6 +145,7 @@ class TuyaHARegistry:
             result.append({
                 "device_id": device_id,
                 "name": row.get("name_by_user") or row.get("name"),
+                "site": device_sites.get(device_id, "unassigned"),
                 "manufacturer": row.get("manufacturer"),
                 "model": row.get("model"),
                 "area_id": row.get("area_id"),
@@ -308,6 +337,15 @@ def _summarize_entity_health(
         str(row.get("device_id") or ""): str(row.get("name") or "")
         for row in devices if isinstance(row, Mapping)
     }
+    device_sites = {
+        str(row.get("device_id") or ""): str(row.get("site") or "unassigned")
+        for row in devices if isinstance(row, Mapping)
+    }
+    site_health: dict[str, dict[str, int]] = {}
+    for row in devices:
+        site = str(row.get("site") or "unassigned")
+        bucket = site_health.setdefault(site, {"devices": 0, "entities": 0, "available": 0, "unavailable": 0, "unknown": 0, "missing": 0})
+        bucket["devices"] += 1
     unavailable: list[dict[str, Any]] = []
     unknown: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
@@ -318,12 +356,17 @@ def _summarize_entity_health(
             continue
         device_id = str(entity.get("device_id") or "")
         row = live.get(entity_id)
+        site = str(entity.get("site") or device_sites.get(device_id) or "unassigned")
+        bucket = site_health.setdefault(site, {"devices": 0, "entities": 0, "available": 0, "unavailable": 0, "unknown": 0, "missing": 0})
+        bucket["entities"] += 1
         item = {
             "entity_id": entity_id,
             "device_id": device_id or None,
             "device_name": device_names.get(device_id) or None,
+            "site": site,
         }
         if row is None:
+            bucket["missing"] += 1
             item["state"] = "missing"
             missing.append(item)
             continue
@@ -331,10 +374,13 @@ def _summarize_entity_health(
         item["state"] = state or "unknown"
         if state == "unavailable":
             unavailable.append(item)
+            bucket["unavailable"] += 1
         elif state == "unknown" or not state:
             unknown.append(item)
+            bucket["unknown"] += 1
         else:
             available += 1
+            bucket["available"] += 1
     degraded_devices: dict[str, dict[str, Any]] = {}
     for item in unavailable + missing:
         device_id = str(item.get("device_id") or "")
@@ -342,6 +388,7 @@ def _summarize_entity_health(
         row = degraded_devices.setdefault(key, {
             "device_id": device_id or None,
             "device_name": item.get("device_name"),
+            "site": item.get("site") or "unassigned",
             "entity_count": 0,
             "unavailable": 0,
             "missing": 0,
@@ -363,6 +410,7 @@ def _summarize_entity_health(
         "unknown_entities": unknown[:50],
         "missing_entities": missing[:50],
         "degraded_devices": grouped[:50],
+        "site_health": dict(sorted(site_health.items())),
     }
 
 

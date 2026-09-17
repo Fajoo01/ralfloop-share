@@ -81,7 +81,7 @@ def reload_tuya(config_dir: str, env_file: str) -> dict[str, Any]:
     return {"attempted": len(entry_ids), "results": results, "ok": bool(results) and all(x["ok"] for x in results)}
 
 
-def append_transition_events(path: Path, event: Mapping[str, Any]) -> int:
+def append_transition_events(path: Path, event: Mapping[str, Any], entity_sites: Mapping[str, str]) -> int:
     kinds = (
         ("new_unavailable", "DOMOTICS_ENTITY_UNAVAILABLE"),
         ("recovered", "DOMOTICS_ENTITY_RECOVERED"),
@@ -99,6 +99,7 @@ def append_transition_events(path: Path, event: Mapping[str, Any]) -> int:
                 "source": "domotics_watchdog",
                 "event": event_type,
                 "entity_id": entity_id,
+                "site": str(entity_sites.get(str(entity_id)) or "unassigned"),
             })
     if not rows:
         return 0
@@ -126,8 +127,17 @@ def main() -> int:
     previous = load_state(state_path)
     health = fetch_health(args.socket)
     state_health = health.get("state_health") or {}
-    current_unavailable = entity_ids(state_health.get("unavailable_entities"))
-    current_missing = entity_ids(state_health.get("missing_entities"))
+    unavailable_rows = state_health.get("unavailable_entities") or []
+    missing_rows = state_health.get("missing_entities") or []
+    current_unavailable = entity_ids(unavailable_rows)
+    current_missing = entity_ids(missing_rows)
+    current_entity_sites = {
+        str(row.get("entity_id")): str(row.get("site") or "unassigned")
+        for row in list(unavailable_rows) + list(missing_rows)
+        if isinstance(row, Mapping) and row.get("entity_id")
+    }
+    previous_entity_sites = {str(k): str(v) for k, v in (previous.get("entity_sites") or {}).items()}
+    transition_entity_sites = {**previous_entity_sites, **current_entity_sites}
     current_degraded_devices = degraded_device_keys(state_health.get("degraded_devices"))
     previous_unavailable = set(previous.get("unavailable_entities") or [])
     previous_missing = set(previous.get("missing_entities") or [])
@@ -164,6 +174,8 @@ def main() -> int:
         "missing_entities": sorted(current_missing),
         "degraded_device_keys": sorted(current_degraded_devices),
         "degraded_devices": state_health.get("degraded_devices") or [],
+        "site_health": state_health.get("site_health") or {},
+        "entity_sites": current_entity_sites,
         "reload_candidates": candidates,
         "persistent_reload_candidates": persistent,
         "last_reload_epoch": last_reload,
@@ -181,7 +193,7 @@ def main() -> int:
             event["post_reload_health"] = fetch_health(args.socket).get("state_health") or {}
             event["reload_candidates"] = {}
 
-    event["transition_events_appended"] = 0 if baseline else append_transition_events(Path(args.events), event)
+    event["transition_events_appended"] = 0 if baseline else append_transition_events(Path(args.events), event, transition_entity_sites)
     write_state(state_path, event)
     print(json.dumps(event, ensure_ascii=False))
     return 0

@@ -26,3 +26,17 @@ Il watchdog domotico è read-only: non riavvia Home Assistant, non richiama serv
 - Gate citofono invariato: il volto può solo armare il gate; l'apertura fisica richiede il secondo fattore.
 - Nessun embedding biometrico, token Home Assistant, credenziale Tuya o URL con segreti viene committato.
 - Nessun hardcode di device da considerare guasto: lo stato operativo è basato su baseline/transizioni.
+
+## Site separation: Sede / Camper / Asiago (2026-09-17)
+
+Home Assistant currently assigns none of the 96 Tuya devices to HA areas, so HA `area_id` cannot separate physical locations. Bot-tazzi therefore uses an explicit, versioned device-id map in `config/tuya_sites.json`.
+
+Rules:
+- physical sites are `sede`, `camper`, `asiago`;
+- mapping is by stable Home Assistant `device_id`, never by runtime name matching;
+- only high-confidence devices are assigned automatically;
+- ambiguous devices remain `unassigned` rather than being guessed;
+- Tuya health exposes per-site counts and degraded devices;
+- domotics transition events carry `site`, and the unified activity stream preserves it.
+
+Initial canary with the explicit map: Asiago 4 devices / 1 entity available; Camper 9 devices / 9 entities unavailable; Sede 23 devices / 53 entities (45 available, 6 unavailable, 2 unknown); 60 devices remain unassigned pending classification. The all-unavailable Camper cohort should be treated as a possible site-level offline/power state, not automatically as nine independent device failures.

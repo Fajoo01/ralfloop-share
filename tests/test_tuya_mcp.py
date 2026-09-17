@@ -126,3 +126,27 @@ def test_tuya_health_reports_owned_entity_availability(tmp_path):
     assert payload["state_health"]["degraded_devices"][0]["device_id"] == "dev1"
     assert payload["writes"] == 0
     assert payload["sends"] == 0
+
+
+def test_tuya_site_map_is_external_and_health_is_grouped_by_site(tmp_path):
+    site_map = tmp_path / "tuya_sites.json"
+    site_map.write_text(json.dumps({
+        "schema_version": 1,
+        "sites": {"sede": {"device_ids": ["dev1"]}},
+    }), encoding="utf-8")
+    registry = _registry(tmp_path)
+    registry.site_map_file = site_map
+    backend = FakeBackend()
+    backend.states["light.cucina"] = {
+        "entity_id": "light.cucina", "state": "unavailable", "attributes": {}
+    }
+    server = TuyaMCPServer(registry=registry, backend=backend)
+
+    devices = server.call("tuya_list_devices", {})["structuredContent"]
+    assert devices["items"][0]["site"] == "sede"
+    entities = server.call("tuya_list_entities", {})["structuredContent"]
+    assert entities["items"][0]["site"] == "sede"
+    health = server.call("tuya_health", {})["structuredContent"]["state_health"]
+    assert health["unavailable_entities"][0]["site"] == "sede"
+    assert health["degraded_devices"][0]["site"] == "sede"
+    assert health["site_health"]["sede"]["unavailable"] == 1

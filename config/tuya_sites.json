@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "policy": "explicit_device_id_only",
+  "notes": "Only high-confidence assignments. Ambiguous Tuya devices remain unassigned until explicitly classified.",
+  "sites": {
+    "sede": {
+      "label": "Sede",
+      "device_ids": [
+        "f677c04b52456833ab30a7cc9b30a24d",
+        "64709c32a01a6e93adb5481e9f003f9d",
+        "ab3e1f77cfbadd216fb483b95f0ecb53",
+        "f55d61d9f1a1bacff1934f11d99a0b1b",
+        "b7ff71093bf0803f9a3102b9eea2fb8d",
+        "efcc4ad747ce6182152d1290ffbe8b61",
+        "2d60f9934563d566b65a9cb9c57ac4dc",
+        "026442de4c894902aa22c1c264f7423b",
+        "5527412b54a849e98d32e1b3b7b701cc",
+        "022a3c49cc03a90f116a252de35fc79b",
+        "673ca5b7d662c98edfd5164eee732934",
+        "65382f5956893a41647c9884d0019ab4",
+        "01371f18b65bb7853159447de7324018",
+        "02476287518efb510b12f7263be4a258",
+        "2bcae7b250103873031355612178e437",
+        "5c851b4d9b7336857c957f4270d5f570",
+        "eeab183bd07ced40797be14a66259851",
+        "61988d17f5cd3336b9c363b4a4b51fe4",
+        "b8e6acdbc7f0df9cf445fbebaa97c3c5",
+        "723db30def318d25ac23c2b69bd1fd42",
+        "2dd65b975bd5300b07f96b5fbd2770ad",
+        "1263cb32004a50710f617b8065b5cb56",
+        "1ecb84686741c1e192caf1aaecb812ae"
+      ]
+    },
+    "camper": {
+      "label": "Camper",
+      "device_ids": [
+        "e3ebec067c27dfb4363bc83ef14a96a6",
+        "ce077bb1f2b6e84778f7c20bdff1d124",
+        "f8f5aecc30f116f5cdb1f1e4c32df4eb",
+        "928497b14163097e70f0bb6786f93f4a",
+        "5ec4e46fb28c5c5594ca6bd48afdd8ec",
+        "da52e53793debf3ecb2c766244996055",
+        "a874de35ef01abf438a63e22a4de0666",
+        "15c32cca54ad8c507c48357fa827ba52",
+        "685d7f6c23c8349e77641f95395519f6"
+      ]
+    },
+    "asiago": {
+      "label": "Asiago",
+      "device_ids": [
+        "ae310c4353c81b9e384fb2c2a774f73d",
+        "4b81018fb22eb815d5129c775605a545",
+        "06a367f00d1fe1db9f95265de1e1f212",
+        "a2094e231f1da07e122c3ef9eaabd18c"
+      ]
+    }
+  }
+}

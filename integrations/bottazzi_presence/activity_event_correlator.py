@@ -29,7 +29,7 @@ ALLOWED_EVENTS = {
 SAFE_FIELDS = (
     "ts", "source", "event", "event_id", "track_id", "direction_hint", "presence_state",
     "name", "guest_id", "citofono_event_id", "garden_event_id", "garden_delta_seconds",
-    "confidence", "decision", "authorized", "reason", "entity_id",
+    "confidence", "decision", "authorized", "reason", "entity_id", "site",
 )
 
 
