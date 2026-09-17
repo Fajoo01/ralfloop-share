@@ -49,6 +49,6 @@
     "min_temperature_c": 5.0,
     "max_temperature_c": 35.0,
     "step_c": 0.5,
-    "calibration_bias_c": 0.0
+    "calibration_bias_c": -3.5
   }
 }
