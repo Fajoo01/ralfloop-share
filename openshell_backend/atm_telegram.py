@@ -2817,6 +2817,15 @@ def _surface_topology_is_fresh(payload: dict[str, Any]) -> bool:
         return False
 
 
+def _surface_topology_is_explicitly_stale(payload: dict[str, Any] | None) -> bool:
+    if not payload:
+        return False
+    end_date = str(payload.get("surface_end_date") or "").strip()
+    if not re.fullmatch(r"\d{8}", end_date):
+        return False
+    return not _surface_topology_is_fresh(payload)
+
+
 def _topology_direct_candidates(
     origin_lat: float,
     origin_lon: float,
@@ -3235,6 +3244,13 @@ def _local_atm_realtime_route(
     dest_lat: float,
     dest_lon: float,
 ) -> dict[str, Any] | None:
+    # Il grafo C contiene anche topologia/orari di superficie. Se il feed
+    # dichiara esplicitamente quella finestra scaduta, non lo usiamo per
+    # pianificare: GiroMilano resta la fonte autorevole finché il refresh
+    # non scarica un feed con surface_end_date nuovamente valido.
+    if _surface_topology_is_explicitly_stale(_load_atm_direct_topology()):
+        return None
+
     if (
         not ATM_LOCAL_ROUTER_BIN.is_file()
         or not ATM_LOCAL_ROUTER_GRAPH.is_file()

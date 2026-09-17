@@ -164,6 +164,34 @@ def test_stale_surface_topology_excludes_bus_but_keeps_metro(monkeypatch, tmp_pa
     assert [row["line"] for row in rows] == ["M1"]
 
 
+def test_explicitly_stale_surface_disables_local_c_router(monkeypatch, tmp_path):
+    path = tmp_path / "topology.json"
+    path.write_text(json.dumps({
+        "version": 2, "surface_end_date": "20260913", "patterns": []
+    }), encoding="utf-8")
+    monkeypatch.setattr(atm, "ATM_DIRECT_TOPOLOGY_PATH", path)
+    monkeypatch.setattr(atm, "_ATM_DIRECT_TOPOLOGY_CACHE", None)
+
+    class Now(RealDateTime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(2026, 9, 17, 16, 30)
+            return value if tz is None else value.replace(tzinfo=tz)
+
+    monkeypatch.setattr(atm, "datetime", Now)
+    router_bin = tmp_path / "atm-router"
+    router_graph = tmp_path / "atm-router.bin"
+    router_bin.write_text("fixture", encoding="utf-8")
+    router_graph.write_text("fixture", encoding="utf-8")
+    monkeypatch.setattr(atm, "ATM_LOCAL_ROUTER_BIN", router_bin)
+    monkeypatch.setattr(atm, "ATM_LOCAL_ROUTER_GRAPH", router_graph)
+    monkeypatch.setattr(
+        atm, "_local_atm_router_json",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("stale C router must not run")),
+    )
+    assert atm._local_atm_realtime_route(45.50, 9.20, 45.51, 9.21) is None
+
+
 def test_stale_surface_fast_path_falls_back_to_official_trip(monkeypatch, tmp_path):
     path = tmp_path / "topology.json"
     path.write_text(json.dumps({
