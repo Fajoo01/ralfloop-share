@@ -53,6 +53,38 @@ def test_in_person_sede_event_uses_corrected_temperature():
     assert result["actuator"] == "climate.air_conditioner"
 
 
+
+def test_deadband_prevents_chatter_around_comfort_thresholds():
+    p=policy(); now=datetime(2026,9,17,12,0)
+    e=CalendarEvent(
+        "x", "Riunione Tiremm", now+timedelta(hours=3), now+timedelta(hours=4),
+        location="Via Privata Federico Jarach, 8", calendar_id=p["calendar"]["calendar_id"],
+    )
+    expected = {
+        18.4: ("precondition", "heat"),
+        18.5: ("no_climate_action", None),
+        18.9: ("no_climate_action", None),
+        19.0: ("no_climate_action", None),
+        26.0: ("no_climate_action", None),
+        26.1: ("no_climate_action", None),
+        26.5: ("no_climate_action", None),
+        26.6: ("precondition", "cool"),
+    }
+    for temp, (decision, mode) in expected.items():
+        result=plan_event(e,now=now,current_temperature_c=temp,policy=p,boiler_available=True)
+        assert result["decision"] == decision
+        assert result.get("mode") == mode
+
+
+def test_negative_deadband_is_treated_as_zero():
+    p=policy(); p["comfort"]["deadband_c"]=-1.0; now=datetime(2026,9,17,12,0)
+    e=CalendarEvent(
+        "x", "Riunione Tiremm", now+timedelta(hours=3), now+timedelta(hours=4),
+        location="Via Privata Federico Jarach, 8", calendar_id=p["calendar"]["calendar_id"],
+    )
+    assert plan_event(e,now=now,current_temperature_c=18.9,policy=p)["mode"] == "heat"
+    assert plan_event(e,now=now,current_temperature_c=26.1,policy=p)["mode"] == "cool"
+
 def test_site_map_keeps_boiler_only_in_sede():
     sites=json.loads(Path("config/tuya_sites.json").read_text())["sites"]
     dev=policy()["boiler_thermostat"]["device_id"]

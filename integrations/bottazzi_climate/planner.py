@@ -70,12 +70,15 @@ def plan_event(
     timing = policy["timing"]
     actuators = policy["actuators"]
     temp = float(current_temperature_c)
-    if temp < float(comfort["heat_below_c"]):
+    deadband = max(float(comfort.get("deadband_c", 0.0)), 0.0)
+    heat_trigger = float(comfort["heat_below_c"]) - deadband
+    cool_trigger = float(comfort["cool_above_c"]) + deadband
+    if temp < heat_trigger:
         target = float(comfort["heat_target_c"])
         lead = _lead_minutes(target - temp, float(timing["heat_rate_c_per_hour"]), timing)
         actuator = actuators["heating_preferred"] if boiler_available else actuators["heating_fallback_entity"]
         mode = "heat"
-    elif temp > float(comfort["cool_above_c"]):
+    elif temp > cool_trigger:
         target = float(comfort["cool_target_c"])
         lead = _lead_minutes(temp - target, float(timing["cool_rate_c_per_hour"]), timing)
         actuator = actuators["cooling_entity"]
