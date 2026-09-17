@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "site": "sede",
+  "mode": "read_only_observation",
+  "entities": [
+    "binary_sensor.sensore_bagno_tiremm_occupazione",
+    "event.citofono_doorbell_message",
+    "event.camera_giardino_anteriore_doorbell_message",
+    "switch.cancello_switch_1"
+  ]
+}

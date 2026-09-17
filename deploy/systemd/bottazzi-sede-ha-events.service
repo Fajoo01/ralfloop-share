@@ -1,0 +1,24 @@
+[Unit]
+Description=Bot-tazzi Sede Home Assistant read-only event watcher
+After=network-online.target homeassistant.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sibilla-cumana
+Group=sibilla-cumana
+EnvironmentFile=/home/sibilla-cumana/.secrets/homeassistant.env
+WorkingDirectory=/home/sibilla-cumana/ralf-memory-rag/current
+StateDirectory=bottazzi-sede-events
+UMask=0077
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralf-memory-rag/current/scripts/bottazzi_sede_ha_event_watcher.py
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+RestrictAddressFamilies=AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

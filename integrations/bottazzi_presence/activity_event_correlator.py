@@ -15,6 +15,7 @@ DEFAULT_SOURCES = {
     "garden": Path("/opt/bottazzi-garden/events.jsonl"),
     "citofono": Path("/opt/bottazzi-citofono/events.jsonl"),
     "domotics": Path("/var/lib/ralf-domotics-watchdog/events.jsonl"),
+    "ha_sede": Path("/var/lib/bottazzi-sede-events/ha_events.jsonl"),
 }
 
 ALLOWED_EVENTS = {
@@ -23,13 +24,20 @@ ALLOWED_EVENTS = {
     "guest": {"guest_presence_inferred", "guest_skipped_known_passage_claim"},
     "garden": {"human_passage"},
     "citofono": {"garden_gate_small_motion_citofono_capture"},
-    "domotics": {"DOMOTICS_ENTITY_UNAVAILABLE", "DOMOTICS_ENTITY_RECOVERED", "DOMOTICS_ENTITY_MISSING", "DOMOTICS_ENTITY_RETURNED"},
+    "domotics": {"DOMOTICS_ENTITY_UNAVAILABLE", "DOMOTICS_ENTITY_RECOVERED", "DOMOTICS_ENTITY_MISSING", "DOMOTICS_ENTITY_RETURNED", "DOMOTICS_DEVICE_RETIRED"},
+    "ha_sede": {"HA_STATE_CHANGED"},
+}
+
+SOURCE_DEFAULT_SITE = {
+    "passage": "sede", "presence": "sede", "guest": "sede",
+    "garden": "sede", "citofono": "sede", "ha_sede": "sede",
 }
 
 SAFE_FIELDS = (
     "ts", "source", "event", "event_id", "track_id", "direction_hint", "presence_state",
     "name", "guest_id", "citofono_event_id", "garden_event_id", "garden_delta_seconds",
     "confidence", "decision", "authorized", "reason", "entity_id", "site",
+    "domain", "old_state", "new_state", "device_id", "device_name", "replacement",
 )
 
 
@@ -53,6 +61,7 @@ def normalize(kind: str, row: Mapping[str, Any]) -> dict[str, Any] | None:
     if event not in ALLOWED_EVENTS.get(kind, set()):
         return None
     payload = {key: row[key] for key in SAFE_FIELDS if key in row}
+    payload.setdefault("site", SOURCE_DEFAULT_SITE.get(kind, "unassigned"))
     source_id = str(row.get("event_id") or row.get("track_id") or row.get("entity_id") or "")
     basis = json.dumps({"kind": kind, "source_id": source_id, "payload": payload}, sort_keys=True, separators=(",", ":"), default=str)
     return {
@@ -61,6 +70,7 @@ def normalize(kind: str, row: Mapping[str, Any]) -> dict[str, Any] | None:
         "source_kind": kind,
         "source_id": source_id,
         "occurred_at": row.get("ts"),
+        "site": payload["site"],
         "payload": payload,
     }
 

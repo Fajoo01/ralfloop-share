@@ -58,3 +58,23 @@ def test_truncated_source_does_not_duplicate_seen_event(tmp_path: Path):
     assert result["emitted"] == 1
     rows = [json.loads(x) for x in out.read_text().splitlines()]
     assert [r["source_id"] for r in rows] == ["new", "newer"]
+
+
+def test_sede_sources_get_explicit_site():
+    out = normalize("garden", {"event": "human_passage", "event_id": "g1", "ts": "2026-09-17T10:00:00"})
+    assert out is not None
+    assert out["site"] == "sede"
+    assert out["payload"]["site"] == "sede"
+
+
+def test_ha_sede_state_change_normalizes_read_only_fields():
+    out = normalize("ha_sede", {
+        "event": "HA_STATE_CHANGED", "event_id": "h1", "ts": "2026-09-17T10:00:00",
+        "site": "sede", "entity_id": "switch.cancello_switch_1", "domain": "switch",
+        "old_state": "off", "new_state": "on", "attributes": {"secret": "x"},
+    })
+    assert out is not None
+    assert out["site"] == "sede"
+    assert out["payload"]["old_state"] == "off"
+    assert out["payload"]["new_state"] == "on"
+    assert "attributes" not in out["payload"]
