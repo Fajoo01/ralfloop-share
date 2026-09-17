@@ -79,6 +79,7 @@ def plan_event(
     policy: Mapping[str, Any],
     boiler_available: bool = False,
     outdoor_recent_mean_c: float | None = None,
+    energy_context: Any | None = None,
 ) -> dict[str, Any]:
     classification, reason = classify_event_kind(event, policy)
     eligible = classification == "sede"
@@ -124,11 +125,16 @@ def plan_event(
         lead = _lead_minutes(
             target - temp, float(timing["heat_rate_c_per_hour"]), timing
         )
-        actuator = (
-            actuators["heating_preferred"]
-            if boiler_available
-            else actuators["heating_fallback_entity"]
-        )
+        economic_source = getattr(energy_context, "preferred_heating_source", None)
+        if economic_source == "heat_pump":
+            actuator = actuators["heating_fallback_entity"]
+            heating_source = "heat_pump"
+        elif boiler_available:
+            actuator = actuators["heating_preferred"]
+            heating_source = "boiler"
+        else:
+            actuator = actuators["heating_fallback_entity"]
+            heating_source = "heat_pump_fallback"
         mode = "heat"
     elif comfort.cooling_enabled and temp > cool_trigger:
         target = comfort.cool_target_c
@@ -156,6 +162,8 @@ def plan_event(
         "decision": "precondition",
         "mode": mode,
         "actuator": actuator,
+        "heating_source": heating_source if mode == "heat" else None,
+        "economics_applied": bool(mode == "heat" and getattr(energy_context, "status", None) == "ok"),
         "current_temperature_c": temp,
         "target_temperature_c": target,
         "lead_minutes": lead,
@@ -173,6 +181,7 @@ def plan_event_with_weather(
     policy: Mapping[str, Any],
     boiler_available: bool = False,
     weather_context: Any | None = None,
+    energy_context: Any | None = None,
 ) -> dict[str, Any]:
     from .meteo import fetch_outdoor_weather
 
@@ -188,6 +197,7 @@ def plan_event_with_weather(
         policy=policy,
         boiler_available=boiler_available,
         outdoor_recent_mean_c=weather.recent_mean_c,
+        energy_context=energy_context,
     )
     return {
         **planned,

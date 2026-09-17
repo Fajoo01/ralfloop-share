@@ -131,5 +131,70 @@
   "tuya_read": {
     "socket_path": "/run/ralf-tuya-mcp/mcp.sock",
     "timeout_seconds": 20.0
+  },
+  "energy_economics": {
+    "enabled": true,
+    "mode": "observe_only",
+    "state_file": "energy-state.json",
+    "electricity": {
+      "meter_entity_id": "sensor.contatore_energia_totale",
+      "meter_device_id": "02abd49806d1aa597322f2bd95332c3c",
+      "meter_site": "unassigned",
+      "power_entity_ids": [
+        "sensor.contatore_potenza_di_fase_a",
+        "sensor.contatore_potenza_di_fase_b",
+        "sensor.contatore_potenza_di_fase_c"
+      ],
+      "tariff_period_start": "2026-07-01",
+      "tariff_period_end": "2027-06-30",
+      "included_kwh": 1500.0,
+      "latest_bill_period_end": "2026-07-31",
+      "latest_bill_consumed_with_losses_kwh": 86.0,
+      "latest_bill_remaining_kwh": 1414.0,
+      "historical_annual_kwh": 954.0,
+      "marginal_eur_per_kwh_below_threshold": 0.2765,
+      "marginal_eur_per_kwh_above_threshold_reference": 0.3775,
+      "price_source": "enostra_20260010135802_2026-08-24"
+    },
+    "gas": {
+      "annual_smc": 682.0,
+      "annual_total_eur": 942.37,
+      "fixed_monthly_total_eur": 20.09,
+      "marginal_eur_per_smc": 1.0282844575,
+      "pcs_kwh_per_smc": 11.0119444444,
+      "boiler_efficiency": 0.9,
+      "price_source": "hera_412619770563_2026-09-05"
+    },
+    "heat_pump": {
+      "entity_id": "climate.air_conditioner",
+      "family": "Akai Mistral",
+      "cop_curve_source": "provisional_until_exact_model_or_empirical_calibration",
+      "cop_curve": [
+        [
+          -7.0,
+          2.5
+        ],
+        [
+          0.0,
+          3.0
+        ],
+        [
+          7.0,
+          4.0
+        ],
+        [
+          12.0,
+          4.2
+        ],
+        [
+          20.0,
+          4.4
+        ]
+      ]
+    },
+    "decision": {
+      "minimum_relative_saving": 0.05,
+      "stale_bill_warn_days": 45
+    }
   }
 }

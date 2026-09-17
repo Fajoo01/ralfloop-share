@@ -11,6 +11,7 @@ class OutdoorWeatherContext:
     recent_mean_c: float | None
     history_hours: int
     status: str
+    current_c: float | None = None
 
 
 def parse_meteo_context(
@@ -26,12 +27,18 @@ def parse_meteo_context(
     except (TypeError, ValueError):
         hours = 0
     value = body.get("recent_temperature_mean_c")
-    if value is None or hours < max(int(min_recent_hours), 1):
-        return OutdoorWeatherContext(None, hours, "insufficient_history")
+    current = body.get("current") if isinstance(body.get("current"), Mapping) else {}
+    current_value = current.get("temperature_2m")
     try:
-        return OutdoorWeatherContext(float(value), hours, "ok")
+        current_c = float(current_value) if current_value is not None else None
     except (TypeError, ValueError):
-        return OutdoorWeatherContext(None, hours, "invalid_temperature")
+        current_c = None
+    if value is None or hours < max(int(min_recent_hours), 1):
+        return OutdoorWeatherContext(None, hours, "insufficient_history", current_c)
+    try:
+        return OutdoorWeatherContext(float(value), hours, "ok", current_c)
+    except (TypeError, ValueError):
+        return OutdoorWeatherContext(None, hours, "invalid_temperature", current_c)
 
 
 def _rpc(

@@ -10,6 +10,7 @@ from typing import Any, Callable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from .calendar_mcp import CalendarReadResult, GoogleCalendarMCPReader
+from .energy_economics import EnergyEconomicsContext, fetch_energy_economics, unavailable_energy_context
 from .meteo import OutdoorWeatherContext, fetch_outdoor_weather
 from .planner import CalendarEvent, classify_event_kind, plan_event_with_weather
 from .tuya_read import IndoorClimateContext, fetch_sede_indoor_temperature
@@ -207,6 +208,7 @@ def _plan_block(
     now: datetime,
     indoor: IndoorClimateContext,
     weather: OutdoorWeatherContext,
+    energy: EnergyEconomicsContext,
     policy: Mapping[str, Any],
 ) -> dict[str, Any]:
     event = _block_event(block, str(policy["calendar"]["calendar_id"]))
@@ -217,6 +219,7 @@ def _plan_block(
         policy=policy,
         boiler_available=indoor.status == "ok",
         weather_context=weather,
+        energy_context=energy,
     )
     return {
         **plan,
@@ -230,6 +233,16 @@ def _plan_block(
         "stop_at": plan.get("stop_at"),
         "mode": plan.get("mode"),
         "actuator": plan.get("actuator"),
+        "economics_status": energy.status,
+        "economics_preferred_heating_source": energy.preferred_heating_source,
+        "electricity_marginal_eur_per_kwh": energy.electricity_marginal_eur_per_kwh,
+        "gas_useful_eur_per_kwh": energy.gas_useful_eur_per_kwh,
+        "estimated_cop": energy.estimated_cop,
+        "heatpump_useful_eur_per_kwh": energy.heatpump_useful_eur_per_kwh,
+        "break_even_cop": energy.break_even_cop,
+        "economics_relative_saving": energy.relative_saving,
+        "price_band": energy.price_band,
+        "tariff_remaining_kwh": energy.tariff_remaining_kwh,
     }
 
 
@@ -249,6 +262,7 @@ def run_calendar_climate_cycle(
     calendar_reader: Any | None = None,
     indoor_fetch: Callable[[Mapping[str, Any]], IndoorClimateContext] = fetch_sede_indoor_temperature,
     weather_fetch: Callable[[Mapping[str, Any]], OutdoorWeatherContext] = fetch_outdoor_weather,
+    energy_fetch: Callable[..., EnergyEconomicsContext] = fetch_energy_economics,
     persist: bool = True,
 ) -> dict[str, Any]:
     if policy.get("site") != "sede" or policy.get("dry_run") is not True:
@@ -259,6 +273,14 @@ def run_calendar_climate_cycle(
     calendar: CalendarReadResult = reader.list_upcoming(observed_at)
     indoor = indoor_fetch(policy)
     weather = weather_fetch(policy)
+    try:
+        energy = energy_fetch(
+            policy, now=observed_at,
+            outdoor_temperature_c=weather.current_c if weather.current_c is not None else weather.recent_mean_c,
+            persist=persist,
+        )
+    except Exception:
+        energy = unavailable_energy_context("unavailable")
     blocks = merge_sede_events(calendar.events, policy)
     plans = [
         _plan_block(
@@ -266,6 +288,7 @@ def run_calendar_climate_cycle(
             now=observed_at,
             indoor=indoor,
             weather=weather,
+            energy=energy,
             policy=policy,
         )
         for block in blocks
@@ -310,8 +333,30 @@ def run_calendar_climate_cycle(
         },
         "weather": {
             "status": weather.status,
+            "current_temperature_c": weather.current_c,
             "recent_temperature_mean_c": weather.recent_mean_c,
             "recent_temperature_hours": weather.history_hours,
+        },
+        "energy_economics": {
+            "status": energy.status,
+            "meter_total_kwh": energy.meter_total_kwh,
+            "current_power_kw": energy.current_power_kw,
+            "air_conditioner_state": energy.air_conditioner_state,
+            "tariff_estimated_consumed_kwh": energy.tariff_estimated_consumed_kwh,
+            "tariff_remaining_kwh": energy.tariff_remaining_kwh,
+            "electricity_marginal_eur_per_kwh": energy.electricity_marginal_eur_per_kwh,
+            "gas_useful_eur_per_kwh": energy.gas_useful_eur_per_kwh,
+            "estimated_cop": energy.estimated_cop,
+            "heatpump_useful_eur_per_kwh": energy.heatpump_useful_eur_per_kwh,
+            "break_even_cop": energy.break_even_cop,
+            "preferred_heating_source": energy.preferred_heating_source,
+            "relative_saving": energy.relative_saving,
+            "cop_source": energy.cop_source,
+            "price_band": energy.price_band,
+            "bill_stale_days": energy.bill_stale_days,
+            "accounting_source": energy.accounting_source,
+            "writes": energy.writes,
+            "sends": energy.sends,
         },
         "events": event_rows,
         "reconciliation": changes,

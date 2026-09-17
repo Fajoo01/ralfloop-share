@@ -11,6 +11,7 @@ from integrations.bottazzi_climate.calendar_mcp import (
     CalendarReadResult,
     parse_event_detail,
 )
+from integrations.bottazzi_climate.energy_economics import unavailable_energy_context
 from integrations.bottazzi_climate.meteo import OutdoorWeatherContext
 from integrations.bottazzi_climate.planner import CalendarEvent, classify_event_kind
 from integrations.bottazzi_climate.runtime import (
@@ -182,6 +183,7 @@ def test_runtime_persists_plan_fields_without_climate_writes(tmp_path, monkeypat
         p, now=now, calendar_reader=FakeCalendarReader([e], now),
         indoor_fetch=lambda _: indoor(17.0),
         weather_fetch=lambda _: OutdoorWeatherContext(10.0, 168, "ok"),
+        energy_fetch=lambda *args, **kwargs: unavailable_energy_context("test_disabled"),
     )
     assert result["dry_run"] is True
     assert result["climate_writes"] == 0 and result["climate_sends"] == 0
@@ -206,6 +208,7 @@ def test_runtime_uses_calendar_fallback_when_weather_history_unavailable(tmp_pat
         p, now=now, calendar_reader=FakeCalendarReader([e], now),
         indoor_fetch=lambda _: indoor(18.0),
         weather_fetch=lambda _: OutdoorWeatherContext(None, 12, "insufficient_history"),
+        energy_fetch=lambda *args, **kwargs: unavailable_energy_context("test_disabled"),
     )
     plan = result["blocks"][0]
     assert plan["comfort_profile"] == "shoulder"
@@ -224,6 +227,7 @@ def test_online_and_other_location_do_not_create_climate_blocks(tmp_path):
         p, now=now, calendar_reader=FakeCalendarReader(rows, now),
         indoor_fetch=lambda _: indoor(23.0),
         weather_fetch=lambda _: OutdoorWeatherContext(22.0, 168, "ok"),
+        energy_fetch=lambda *args, **kwargs: unavailable_energy_context("test_disabled"),
     )
     assert result["blocks"] == []
     classes = {row["event_id"]: row["classification"] for row in result["events"]}
