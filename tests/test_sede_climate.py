@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from integrations.bottazzi_climate.comfort import select_seasonal_comfort
-from integrations.bottazzi_climate.planner import CalendarEvent, plan_event
+from integrations.bottazzi_climate.planner import CalendarEvent, plan_event, plan_event_with_weather
 from integrations.bottazzi_climate import meteo as climate_meteo
 from integrations.bottazzi_climate.meteo import parse_meteo_context
 from integrations.bottazzi_climate.thermostat import (
@@ -79,7 +79,7 @@ def test_september_uses_shoulder_profile_with_wider_band():
 def test_running_mean_overrides_calendar_season():
     p=policy(); now=datetime(2026,1,17,12,0)
     winter=select_seasonal_comfort(now=now,policy=p,outdoor_recent_mean_c=10.0)
-    summer=select_seasonal_comfort(now=now,policy=p,outdoor_recent_mean_c=22.0)
+    summer=select_seasonal_comfort(now=now,policy=p,outdoor_recent_mean_c=24.0)
     assert (winter.name, winter.source) == ("winter", "outdoor_recent_mean")
     assert winter.heating_enabled is True and winter.cooling_enabled is False
     assert (summer.name, summer.source) == ("summer", "outdoor_recent_mean")
@@ -136,14 +136,14 @@ def test_live_meteo_mean_shape_selects_weather_profile_without_network():
     comfort=select_seasonal_comfort(
         now=now, policy=p, outdoor_recent_mean_c=context.recent_mean_c
     )
-    assert (comfort.name, comfort.source) == ("summer", "outdoor_recent_mean")
+    assert (comfort.name, comfort.source) == ("shoulder", "outdoor_recent_mean")
 
 
 def test_fetch_outdoor_weather_reads_configured_meteo_mcp(monkeypatch):
     p=policy()
     seen={}
-    def fake_rpc(sock_path, address, timeout_s):
-        seen.update(socket_path=sock_path, address=address, timeout=timeout_s)
+    def fake_rpc(sock_path, address, timeout_s, lat=None, lon=None):
+        seen.update(socket_path=sock_path, address=address, timeout=timeout_s, lat=lat, lon=lon)
         return {
             "structuredContent": {
                 "recent_temperature_mean_c": 14.2,
@@ -155,3 +155,31 @@ def test_fetch_outdoor_weather_reads_configured_meteo_mcp(monkeypatch):
     assert (context.recent_mean_c, context.history_hours, context.status) == (14.2, 168, "ok")
     assert seen["socket_path"] == p["weather"]["socket_path"]
     assert seen["address"] == p["weather"]["address"]
+    assert seen["lat"] == p["weather"]["lat"]
+    assert seen["lon"] == p["weather"]["lon"]
+
+def test_weather_mean_22_49_keeps_september_in_shoulder():
+    p=policy(); now=datetime(2026,9,17,15,0)
+    comfort=select_seasonal_comfort(now=now,policy=p,outdoor_recent_mean_c=22.49)
+    assert (comfort.name, comfort.source) == ("shoulder", "outdoor_recent_mean")
+
+
+def test_plan_event_with_weather_wires_meteo_into_dry_run(monkeypatch):
+    p=policy(); now=datetime(2026,9,17,15,0)
+    e=CalendarEvent(
+        "live", "Riunione Tiremm", now+timedelta(hours=2), now+timedelta(hours=3),
+        location="Via Privata Federico Jarach, 8", calendar_id=p["calendar"]["calendar_id"],
+    )
+    monkeypatch.setattr(
+        climate_meteo, "fetch_outdoor_weather",
+        lambda _p: climate_meteo.OutdoorWeatherContext(22.49, 168, "ok"),
+    )
+    result=plan_event_with_weather(
+        e, now=now, current_temperature_c=23.0, policy=p, boiler_available=True
+    )
+    assert result["dry_run"] is True
+    assert result["comfort_profile"] == "shoulder"
+    assert result["comfort_profile_source"] == "outdoor_recent_mean"
+    assert result["weather_status"] == "ok"
+    assert result["weather_history_hours"] == 168
+    assert result["decision"] == "no_climate_action"

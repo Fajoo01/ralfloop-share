@@ -110,3 +110,29 @@ def plan_event(
         "stop_at": stop_at.isoformat(),
         "action_due": now >= action_at and now < event.end,
     }
+
+def plan_event_with_weather(
+    event: CalendarEvent,
+    *,
+    now: datetime,
+    current_temperature_c: float | None,
+    policy: Mapping[str, Any],
+    boiler_available: bool = False,
+) -> dict[str, Any]:
+    # Import locally to keep the pure planner usable in tests/offline tools.
+    from .meteo import fetch_outdoor_weather
+
+    weather = fetch_outdoor_weather(policy)
+    planned = plan_event(
+        event,
+        now=now,
+        current_temperature_c=current_temperature_c,
+        policy=policy,
+        boiler_available=boiler_available,
+        outdoor_recent_mean_c=weather.recent_mean_c,
+    )
+    return {
+        **planned,
+        "weather_status": weather.status,
+        "weather_history_hours": weather.history_hours,
+    }

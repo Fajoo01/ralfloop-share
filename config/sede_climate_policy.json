@@ -75,7 +75,7 @@
         ]
       },
       "winter_max_recent_mean_c": 15.0,
-      "summer_min_recent_mean_c": 20.0
+      "summer_min_recent_mean_c": 23.0
     },
     "profiles": {
       "winter": {
@@ -111,8 +111,10 @@
     "enabled": true,
     "provider": "meteo_mcp",
     "socket_path": "/run/ralf-meteo-mcp/mcp.sock",
-    "address": "Milano, Italia",
+    "address": "Via Privata Federico Jarach 8, Milano",
     "min_recent_hours": 72,
-    "timeout_seconds": 5.0
+    "timeout_seconds": 5.0,
+    "lat": 45.5065,
+    "lon": 9.2355
   }
 }

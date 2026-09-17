@@ -34,7 +34,13 @@ def parse_meteo_context(
         return OutdoorWeatherContext(None, hours, "invalid_temperature")
 
 
-def _rpc(sock_path: str, address: str, timeout_s: float) -> Mapping[str, Any]:
+def _rpc(
+    sock_path: str,
+    address: str,
+    timeout_s: float,
+    lat: float | None = None,
+    lon: float | None = None,
+) -> Mapping[str, Any]:
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.settimeout(float(timeout_s))
     try:
@@ -59,9 +65,16 @@ def _rpc(sock_path: str, address: str, timeout_s: float) -> Mapping[str, Any]:
             },
         })
         stream.write(b'{"jsonrpc":"2.0","method":"notifications/initialized"}\n')
+        arguments: dict[str, Any]
+        if lat is not None and lon is not None:
+            arguments = {"lat": float(lat), "lon": float(lon)}
+        elif address:
+            arguments = {"address": address}
+        else:
+            raise RuntimeError("meteo_location_missing")
         response = request({
             "jsonrpc": "2.0", "id": 2, "method": "tools/call",
-            "params": {"name": "meteo_current", "arguments": {"address": address}},
+            "params": {"name": "meteo_current", "arguments": arguments},
         })
         result = response.get("result")
         if not isinstance(result, Mapping):
@@ -80,6 +93,8 @@ def fetch_outdoor_weather(policy: Mapping[str, Any]) -> OutdoorWeatherContext:
             str(cfg.get("socket_path") or "/run/ralf-meteo-mcp/mcp.sock"),
             str(cfg.get("address") or "").strip(),
             float(cfg.get("timeout_seconds", 5.0)),
+            float(cfg["lat"]) if cfg.get("lat") is not None else None,
+            float(cfg["lon"]) if cfg.get("lon") is not None else None,
         )
         return parse_meteo_context(
             payload, min_recent_hours=int(cfg.get("min_recent_hours", 72))
