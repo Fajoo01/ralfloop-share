@@ -143,6 +143,20 @@ def apply_session(registry: dict[str, Any], session: Mapping[str, Any]) -> list[
                 "certainty": after["certainty"], "observed_at": after.get("observed_at"),
                 "source_session_id": session_id, "direction_hint": after.get("direction_hint"),
             })
+    observations = registry.setdefault("identity_observations", [])
+    for hint in session.get("identity_hints") or []:
+        if not isinstance(hint, Mapping):
+            continue
+        subject = str(hint.get("subject") or "").strip().casefold()
+        if not subject:
+            continue
+        observations.append({
+            "subject": subject, "observed_at": hint.get("occurred_at"),
+            "reason": hint.get("reason"), "support_frames": hint.get("support_frames"),
+            "frame_ratio": hint.get("frame_ratio"), "source_session_id": session_id,
+            "role": "identity_hint_only",
+        })
+    registry["identity_observations"] = observations[-256:]
     anonymous = registry.setdefault("anonymous", {"direction_balance": 0, "unresolved_count": 0, "movements": []})
     claims = [c for c in (session.get("subject_claims") or []) if isinstance(c, Mapping)]
     has_known_claim = any(str(c.get("kind") or "") == "known" for c in claims)
@@ -181,7 +195,8 @@ def run(source: Path, state_path: Path, events_path: Path, legacy_path: Path) ->
             "people": bootstrap_people(legacy_path),
             "anonymous": {"direction_balance": 0, "unresolved_count": 0, "movements": []},
             "seen_session_ids": [],
-            "note": "Current state starts unknown; legacy presence is historical context only.",
+            "identity_observations": [],
+            "note": "Current state starts unknown; legacy presence is historical context only. Face identity hints are observational and never change presence alone.",
         }
         atomic_json(state_path, registry)
         return {"status": "baseline_initialized", "processed": 0, "changes": 0, "people": len(registry["people"])}

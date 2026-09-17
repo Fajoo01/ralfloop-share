@@ -15,7 +15,7 @@ ACTIVITY_EVENT_TYPES = {
     "PHYSICAL_PASSAGE_TRACKED", "PHYSICAL_PASSAGE_UNPAIRED",
     "PRESENCE_INFERRED", "PRESENCE_EXIT_CONFIRMED", "PRESENCE_SHORT_ROUNDTRIP", "PRESENCE_CONFIRMED",
     "GUEST_PRESENCE_INFERRED", "GUEST_SKIPPED_KNOWN_PASSAGE_CLAIM",
-    "HA_STATE_CHANGED",
+    "HA_STATE_CHANGED", "FACE_IDENTITY_HINT",
 }
 
 
@@ -92,14 +92,20 @@ def activity_row(row: Mapping[str, Any]) -> dict[str, Any] | None:
     payload = row.get("payload") if isinstance(row.get("payload"), Mapping) else {}
     return {
         "event_id": str(row.get("event_id") or ""), "event_type": event_type,
+        "source_id": str(row.get("source_id") or ""),
         "source_kind": str(row.get("source_kind") or ""), "site": site,
         "occurred_at": str(row.get("occurred_at") or ""), "epoch": ts,
         "direction_hint": payload.get("direction_hint"), "presence_state": payload.get("presence_state"),
         "name": payload.get("name"), "guest_id": payload.get("guest_id"),
         "confidence": payload.get("confidence"), "event_source": payload.get("source"),
         "entity_id": payload.get("entity_id"), "old_state": payload.get("old_state"), "new_state": payload.get("new_state"),
+        "track_id": payload.get("track_id"), "citofono_event_id": payload.get("citofono_event_id"),
+        "garden_event_id": payload.get("garden_event_id"),
+        "identity_reason": payload.get("identity_reason"),
+        "identity_support_frames": payload.get("identity_support_frames"),
+        "identity_frame_ratio": payload.get("identity_frame_ratio"),
         "signal_role": payload.get("signal_role"),
-        "auxiliary": payload.get("signal_role") == "auxiliary_relay",
+        "auxiliary": payload.get("signal_role") == "auxiliary_relay" or event_type == "FACE_IDENTITY_HINT",
     }
 
 
@@ -118,11 +124,16 @@ def finalize_session(session: Mapping[str, Any]) -> dict[str, Any]:
         if not name and not guest_id:
             continue
         etype = str(event.get("event_type") or "")
-        if etype in {"PRESENCE_CONFIRMED", "PRESENCE_EXIT_CONFIRMED"}:
-            certainty = "confirmed"
-        elif etype == "PRESENCE_INFERRED":
-            certainty = "probable"
+        if name:
+            if etype in {"PRESENCE_CONFIRMED", "PRESENCE_EXIT_CONFIRMED"}:
+                certainty = "confirmed"
+            elif etype in {"PRESENCE_INFERRED", "PRESENCE_SHORT_ROUNDTRIP"}:
+                certainty = "probable"
+            else:
+                continue
         else:
+            if etype != "GUEST_PRESENCE_INFERRED":
+                continue
             certainty = "uncertain"
         subject_claims.append({
             "kind": "known" if name else "guest",
@@ -135,6 +146,22 @@ def finalize_session(session: Mapping[str, Any]) -> dict[str, Any]:
             "occurred_at": event.get("occurred_at"),
             "direction_hint": event.get("direction_hint"),
         })
+    identity_hints = []
+    for event in events:
+        if event.get("event_type") != "FACE_IDENTITY_HINT":
+            continue
+        subject = str(event.get("name") or "").strip().casefold()
+        if not subject:
+            continue
+        identity_hints.append({
+            "subject": subject, "occurred_at": event.get("occurred_at"),
+            "reason": event.get("identity_reason"),
+            "support_frames": event.get("identity_support_frames"),
+            "frame_ratio": event.get("identity_frame_ratio"),
+            "event_id": event.get("event_id"),
+            "citofono_event_id": event.get("citofono_event_id") or event.get("source_id"),
+            "role": "identity_hint_only",
+        })
     movement_events = [x for x in events if not x.get("auxiliary")]
     movement_confidence = next((x.get("confidence") for x in reversed(movement_events) if x.get("confidence")), None)
     return {
@@ -146,6 +173,7 @@ def finalize_session(session: Mapping[str, Any]) -> dict[str, Any]:
         "direction_hint": latest_direction, "presence_state": latest_presence,
         "movement_confidence": movement_confidence,
         "subject_claims": subject_claims[-32:],
+        "identity_hints": identity_hints[-32:],
         "evidence_event_ids": ids[-64:],
     }
 
@@ -164,13 +192,14 @@ def run(source: Path, state_path: Path, out: Path, *, window_seconds: float = 18
     if not initialized:
         off = source.stat().st_size if source.exists() else 0
         cp = checkpoint(source, off)
-        atomic_json(state_path, {"initialized": True, "offset": off, "checkpoint": cp, "open_sessions": {}})
+        atomic_json(state_path, {"initialized": True, "offset": off, "checkpoint": cp, "open_sessions": {}, "pending_auxiliary": {}})
         return {"status": "baseline_initialized", "processed": 0, "finalized": 0, "open_sites": 0}
     offset = int(state.get("offset") or 0)
     if not checkpoint_matches(source, state.get("checkpoint")):
         offset = 0
     new_offset, raw_rows = read_new(source, offset)
     open_sessions = dict(state.get("open_sessions") or {})
+    pending_auxiliary = dict(state.get("pending_auxiliary") or {})
     finalized: list[dict[str, Any]] = []
     processed = 0
     for raw in raw_rows:
@@ -182,9 +211,17 @@ def run(source: Path, state_path: Path, out: Path, *, window_seconds: float = 18
         if current and float(row["epoch"]) - float(current.get("last_epoch") or 0) > window_seconds:
             finalized.append(finalize_session(current)); current = None
         if row.get("auxiliary") and not current:
+            pending = list(pending_auxiliary.get(site) or [])
+            pending.append(row)
+            pending_auxiliary[site] = pending[-32:]
             continue
         if not current:
-            current = {"site": site, "started_at": row["occurred_at"], "last_at": row["occurred_at"], "last_epoch": row["epoch"], "events": []}
+            pending = [
+                x for x in (pending_auxiliary.get(site) or [])
+                if 0 <= float(row["epoch"]) - float(x.get("epoch") or 0) <= window_seconds
+            ]
+            current = {"site": site, "started_at": (pending[0]["occurred_at"] if pending else row["occurred_at"]), "last_at": row["occurred_at"], "last_epoch": row["epoch"], "events": pending}
+            pending_auxiliary.pop(site, None)
         current["last_at"] = row["occurred_at"]; current["last_epoch"] = row["epoch"]
         current["events"] = (list(current.get("events") or []) + [row])[-64:]
         open_sessions[site] = current
@@ -192,9 +229,15 @@ def run(source: Path, state_path: Path, out: Path, *, window_seconds: float = 18
     for site, current in list(open_sessions.items()):
         if now - float(current.get("last_epoch") or now) > window_seconds:
             finalized.append(finalize_session(current)); del open_sessions[site]
+    for site, pending in list(pending_auxiliary.items()):
+        fresh = [x for x in pending if now - float(x.get("epoch") or 0) <= window_seconds]
+        if fresh:
+            pending_auxiliary[site] = fresh[-32:]
+        else:
+            pending_auxiliary.pop(site, None)
     append_rows(out, finalized)
     cp = checkpoint(source, new_offset)
-    atomic_json(state_path, {"initialized": True, "offset": new_offset, "checkpoint": cp, "open_sessions": open_sessions})
+    atomic_json(state_path, {"initialized": True, "offset": new_offset, "checkpoint": cp, "open_sessions": open_sessions, "pending_auxiliary": pending_auxiliary})
     return {"status": "completed", "processed": processed, "finalized": len(finalized), "open_sites": len(open_sessions)}
 
 

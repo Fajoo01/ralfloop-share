@@ -8,6 +8,11 @@ import os
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+try:
+    from .presence_logic import face_summary_row, trusted_face_event
+except ImportError:
+    from presence_logic import face_summary_row, trusted_face_event
+
 DEFAULT_SOURCES = {
     "passage": Path("/opt/bottazzi-presence/passage_events.jsonl"),
     "presence": Path("/opt/bottazzi-presence/presence_events.jsonl"),
@@ -23,7 +28,7 @@ ALLOWED_EVENTS = {
     "presence": {"presence_inferred", "presence_exit_confirmed", "presence_short_roundtrip", "presence_confirmed"},
     "guest": {"guest_presence_inferred", "guest_skipped_known_passage_claim"},
     "garden": {"human_passage"},
-    "citofono": {"garden_gate_small_motion_citofono_capture"},
+    "citofono": {"garden_gate_small_motion_citofono_capture", "camera_wake_face_burst"},
     "domotics": {"DOMOTICS_ENTITY_UNAVAILABLE", "DOMOTICS_ENTITY_RECOVERED", "DOMOTICS_ENTITY_MISSING", "DOMOTICS_ENTITY_RETURNED", "DOMOTICS_DEVICE_RETIRED"},
     "ha_sede": {"HA_STATE_CHANGED"},
 }
@@ -38,6 +43,7 @@ SAFE_FIELDS = (
     "name", "guest_id", "citofono_event_id", "garden_event_id", "garden_delta_seconds",
     "confidence", "decision", "authorized", "reason", "entity_id", "site",
     "domain", "old_state", "new_state", "device_id", "device_name", "replacement", "signal_role",
+    "identity_reason", "identity_support_frames", "identity_frame_ratio", "identity_hint_only",
 )
 
 
@@ -62,11 +68,29 @@ def normalize(kind: str, row: Mapping[str, Any]) -> dict[str, Any] | None:
         return None
     payload = {key: row[key] for key in SAFE_FIELDS if key in row}
     payload.setdefault("site", SOURCE_DEFAULT_SITE.get(kind, "unassigned"))
+    event_type = event.upper()
+    if kind == "citofono" and event == "camera_wake_face_burst":
+        if not trusted_face_event(row):
+            return None
+        summary = face_summary_row(row)
+        verdict = str(row.get("verdict") or "").strip().casefold()
+        if not verdict:
+            return None
+        consensus = row.get("consensus") if isinstance(row.get("consensus"), Mapping) else {}
+        payload.update({
+            "event": "face_identity_hint",
+            "name": verdict,
+            "identity_reason": consensus.get("reason"),
+            "identity_support_frames": summary.get("unique_frames"),
+            "identity_frame_ratio": summary.get("frame_ratio"),
+            "identity_hint_only": True,
+        })
+        event_type = "FACE_IDENTITY_HINT"
     source_id = str(row.get("event_id") or row.get("track_id") or row.get("entity_id") or "")
     basis = json.dumps({"kind": kind, "source_id": source_id, "payload": payload}, sort_keys=True, separators=(",", ":"), default=str)
     return {
         "event_id": "activity_" + hashlib.sha256(basis.encode()).hexdigest()[:24],
-        "event_type": event.upper(),
+        "event_type": event_type,
         "source_kind": kind,
         "source_id": source_id,
         "occurred_at": row.get("ts"),

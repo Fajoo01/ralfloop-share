@@ -69,3 +69,15 @@ def test_first_run_baselines_without_replaying_sessions(tmp_path: Path):
     assert r['status']=='baseline_initialized'
     assert json.load(open(state))['people']['fabio']['state']=='unknown'
     assert not events.exists()
+
+
+def test_identity_hint_is_recorded_but_never_changes_presence_state():
+    reg={'people':{'fabio':{'state':'unknown','certainty':'stale'}},'seen_session_ids':[],'identity_observations':[]}
+    s=session('s-face', claims=[])
+    s['identity_hints']=[{'subject':'fabio','occurred_at':'2026-09-17T10:00:00+00:00','reason':'multiframe_consensus_with_insightface','support_frames':3,'frame_ratio':0.6}]
+    changes=apply_session(reg,s)
+    assert changes==[]
+    assert reg['people']['fabio']['state']=='unknown'
+    assert reg['people']['fabio']['certainty']=='stale'
+    assert reg['identity_observations'][-1]['subject']=='fabio'
+    assert reg['identity_observations'][-1]['role']=='identity_hint_only'

@@ -78,3 +78,29 @@ def test_ha_sede_state_change_normalizes_read_only_fields():
     assert out["payload"]["old_state"] == "off"
     assert out["payload"]["new_state"] == "on"
     assert "attributes" not in out["payload"]
+
+
+def test_trusted_citofono_face_becomes_identity_hint_only():
+    row = {
+        "event": "camera_wake_face_burst", "event_id": "citofono_123", "ts": "2026-09-17T10:00:00",
+        "verdict": "fabio",
+        "consensus": {"verdict": "fabio", "reason": "multiframe_consensus_with_insightface", "authorized": True},
+        "summary": [{"name":"fabio","unique_frames":3,"frame_ratio":0.6,"best_distance":0.22}],
+    }
+    out = normalize("citofono", row)
+    assert out is not None
+    assert out["event_type"] == "FACE_IDENTITY_HINT"
+    assert out["source_id"] == "citofono_123"
+    assert out["payload"]["name"] == "fabio"
+    assert out["payload"]["identity_hint_only"] is True
+    assert out["payload"]["site"] == "sede"
+    assert "summary" not in out["payload"]
+    assert "authorized" not in out["payload"]
+
+
+def test_uncertain_citofono_face_is_not_emitted_as_identity_hint():
+    row = {
+        "event": "camera_wake_face_burst", "event_id": "citofono_124", "ts": "2026-09-17T10:00:00",
+        "verdict": "incerto", "consensus": {"verdict":"incerto","reason":"identity_competition"}, "summary": [],
+    }
+    assert normalize("citofono", row) is None

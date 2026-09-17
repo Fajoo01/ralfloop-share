@@ -81,3 +81,39 @@ def test_finalize_session_preserves_subject_claim_certainty():
     assert out['subject_claims'][0]['subject']=='fabio'
     assert out['subject_claims'][0]['certainty']=='confirmed'
     assert out['subject_claims'][0]['state']=='inside'
+
+
+def test_face_hint_is_auxiliary_and_cannot_open_session_by_itself(tmp_path: Path):
+    src=tmp_path/'activity.jsonl'; state=tmp_path/'state.json'; out=tmp_path/'sessions.jsonl'
+    src.write_text('')
+    assert run(src,state,out,now_epoch=parse_ts('2026-09-17T09:00:00+00:00'))['status']=='baseline_initialized'
+    face={
+        'event_id':'aface','event_type':'FACE_IDENTITY_HINT','source_kind':'citofono','source_id':'citofono_1',
+        'site':'sede','occurred_at':'2026-09-17T10:00:00+00:00',
+        'payload':{'site':'sede','name':'fabio','identity_reason':'multiframe_consensus_with_insightface','identity_support_frames':3,'identity_frame_ratio':0.6},
+    }
+    with src.open('a') as fh: fh.write(json.dumps(face)+'\n')
+    r=run(src,state,out,now_epoch=parse_ts('2026-09-17T10:01:00+00:00'))
+    assert r['processed']==1 and r['open_sites']==0
+    st=json.loads(state.read_text())
+    assert len(st['pending_auxiliary']['sede'])==1
+    assert not out.exists()
+
+
+def test_buffered_face_hint_attaches_to_real_movement_without_becoming_subject_claim(tmp_path: Path):
+    src=tmp_path/'activity.jsonl'; state=tmp_path/'state.json'; out=tmp_path/'sessions.jsonl'
+    src.write_text('')
+    run(src,state,out,now_epoch=parse_ts('2026-09-17T09:00:00+00:00'))
+    rows=[
+        {'event_id':'aface','event_type':'FACE_IDENTITY_HINT','source_kind':'citofono','source_id':'citofono_1','site':'sede','occurred_at':'2026-09-17T10:00:00+00:00','payload':{'site':'sede','name':'fabio','identity_reason':'multiframe_consensus_with_insightface','identity_support_frames':3,'identity_frame_ratio':0.6}},
+        {'event_id':'apass','event_type':'PHYSICAL_PASSAGE_TRACKED','source_kind':'passage','source_id':'passage_1','site':'sede','occurred_at':'2026-09-17T10:01:00+00:00','payload':{'site':'sede','direction_hint':'uscita_probabile','presence_state':'outside','confidence':'high','track_id':'passage_1','citofono_event_id':'citofono_1'}},
+    ]
+    with src.open('a') as fh:
+        for row in rows: fh.write(json.dumps(row)+'\n')
+    run(src,state,out,now_epoch=parse_ts('2026-09-17T10:01:30+00:00'))
+    run(src,state,out,now_epoch=parse_ts('2026-09-17T10:10:00+00:00'))
+    session=json.loads(out.read_text().splitlines()[-1])
+    assert session['site']=='sede'
+    assert session['subject_claims']==[]
+    assert session['identity_hints'][0]['subject']=='fabio'
+    assert session['identity_hints'][0]['citofono_event_id']=='citofono_1'
