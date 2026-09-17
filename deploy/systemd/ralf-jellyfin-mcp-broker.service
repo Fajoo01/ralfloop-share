@@ -1,0 +1,25 @@
+[Unit]
+Description=Ralf Jellyfin identity MCP broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sibilla-cumana
+Group=ralf-mcp
+SupplementaryGroups=sibilla-cumana
+RuntimeDirectory=ralf-jellyfin-mcp
+RuntimeDirectoryMode=2770
+UMask=0007
+Environment=PYTHONPATH=/home/sibilla-cumana/ralf-memory-rag/releases/60c76d7664124e24174ae2a0107eadb66dc302e2
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralf-memory-rag/releases/60c76d7664124e24174ae2a0107eadb66dc302e2/scripts/ralf_arci_mcp_broker.py --socket /run/ralf-jellyfin-mcp/mcp.sock --allow-group ralf-mcp --command /home/sibilla-cumana/ralf-memory-rag/releases/60c76d7664124e24174ae2a0107eadb66dc302e2/scripts/ralf_jellyfin_identity_mcp_server.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

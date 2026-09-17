@@ -1,0 +1,29 @@
+[Unit]
+Description=Ralf Mailchimp Marketing MCP broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sibilla-cumana
+Group=ralf-mcp
+SupplementaryGroups=sibilla-cumana
+WorkingDirectory=/home/sibilla-cumana/ralfloop-production/current
+UMask=0007
+RuntimeDirectory=ralf-mailchimp-mcp
+RuntimeDirectoryMode=2770
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=/etc/ralfloop/mailchimp-mcp.env
+EnvironmentFile=/etc/ralfloop/telegram-approval.env
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_mailchimp_mcp_broker.py --socket /run/ralf-mailchimp-mcp/mcp.sock --allow-group ralf-mcp --command /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_mailchimp_mcp_server.py --idle-timeout 60
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/ralfloop
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

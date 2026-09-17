@@ -1,0 +1,27 @@
+[Unit]
+Description=Ralf read-only operational Memory MCP broker
+After=local-fs.target
+
+[Service]
+Type=simple
+User=sibilla-cumana
+Group=ralf-mcp
+SupplementaryGroups=bandi
+WorkingDirectory=/home/sibilla-cumana/ralf-memory-mcp/current
+UMask=0007
+RuntimeDirectory=ralf-memory-mcp
+RuntimeDirectoryMode=2770
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=RALF_MEMORY_PATH=/home/bandi/.local/share/bottazzi/runtime-production/operational-memory.sqlite3
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralf-memory-rag/releases/8036e99fbe6c5fa385de069264a08835d95d82c4/scripts/ralf_arci_mcp_broker.py --socket /run/ralf-memory-mcp/mcp.sock --allow-group ralf-mcp --command /home/sibilla-cumana/ralf-memory-mcp/current/scripts/ralf_memory_mcp_server.py --idle-timeout 120
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/home/bandi/.local/share/bottazzi/runtime-production/operational-memory.sqlite3
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
