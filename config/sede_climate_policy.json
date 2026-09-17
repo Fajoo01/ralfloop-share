@@ -50,5 +50,69 @@
     "max_temperature_c": 35.0,
     "step_c": 0.5,
     "calibration_bias_c": 0.0
+  },
+  "seasonal_comfort": {
+    "enabled": true,
+    "selector": {
+      "fallback_months": {
+        "winter": [
+          11,
+          12,
+          1,
+          2,
+          3
+        ],
+        "shoulder": [
+          4,
+          5,
+          9,
+          10
+        ],
+        "summer": [
+          6,
+          7,
+          8
+        ]
+      },
+      "winter_max_recent_mean_c": 15.0,
+      "summer_min_recent_mean_c": 20.0
+    },
+    "profiles": {
+      "winter": {
+        "heating_enabled": true,
+        "cooling_enabled": false,
+        "heat_below_c": 19.5,
+        "heat_target_c": 20.0,
+        "cool_above_c": 99.0,
+        "cool_target_c": 26.0,
+        "deadband_c": 0.5
+      },
+      "shoulder": {
+        "heating_enabled": true,
+        "cooling_enabled": true,
+        "heat_below_c": 19.0,
+        "heat_target_c": 19.5,
+        "cool_above_c": 26.5,
+        "cool_target_c": 26.0,
+        "deadband_c": 0.5
+      },
+      "summer": {
+        "heating_enabled": false,
+        "cooling_enabled": true,
+        "heat_below_c": -99.0,
+        "heat_target_c": 19.5,
+        "cool_above_c": 26.0,
+        "cool_target_c": 26.0,
+        "deadband_c": 0.5
+      }
+    }
+  },
+  "weather": {
+    "enabled": true,
+    "provider": "meteo_mcp",
+    "socket_path": "/run/ralf-meteo-mcp/mcp.sock",
+    "address": "Milano, Italia",
+    "min_recent_hours": 72,
+    "timeout_seconds": 5.0
   }
 }

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Mapping
 
+from .comfort import select_seasonal_comfort
+
 
 @dataclass(frozen=True)
 class CalendarEvent:
@@ -47,6 +49,7 @@ def plan_event(
     current_temperature_c: float | None,
     policy: Mapping[str, Any],
     boiler_available: bool = False,
+    outdoor_recent_mean_c: float | None = None,
 ) -> dict[str, Any]:
     eligible, reason = classify_event(event, policy)
     base = {
@@ -66,30 +69,37 @@ def plan_event(
     if current_temperature_c is None:
         return {**base, "decision": "observe_only", "reason": "indoor_temperature_unavailable"}
 
-    comfort = policy["comfort"]
+    comfort = select_seasonal_comfort(
+        now=now, policy=policy, outdoor_recent_mean_c=outdoor_recent_mean_c
+    )
     timing = policy["timing"]
     actuators = policy["actuators"]
     temp = float(current_temperature_c)
-    deadband = max(float(comfort.get("deadband_c", 0.0)), 0.0)
-    heat_trigger = float(comfort["heat_below_c"]) - deadband
-    cool_trigger = float(comfort["cool_above_c"]) + deadband
-    if temp < heat_trigger:
-        target = float(comfort["heat_target_c"])
+    heat_trigger = comfort.heat_below_c - comfort.deadband_c
+    cool_trigger = comfort.cool_above_c + comfort.deadband_c
+    season_meta = {
+        "comfort_profile": comfort.name,
+        "comfort_profile_source": comfort.source,
+        "outdoor_recent_mean_c": outdoor_recent_mean_c,
+    }
+    if comfort.heating_enabled and temp < heat_trigger:
+        target = comfort.heat_target_c
         lead = _lead_minutes(target - temp, float(timing["heat_rate_c_per_hour"]), timing)
         actuator = actuators["heating_preferred"] if boiler_available else actuators["heating_fallback_entity"]
         mode = "heat"
-    elif temp > cool_trigger:
-        target = float(comfort["cool_target_c"])
+    elif comfort.cooling_enabled and temp > cool_trigger:
+        target = comfort.cool_target_c
         lead = _lead_minutes(temp - target, float(timing["cool_rate_c_per_hour"]), timing)
         actuator = actuators["cooling_entity"]
         mode = "cool"
     else:
-        return {**base, "decision": "no_climate_action", "current_temperature_c": temp, "reason": "within_comfort_band"}
+        return {**base, **season_meta, "decision": "no_climate_action", "current_temperature_c": temp, "reason": "within_seasonal_comfort_band"}
 
     action_at = event.start - timedelta(minutes=lead)
     stop_at = event.end + timedelta(minutes=float(timing.get("post_event_grace_minutes", 0)))
     return {
         **base,
+        **season_meta,
         "decision": "precondition",
         "mode": mode,
         "actuator": actuator,

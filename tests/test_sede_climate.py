@@ -6,7 +6,10 @@ from pathlib import Path
 
 import pytest
 
+from integrations.bottazzi_climate.comfort import select_seasonal_comfort
 from integrations.bottazzi_climate.planner import CalendarEvent, plan_event
+from integrations.bottazzi_climate import meteo as climate_meteo
+from integrations.bottazzi_climate.meteo import parse_meteo_context
 from integrations.bottazzi_climate.thermostat import (
     normalize_ha_thermostat_state,
     physical_target_to_ha,
@@ -47,14 +50,14 @@ def test_online_calendar_event_is_excluded():
 def test_in_person_sede_event_uses_corrected_temperature():
     p=policy(); now=datetime(2026,9,17,12,0)
     e=CalendarEvent("x","Tedesco",now+timedelta(hours=3),now+timedelta(hours=4),calendar_id=p["calendar"]["calendar_id"])
-    result=plan_event(e,now=now,current_temperature_c=27.0,policy=p,boiler_available=True)
+    result=plan_event(e,now=now,current_temperature_c=27.1,policy=p,boiler_available=True)
     assert result["decision"] == "precondition"
     assert result["mode"] == "cool"
     assert result["actuator"] == "climate.air_conditioner"
 
 
 
-def test_deadband_prevents_chatter_around_comfort_thresholds():
+def test_september_uses_shoulder_profile_with_wider_band():
     p=policy(); now=datetime(2026,9,17,12,0)
     e=CalendarEvent(
         "x", "Riunione Tiremm", now+timedelta(hours=3), now+timedelta(hours=4),
@@ -63,21 +66,37 @@ def test_deadband_prevents_chatter_around_comfort_thresholds():
     expected = {
         18.4: ("precondition", "heat"),
         18.5: ("no_climate_action", None),
-        18.9: ("no_climate_action", None),
-        19.0: ("no_climate_action", None),
-        26.0: ("no_climate_action", None),
-        26.1: ("no_climate_action", None),
-        26.5: ("no_climate_action", None),
-        26.6: ("precondition", "cool"),
+        27.0: ("no_climate_action", None),
+        27.1: ("precondition", "cool"),
     }
     for temp, (decision, mode) in expected.items():
         result=plan_event(e,now=now,current_temperature_c=temp,policy=p,boiler_available=True)
+        assert result["comfort_profile"] == "shoulder"
         assert result["decision"] == decision
         assert result.get("mode") == mode
 
 
+def test_running_mean_overrides_calendar_season():
+    p=policy(); now=datetime(2026,1,17,12,0)
+    winter=select_seasonal_comfort(now=now,policy=p,outdoor_recent_mean_c=10.0)
+    summer=select_seasonal_comfort(now=now,policy=p,outdoor_recent_mean_c=22.0)
+    assert (winter.name, winter.source) == ("winter", "outdoor_recent_mean")
+    assert winter.heating_enabled is True and winter.cooling_enabled is False
+    assert (summer.name, summer.source) == ("summer", "outdoor_recent_mean")
+    assert summer.heating_enabled is False and summer.cooling_enabled is True
+
+
+def test_summer_disables_heating_and_winter_disables_cooling():
+    p=policy()
+    summer_now=datetime(2026,7,17,12,0)
+    winter_now=datetime(2026,1,17,12,0)
+    summer_event=CalendarEvent("s","Estate",summer_now+timedelta(hours=3),summer_now+timedelta(hours=4),calendar_id=p["calendar"]["calendar_id"])
+    winter_event=CalendarEvent("w","Inverno",winter_now+timedelta(hours=3),winter_now+timedelta(hours=4),calendar_id=p["calendar"]["calendar_id"])
+    assert plan_event(summer_event,now=summer_now,current_temperature_c=16.0,policy=p)["decision"] == "no_climate_action"
+    assert plan_event(winter_event,now=winter_now,current_temperature_c=30.0,policy=p)["decision"] == "no_climate_action"
+
 def test_negative_deadband_is_treated_as_zero():
-    p=policy(); p["comfort"]["deadband_c"]=-1.0; now=datetime(2026,9,17,12,0)
+    p=policy(); p["seasonal_comfort"]["enabled"]=False; p["comfort"]["deadband_c"]=-1.0; now=datetime(2026,9,17,12,0)
     e=CalendarEvent(
         "x", "Riunione Tiremm", now+timedelta(hours=3), now+timedelta(hours=4),
         location="Via Privata Federico Jarach, 8", calendar_id=p["calendar"]["calendar_id"],
@@ -91,3 +110,48 @@ def test_site_map_keeps_boiler_only_in_sede():
     assert dev in sites["sede"]["device_ids"]
     assert dev not in sites["camper"]["device_ids"]
     assert dev not in sites["asiago"]["device_ids"]
+
+
+def test_meteo_recent_mean_requires_enough_history():
+    good = parse_meteo_context({
+        "structuredContent": {
+            "recent_temperature_mean_c": 21.7,
+            "recent_temperature_hours": 168,
+        }
+    }, min_recent_hours=72)
+    short = parse_meteo_context({
+        "recent_temperature_mean_c": 12.0,
+        "recent_temperature_hours": 12,
+    }, min_recent_hours=72)
+    assert (good.recent_mean_c, good.status) == (21.7, "ok")
+    assert (short.recent_mean_c, short.status) == (None, "insufficient_history")
+
+
+def test_live_meteo_mean_shape_selects_weather_profile_without_network():
+    p=policy(); now=datetime(2026,9,17,12,0)
+    context=parse_meteo_context({
+        "recent_temperature_mean_c": 21.77,
+        "recent_temperature_hours": 168,
+    })
+    comfort=select_seasonal_comfort(
+        now=now, policy=p, outdoor_recent_mean_c=context.recent_mean_c
+    )
+    assert (comfort.name, comfort.source) == ("summer", "outdoor_recent_mean")
+
+
+def test_fetch_outdoor_weather_reads_configured_meteo_mcp(monkeypatch):
+    p=policy()
+    seen={}
+    def fake_rpc(sock_path, address, timeout_s):
+        seen.update(socket_path=sock_path, address=address, timeout=timeout_s)
+        return {
+            "structuredContent": {
+                "recent_temperature_mean_c": 14.2,
+                "recent_temperature_hours": 168,
+            }
+        }
+    monkeypatch.setattr(climate_meteo, "_rpc", fake_rpc)
+    context=climate_meteo.fetch_outdoor_weather(p)
+    assert (context.recent_mean_c, context.history_hours, context.status) == (14.2, 168, "ok")
+    assert seen["socket_path"] == p["weather"]["socket_path"]
+    assert seen["address"] == p["weather"]["address"]
