@@ -52,19 +52,36 @@ def entity_ids(rows: Any) -> set[str]:
 
 
 def degraded_device_keys(rows: Any) -> set[str]:
+    return set(degraded_device_sites(rows))
+
+
+def degraded_device_sites(rows: Any) -> dict[str, str]:
     if not isinstance(rows, list):
-        return set()
-    result = set()
+        return {}
+    result: dict[str, str] = {}
     for row in rows:
         if not isinstance(row, Mapping):
             continue
         device_id = str(row.get("device_id") or "").strip()
         entities = row.get("entities") or []
-        if device_id:
-            result.add("device:" + device_id)
-        elif entities:
-            result.add("entity:" + str(entities[0]))
+        key = "device:" + device_id if device_id else ("entity:" + str(entities[0]) if entities else "")
+        if key:
+            result[key] = str(row.get("site") or "unassigned")
     return result
+
+
+def recovery_eligible_devices(rows: Any, site_health: Mapping[str, Any]) -> tuple[dict[str, str], list[str]]:
+    sites = degraded_device_sites(rows)
+    eligible: dict[str, str] = {}
+    suppressed: list[str] = []
+    for key, site in sites.items():
+        summary = site_health.get(site) if isinstance(site_health, Mapping) else None
+        status = str(summary.get("status") or "") if isinstance(summary, Mapping) else ""
+        if status == "offline":
+            suppressed.append(key)
+        else:
+            eligible[key] = site
+    return eligible, sorted(suppressed)
 
 
 def reload_tuya(config_dir: str, env_file: str) -> dict[str, Any]:
@@ -138,7 +155,11 @@ def main() -> int:
     }
     previous_entity_sites = {str(k): str(v) for k, v in (previous.get("entity_sites") or {}).items()}
     transition_entity_sites = {**previous_entity_sites, **current_entity_sites}
-    current_degraded_devices = degraded_device_keys(state_health.get("degraded_devices"))
+    site_health = state_health.get("site_health") or {}
+    eligible_device_sites, suppressed_offline_devices = recovery_eligible_devices(
+        state_health.get("degraded_devices"), site_health
+    )
+    current_degraded_devices = set(eligible_device_sites)
     previous_unavailable = set(previous.get("unavailable_entities") or [])
     previous_missing = set(previous.get("missing_entities") or [])
     previous_degraded_devices = set(previous.get("degraded_device_keys") or [])
@@ -174,7 +195,12 @@ def main() -> int:
         "missing_entities": sorted(current_missing),
         "degraded_device_keys": sorted(current_degraded_devices),
         "degraded_devices": state_health.get("degraded_devices") or [],
-        "site_health": state_health.get("site_health") or {},
+        "site_health": site_health,
+        "offline_sites": sorted(
+            site for site, row in site_health.items()
+            if isinstance(row, Mapping) and row.get("status") == "offline"
+        ),
+        "recovery_suppressed_site_offline": suppressed_offline_devices,
         "entity_sites": current_entity_sites,
         "reload_candidates": candidates,
         "persistent_reload_candidates": persistent,

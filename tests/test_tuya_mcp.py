@@ -150,3 +150,4 @@ def test_tuya_site_map_is_external_and_health_is_grouped_by_site(tmp_path):
     assert health["unavailable_entities"][0]["site"] == "sede"
     assert health["degraded_devices"][0]["site"] == "sede"
     assert health["site_health"]["sede"]["unavailable"] == 1
+    assert health["site_health"]["sede"]["status"] == "offline"

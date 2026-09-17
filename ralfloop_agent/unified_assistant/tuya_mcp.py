@@ -341,7 +341,7 @@ def _summarize_entity_health(
         str(row.get("device_id") or ""): str(row.get("site") or "unassigned")
         for row in devices if isinstance(row, Mapping)
     }
-    site_health: dict[str, dict[str, int]] = {}
+    site_health: dict[str, dict[str, Any]] = {}
     for row in devices:
         site = str(row.get("site") or "unassigned")
         bucket = site_health.setdefault(site, {"devices": 0, "entities": 0, "available": 0, "unavailable": 0, "unknown": 0, "missing": 0})
@@ -401,6 +401,17 @@ def _summarize_entity_health(
         degraded_devices.values(),
         key=lambda row: (-int(row["entity_count"]), str(row.get("device_name") or "")),
     )
+    for bucket in site_health.values():
+        if int(bucket["entities"]) == 0:
+            bucket["status"] = "no_entities"
+        elif int(bucket["available"]) == 0 and int(bucket["unavailable"]) > 0:
+            bucket["status"] = "offline"
+        elif int(bucket["unavailable"]) > 0 or int(bucket["missing"]) > 0:
+            bucket["status"] = "degraded"
+        elif int(bucket["available"]) > 0:
+            bucket["status"] = "online"
+        else:
+            bucket["status"] = "unknown"
     return {
         "available": available,
         "unavailable": len(unavailable),
