@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+AUXILIARY_EVENT_TYPES = {"FACE_IDENTITY_HINT", "GARDEN_GATE_SMALL_MOTION_CITOFONO_CAPTURE"}
+
 ACTIVITY_EVENT_TYPES = {
     "HUMAN_PASSAGE", "GARDEN_GATE_SMALL_MOTION_CITOFONO_CAPTURE",
     "PHYSICAL_PASSAGE_TRACKED", "PHYSICAL_PASSAGE_UNPAIRED",
@@ -105,7 +107,7 @@ def activity_row(row: Mapping[str, Any]) -> dict[str, Any] | None:
         "identity_support_frames": payload.get("identity_support_frames"),
         "identity_frame_ratio": payload.get("identity_frame_ratio"),
         "signal_role": payload.get("signal_role"),
-        "auxiliary": payload.get("signal_role") == "auxiliary_relay" or event_type == "FACE_IDENTITY_HINT",
+        "auxiliary": payload.get("signal_role") == "auxiliary_relay" or event_type in AUXILIARY_EVENT_TYPES,
     }
 
 
@@ -231,6 +233,21 @@ def run(source: Path, state_path: Path, out: Path, *, window_seconds: float = 18
     new_offset, raw_rows = read_new(source, offset)
     open_sessions = dict(state.get("open_sessions") or {})
     pending_auxiliary = dict(state.get("pending_auxiliary") or {})
+    # Migrate pre-policy sessions that were opened only by events now classified as auxiliary.
+    for site, current in list(open_sessions.items()):
+        events = list(current.get("events") or []) if isinstance(current, Mapping) else []
+        if events and all(
+            (str(e.get("event_type") or "") in AUXILIARY_EVENT_TYPES)
+            or e.get("signal_role") == "auxiliary_relay"
+            or bool(e.get("auxiliary"))
+            for e in events if isinstance(e, Mapping)
+        ):
+            pending = list(pending_auxiliary.get(site) or [])
+            for e in events:
+                if isinstance(e, Mapping):
+                    ee = dict(e); ee["auxiliary"] = True; pending.append(ee)
+            pending_auxiliary[site] = pending[-32:]
+            del open_sessions[site]
     finalized: list[dict[str, Any]] = []
     processed = 0
     for raw in raw_rows:

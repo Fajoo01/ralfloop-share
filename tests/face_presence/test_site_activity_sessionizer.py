@@ -140,3 +140,31 @@ def test_nearby_but_different_citofono_id_never_links_identity():
         {"event_id":"pass1","event_type":"PHYSICAL_PASSAGE_TRACKED","source_kind":"passage","citofono_event_id":"cit_B","track_id":"trk1","presence_state":"inside","confidence":"high"},
     ]}
     assert finalize_session(s)['identity_passage_links']==[]
+
+
+def test_small_gate_motion_is_auxiliary_and_cannot_open_session(tmp_path: Path):
+    src=tmp_path/'activity.jsonl'; state=tmp_path/'state.json'; out=tmp_path/'sessions.jsonl'
+    src.write_text('')
+    run(src,state,out,now_epoch=parse_ts('2026-09-17T09:00:00+00:00'))
+    row={'event_id':'small1','event_type':'GARDEN_GATE_SMALL_MOTION_CITOFONO_CAPTURE','source_kind':'citofono','site':'sede','occurred_at':'2026-09-17T10:00:00+00:00','payload':{'site':'sede'}}
+    with src.open('a') as fh: fh.write(json.dumps(row)+'\n')
+    r=run(src,state,out,now_epoch=parse_ts('2026-09-17T10:01:00+00:00'))
+    assert r['open_sites']==0
+    st=json.loads(state.read_text())
+    assert len(st['pending_auxiliary']['sede'])==1
+    assert not out.exists()
+
+
+def test_policy_migration_moves_aux_only_open_session_to_pending(tmp_path: Path):
+    src=tmp_path/'activity.jsonl'; state=tmp_path/'state.json'; out=tmp_path/'sessions.jsonl'
+    src.write_text('')
+    run(src,state,out,now_epoch=parse_ts('2026-09-17T09:00:00+00:00'))
+    st=json.loads(state.read_text())
+    st['open_sessions']={'sede':{'site':'sede','started_at':'2026-09-17T10:00:00+00:00','last_at':'2026-09-17T10:00:00+00:00','last_epoch':parse_ts('2026-09-17T10:00:00+00:00'),'events':[{'event_id':'small1','event_type':'GARDEN_GATE_SMALL_MOTION_CITOFONO_CAPTURE','source_kind':'citofono','occurred_at':'2026-09-17T10:00:00+00:00','epoch':parse_ts('2026-09-17T10:00:00+00:00'),'auxiliary':False}]}}
+    state.write_text(json.dumps(st))
+    r=run(src,state,out,now_epoch=parse_ts('2026-09-17T10:01:00+00:00'))
+    assert r['open_sites']==0
+    st=json.loads(state.read_text())
+    assert 'sede' not in st['open_sessions']
+    assert st['pending_auxiliary']['sede'][0]['event_type']=='GARDEN_GATE_SMALL_MOTION_CITOFONO_CAPTURE'
+    assert not out.exists()
