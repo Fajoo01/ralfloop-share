@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Bot-tazzi Sede presence registry
+
+[Timer]
+OnBootSec=60s
+OnUnitActiveSec=30s
+AccuracySec=2s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

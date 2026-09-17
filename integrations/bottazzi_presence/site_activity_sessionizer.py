@@ -95,6 +95,8 @@ def activity_row(row: Mapping[str, Any]) -> dict[str, Any] | None:
         "source_kind": str(row.get("source_kind") or ""), "site": site,
         "occurred_at": str(row.get("occurred_at") or ""), "epoch": ts,
         "direction_hint": payload.get("direction_hint"), "presence_state": payload.get("presence_state"),
+        "name": payload.get("name"), "guest_id": payload.get("guest_id"),
+        "confidence": payload.get("confidence"), "event_source": payload.get("source"),
         "entity_id": payload.get("entity_id"), "old_state": payload.get("old_state"), "new_state": payload.get("new_state"),
         "signal_role": payload.get("signal_role"),
         "auxiliary": payload.get("signal_role") == "auxiliary_relay",
@@ -109,6 +111,32 @@ def finalize_session(session: Mapping[str, Any]) -> dict[str, Any]:
     identity = json.dumps([session.get("site"), ids], separators=(",", ":"))
     latest_direction = next((x.get("direction_hint") for x in reversed(events) if x.get("direction_hint")), None)
     latest_presence = next((x.get("presence_state") for x in reversed(events) if x.get("presence_state")), None)
+    subject_claims = []
+    for event in events:
+        name = str(event.get("name") or "").strip()
+        guest_id = str(event.get("guest_id") or "").strip()
+        if not name and not guest_id:
+            continue
+        etype = str(event.get("event_type") or "")
+        if etype in {"PRESENCE_CONFIRMED", "PRESENCE_EXIT_CONFIRMED"}:
+            certainty = "confirmed"
+        elif etype == "PRESENCE_INFERRED":
+            certainty = "probable"
+        else:
+            certainty = "uncertain"
+        subject_claims.append({
+            "kind": "known" if name else "guest",
+            "subject": name or guest_id,
+            "state": event.get("presence_state") or "unknown",
+            "certainty": certainty,
+            "event_type": etype,
+            "event_source": event.get("event_source"),
+            "event_id": event.get("event_id"),
+            "occurred_at": event.get("occurred_at"),
+            "direction_hint": event.get("direction_hint"),
+        })
+    movement_events = [x for x in events if not x.get("auxiliary")]
+    movement_confidence = next((x.get("confidence") for x in reversed(movement_events) if x.get("confidence")), None)
     return {
         "event_id": "site_session_" + hashlib.sha256(identity.encode()).hexdigest()[:24],
         "event": "SITE_ACTIVITY_SESSION", "site": session.get("site"),
@@ -116,6 +144,8 @@ def finalize_session(session: Mapping[str, Any]) -> dict[str, Any]:
         "event_count": len(events), "source_kinds": source_kinds, "event_types": event_types,
         "correlation": "multi_source" if len(source_kinds) >= 2 else "single_source",
         "direction_hint": latest_direction, "presence_state": latest_presence,
+        "movement_confidence": movement_confidence,
+        "subject_claims": subject_claims[-32:],
         "evidence_event_ids": ids[-64:],
     }
 

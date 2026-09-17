@@ -1,0 +1,16 @@
+[Unit]
+Description=Bot-tazzi definitive Sede ingress/egress presence registry
+After=bottazzi-site-correlator.service
+
+[Service]
+Type=oneshot
+User=sibilla-cumana
+Group=sibilla-cumana
+StateDirectory=bottazzi-sede-presence
+UMask=0077
+ExecStart=/usr/bin/python3 /opt/bottazzi-presence/sede_presence_registry.py
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX

@@ -71,3 +71,13 @@ def test_auxiliary_gate_relay_only_enriches_existing_session(tmp_path: Path):
     assert r2['finalized'] == 1
     row=json.loads(out.read_text().splitlines()[0])
     assert row['event_count'] == 2
+
+
+def test_finalize_session_preserves_subject_claim_certainty():
+    s={"site":"sede","started_at":"a","last_at":"b","events":[
+        {"event_id":"p1","event_type":"PRESENCE_CONFIRMED","source_kind":"presence","name":"fabio","presence_state":"inside","event_source":"access_ui","occurred_at":"2026-09-17T10:00:00+00:00"},
+    ]}
+    out=finalize_session(s)
+    assert out['subject_claims'][0]['subject']=='fabio'
+    assert out['subject_claims'][0]['certainty']=='confirmed'
+    assert out['subject_claims'][0]['state']=='inside'
