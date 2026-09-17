@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Bot-tazzi site-aware activity sessionizer
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=30s
+AccuracySec=2s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
