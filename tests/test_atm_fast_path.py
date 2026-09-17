@@ -83,10 +83,12 @@ def test_topology_candidates_are_ranked_from_data_not_line_names(monkeypatch, tm
     path = tmp_path / "topology.json"
     payload = {
         "version": 2,
+        "surface_end_date": "20991231",
         "patterns": [
             {
                 "line": "X7",
                 "direction": "0",
+                "route_type": "3",
                 "stops": [
                     {"id": "O1", "name": "Origin 1", "lat": 45.5000, "lon": 9.2000, "departure_s": 1000},
                     {"id": "D1", "name": "Dest 1", "lat": 45.5010, "lon": 9.2010, "arrival_s": 1120},
@@ -95,6 +97,7 @@ def test_topology_candidates_are_ranked_from_data_not_line_names(monkeypatch, tm
             {
                 "line": "K2",
                 "direction": "1",
+                "route_type": "3",
                 "stops": [
                     {"id": "O2", "name": "Origin 2", "lat": 45.5002, "lon": 9.2000, "departure_s": 1000},
                     {"id": "D2", "name": "Dest 2", "lat": 45.5011, "lon": 9.2010, "arrival_s": 1130},
@@ -103,6 +106,7 @@ def test_topology_candidates_are_ranked_from_data_not_line_names(monkeypatch, tm
             {
                 "line": "Z9",
                 "direction": "0",
+                "route_type": "3",
                 "stops": [
                     {"id": "O3", "name": "Far origin", "lat": 45.5070, "lon": 9.2000, "departure_s": 1000},
                     {"id": "D3", "name": "Dest 3", "lat": 45.5010, "lon": 9.2010, "arrival_s": 1140},
@@ -121,6 +125,76 @@ def test_topology_candidates_are_ranked_from_data_not_line_names(monkeypatch, tm
     assert [row["line"] for row in rows] == ["X7", "K2"]
     assert rows[0]["travel_seconds"] == 120
     assert rows[1]["travel_seconds"] == 130
+
+
+def test_stale_surface_topology_excludes_bus_but_keeps_metro(monkeypatch, tmp_path):
+    path = tmp_path / "topology.json"
+    payload = {
+        "version": 2,
+        "surface_end_date": "20260913",
+        "patterns": [
+            {
+                "line": "44", "direction": "0", "route_type": "3",
+                "stops": [
+                    {"id": "O", "name": "Origin", "lat": 45.5000, "lon": 9.2000, "departure_s": 1000},
+                    {"id": "D", "name": "Dest", "lat": 45.5010, "lon": 9.2010, "arrival_s": 1120},
+                ],
+            },
+            {
+                "line": "M1", "direction": "0", "route_type": "1",
+                "stops": [
+                    {"id": "MO", "name": "Metro Origin", "lat": 45.5001, "lon": 9.2000, "departure_s": 1000},
+                    {"id": "MD", "name": "Metro Dest", "lat": 45.5010, "lon": 9.2010, "arrival_s": 1130},
+                ],
+            },
+        ],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(atm, "ATM_DIRECT_TOPOLOGY_PATH", path)
+    monkeypatch.setattr(atm, "_ATM_DIRECT_TOPOLOGY_CACHE", None)
+
+    class Now(RealDateTime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(2026, 9, 17, 16, 30)
+            return value if tz is None else value.replace(tzinfo=tz)
+
+    monkeypatch.setattr(atm, "datetime", Now)
+    rows = atm._topology_direct_candidates(45.5000, 9.2000, 45.5010, 9.2010)
+    assert [row["line"] for row in rows] == ["M1"]
+
+
+def test_stale_surface_fast_path_falls_back_to_official_trip(monkeypatch, tmp_path):
+    path = tmp_path / "topology.json"
+    path.write_text(json.dumps({
+        "version": 2, "surface_end_date": "20260913",
+        "patterns": [{
+            "line": "44", "direction": "0", "route_type": "3",
+            "stops": [
+                {"id": "O", "name": "Origin", "lat": 45.5067, "lon": 9.2355, "departure_s": 1000},
+                {"id": "D", "name": "Turro", "lat": 45.5034, "lon": 9.2208, "arrival_s": 1450},
+            ],
+        }],
+    }), encoding="utf-8")
+    monkeypatch.setattr(atm, "ATM_DIRECT_TOPOLOGY_PATH", path)
+    monkeypatch.setattr(atm, "_ATM_DIRECT_TOPOLOGY_CACHE", None)
+    monkeypatch.setattr(atm, "_local_atm_realtime_route", lambda *_a, **_k: None)
+    monkeypatch.setattr(atm, "_resolve_destination", lambda _name: {
+        "name": "sonia", "label": "Sonia", "lat": 45.503443, "lon": 9.220793
+    })
+    trip = direct_trip()
+    monkeypatch.setattr(atm, "_atm_trip_plan", lambda *_a, **_k: trip)
+
+    class Now(RealDateTime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(2026, 9, 17, 16, 30)
+            return value if tz is None else value.replace(tzinfo=tz)
+
+    monkeypatch.setattr(atm, "datetime", Now)
+    result = atm._build_plan_impl(45.5067373, 9.2355089, "Sonia")
+    assert result["route_mode"] == "official_atm_trip"
+    assert result["official_route"] is trip
 
 
 def test_render_multiple_direct_candidates():

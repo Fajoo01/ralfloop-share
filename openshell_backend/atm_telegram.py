@@ -2806,6 +2806,17 @@ def _load_atm_direct_topology() -> dict[str, Any] | None:
     return payload
 
 
+def _surface_topology_is_fresh(payload: dict[str, Any]) -> bool:
+    end_date = str(payload.get("surface_end_date") or "").strip()
+    if not re.fullmatch(r"\d{8}", end_date):
+        return False
+    try:
+        today = int(datetime.now().strftime("%Y%m%d"))
+        return int(end_date) >= today
+    except (TypeError, ValueError):
+        return False
+
+
 def _topology_direct_candidates(
     origin_lat: float,
     origin_lon: float,
@@ -2819,9 +2830,17 @@ def _topology_direct_candidates(
         return []
 
     best_by_line: dict[str, dict[str, Any]] = {}
+    surface_fresh = _surface_topology_is_fresh(payload)
 
     for pattern in payload.get("patterns") or []:
         if not isinstance(pattern, dict):
+            continue
+
+        # Quando la finestra dichiarata dal feed per bus/tram è scaduta,
+        # la topologia resta utile solo per la metropolitana (route_type=1).
+        # Le linee di superficie devono tornare al planner GiroMilano live.
+        route_type = str(pattern.get("route_type") or "").strip()
+        if route_type != "1" and not surface_fresh:
             continue
 
         line = _line_label(pattern.get("line"))
