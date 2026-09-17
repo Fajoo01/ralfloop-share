@@ -1,7 +1,7 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "policy": "explicit_device_id_only",
-  "notes": "Explicit physical-site assignments. Retired devices stay documented but are excluded from active health/recovery.",
+  "notes": "Explicit physical-site assignments. Retired and inactive/uncommissioned devices stay documented but are excluded from active health/recovery.",
   "sites": {
     "sede": {
       "label": "Sede",
@@ -19,15 +19,32 @@
         "673ca5b7d662c98edfd5164eee732934",
         "65382f5956893a41647c9884d0019ab4",
         "01371f18b65bb7853159447de7324018",
-        "02476287518efb510b12f7263be4a258",
         "2bcae7b250103873031355612178e437",
         "5c851b4d9b7336857c957f4270d5f570",
         "eeab183bd07ced40797be14a66259851",
         "b8e6acdbc7f0df9cf445fbebaa97c3c5",
         "723db30def318d25ac23c2b69bd1fd42",
-        "2dd65b975bd5300b07f96b5fbd2770ad",
-        "1263cb32004a50710f617b8065b5cb56",
-        "1ecb84686741c1e192caf1aaecb812ae"
+        "2dd65b975bd5300b07f96b5fbd2770ad"
+      ],
+      "inactive_devices": [
+        {
+          "device_id": "02476287518efb510b12f7263be4a258",
+          "name": "sensore serranda",
+          "status": "uncommissioned",
+          "reason": "never_observed_available"
+        },
+        {
+          "device_id": "1ecb84686741c1e192caf1aaecb812ae",
+          "name": "porte",
+          "status": "uncommissioned",
+          "reason": "never_observed_available"
+        },
+        {
+          "device_id": "1263cb32004a50710f617b8065b5cb56",
+          "name": "sopraporta",
+          "status": "uncommissioned",
+          "reason": "never_observed_available"
+        }
       ]
     },
     "camper": {

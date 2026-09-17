@@ -174,3 +174,22 @@ def test_retired_device_is_excluded_from_active_registry_and_health(tmp_path):
     assert health["tuya_entities"] == 0
     assert health["state_health"]["unavailable"] == 0
 
+
+
+def test_inactive_uncommissioned_device_is_excluded_from_active_health(tmp_path):
+    site_map = tmp_path / "tuya_sites.json"
+    site_map.write_text(json.dumps({
+        "schema_version": 3,
+        "sites": {"sede": {"inactive_devices": [
+            {"device_id": "dev1", "status": "uncommissioned", "reason": "never_observed_available"}
+        ]}},
+    }), encoding="utf-8")
+    registry = _registry(tmp_path)
+    registry.site_map_file = site_map
+    server = TuyaMCPServer(registry=registry, backend=FakeBackend())
+    assert registry.devices() == ()
+    assert registry.entities() == ()
+    health = server.call("tuya_health", {})["structuredContent"]
+    assert health["tuya_devices"] == 0
+    assert health["state_health"]["unavailable"] == 0
+
