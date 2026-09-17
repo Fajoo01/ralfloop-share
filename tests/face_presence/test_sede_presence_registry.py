@@ -114,3 +114,39 @@ def test_low_confidence_link_does_not_assign_person_and_stays_anonymous():
     apply_session(reg,s)
     assert reg['people']['fabio']['state']=='unknown'
     assert reg['anonymous']['unresolved_count']==1
+
+from datetime import datetime, timezone
+from integrations.bottazzi_presence.sede_presence_registry import build_snapshot, resolve_update, parse_epoch
+
+
+def test_naive_timestamp_uses_configured_sede_timezone_in_summer():
+    got=parse_epoch("2026-09-17T10:00:00", "Europe/Rome")
+    expected=datetime(2026,9,17,8,0,tzinfo=timezone.utc).timestamp()
+    assert got == expected
+
+
+def test_out_of_order_claim_is_rejected():
+    before={'state':'inside','certainty':'confirmed','observed_at':'2026-09-17T10:10:00+00:00'}
+    candidate={'state':'outside','certainty':'probable','observed_at':'2026-09-17T10:00:00+00:00'}
+    assert resolve_update(before,candidate,{'confirmed_guard_seconds':180}) == (False,'out_of_order')
+
+
+def test_probable_conflict_inside_confirmed_guard_is_held():
+    before={'state':'inside','certainty':'confirmed','observed_at':'2026-09-17T10:00:00+00:00'}
+    candidate={'state':'outside','certainty':'probable','observed_at':'2026-09-17T10:02:00+00:00'}
+    assert resolve_update(before,candidate,{'confirmed_guard_seconds':180}) == (False,'confirmed_guard')
+
+
+def test_newer_probable_passage_after_guard_can_advance_state():
+    before={'state':'inside','certainty':'confirmed','observed_at':'2026-09-17T10:00:00+00:00'}
+    candidate={'state':'outside','certainty':'probable','observed_at':'2026-09-17T10:05:00+00:00'}
+    assert resolve_update(before,candidate,{'confirmed_guard_seconds':180}) == (True,None)
+
+
+def test_snapshot_marks_old_observation_stale_and_reports_uncertainty():
+    now=datetime(2026,9,17,12,0,tzinfo=timezone.utc).timestamp()
+    reg={'people':{'fabio':{'state':'inside','certainty':'confirmed','observed_at':'2026-09-17T04:00:00+00:00'}},'anonymous':{'direction_balance':0,'unresolved_count':1},'conflicts':[]}
+    snap=build_snapshot(reg,{'snapshot_fresh_seconds':21600},now_epoch=now)
+    assert snap['people']['fabio']['state']=='unknown'
+    assert snap['people']['fabio']['certainty']=='stale'
+    assert snap['quality']=='uncertain'

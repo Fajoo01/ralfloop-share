@@ -5,6 +5,8 @@ import argparse
 import hashlib
 import json
 import os
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -71,6 +73,89 @@ def read_new(path: Path, offset: int) -> tuple[int, list[dict[str, Any]]]:
         return fh.tell(), rows
 
 
+
+def parse_epoch(value: Any, naive_timezone: str = "UTC") -> float | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo(str(naive_timezone or "UTC")))
+        return dt.timestamp()
+    except ValueError:
+        return None
+
+
+def load_policy(path: Path) -> dict[str, Any]:
+    value = load_json(path, {})
+    return {
+        "confirmed_guard_seconds": max(0, int(value.get("confirmed_guard_seconds") or 0)),
+        "naive_timezone": str(value.get("naive_timezone") or "UTC"),
+        "snapshot_fresh_seconds": max(0, int(value.get("snapshot_fresh_seconds") or 0)),
+        "max_conflicts": max(1, int(value.get("max_conflicts") or 256)),
+    }
+
+
+def resolve_update(before: Mapping[str, Any], candidate: Mapping[str, Any], policy: Mapping[str, Any]) -> tuple[bool, str | None]:
+    naive_timezone = str(policy.get("naive_timezone") or "UTC")
+    before_ts = parse_epoch(before.get("observed_at"), naive_timezone)
+    candidate_ts = parse_epoch(candidate.get("observed_at"), naive_timezone)
+    if before_ts is not None and candidate_ts is not None and candidate_ts < before_ts:
+        return False, "out_of_order"
+    before_certainty = str(before.get("certainty") or "stale")
+    candidate_certainty = str(candidate.get("certainty") or "uncertain")
+    if before_certainty == "confirmed" and candidate_certainty != "confirmed" and before_ts is not None and candidate_ts is not None:
+        guard = float(policy.get("confirmed_guard_seconds") or 0)
+        if 0 <= candidate_ts - before_ts <= guard:
+            return False, "confirmed_guard"
+    return True, None
+
+
+def record_conflict(registry: dict[str, Any], *, subject: str, before: Mapping[str, Any], candidate: Mapping[str, Any], reason: str, session_id: str, policy: Mapping[str, Any]) -> None:
+    rows = registry.setdefault("conflicts", [])
+    rows.append({
+        "subject": subject, "reason": reason, "source_session_id": session_id,
+        "before_state": before.get("state"), "before_certainty": before.get("certainty"),
+        "before_observed_at": before.get("observed_at"),
+        "candidate_state": candidate.get("state"), "candidate_certainty": candidate.get("certainty"),
+        "candidate_observed_at": candidate.get("observed_at"),
+    })
+    registry["conflicts"] = rows[-int(policy.get("max_conflicts") or 256):]
+
+
+def build_snapshot(registry: Mapping[str, Any], policy: Mapping[str, Any], *, now_epoch: float | None = None) -> dict[str, Any]:
+    now_epoch = datetime.now(timezone.utc).timestamp() if now_epoch is None else float(now_epoch)
+    fresh_seconds = float(policy.get("snapshot_fresh_seconds") or 0)
+    people = {}
+    groups = {"inside": [], "outside": [], "unknown": []}
+    for subject, raw in sorted((registry.get("people") or {}).items()):
+        row = dict(raw)
+        observed = parse_epoch(row.get("observed_at"), str(policy.get("naive_timezone") or "UTC"))
+        age = None if observed is None else max(0.0, now_epoch - observed)
+        fresh = observed is not None and (fresh_seconds <= 0 or age <= fresh_seconds)
+        effective_state = str(row.get("state") or "unknown") if fresh else "unknown"
+        effective_certainty = str(row.get("certainty") or "stale") if fresh else "stale"
+        people[subject] = {
+            "state": effective_state, "certainty": effective_certainty,
+            "observed_at": row.get("observed_at"), "age_seconds": None if age is None else round(age, 1),
+            "source_session_id": row.get("source_session_id"), "direction_hint": row.get("direction_hint"),
+        }
+        groups.setdefault(effective_state if effective_state in groups else "unknown", []).append(subject)
+    anonymous = registry.get("anonymous") or {}
+    unresolved = int(anonymous.get("unresolved_count") or 0)
+    balance = int(anonymous.get("direction_balance") or 0)
+    quality = "uncertain" if unresolved or groups["unknown"] else "coherent"
+    return {
+        "schema_version": 1, "site": "sede", "generated_at": datetime.now(timezone.utc).isoformat(),
+        "quality": quality, "people": people, "inside": groups["inside"], "outside": groups["outside"],
+        "unknown": groups["unknown"],
+        "anonymous": {"direction_balance": balance, "unresolved_count": unresolved},
+        "conflict_count": len(registry.get("conflicts") or []),
+    }
+
 def bootstrap_people(legacy_path: Path) -> dict[str, dict[str, Any]]:
     legacy = load_json(legacy_path, {})
     people = {}
@@ -111,7 +196,8 @@ def normalized_claim(claim: Mapping[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def apply_session(registry: dict[str, Any], session: Mapping[str, Any]) -> list[dict[str, Any]]:
+def apply_session(registry: dict[str, Any], session: Mapping[str, Any], policy: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
+    policy = dict(policy or {"confirmed_guard_seconds": 0, "max_conflicts": 256})
     if session.get("event") != "SITE_ACTIVITY_SESSION" or session.get("site") != "sede":
         return []
     session_id = str(session.get("event_id") or "")
@@ -135,6 +221,10 @@ def apply_session(registry: dict[str, Any], session: Mapping[str, Any]) -> list[
             **claim,
             "source_session_id": session_id,
         }
+        accepted, reject_reason = resolve_update(before, after, policy)
+        if not accepted:
+            record_conflict(registry, subject=subject, before=before, candidate=after, reason=str(reject_reason), session_id=session_id, policy=policy)
+            continue
         people[subject] = after
         if before.get("state") != after.get("state") or before.get("certainty") != after.get("certainty"):
             changes.append({
@@ -172,6 +262,10 @@ def apply_session(registry: dict[str, Any], session: Mapping[str, Any]) -> list[
             "citofono_event_id": link.get("citofono_event_id"),
             "track_id": link.get("track_id"),
         }
+        accepted, reject_reason = resolve_update(before, after, policy)
+        if not accepted:
+            record_conflict(registry, subject=subject, before=before, candidate=after, reason=str(reject_reason), session_id=session_id, policy=policy)
+            continue
         people[subject] = after
         if before.get("state") != after.get("state") or before.get("certainty") != after.get("certainty"):
             changes.append({
@@ -223,7 +317,9 @@ def apply_session(registry: dict[str, Any], session: Mapping[str, Any]) -> list[
     return changes
 
 
-def run(source: Path, state_path: Path, events_path: Path, legacy_path: Path) -> dict[str, Any]:
+def run(source: Path, state_path: Path, events_path: Path, legacy_path: Path, policy_path: Path | None = None, snapshot_path: Path | None = None) -> dict[str, Any]:
+    policy = load_policy(policy_path) if policy_path is not None else {"confirmed_guard_seconds": 0, "snapshot_fresh_seconds": 0, "max_conflicts": 256, "naive_timezone": "UTC"}
+    snapshot_path = snapshot_path or state_path.with_name("snapshot.json")
     registry = load_json(state_path, {})
     initialized = bool(registry.get("initialized"))
     if not initialized:
@@ -235,9 +331,11 @@ def run(source: Path, state_path: Path, events_path: Path, legacy_path: Path) ->
             "anonymous": {"direction_balance": 0, "unresolved_count": 0, "movements": []},
             "seen_session_ids": [],
             "identity_observations": [],
+            "conflicts": [],
             "note": "Current state starts unknown; legacy presence is historical context only. Face identity hints are observational and never change presence alone.",
         }
         atomic_json(state_path, registry)
+        atomic_json(snapshot_path, build_snapshot(registry, policy))
         return {"status": "baseline_initialized", "processed": 0, "changes": 0, "people": len(registry["people"])}
     offset = int(registry.get("offset") or 0)
     if not checkpoint_matches(source, registry.get("checkpoint")):
@@ -249,11 +347,12 @@ def run(source: Path, state_path: Path, events_path: Path, legacy_path: Path) ->
         if row.get("event") != "SITE_ACTIVITY_SESSION" or row.get("site") != "sede":
             continue
         processed += 1
-        changes.extend(apply_session(registry, row))
+        changes.extend(apply_session(registry, row, policy))
     registry["offset"] = new_offset
     registry["checkpoint"] = source_checkpoint(source, new_offset)
     append_rows(events_path, changes)
     atomic_json(state_path, registry)
+    atomic_json(snapshot_path, build_snapshot(registry, policy))
     return {"status": "completed", "processed": processed, "changes": len(changes), "people": len(registry.get("people") or {})}
 
 
@@ -263,8 +362,10 @@ def main() -> int:
     ap.add_argument("--state", default="/var/lib/bottazzi-sede-presence/registry.json")
     ap.add_argument("--events", default="/var/lib/bottazzi-sede-presence/events.jsonl")
     ap.add_argument("--legacy", default="/opt/bottazzi-presence/registry.json")
+    ap.add_argument("--policy", default="/home/sibilla-cumana/ralf-memory-rag/current/config/sede_presence_policy.json")
+    ap.add_argument("--snapshot", default="/var/lib/bottazzi-sede-presence/snapshot.json")
     args = ap.parse_args()
-    result = run(Path(args.source), Path(args.state), Path(args.events), Path(args.legacy))
+    result = run(Path(args.source), Path(args.state), Path(args.events), Path(args.legacy), Path(args.policy), Path(args.snapshot))
     print(json.dumps(result, ensure_ascii=False))
     return 0
 

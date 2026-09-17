@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "site": "sede",
+  "confirmed_guard_seconds": 180,
+  "snapshot_fresh_seconds": 21600,
+  "max_conflicts": 256,
+  "naive_timezone": "Europe/Rome"
+}
