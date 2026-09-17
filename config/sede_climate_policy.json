@@ -124,7 +124,7 @@
     "lookahead_days": 14,
     "max_results": 50,
     "merge_gap_minutes": 0,
-    "state_dir": "/home/sibilla-cumana/.local/share/bottazzi/sede-climate",
+    "state_dir": "/var/lib/ralfloop/sede-climate",
     "state_file": "calendar-state.json",
     "decision_log_file": "decisions.jsonl"
   },

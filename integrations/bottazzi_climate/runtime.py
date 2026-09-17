@@ -194,8 +194,10 @@ def _block_event(block: CalendarBlock, calendar_id: str) -> CalendarEvent:
         summary=" + ".join(summaries),
         start=block.start,
         end=block.end,
-        location="",
+        location=next((item.location for item in block.events if item.location), ""),
         calendar_id=calendar_id,
+        description=" ".join(item.description for item in block.events if item.description),
+        conference_url=next((item.conference_url for item in block.events if item.conference_url), ""),
     )
 
 

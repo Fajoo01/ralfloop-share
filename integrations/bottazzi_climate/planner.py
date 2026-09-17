@@ -15,7 +15,6 @@ class CalendarEvent:
     end: datetime
     location: str = ""
     calendar_id: str = ""
-    online_hint: bool = False
     description: str = ""
     conference_url: str = ""
     all_day: bool = False
