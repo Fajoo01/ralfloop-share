@@ -1,7 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "policy": "explicit_device_id_only",
-  "notes": "Only high-confidence assignments. Ambiguous Tuya devices remain unassigned until explicitly classified.",
+  "notes": "Explicit physical-site assignments. Retired devices stay documented but are excluded from active health/recovery.",
   "sites": {
     "sede": {
       "label": "Sede",
@@ -23,7 +23,6 @@
         "2bcae7b250103873031355612178e437",
         "5c851b4d9b7336857c957f4270d5f570",
         "eeab183bd07ced40797be14a66259851",
-        "61988d17f5cd3336b9c363b4a4b51fe4",
         "b8e6acdbc7f0df9cf445fbebaa97c3c5",
         "723db30def318d25ac23c2b69bd1fd42",
         "2dd65b975bd5300b07f96b5fbd2770ad",
@@ -52,6 +51,14 @@
         "4b81018fb22eb815d5129c775605a545",
         "06a367f00d1fe1db9f95265de1e1f212",
         "a2094e231f1da07e122c3ef9eaabd18c"
+      ],
+      "retired_devices": [
+        {
+          "device_id": "61988d17f5cd3336b9c363b4a4b51fe4",
+          "name": "sensore ballatoio",
+          "status": "retired",
+          "replacement": "radar_presence_sensor"
+        }
       ]
     }
   }

@@ -75,6 +75,24 @@ class TuyaHARegistry:
                 if value:
                     result[value] = site_name
         return result
+
+    def _retired_device_ids(self) -> frozenset[str]:
+        try:
+            payload = json.loads(self.site_map_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return frozenset()
+        sites = payload.get("sites") if isinstance(payload, Mapping) else None
+        if not isinstance(sites, Mapping):
+            return frozenset()
+        result: set[str] = set()
+        for spec in sites.values():
+            if not isinstance(spec, Mapping):
+                continue
+            for row in spec.get("retired_devices") or []:
+                if isinstance(row, Mapping) and row.get("device_id"):
+                    result.add(str(row["device_id"]).strip())
+        return frozenset(result)
+
     def _load(self, name: str) -> dict[str, Any]:
         path = self.storage / name
         try:
@@ -100,6 +118,7 @@ class TuyaHARegistry:
     def entities(self, *, include_disabled: bool = False) -> tuple[dict[str, Any], ...]:
         ids = self.config_entry_ids()
         device_sites = self._device_sites()
+        retired_device_ids = self._retired_device_ids()
         payload = self._load("core.entity_registry")
         rows = payload.get("data", {}).get("entities", [])
         result: list[dict[str, Any]] = []
@@ -109,6 +128,9 @@ class TuyaHARegistry:
             if row.get("disabled_by") and not include_disabled:
                 continue
             entity_id = str(row.get("entity_id") or "")
+            device_id = str(row.get("device_id") or "")
+            if device_id in retired_device_ids:
+                continue
             if "." not in entity_id:
                 continue
             result.append({
@@ -126,6 +148,7 @@ class TuyaHARegistry:
     def devices(self) -> tuple[dict[str, Any], ...]:
         ids = self.config_entry_ids()
         device_sites = self._device_sites()
+        retired_device_ids = self._retired_device_ids()
         entities = self.entities(include_disabled=True)
         counts: dict[str, int] = {}
         for row in entities:
@@ -142,6 +165,8 @@ class TuyaHARegistry:
             if not config_entries.intersection(ids):
                 continue
             device_id = str(row.get("id") or "")
+            if device_id in retired_device_ids:
+                continue
             result.append({
                 "device_id": device_id,
                 "name": row.get("name_by_user") or row.get("name"),

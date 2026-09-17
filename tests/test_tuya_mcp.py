@@ -151,3 +151,26 @@ def test_tuya_site_map_is_external_and_health_is_grouped_by_site(tmp_path):
     assert health["degraded_devices"][0]["site"] == "sede"
     assert health["site_health"]["sede"]["unavailable"] == 1
     assert health["site_health"]["sede"]["status"] == "offline"
+
+
+def test_retired_device_is_excluded_from_active_registry_and_health(tmp_path):
+    site_map = tmp_path / "tuya_sites.json"
+    site_map.write_text(json.dumps({
+        "schema_version": 2,
+        "sites": {
+            "asiago": {
+                "device_ids": [],
+                "retired_devices": [{"device_id": "dev1", "status": "retired"}],
+            }
+        },
+    }), encoding="utf-8")
+    registry = _registry(tmp_path)
+    registry.site_map_file = site_map
+    server = TuyaMCPServer(registry=registry, backend=FakeBackend())
+    assert registry.devices() == ()
+    assert registry.entities() == ()
+    health = server.call("tuya_health", {})["structuredContent"]
+    assert health["tuya_devices"] == 0
+    assert health["tuya_entities"] == 0
+    assert health["state_health"]["unavailable"] == 0
+
