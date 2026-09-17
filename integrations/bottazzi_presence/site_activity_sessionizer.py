@@ -96,6 +96,8 @@ def activity_row(row: Mapping[str, Any]) -> dict[str, Any] | None:
         "occurred_at": str(row.get("occurred_at") or ""), "epoch": ts,
         "direction_hint": payload.get("direction_hint"), "presence_state": payload.get("presence_state"),
         "entity_id": payload.get("entity_id"), "old_state": payload.get("old_state"), "new_state": payload.get("new_state"),
+        "signal_role": payload.get("signal_role"),
+        "auxiliary": payload.get("signal_role") == "auxiliary_relay",
     }
 
 
@@ -149,6 +151,8 @@ def run(source: Path, state_path: Path, out: Path, *, window_seconds: float = 18
         current = open_sessions.get(site)
         if current and float(row["epoch"]) - float(current.get("last_epoch") or 0) > window_seconds:
             finalized.append(finalize_session(current)); current = None
+        if row.get("auxiliary") and not current:
+            continue
         if not current:
             current = {"site": site, "started_at": row["occurred_at"], "last_at": row["occurred_at"], "last_epoch": row["epoch"], "events": []}
         current["last_at"] = row["occurred_at"]; current["last_epoch"] = row["epoch"]

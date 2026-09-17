@@ -43,3 +43,31 @@ def test_run_baselines_then_groups_same_site_and_separates_other_site(tmp_path: 
     asiago=next(x for x in rows if x['site']=='asiago')
     assert sede['event_count']==2 and sede['correlation']=='multi_source'
     assert asiago['event_count']==1 and asiago['correlation']=='single_source'
+
+
+def test_auxiliary_gate_relay_cannot_start_session(tmp_path: Path):
+    src=tmp_path/'activity.jsonl'; state=tmp_path/'state.json'; out=tmp_path/'sessions.jsonl'
+    src.write_text('')
+    assert run(src,state,out,now_epoch=0)["status"] == "baseline_initialized"
+    gate=_event('r1','HA_STATE_CHANGED','ha_sede','sede','2026-09-17T10:00:00+00:00',entity_id='switch.cancello_switch_1',old_state='off',new_state='on',signal_role='auxiliary_relay')
+    with src.open('a') as fh: fh.write(json.dumps(gate)+'\n')
+    r=run(src,state,out,now_epoch=parse_ts('2026-09-17T10:01:00+00:00'),window_seconds=180)
+    assert r['processed'] == 1
+    assert r['open_sites'] == 0
+    assert not out.exists()
+
+
+def test_auxiliary_gate_relay_only_enriches_existing_session(tmp_path: Path):
+    src=tmp_path/'activity.jsonl'; state=tmp_path/'state.json'; out=tmp_path/'sessions.jsonl'
+    src.write_text('')
+    run(src,state,out,now_epoch=0)
+    primary=_event('g1','HUMAN_PASSAGE','garden','sede','2026-09-17T10:00:00+00:00')
+    gate=_event('r1','HA_STATE_CHANGED','ha_sede','sede','2026-09-17T10:00:30+00:00',entity_id='switch.cancello_switch_1',old_state='off',new_state='on',signal_role='auxiliary_relay')
+    with src.open('a') as fh:
+        fh.write(json.dumps(primary)+'\n'); fh.write(json.dumps(gate)+'\n')
+    r=run(src,state,out,now_epoch=parse_ts('2026-09-17T10:01:00+00:00'),window_seconds=180)
+    assert r['open_sites'] == 1
+    r2=run(src,state,out,now_epoch=parse_ts('2026-09-17T10:10:00+00:00'),window_seconds=180)
+    assert r2['finalized'] == 1
+    row=json.loads(out.read_text().splitlines()[0])
+    assert row['event_count'] == 2

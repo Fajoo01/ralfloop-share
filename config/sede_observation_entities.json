@@ -3,9 +3,21 @@
   "site": "sede",
   "mode": "read_only_observation",
   "entities": [
-    "binary_sensor.sensore_bagno_tiremm_occupazione",
-    "event.citofono_doorbell_message",
-    "event.camera_giardino_anteriore_doorbell_message",
-    "switch.cancello_switch_1"
+    {
+      "entity_id": "binary_sensor.sensore_bagno_tiremm_occupazione",
+      "role": "primary_observation"
+    },
+    {
+      "entity_id": "event.citofono_doorbell_message",
+      "role": "primary_observation"
+    },
+    {
+      "entity_id": "event.camera_giardino_anteriore_doorbell_message",
+      "role": "primary_observation"
+    },
+    {
+      "entity_id": "switch.cancello_switch_1",
+      "role": "auxiliary_relay"
+    }
   ]
 }

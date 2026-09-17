@@ -13,12 +13,22 @@ from urllib.parse import urlparse
 import websocket
 
 
-def load_config(path: str | Path) -> tuple[str, frozenset[str]]:
+def load_config(path: str | Path) -> tuple[str, dict[str, str]]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     site = str(payload.get("site") or "").strip().casefold()
     if not site:
         raise ValueError("missing_site")
-    entities = frozenset(str(x).strip() for x in payload.get("entities") or [] if str(x).strip())
+    entities: dict[str, str] = {}
+    for item in payload.get("entities") or []:
+        if isinstance(item, str):
+            entity_id = item.strip(); role = "primary_observation"
+        elif isinstance(item, Mapping):
+            entity_id = str(item.get("entity_id") or "").strip()
+            role = str(item.get("role") or "primary_observation").strip()
+        else:
+            continue
+        if entity_id:
+            entities[entity_id] = role
     if not entities:
         raise ValueError("missing_entities")
     return site, entities
@@ -30,7 +40,7 @@ def websocket_url(ha_url: str) -> str:
     return f"{scheme}://{parsed.netloc}/api/websocket"
 
 
-def sanitize_state_event(message: Mapping[str, Any], *, site: str, allowed: frozenset[str]) -> dict[str, Any] | None:
+def sanitize_state_event(message: Mapping[str, Any], *, site: str, allowed: Mapping[str, str]) -> dict[str, Any] | None:
     if message.get("type") != "event":
         return None
     event = message.get("event")
@@ -42,6 +52,7 @@ def sanitize_state_event(message: Mapping[str, Any], *, site: str, allowed: froz
     entity_id = str(data.get("entity_id") or "")
     if entity_id not in allowed:
         return None
+    signal_role = str(allowed.get(entity_id) or "primary_observation")
     old = data.get("old_state") if isinstance(data.get("old_state"), Mapping) else {}
     new = data.get("new_state") if isinstance(data.get("new_state"), Mapping) else {}
     old_state = old.get("state")
@@ -58,6 +69,7 @@ def sanitize_state_event(message: Mapping[str, Any], *, site: str, allowed: froz
         "site": site,
         "entity_id": entity_id,
         "domain": entity_id.split(".", 1)[0],
+        "signal_role": signal_role,
         "old_state": old_state,
         "new_state": new_state,
     }
@@ -69,7 +81,7 @@ def append_event(path: Path, row: Mapping[str, Any]) -> None:
         fh.write(json.dumps(dict(row), ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
-def run_once(*, ha_url: str, token: str, site: str, allowed: frozenset[str], out: Path) -> None:
+def run_once(*, ha_url: str, token: str, site: str, allowed: Mapping[str, str], out: Path) -> None:
     ws = websocket.create_connection(websocket_url(ha_url), timeout=30)
     try:
         hello = json.loads(ws.recv())
