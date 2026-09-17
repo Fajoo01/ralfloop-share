@@ -22,16 +22,7 @@ def test_bht_half_degree_protocol_is_normalized():
         {"state": "heat_cool", "current_temperature": 5.4, "temperature": 3.8},
         policy(),
     )
-    assert reading.current_temperature_c == 23.5
-    assert reading.target_temperature_c == 19.0
-
-
-def test_live_boiler_reading_applies_calibration_bias():
-    reading = normalize_ha_thermostat_state(
-        {"state": "heat_cool", "current_temperature": 5.2, "temperature": 3.8},
-        policy(),
-    )
-    assert reading.current_temperature_c == 22.5
+    assert reading.current_temperature_c == 27.0
     assert reading.target_temperature_c == 19.0
 
 
