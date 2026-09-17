@@ -162,6 +162,36 @@ def finalize_session(session: Mapping[str, Any]) -> dict[str, Any]:
             "citofono_event_id": event.get("citofono_event_id") or event.get("source_id"),
             "role": "identity_hint_only",
         })
+    face_by_citofono = {}
+    for event in events:
+        if event.get("event_type") != "FACE_IDENTITY_HINT":
+            continue
+        cid = str(event.get("citofono_event_id") or event.get("source_id") or "").strip()
+        if cid and event.get("name"):
+            face_by_citofono[cid] = event
+    identity_passage_links = []
+    for event in events:
+        if event.get("event_type") != "PHYSICAL_PASSAGE_TRACKED":
+            continue
+        cid = str(event.get("citofono_event_id") or "").strip()
+        face = face_by_citofono.get(cid)
+        if not face:
+            continue
+        identity_passage_links.append({
+            "event": "IDENTITY_PASSAGE_LINKED",
+            "subject": str(face.get("name") or "").strip().casefold(),
+            "citofono_event_id": cid,
+            "track_id": event.get("track_id"),
+            "direction_hint": event.get("direction_hint"),
+            "presence_state": event.get("presence_state"),
+            "movement_confidence": event.get("confidence"),
+            "face_reason": face.get("identity_reason"),
+            "face_support_frames": face.get("identity_support_frames"),
+            "face_frame_ratio": face.get("identity_frame_ratio"),
+            "face_event_id": face.get("event_id"),
+            "passage_event_id": event.get("event_id"),
+            "role": "probable_identity_for_tracked_passage",
+        })
     movement_events = [x for x in events if not x.get("auxiliary")]
     movement_confidence = next((x.get("confidence") for x in reversed(movement_events) if x.get("confidence")), None)
     return {
@@ -174,6 +204,7 @@ def finalize_session(session: Mapping[str, Any]) -> dict[str, Any]:
         "movement_confidence": movement_confidence,
         "subject_claims": subject_claims[-32:],
         "identity_hints": identity_hints[-32:],
+        "identity_passage_links": identity_passage_links[-32:],
         "evidence_event_ids": ids[-64:],
     }
 

@@ -81,3 +81,36 @@ def test_identity_hint_is_recorded_but_never_changes_presence_state():
     assert reg['people']['fabio']['certainty']=='stale'
     assert reg['identity_observations'][-1]['subject']=='fabio'
     assert reg['identity_observations'][-1]['role']=='identity_hint_only'
+
+
+def test_identity_passage_link_updates_probable_and_avoids_anonymous_count():
+    reg={'people':{'fabio':{'state':'unknown','certainty':'stale'}},'seen_session_ids':[],'identity_observations':[],'anonymous':{'direction_balance':0,'unresolved_count':0,'movements':[]}}
+    s=session('s-link', claims=[])
+    s.update({'ended_at':'2026-09-17T10:01:00+00:00','direction_hint':'entrata_probabile','presence_state':'inside','movement_confidence':'high'})
+    s['identity_passage_links']=[{'subject':'fabio','presence_state':'inside','movement_confidence':'high','direction_hint':'entrata_probabile','citofono_event_id':'cit1','track_id':'trk1'}]
+    changes=apply_session(reg,s)
+    assert reg['people']['fabio']['state']=='inside'
+    assert reg['people']['fabio']['certainty']=='probable'
+    assert reg['people']['fabio']['evidence_kind']=='identity_passage_link'
+    assert reg['anonymous']['direction_balance']==0
+    assert reg['anonymous']['unresolved_count']==0
+    assert changes[-1]['certainty']=='probable'
+
+
+def test_presence_claim_has_precedence_over_identity_passage_link():
+    reg={'people':{'fabio':{'state':'unknown','certainty':'stale'}},'seen_session_ids':[],'identity_observations':[],'anonymous':{'direction_balance':0,'unresolved_count':0,'movements':[]}}
+    s=session('s-both', claims=[claim(name='fabio',state='outside',certainty='confirmed')])
+    s['identity_passage_links']=[{'subject':'fabio','presence_state':'inside','movement_confidence':'high','direction_hint':'entrata_probabile','citofono_event_id':'cit1','track_id':'trk1'}]
+    apply_session(reg,s)
+    assert reg['people']['fabio']['state']=='outside'
+    assert reg['people']['fabio']['certainty']=='confirmed'
+
+
+def test_low_confidence_link_does_not_assign_person_and_stays_anonymous():
+    reg={'people':{'fabio':{'state':'unknown','certainty':'stale'}},'seen_session_ids':[],'identity_observations':[],'anonymous':{'direction_balance':0,'unresolved_count':0,'movements':[]}}
+    s=session('s-low', claims=[])
+    s.update({'ended_at':'2026-09-17T10:01:00+00:00','direction_hint':'uscita_probabile','presence_state':'outside','movement_confidence':'low'})
+    s['identity_passage_links']=[{'subject':'fabio','presence_state':'outside','movement_confidence':'low','direction_hint':'uscita_probabile','citofono_event_id':'cit1','track_id':'trk1'}]
+    apply_session(reg,s)
+    assert reg['people']['fabio']['state']=='unknown'
+    assert reg['anonymous']['unresolved_count']==1

@@ -143,6 +143,44 @@ def apply_session(registry: dict[str, Any], session: Mapping[str, Any]) -> list[
                 "certainty": after["certainty"], "observed_at": after.get("observed_at"),
                 "source_session_id": session_id, "direction_hint": after.get("direction_hint"),
             })
+    known_claim_subjects = {
+        str(c.get("subject") or "").strip().casefold()
+        for c in (session.get("subject_claims") or [])
+        if isinstance(c, Mapping) and str(c.get("kind") or "") == "known"
+    }
+    linked_subjects = set()
+    for link in session.get("identity_passage_links") or []:
+        if not isinstance(link, Mapping):
+            continue
+        subject = str(link.get("subject") or "").strip().casefold()
+        state = str(link.get("presence_state") or "unknown").strip().casefold()
+        confidence = str(link.get("movement_confidence") or "").strip().casefold()
+        if not subject or subject in known_claim_subjects or state not in {"inside", "outside"}:
+            continue
+        if confidence not in {"high", "medium"}:
+            continue
+        linked_subjects.add(subject)
+        before = dict(people.get(subject) or {"state": "unknown", "certainty": "stale"})
+        after = {
+            **before,
+            "state": state,
+            "certainty": "probable",
+            "observed_at": session.get("ended_at"),
+            "source_session_id": session_id,
+            "direction_hint": link.get("direction_hint"),
+            "evidence_kind": "identity_passage_link",
+            "citofono_event_id": link.get("citofono_event_id"),
+            "track_id": link.get("track_id"),
+        }
+        people[subject] = after
+        if before.get("state") != after.get("state") or before.get("certainty") != after.get("certainty"):
+            changes.append({
+                "event": "SEDE_PRESENCE_CHANGED", "site": "sede", "subject": subject,
+                "before_state": before.get("state", "unknown"), "after_state": state,
+                "certainty": "probable", "observed_at": session.get("ended_at"),
+                "source_session_id": session_id, "direction_hint": link.get("direction_hint"),
+                "evidence_kind": "identity_passage_link",
+            })
     observations = registry.setdefault("identity_observations", [])
     for hint in session.get("identity_hints") or []:
         if not isinstance(hint, Mapping):
@@ -160,7 +198,8 @@ def apply_session(registry: dict[str, Any], session: Mapping[str, Any]) -> list[
     anonymous = registry.setdefault("anonymous", {"direction_balance": 0, "unresolved_count": 0, "movements": []})
     claims = [c for c in (session.get("subject_claims") or []) if isinstance(c, Mapping)]
     has_known_claim = any(str(c.get("kind") or "") == "known" for c in claims)
-    if not has_known_claim:
+    has_linked_identity = bool(linked_subjects)
+    if not has_known_claim and not has_linked_identity:
         direction = str(session.get("direction_hint") or "")
         presence = str(session.get("presence_state") or "")
         confidence = str(session.get("movement_confidence") or "").casefold()

@@ -117,3 +117,26 @@ def test_buffered_face_hint_attaches_to_real_movement_without_becoming_subject_c
     assert session['subject_claims']==[]
     assert session['identity_hints'][0]['subject']=='fabio'
     assert session['identity_hints'][0]['citofono_event_id']=='citofono_1'
+
+
+def test_exact_citofono_id_links_face_to_tracked_passage():
+    s={"site":"sede","started_at":"a","last_at":"b","events":[
+        {"event_id":"face1","event_type":"FACE_IDENTITY_HINT","source_kind":"citofono","source_id":"cit_1","name":"fabio","identity_reason":"multiframe_consensus_with_insightface","identity_support_frames":3,"identity_frame_ratio":0.6},
+        {"event_id":"pass1","event_type":"PHYSICAL_PASSAGE_TRACKED","source_kind":"passage","citofono_event_id":"cit_1","track_id":"trk1","direction_hint":"entrata_probabile","presence_state":"inside","confidence":"high"},
+    ]}
+    out=finalize_session(s)
+    assert out['subject_claims']==[]
+    assert len(out['identity_passage_links'])==1
+    link=out['identity_passage_links'][0]
+    assert link['subject']=='fabio'
+    assert link['citofono_event_id']=='cit_1'
+    assert link['track_id']=='trk1'
+    assert link['presence_state']=='inside'
+
+
+def test_nearby_but_different_citofono_id_never_links_identity():
+    s={"site":"sede","started_at":"a","last_at":"b","events":[
+        {"event_id":"face1","event_type":"FACE_IDENTITY_HINT","source_kind":"citofono","source_id":"cit_A","name":"fabio"},
+        {"event_id":"pass1","event_type":"PHYSICAL_PASSAGE_TRACKED","source_kind":"passage","citofono_event_id":"cit_B","track_id":"trk1","presence_state":"inside","confidence":"high"},
+    ]}
+    assert finalize_session(s)['identity_passage_links']==[]
