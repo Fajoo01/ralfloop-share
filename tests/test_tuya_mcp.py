@@ -193,3 +193,28 @@ def test_inactive_uncommissioned_device_is_excluded_from_active_health(tmp_path)
     assert health["tuya_devices"] == 0
     assert health["state_health"]["unavailable"] == 0
 
+
+
+def test_tuya_scene_is_visible_but_excluded_from_physical_health(tmp_path):
+    registry = _registry(tmp_path)
+    storage = tmp_path / ".storage" / "core.entity_registry"
+    data = json.loads(storage.read_text())
+    data["data"]["entities"].append({
+        "entity_id": "scene.cloud_rule", "config_entry_id": "tuya-entry",
+        "device_id": "scene-dev", "platform": "tuya", "original_name": "Cloud rule",
+    })
+    storage.write_text(json.dumps(data), encoding="utf-8")
+    devices = tmp_path / ".storage" / "core.device_registry"
+    dd = json.loads(devices.read_text())
+    dd["data"]["devices"].append({"id":"scene-dev","config_entries":["tuya-entry"],"name":"Scene"})
+    devices.write_text(json.dumps(dd), encoding="utf-8")
+    backend = FakeBackend()
+    backend.states["scene.cloud_rule"] = {"entity_id":"scene.cloud_rule","state":"unavailable","attributes":{}}
+    server = TuyaMCPServer(registry=registry, backend=backend)
+    health = server.call("tuya_health", {})["structuredContent"]["state_health"]
+    assert health["unavailable"] == 0
+    assert health["ignored_nonphysical"] == 1
+    assert health["ignored_nonphysical_entities"][0]["entity_id"] == "scene.cloud_rule"
+    listed = server.call("tuya_list_entities", {})["structuredContent"]["items"]
+    assert any(row["entity_id"] == "scene.cloud_rule" for row in listed)
+

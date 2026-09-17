@@ -353,6 +353,9 @@ class TuyaMCPServer:
         }
 
 
+NON_PHYSICAL_HEALTH_DOMAINS = frozenset({"scene"})
+
+
 def _summarize_entity_health(
     entities: tuple[dict[str, Any], ...],
     devices: tuple[dict[str, Any], ...],
@@ -375,10 +378,21 @@ def _summarize_entity_health(
     unavailable: list[dict[str, Any]] = []
     unknown: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
+    ignored_nonphysical: list[dict[str, Any]] = []
     available = 0
     for entity in entities:
         entity_id = str(entity.get("entity_id") or "")
         if not entity_id:
+            continue
+        domain = str(entity.get("domain") or entity_id.split(".", 1)[0])
+        if domain in NON_PHYSICAL_HEALTH_DOMAINS:
+            row = live.get(entity_id)
+            ignored_nonphysical.append({
+                "entity_id": entity_id,
+                "domain": domain,
+                "site": str(entity.get("site") or "unassigned"),
+                "state": str((row or {}).get("state") or "missing").casefold(),
+            })
             continue
         device_id = str(entity.get("device_id") or "")
         row = live.get(entity_id)
@@ -446,6 +460,8 @@ def _summarize_entity_health(
         "unavailable_entities": unavailable[:50],
         "unknown_entities": unknown[:50],
         "missing_entities": missing[:50],
+        "ignored_nonphysical": len(ignored_nonphysical),
+        "ignored_nonphysical_entities": ignored_nonphysical[:100],
         "degraded_devices": grouped[:50],
         "site_health": dict(sorted(site_health.items())),
     }
