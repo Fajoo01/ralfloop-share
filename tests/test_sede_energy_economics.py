@@ -174,3 +174,23 @@ def test_stale_price_snapshot_falls_back_to_verified_bill(tmp_path):
     assert band == "included_fixed"
     assert price == cfg["electricity"]["marginal_eur_per_kwh_below_threshold"]
     assert source == cfg["electricity"]["price_source"]
+
+
+def test_sede_policy_disables_wrong_site_live_meter():
+    elec = policy()["energy_economics"]["electricity"]
+    assert elec["live_meter_enabled"] is False
+    assert elec["live_meter_status"] == "disabled_wrong_site_asiago"
+    assert "meter_entity_id" not in elec
+    assert "meter_device_id" not in elec
+
+
+def test_tariff_accounting_without_sede_meter_uses_bill_estimate_only():
+    cfg = policy()["energy_economics"]["electricity"]
+    now = datetime(2026, 9, 17, 17, 50, tzinfo=TZ)
+    consumed, remaining, state, _, source = _tariff_accounting(
+        cfg, now, None, {"meter_anchor_kwh": 62.6}, cfg["price_source"]
+    )
+    assert source == "bill_plus_historical_gap_estimate_no_sede_meter"
+    assert state["live_meter"] == "disabled"
+    assert "meter_anchor_kwh" not in state
+    assert consumed > 0 and remaining < cfg["included_kwh"]

@@ -123,10 +123,23 @@ def _bill_anchor(cfg: Mapping[str, Any], now: datetime) -> tuple[float, int]:
 
 
 def _tariff_accounting(
-    cfg: Mapping[str, Any], now: datetime, meter_kwh: float,
+    cfg: Mapping[str, Any], now: datetime, meter_kwh: float | None,
     previous: Mapping[str, Any], price_source: str,
 ) -> tuple[float, float, dict[str, Any], int, str]:
     anchor_estimate, stale_days = _bill_anchor(cfg, now)
+    if meter_kwh is None:
+        state = {
+            "schema_version": 1,
+            "price_source": price_source,
+            "last_tariff_consumed_kwh": anchor_estimate,
+            "updated_at": now.isoformat(),
+            "live_meter": "disabled",
+        }
+        included = float(cfg["included_kwh"])
+        return (
+            anchor_estimate, max(included - anchor_estimate, 0.0), state,
+            stale_days, "bill_plus_historical_gap_estimate_no_sede_meter",
+        )
     same_source = previous.get("price_source") == price_source
     old_meter = previous.get("meter_anchor_kwh")
     old_consumed = previous.get("tariff_consumed_at_anchor_kwh")
@@ -255,14 +268,17 @@ def fetch_energy_economics(
         session.initialize(); tools = {tool.name for tool in session.list_tools()}
         if "tuya_get_state" not in tools:
             raise EnergyEconomicsError("tuya_get_state_not_discovered")
-        meter_payload = _read_entity(session, str(elec["meter_entity_id"]))
-        meta = _entity_meta(meter_payload)
-        if str(meta.get("device_id") or "") != str(elec["meter_device_id"]):
-            raise EnergyEconomicsError("energy_meter_device_mismatch")
-        if str(meta.get("site") or "") != str(elec.get("meter_site") or ""):
-            raise EnergyEconomicsError("energy_meter_site_mismatch")
-        meter_kwh = _float_state(meter_payload)
-        powers = [_float_state(_read_entity(session, str(entity))) for entity in elec.get("power_entity_ids", ())]
+        meter_kwh: float | None = None
+        powers: list[float] = []
+        if bool(elec.get("live_meter_enabled", False)):
+            meter_payload = _read_entity(session, str(elec["meter_entity_id"]))
+            meta = _entity_meta(meter_payload)
+            if str(meta.get("device_id") or "") != str(elec["meter_device_id"]):
+                raise EnergyEconomicsError("energy_meter_device_mismatch")
+            if str(meta.get("site") or "") != str(elec.get("meter_site") or ""):
+                raise EnergyEconomicsError("energy_meter_site_mismatch")
+            meter_kwh = _float_state(meter_payload)
+            powers = [_float_state(_read_entity(session, str(entity))) for entity in elec.get("power_entity_ids", ())]
         ac_payload = _read_entity(session, str(hp["entity_id"]))
         ac_state = str((ac_payload.get("state") or {}).get("state") or "")
     finally:

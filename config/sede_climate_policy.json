@@ -137,14 +137,6 @@
     "mode": "observe_only",
     "state_file": "energy-state.json",
     "electricity": {
-      "meter_entity_id": "sensor.contatore_energia_totale",
-      "meter_device_id": "02abd49806d1aa597322f2bd95332c3c",
-      "meter_site": "unassigned",
-      "power_entity_ids": [
-        "sensor.contatore_potenza_di_fase_a",
-        "sensor.contatore_potenza_di_fase_b",
-        "sensor.contatore_potenza_di_fase_c"
-      ],
       "tariff_period_start": "2026-07-01",
       "tariff_period_end": "2027-06-30",
       "included_kwh": 1500.0,
@@ -154,7 +146,9 @@
       "historical_annual_kwh": 954.0,
       "marginal_eur_per_kwh_below_threshold": 0.2765,
       "marginal_eur_per_kwh_above_threshold_reference": 0.3775,
-      "price_source": "enostra_20260010135802_2026-08-24"
+      "price_source": "enostra_20260010135802_2026-08-24",
+      "live_meter_enabled": false,
+      "live_meter_status": "disabled_wrong_site_asiago"
     },
     "gas": {
       "annual_smc": 682.0,
