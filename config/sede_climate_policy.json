@@ -17,7 +17,8 @@
       "meet.google.com",
       "zoom",
       "teams"
-    ]
+    ],
+    "ignore_all_day": true
   },
   "comfort": {
     "heat_below_c": 19.0,
@@ -116,5 +117,19 @@
     "timeout_seconds": 5.0,
     "lat": 45.5065,
     "lon": 9.2355
+  },
+  "calendar_runtime": {
+    "socket_path": "/run/ralf-google-workspace-mcp/mcp.sock",
+    "timeout_seconds": 20.0,
+    "lookahead_days": 14,
+    "max_results": 50,
+    "merge_gap_minutes": 0,
+    "state_dir": "/home/sibilla-cumana/.local/share/bottazzi/sede-climate",
+    "state_file": "calendar-state.json",
+    "decision_log_file": "decisions.jsonl"
+  },
+  "tuya_read": {
+    "socket_path": "/run/ralf-tuya-mcp/mcp.sock",
+    "timeout_seconds": 20.0
   }
 }
