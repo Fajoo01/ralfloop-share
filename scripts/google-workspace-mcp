@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ENV_FILE="${GOOGLE_WORKSPACE_MCP_ENV:-$HOME/.config/google-workspace-mcp/oauth.env}"
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+fi
+if [[ -z "${GOOGLE_CLIENT_ID:-}" || -z "${GOOGLE_CLIENT_SECRET:-}" ]]; then
+  echo "google-workspace-mcp: missing GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET in $ENV_FILE" >&2
+  exit 2
+fi
+exec npx -y @aaronsb/google-workspace-mcp@4.5.1 "$@"
