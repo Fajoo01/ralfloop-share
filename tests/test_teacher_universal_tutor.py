@@ -176,12 +176,117 @@ def test_counterexample_uses_core_evidence_without_llm(tmp_path):
     assert result["core_evidence"]["turn_classification"]["signal"] == "counterexample_cue"
     assert "flessibile" in result["response"]
     assert "fluisce spontaneamente" in result["response"]
-    assert "troppo semplificata" in result["response"]
+    assert "regola corretta" in result["response"]
 
 
-def test_concept_evidence_is_binding_in_model_prompt_for_plain_question(tmp_path):
-    captured = {}
+def test_claim_shaped_turn_uses_curated_evidence_without_llm(tmp_path):
+    class Core:
+        def classify_turn(self, text):
+            return {"ok": True, "move": "neutral", "signal": "none", "confidence": 0.55}
 
+        def concept_evidence(self, topic):
+            assert topic == "Le stagioni"
+            return {
+                "ok": True,
+                "found": True,
+                "topic": topic,
+                "evidence": "Le stagioni dipendono soprattutto dall'inclinazione dell'asse terrestre.",
+                "misconceptions": "La distanza Terra-Sole non è la causa principale delle stagioni.",
+            }
+
+    def model(*_):
+        raise AssertionError("claim-shaped turn with curated evidence must not call the LLM")
+
+    service = TeacherService(
+        TeacherStore(tmp_path / "claim.sqlite3"),
+        model_call=model,
+        deterministic_core=Core(),
+    )
+    student = service.login("CLAIM", "middle", "2")["student"]
+    session = service.start_session(student["student_id"], "scienze", "Le stagioni")["session"]
+    result = service.explain(
+        session["session_id"],
+        "In estate fa caldo perché la Terra è più vicina al Sole.",
+    )
+    assert result["deterministic"] is True
+    assert result["pedagogy"]["strategy"] == "error_analysis"
+    assert "inclinazione" in result["response"]
+    assert "distanza Terra-Sole" in result["response"]
+
+
+def test_open_question_uses_targeted_curated_sentence_when_supported(tmp_path):
+    class Core:
+        def classify_turn(self, text):
+            return {"ok": True, "move": "question", "signal": "question_form", "confidence": 0.82}
+
+        def concept_evidence(self, topic):
+            return {
+                "ok": True,
+                "found": True,
+                "topic": topic,
+                "evidence": (
+                    "La Luna riflette la luce del Sole. "
+                    "Le fasi lunari dipendono dalla geometria tra Sole, Terra e Luna: "
+                    "vediamo una falce quando è visibile solo una parte della metà illuminata."
+                ),
+                "misconceptions": "Le fasi non sono causate dall'ombra della Terra.",
+            }
+
+    def model(*_):
+        raise AssertionError("supported open question should use curated evidence")
+
+    service = TeacherService(
+        TeacherStore(tmp_path / "open-question.sqlite3"),
+        model_call=model,
+        deterministic_core=Core(),
+    )
+    student = service.login("OPEN", "primary", "5")["student"]
+    session = service.start_session(student["student_id"], "scienze", "Luna e luce")["session"]
+    result = service.explain(
+        session["session_id"],
+        "Allora perché a volte vedo solo una falce?",
+    )
+    assert result["deterministic"] is True
+    assert "falce" in result["response"]
+    assert "geometria" in result["response"]
+
+
+def test_unsupported_open_question_still_uses_model(tmp_path):
+    calls = []
+
+    class Core:
+        def classify_turn(self, text):
+            return {"ok": True, "move": "question", "signal": "question_form", "confidence": 0.82}
+
+        def concept_evidence(self, topic):
+            return {
+                "ok": True,
+                "found": True,
+                "topic": topic,
+                "evidence": "La Luna riflette la luce del Sole.",
+                "misconceptions": "La Luna non emette luce visibile propria.",
+            }
+
+    def model(system_prompt, user_prompt):
+        calls.append(json.loads(user_prompt))
+        return {"response": "La distanza media è circa 384 mila chilometri."}
+
+    service = TeacherService(
+        TeacherStore(tmp_path / "unsupported-open.sqlite3"),
+        model_call=model,
+        deterministic_core=Core(),
+    )
+    student = service.login("UNSUPPORTED", "primary", "5")["student"]
+    session = service.start_session(student["student_id"], "scienze", "Luna e luce")["session"]
+    result = service.explain(
+        session["session_id"],
+        "Quanto dista in media la Luna dalla Terra?",
+    )
+    assert result.get("deterministic") is not True
+    assert len(calls) == 1
+
+
+def test_plain_question_uses_curated_evidence_when_directly_supported(tmp_path):
     class Core:
         def classify_turn(self, text):
             return {"ok": True, "move": "question", "signal": "question_form",
@@ -193,10 +298,8 @@ def test_concept_evidence_is_binding_in_model_prompt_for_plain_question(tmp_path
                     "misconceptions": "Non usare la forma del contenitore come unico criterio.",
                     "writes": 0, "external_side_effects": 0}
 
-    def model(system_prompt, user_prompt):
-        captured["system"] = system_prompt
-        captured["payload"] = json.loads(user_prompt)
-        return {"response": "Un liquido fluisce spontaneamente."}
+    def model(*_):
+        raise AssertionError("directly supported concept question should not call the LLM")
 
     service = TeacherService(
         TeacherStore(tmp_path / "binding.sqlite3"),
@@ -207,11 +310,170 @@ def test_concept_evidence_is_binding_in_model_prompt_for_plain_question(tmp_path
     session = service.start_session(
         student["student_id"], "scienze", "Gli stati dell'acqua"
     )["session"]
-    service.explain(session["session_id"], "Come riconosco un liquido?")
+    result = service.explain(session["session_id"], "Come riconosco un liquido?")
 
-    assert "EVIDENZA CONCETTUALE VINCOLANTE" in captured["system"]
-    assert "fluisce spontaneamente" in captured["system"]
-    assert captured["payload"]["deterministic_evidence"]["concept_evidence"]["found"] is True
+    assert result["deterministic"] is True
+    assert "fluisce spontaneamente" in result["response"]
+    assert result["core_evidence"]["concept_evidence"]["found"] is True
+
+def test_confusion_uses_curated_evidence_without_llm(tmp_path):
+    class Core:
+        def classify_turn(self, text):
+            return {"ok": True, "move": "confusion", "signal": "confusion_cue", "confidence": 0.94}
+
+        def concept_evidence(self, topic):
+            return {
+                "ok": True,
+                "found": True,
+                "topic": topic,
+                "evidence": (
+                    "Dividere per una frazione non nulla equivale a moltiplicare per il suo reciproco. "
+                    "Il reciproco è il numero che, moltiplicato per il divisore, dà 1."
+                ),
+                "misconceptions": "Non capovolgere una frazione ogni volta che la incontri.",
+            }
+
+    def model(*_):
+        raise AssertionError("confusion on curated topic should not call LLM")
+
+    service = TeacherService(
+        TeacherStore(tmp_path / "confusion.sqlite3"),
+        model_call=model,
+        deterministic_core=Core(),
+    )
+    student = service.login("CONFUSION", "primary", "5")["student"]
+    session = service.start_session(
+        student["student_id"], "matematica", "Divisione fra frazioni"
+    )["session"]
+    result = service.explain(session["session_id"], "non ho capito")
+
+    assert result["deterministic"] is True
+    assert "Ripartiamo da un solo punto sicuro" in result["response"]
+    assert "reciproco" in result["response"]
+    assert "Quale parola o passaggio" in result["response"]
+
+
+def test_history_is_selective_but_preserves_grounded_source(tmp_path):
+    calls = []
+
+    def model(system_prompt, user_prompt):
+        payload = json.loads(user_prompt)
+        calls.append(payload)
+        return {"response": f"Risposta {len(calls)}"}
+
+    service = TeacherService(
+        TeacherStore(tmp_path / "compact-history.sqlite3"),
+        model_call=model,
+    )
+    student = service.login("COMPACT", "university", "2")["student"]
+    session = service.start_session(student["student_id"], "filosofia", "testo")['session']
+    material = "Fonte vincolante: la regola richiede eccezioni dichiarate."
+    service.summarize_material(session['session_id'], material, "Riassumi.")
+    for index in range(1, 6):
+        service.explain(session['session_id'], f"Domanda libera numero {index}?")
+
+    history = calls[-1]["history"]
+    assert len(history) <= 4
+    assert any(
+        isinstance(item.get("student_request"), dict)
+        and material in item["student_request"].get("material", "")
+        for item in history
+    )
+    questions = [
+        item.get("student_request", {}).get("question", "")
+        for item in history
+        if isinstance(item.get("student_request"), dict)
+    ]
+    assert "Domanda libera numero 1?" not in questions
+    assert "Domanda libera numero 4?" in questions
+
+
+def test_request_example_uses_curated_example_without_llm(tmp_path):
+    class Core:
+        def classify_turn(self, text):
+            return {"ok": True, "move": "request_example", "signal": "example_request", "confidence": 0.96}
+
+        def concept_evidence(self, topic):
+            return {
+                "ok": True,
+                "found": True,
+                "topic": topic,
+                "evidence": (
+                    "Dividere per una frazione non nulla equivale a moltiplicare per il suo reciproco. "
+                    "Esempio concreto: quante porzioni da 1/4 stanno in 1/2? Ce ne stanno 2."
+                ),
+                "misconceptions": "Non capovolgere una frazione ogni volta che la incontri.",
+            }
+
+    def model(*_):
+        raise AssertionError("curated example should not call the LLM")
+
+    service = TeacherService(
+        TeacherStore(tmp_path / "example.sqlite3"),
+        model_call=model,
+        deterministic_core=Core(),
+    )
+    student = service.login("EXAMPLE", "primary", "5")["student"]
+    session = service.start_session(
+        student["student_id"], "matematica", "Divisione fra frazioni"
+    )["session"]
+    result = service.explain_differently(
+        session["session_id"],
+        "ancora non capisco. niente regole, fammi un esempio concreto",
+    )
+
+    assert result["deterministic"] is True
+    assert "porzioni da 1/4" in result["response"]
+    assert "esempio concreto" in result["response"].casefold()
+
+
+def test_repetition_guard_retries_with_latest_turn_context(tmp_path):
+    calls = []
+    repeated = "Usa sempre la stessa regola e ripeti lo stesso procedimento passo per passo."
+
+    def model(system_prompt, user_prompt):
+        payload = json.loads(user_prompt)
+        calls.append(payload)
+        if len(calls) <= 2:
+            return {"response": repeated}
+        assert payload["quality_retry"]["reason"] == "repetitive_response"
+        assert "secondo esempio" in payload["quality_retry"]["latest_student_turn"]
+        return {"response": "Cambio strategia: nel secondo esempio guardiamo prima il caso concreto richiesto."}
+
+    service = TeacherService(
+        TeacherStore(tmp_path / "retry.sqlite3"),
+        model_call=model,
+    )
+    student = service.login("RETRY", "middle", "2")["student"]
+    session = service.start_session(student["student_id"], "scienze", "tema libero")["session"]
+    service.explain(session["session_id"], "Spiegami la regola.")
+    result = service.explain(session["session_id"], "Fammi un secondo esempio diverso.")
+
+    assert len(calls) == 3
+    assert result["quality_retry"]["reason"] == "repetitive_response"
+    assert result["quality_retry"]["fallback"] is False
+    assert result["response"].startswith("Cambio strategia")
+
+
+def test_repetition_guard_falls_back_instead_of_repeating_again(tmp_path):
+    repeated = "Ripeto esattamente la stessa spiegazione perché non cambio strategia."
+
+    def model(*_):
+        return {"response": repeated}
+
+    service = TeacherService(
+        TeacherStore(tmp_path / "retry-fallback.sqlite3"),
+        model_call=model,
+    )
+    student = service.login("RETRY-FALLBACK", "middle", "2")["student"]
+    session = service.start_session(student["student_id"], "scienze", "tema libero")["session"]
+    service.explain(session["session_id"], "Spiegami il concetto.")
+    result = service.explain(session["session_id"], "Non ho capito, spiegalo di nuovo.")
+
+    assert result["quality_retry"]["fallback"] is True
+    assert result["response"] != repeated
+    assert "non voglio ripeterla" in result["response"].casefold()
+
 
 def test_service_injects_bounded_multi_turn_history_and_source_material(tmp_path):
     calls = []

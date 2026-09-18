@@ -220,7 +220,17 @@ def latest_event(db: Path, session_id: str) -> dict:
 
 def contains_any(text: str, group: list[str]) -> bool:
     low = text.casefold()
-    return any(term.casefold() in low for term in group)
+    expanded = low.replace("÷", " divid ").replace("×", " moltiplic ")
+    words = re.findall(r"[a-zà-ÿ0-9]+", expanded)
+    for term in group:
+        needle = term.casefold().strip()
+        if needle in expanded:
+            return True
+        if re.fullmatch(r"[a-zà-ÿ]+", needle) and len(needle) >= 5:
+            stem = needle[:4]
+            if any(word.startswith(stem) for word in words):
+                return True
+    return False
 
 def score_turn(case: dict, turn: dict, output: dict, event: dict, previous: str) -> dict:
     expect = turn.get("expect") or {}

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import difflib
 import json
 import os
+import re
 from typing import Any, Callable, Iterator
 from urllib.parse import urlparse
 
@@ -63,6 +65,148 @@ def _student_turn(payload: dict[str, Any]) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+def _claim_like_for_evidence(text: str, student_move: str) -> bool:
+    """Return True for claim-shaped turns that should be checked against curated evidence."""
+    if student_move in {"counterexample", "correction"}:
+        return True
+    if student_move in {"confusion", "request_example"}:
+        return False
+    normalized = " ".join(text.casefold().split())
+    if not normalized:
+        return False
+    if not normalized.endswith("?"):
+        return True
+    if normalized.endswith(("giusto?", "vero?", "no?")):
+        return True
+    open_question_prefixes = (
+        "come ", "perché ", "perche ", "cosa ", "quale ", "quali ",
+        "chi ", "dove ", "quando ", "quanto ", "quanta ", "quanti ",
+        "quante ", "allora perché ", "allora perche ",
+    )
+    if normalized.startswith(open_question_prefixes):
+        return False
+    # Yes/no and conditional questions usually contain a proposition to validate.
+    return True
+
+
+_CONCEPT_STOPWORDS = {
+    "allora", "anche", "ancora", "avere", "come", "cosa", "della", "delle",
+    "dello", "degli", "dalla", "dalle", "dallo", "dopo", "essere", "fatto",
+    "nella", "nelle", "nello", "negli", "perche", "perché", "posso", "puo",
+    "può", "quale", "quindi", "questo", "questa", "quello", "quella", "solo",
+    "sono", "stesso", "stessa", "tutto", "tutta", "vero", "giusto",
+}
+
+
+def _concept_term(word: str) -> str:
+    value = word.casefold().strip("'’")
+    groups = (
+        (("division", "dividere", "dividi", "diviso", "divisore"), "divid"),
+        (("capovol",), "capovol"),
+        (("derivat",), "derivat"),
+        (("intervall",), "intervall"),
+        (("emisfer",), "emisfer"),
+        (("stagion",), "stagion"),
+        (("falc",), "falc"),
+        (("lumin",), "lumin"),
+        (("distan", "vicin"), "distan"),
+        (("disordin",), "disordin"),
+        (("metafor",), "metafor"),
+        (("indic",), "indic"),
+        (("reciproc",), "reciproc"),
+        (("frazion",), "frazion"),
+        (("probabil",), "probabil"),
+        (("indipenden",), "indipenden"),
+        (("incompatibil",), "incompatibil"),
+        (("costant",), "costant"),
+    )
+    for prefixes, stem in groups:
+        if any(value.startswith(prefix) for prefix in prefixes):
+            return stem
+    if len(value) >= 7:
+        return value[:6]
+    return value
+
+
+def _concept_terms(text: str) -> set[str]:
+    words = re.findall(r"[A-Za-zÀ-ÿ0-9']+", text.casefold())
+    return {
+        _concept_term(word)
+        for word in words
+        if len(word) >= 4 and word not in _CONCEPT_STOPWORDS
+    }
+
+
+def _targeted_concept_text(
+    text: str,
+    query: str,
+    *,
+    topic: str = "",
+    max_sentences: int = 2,
+) -> tuple[str, int]:
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", text.strip()) if part.strip()]
+    if not sentences:
+        return text.strip(), 0
+    query_terms = _concept_terms(query) - _concept_terms(topic)
+    ranked: list[tuple[int, int, str]] = []
+    wants_reason = query.casefold().lstrip().startswith(("perché", "perche"))
+    for index, sentence in enumerate(sentences):
+        score = len(query_terms & _concept_terms(sentence))
+        if wants_reason and any(cue in sentence.casefold() for cue in ("perché", "perche", "per questo", "perciò", "quindi")):
+            score += 2
+        ranked.append((score, index, sentence))
+    best_score = max(score for score, _, _ in ranked)
+    if best_score <= 0:
+        return sentences[0], 0
+    selected = sorted(
+        (item for item in ranked if item[0] > 0),
+        key=lambda item: (-item[0], item[1]),
+    )[:max_sentences]
+    selected.sort(key=lambda item: item[1])
+    return " ".join(sentence for _, _, sentence in selected), best_score
+
+
+def _concept_example(text: str) -> str:
+    for sentence in re.split(r"(?<=[.!?])\s+", text.strip()):
+        candidate = sentence.strip()
+        if candidate.casefold().startswith(("esempio:", "esempio concreto:")):
+            return candidate
+    return ""
+
+
+def _last_tutor_response(history: list[dict[str, Any]]) -> str:
+    for item in reversed(history):
+        value = item.get("tutor_response")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _response_similarity(previous: str, current: str) -> float:
+    if not previous or not current:
+        return 0.0
+    def norm(value: str) -> str:
+        return re.sub(r"\s+", " ", value.casefold()).strip()
+    return difflib.SequenceMatcher(None, norm(previous), norm(current)).ratio()
+
+
+def _repetition_fallback(student_move: str) -> str:
+    if student_move == "confusion":
+        return (
+            "La spiegazione precedente si stava ripetendo e non ti stava aiutando. "
+            "Dimmi quale parola o passaggio preciso non è chiaro: ripartiamo solo da quello."
+        )
+    if student_move == "request_example":
+        return (
+            "La spiegazione precedente si stava ripetendo. Cambio davvero strada: "
+            "preferisci un esempio con oggetti quotidiani oppure con numeri piccoli?"
+        )
+    return (
+        "La risposta precedente non affrontava abbastanza il nuovo punto. "
+        "Non voglio ripeterla: indicami il passaggio preciso a cui ti riferisci e rispondo solo a quello."
+    )
 
 
 def _student_move(core: Any | None, payload: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
@@ -137,47 +281,69 @@ def _history_has_grounded_source(history: list[dict[str, Any]]) -> bool:
 
 
 def _history_context(store: TeacherStore, session_id: str) -> list[dict[str, Any]]:
-    budget = 9000
-    selected: list[dict[str, Any]] = []
+    """Compact conversational memory: latest turns plus the active grounded source."""
+    budget = 5200
     try:
-        events = store.recent_events(session_id, limit=8)
+        recent = store.recent_events(session_id, limit=12)
     except Exception:
         return []
-    for event in reversed(events):
+
+    def is_grounded(event: dict[str, Any]) -> bool:
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            return False
+        request = payload.get("request")
+        return (
+            isinstance(request, dict)
+            and isinstance(request.get("material"), str)
+            and bool(request["material"].strip())
+        )
+
+    keep_ids = {
+        event.get("event_id")
+        for event in recent[-3:]
+    }
+    grounded = [event for event in recent if is_grounded(event)]
+    if grounded:
+        keep_ids.add(grounded[-1].get("event_id"))
+    events = [event for event in recent if event.get("event_id") in keep_ids]
+
+    selected: list[dict[str, Any]] = []
+    for event in events:
         payload = event.get("payload")
         if not isinstance(payload, dict):
             continue
         request = payload.get("request")
-        item: dict[str, Any] = {
-            "action": str(event.get("kind") or ""),
-        }
+        item: dict[str, Any] = {"action": str(event.get("kind") or "")}
         if isinstance(request, dict) and request:
-            item["student_request"] = request
+            compact_request = dict(request)
+            for key, limit in {
+                "question": 1200,
+                "concept": 1200,
+                "exercise": 1600,
+                "student_attempt": 1200,
+                "student_answer": 500,
+                "context": 1800,
+                "material": 3500,
+                "objective": 800,
+            }.items():
+                value = compact_request.get(key)
+                if isinstance(value, str):
+                    compact_request[key] = value[:limit]
+            item["student_request"] = compact_request
         response = payload.get("response")
         if isinstance(response, str) and response.strip():
-            item["tutor_response"] = response.strip()[:3000]
+            item["tutor_response"] = response.strip()[:1200]
         source_mode = payload.get("source_mode")
         if isinstance(source_mode, str) and source_mode:
             item["source_mode"] = source_mode
         if len(item) == 1:
             continue
         encoded = json.dumps(item, ensure_ascii=False)
-        if len(encoded) > budget and selected:
-            break
-        if len(encoded) > budget:
-            if "tutor_response" in item:
-                item["tutor_response"] = item["tutor_response"][:1200]
-            request_value = item.get("student_request")
-            if isinstance(request_value, dict) and isinstance(request_value.get("material"), str):
-                request_value = dict(request_value)
-                request_value["material"] = request_value["material"][:3500]
-                item["student_request"] = request_value
-            encoded = json.dumps(item, ensure_ascii=False)
         if len(encoded) > budget:
             continue
         selected.append(item)
         budget -= len(encoded)
-    selected.reverse()
     return selected
 
 
@@ -414,42 +580,75 @@ class TeacherService:
         student_move, turn_evidence = _student_move(
             self.deterministic_core, payload
         )
-        if student_move not in {"counterexample", "correction"}:
-            return None
+        student_text = _student_turn(payload)
         evidence = _concept_evidence(
             self.deterministic_core, session.get("topic", "")
         )
         if evidence is None:
             return None
+        facts = str(evidence.get("evidence") or "").strip()
+        misconception = str(evidence.get("misconceptions") or "").strip()
+        if not facts:
+            return None
+        targeted_facts, fact_score = _targeted_concept_text(
+            facts, student_text, topic=session.get("topic", ""), max_sentences=2
+        )
+        targeted_guard, guard_score = _targeted_concept_text(
+            misconception, student_text, topic=session.get("topic", ""), max_sentences=1
+        ) if misconception else ("", 0)
+        claim_check = _claim_like_for_evidence(student_text, student_move)
+        supported_open_question = (
+            student_move == "question" and fact_score >= 1
+        )
+        supported_confusion = student_move == "confusion"
+        curated_example = _concept_example(facts) if student_move == "request_example" else ""
+        supported_example = bool(curated_example)
+        if not claim_check and not supported_open_question and not supported_confusion and not supported_example:
+            return None
 
         student = self.store.student(session["student_id"])
         learner = profile_from_student(student)
+        effective_move = (
+            student_move
+            if student_move in {"counterexample", "correction", "confusion", "request_example"}
+            else "claim_check" if claim_check else student_move
+        )
+        if supported_example:
+            targeted_facts = curated_example
         decision = select_pedagogy(
             learner,
             action=action,
             subject=session["subject"],
             topic=session["topic"],
-            student_move=student_move,
+            student_move=effective_move,
         )
-        facts = str(evidence.get("evidence") or "").strip()
-        misconception = str(evidence.get("misconceptions") or "").strip()
-        if not facts:
-            return None
 
-        parts = [
-            "La tua obiezione va verificata sul criterio corretto.",
-            facts,
-        ]
-        if misconception:
-            parts.append("Da evitare come regola: " + misconception)
-        parts.append(
-            "Se prima avevo lasciato intendere il contrario, quella "
-            "spiegazione era troppo semplificata e va corretta."
-        )
-        if decision.micro_check:
+        history = _history_context(self.store, session_id)
+        if effective_move in {"counterexample", "correction"}:
+            lead = "La tua obiezione va verificata sul criterio corretto."
+        elif effective_move == "claim_check":
+            lead = "Controlliamo la regola o l'ipotesi che stai proponendo."
+        elif effective_move == "confusion":
+            lead = "Ripartiamo da un solo punto sicuro."
+        elif effective_move == "request_example":
+            lead = "Cambiamo strada con un esempio concreto."
+        else:
+            lead = "Per la tua domanda, il punto rilevante è questo."
+        parts = [lead, targeted_facts]
+        if targeted_guard and guard_score > 0 and effective_move != "question":
+            parts.append("Attenzione: " + targeted_guard)
+        if history and effective_move in {"counterexample", "correction", "claim_check"}:
             parts.append(
-                "Prova a riformulare in una frase la regola corretta."
+                "Se prima avevo lasciato intendere il contrario, quella "
+                "spiegazione era troppo semplificata e va corretta."
             )
+        if decision.micro_check:
+            if effective_move in {"counterexample", "correction", "claim_check"}:
+                parts.append("Qual è la regola corretta in una frase?")
+            elif effective_move == "confusion":
+                parts.append("Quale parola o passaggio di questa frase non è chiaro?")
+            else:
+                parts.append("Ti torna questo passaggio?")
         response = " ".join(parts)
         if len(response) > decision.max_response_chars:
             response = response[: decision.max_response_chars].rsplit(" ", 1)[0] + "."
@@ -472,6 +671,7 @@ class TeacherService:
             "source_mode": "deterministic_core",
             "strategy": decision.strategy.value,
             "student_move": student_move,
+            "claim_check": effective_move == "claim_check",
             "mode": decision.mode.value,
             "model_path": "none",
             "core_tool": "core.concept_evidence",
@@ -1179,6 +1379,60 @@ class TeacherService:
         if not response:
             raise RuntimeError("teacher_model_empty_response")
 
+        quality_retry: dict[str, Any] | None = None
+        previous_response = _last_tutor_response(history)
+        initial_similarity = _response_similarity(previous_response, response)
+        if (
+            previous_response
+            and action in {"explain", "explain_differently"}
+            and initial_similarity >= 0.82
+        ):
+            retry_context = json.loads(json.dumps(context, ensure_ascii=False))
+            retry_context["quality_retry"] = {
+                "reason": "repetitive_response",
+                "previous_response": previous_response[:1800],
+                "latest_student_turn": _student_turn(payload)[:1200],
+                "instruction": (
+                    "Riscrivi da zero. Rispondi al turno corrente, non alla domanda precedente. "
+                    "Cambia strategia e non riutilizzare la stessa spiegazione."
+                ),
+            }
+            retry_system = (
+                _teacher_system_prompt(
+                    decision,
+                    concept_evidence=concept_evidence,
+                    grounding_active=grounding_active,
+                )
+                + "\n\nQUALITY RETRY VINCOLANTE:\n"
+                + "La bozza precedente era troppo simile alla risposta già data. "
+                + "Affronta solo la nuova richiesta e cambia strategia."
+            )
+            try:
+                retry_result = self.model_call(
+                    retry_system,
+                    json.dumps(retry_context, ensure_ascii=False),
+                )
+            except Exception:
+                retry_result = None
+            retry_response = ""
+            if isinstance(retry_result, dict):
+                retry_response = str(retry_result.get("response") or "").strip().replace("**", "").replace("__", "")
+            retry_similarity = _response_similarity(previous_response, retry_response)
+            used_fallback = not retry_response or retry_similarity >= 0.90
+            response = (
+                _repetition_fallback(student_move)
+                if used_fallback
+                else retry_response
+            )
+            quality_retry = {
+                "reason": "repetitive_response",
+                "initial_similarity": round(initial_similarity, 3),
+                "retry_similarity": round(retry_similarity, 3),
+                "fallback": used_fallback,
+            }
+            if isinstance(retry_result, dict) and not used_fallback:
+                result = retry_result
+
         output = {
             "ok": True,
             "action": action,
@@ -1193,6 +1447,8 @@ class TeacherService:
 
         if isinstance(result.get("correct"), bool):
             output["correct"] = result["correct"]
+        if quality_retry is not None:
+            output["quality_retry"] = quality_retry
 
         self.store.event(
             session_id,
@@ -1205,6 +1461,7 @@ class TeacherService:
                 "student_move": student_move,
                 "mode": decision.mode.value,
                 "model_path": decision.model_path.value,
+                "quality_retry": quality_retry,
             },
         )
 

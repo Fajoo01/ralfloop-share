@@ -538,10 +538,14 @@ static void write_math_hint(FILE *out, const char *text, const char *attempt) {
     int recognized = equation || arithmetic;
     const char *hint = "";
     if (equation) {
-        if (attempt && strchr(attempt, '=')) {
-            hint = "Fai un solo passo: usa l'operazione inversa necessaria per lasciare x da sola, applicandola a entrambi i membri. Fermati prima di calcolare il valore finale di x.";
+        char attempt_expression[512]; attempt_expression[0] = 0;
+        long double attempt_expected = 0.0L;
+        int attempt_equation = attempt && *attempt &&
+            extract_linear_equation(attempt, attempt_expression, sizeof attempt_expression, &attempt_expected);
+        if (attempt_equation) {
+            hint = "Hai già scritto un'equazione con il termine in x. Il coefficiente di x non si sposta cambiando segno: quando hai kx = c, dividi entrambi i membri per lo stesso coefficiente non nullo k. Fermati prima del valore finale di x.";
         } else {
-            hint = "Fai un solo passo verso x isolata: applica la stessa operazione a entrambi i membri dell'equazione. Fermati prima di trovare il valore finale di x.";
+            hint = "Fai un solo passo: isola prima il termine che contiene x neutralizzando il termine costante con la stessa operazione su entrambi i membri. Fermati prima del valore finale di x.";
         }
     } else if (arithmetic && strchr(expression, '/') &&
                (strchr(expression, '+') || strchr(expression, '-'))) {
@@ -636,6 +640,8 @@ static void write_turn_classification(FILE *out, const char *text) {
     double confidence = 0.55;
     if (contains_ci_ascii(text, "hai sbagliato") || contains_ci_ascii(text, "sbagliato") || contains_ci_ascii(text, "questo e falso") || contains_ci_ascii(text, "non e vero")) {
         move = "correction"; signal = "correction_cue"; confidence = 0.94;
+    } else if ((starts_ci_ascii(text, "se invece ") || starts_ci_ascii(text, "e se invece ")) && strchr(text, '?')) {
+        move = "question"; signal = "contrastive_question"; confidence = 0.90;
     } else if (contains_ci_ascii(text, "cosa c'entra") || contains_ci_ascii(text, "che c'entra") || contains_ci_ascii(text, "non c'entra") || contains_ci_ascii(text, "non torna") || contains_ci_ascii(text, "eppure") || contains_ci_ascii(text, "invece") || contains_ci_ascii(text, "ma allora") || contains_ci_ascii(text, "allora perche") || contains_ci_ascii(text, "però") || contains_ci_ascii(text, "pero'")) {
         move = "counterexample"; signal = "counterexample_cue"; confidence = 0.93;
     } else if (contains_ci_ascii(text, "fammi un esempio") || contains_ci_ascii(text, "fai un esempio") ||

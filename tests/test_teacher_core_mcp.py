@@ -82,6 +82,8 @@ def test_core_mcp_real_tools_are_bounded_and_read_only():
         assert safe_hint["recognized"] is True
         assert safe_hint["kind"] == "linear_equation"
         assert safe_hint["allow_final_solution"] is False
+        assert "dividi entrambi i membri" in safe_hint["hint"]
+        assert "non si sposta cambiando segno" in safe_hint["hint"]
         assert "x = 7" not in safe_hint["hint"]
         assert "x=7" not in safe_hint["hint"]
 
@@ -111,6 +113,12 @@ def test_core_mcp_real_tools_are_bounded_and_read_only():
             {"text": "Spiegamelo con un esempio semplice senza formule."},
         ))
         assert explained_example["move"] == "request_example"
+        contrastive_question = _payload(session.call_tool(
+            "core.classify_turn",
+            {"text": "Se invece f'=0 in tutto un intervallo, posso concludere che è costante lì?"},
+        ))
+        assert contrastive_question["move"] == "question"
+        assert contrastive_question["signal"] == "contrastive_question"
         for objection in (
             "Ma a scuola mi dicono sempre passa e cambia segno.",
             "Ma un mazzo di carte ordinato ha meno entropia?",
