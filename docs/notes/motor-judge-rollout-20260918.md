@@ -34,3 +34,7 @@ Any startup failure, 19194 PID change or canary failure restores the old target/
 ## Current state
 
 The rollout code is prepared and tested only. No dedicated Judge symlink exists yet, no unit/env file has been changed live, and neither 19194 nor 19196 has been restarted by this release work.
+
+## Metadata safety check
+
+The first RC dry-run exposed a deployment-script issue before apply: the live env is `root:sibilla-cumana 0640`. An atomic rewrite that preserved mode but not uid/gid could make the service unable to read the env file. The rollout now records uid/gid/mode in rollback state and preserves them on both candidate install and rollback. This correction was test-covered before producing the next candidate.

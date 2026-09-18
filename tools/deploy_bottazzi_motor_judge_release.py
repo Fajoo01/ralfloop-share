@@ -162,15 +162,26 @@ def _backup_state(old_target: Path) -> Path:
     stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     root = JUDGE_ROOT / "rollbacks" / stamp
     root.mkdir(parents=True, exist_ok=False)
+    state: dict[str, Any] = {"old_target": str(old_target.resolve())}
+    for label, source in (("env", ENV_FILE), ("unit", UNIT_FILE)):
+        if not source.is_file():
+            continue
+        st = source.stat()
+        state[label] = {"uid": st.st_uid, "gid": st.st_gid, "mode": st.st_mode & 0o777}
+        shutil.copy2(source, root / source.name)
     (root / "state.json").write_text(
-        json.dumps({"old_target": str(old_target.resolve())}, indent=2) + "\n",
-        encoding="utf-8",
+        json.dumps(state, sort_keys=True, indent=2) + "\n", encoding="utf-8"
     )
-    if ENV_FILE.is_file():
-        shutil.copy2(ENV_FILE, root / "bottazzi-motor-judge.env")
-    if UNIT_FILE.is_file():
-        shutil.copy2(UNIT_FILE, root / "bottazzi-motor-judge.service")
     return root
+
+
+def _replace_text_preserve_metadata(path: Path, text: str) -> None:
+    st = path.stat()
+    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    temporary.write_text(text, encoding="utf-8")
+    os.chmod(temporary, st.st_mode & 0o777)
+    os.chown(temporary, st.st_uid, st.st_gid)
+    os.replace(temporary, path)
 
 
 def _install_candidate_config(release: Path) -> None:
@@ -178,14 +189,11 @@ def _install_candidate_config(release: Path) -> None:
     updated = _force_env_value(
         original, "BOTTAZZI_MOTOR_JUDGE_DENSE_READAHEAD", "0"
     )
-    temporary = ENV_FILE.with_name(f".{ENV_FILE.name}.tmp-{os.getpid()}")
-    temporary.write_text(updated, encoding="utf-8")
-    os.chmod(temporary, ENV_FILE.stat().st_mode & 0o777)
-    os.replace(temporary, ENV_FILE)
-    shutil.copy2(
-        release / "deploy/systemd/bottazzi-motor-judge.service",
-        UNIT_FILE,
-    )
+    _replace_text_preserve_metadata(ENV_FILE, updated)
+    unit_text = (
+        release / "deploy/systemd/bottazzi-motor-judge.service"
+    ).read_text(encoding="utf-8")
+    _replace_text_preserve_metadata(UNIT_FILE, unit_text)
 
 
 def _systemctl(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -280,12 +288,15 @@ def run_canaries(env: dict[str, str]) -> list[dict[str, Any]]:
 
 def _rollback(backup: Path, old_target: Path) -> None:
     _atomic_link(JUDGE_CURRENT, old_target)
-    env_backup = backup / "bottazzi-motor-judge.env"
-    unit_backup = backup / "bottazzi-motor-judge.service"
-    if env_backup.is_file():
-        shutil.copy2(env_backup, ENV_FILE)
-    if unit_backup.is_file():
-        shutil.copy2(unit_backup, UNIT_FILE)
+    state = json.loads((backup / "state.json").read_text(encoding="utf-8"))
+    for label, destination in (("env", ENV_FILE), ("unit", UNIT_FILE)):
+        source = backup / destination.name
+        metadata = state.get(label)
+        if not source.is_file() or not isinstance(metadata, dict):
+            continue
+        shutil.copy2(source, destination)
+        os.chmod(destination, int(metadata["mode"]))
+        os.chown(destination, int(metadata["uid"]), int(metadata["gid"]))
     _systemctl("daemon-reload")
     _systemctl("restart", SERVICE)
     if not _wait_service_active():

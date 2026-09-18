@@ -118,3 +118,19 @@ def test_apply_rolls_back_when_canary_fails(tmp_path, monkeypatch):
     assert result["rolled_back"] is True
     assert rolled_back["value"] is True
     assert result["production_19194_unchanged"] is True
+
+
+def test_atomic_text_replace_preserves_metadata(tmp_path, monkeypatch):
+    target = tmp_path / "judge.env"
+    target.write_text("A=1\n", encoding="utf-8")
+    target.chmod(0o640)
+    st = target.stat()
+    calls = []
+    monkeypatch.setattr(
+        rollout.os, "chown",
+        lambda path, uid, gid: calls.append((Path(path).name, uid, gid)),
+    )
+    rollout._replace_text_preserve_metadata(target, "A=2\n")
+    assert target.read_text(encoding="utf-8") == "A=2\n"
+    assert target.stat().st_mode & 0o777 == 0o640
+    assert calls == [(f".{target.name}.tmp-{rollout.os.getpid()}", st.st_uid, st.st_gid)]
