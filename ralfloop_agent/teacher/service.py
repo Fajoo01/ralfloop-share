@@ -4,6 +4,7 @@ import difflib
 import json
 import os
 import re
+from collections import Counter
 from typing import Any, Callable, Iterator
 from urllib.parse import urlparse
 
@@ -121,6 +122,9 @@ def _concept_term(word: str) -> str:
         (("indipenden",), "indipenden"),
         (("incompatibil",), "incompatibil"),
         (("costant",), "costant"),
+        (("cambi",), "cambi"),
+        (("andar", "andat"), "and"),
+        (("somm",), "somm"),
     )
     for prefixes, stem in groups:
         if any(value.startswith(prefix) for prefix in prefixes):
@@ -145,27 +149,48 @@ def _targeted_concept_text(
     *,
     topic: str = "",
     max_sentences: int = 2,
+    previous_response: str = "",
 ) -> tuple[str, int]:
     sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", text.strip()) if part.strip()]
     if not sentences:
         return text.strip(), 0
     query_terms = _concept_terms(query) - _concept_terms(topic)
-    ranked: list[tuple[int, int, str]] = []
+    sentence_terms = [_concept_terms(sentence) for sentence in sentences]
+    query_words = re.findall(r"[A-Za-zÀ-ÿ0-9']+", query.casefold())
+    query_bigrams = set(zip(query_words, query_words[1:]))
+    document_frequency = Counter(
+        term for terms in sentence_terms for term in (query_terms & terms)
+    )
+    ranked: list[tuple[int, float, int, str]] = []
     wants_reason = query.casefold().lstrip().startswith(("perché", "perche"))
     for index, sentence in enumerate(sentences):
-        score = len(query_terms & _concept_terms(sentence))
+        overlap = query_terms & sentence_terms[index]
+        # Prefer terms that identify this specific follow-up rather than generic
+        # topic vocabulary repeated in several evidence sentences.
+        score = sum(3 if document_frequency[term] == 1 else 1 for term in overlap)
+        sentence_words = re.findall(r"[A-Za-zÀ-ÿ0-9']+", sentence.casefold())
+        sentence_bigrams = set(zip(sentence_words, sentence_words[1:]))
+        matching_bigrams = query_bigrams & sentence_bigrams
+        relevant_bigrams = {
+            bigram for bigram in matching_bigrams
+            if any(_concept_term(word) in query_terms for word in bigram if len(word) >= 4)
+        }
+        score += 2 * len(relevant_bigrams)
         if wants_reason and any(cue in sentence.casefold() for cue in ("perché", "perche", "per questo", "perciò", "quindi")):
             score += 2
-        ranked.append((score, index, sentence))
-    best_score = max(score for score, _, _ in ranked)
+        novelty = 1.0 - _response_similarity(previous_response, sentence)
+        ranked.append((score, novelty, index, sentence))
+    best_score = max(score for score, _, _, _ in ranked)
     if best_score <= 0:
+        if previous_response and len(sentences) > 1:
+            return max(sentences, key=lambda sentence: 1.0 - _response_similarity(previous_response, sentence)), 0
         return sentences[0], 0
     selected = sorted(
         (item for item in ranked if item[0] > 0),
-        key=lambda item: (-item[0], item[1]),
+        key=lambda item: (-item[0], -item[1], item[2]),
     )[:max_sentences]
-    selected.sort(key=lambda item: item[1])
-    return " ".join(sentence for _, _, sentence in selected), best_score
+    selected.sort(key=lambda item: item[2])
+    return " ".join(sentence for _, _, _, sentence in selected), best_score
 
 
 def _concept_example(text: str) -> str:
@@ -182,6 +207,21 @@ def _last_tutor_response(history: list[dict[str, Any]]) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+def _grounded_abstention_response(history: list[dict[str, Any]]) -> str:
+    primary = (
+        "Nel materiale fornito non c'è abbastanza informazione per "
+        "attribuire questa idea a un autore, filosofo o teoria specifica. "
+        "Posso restare su ciò che l'estratto sostiene esplicitamente."
+    )
+    previous = _last_tutor_response(history)
+    if previous and _response_similarity(previous, primary) >= 0.78:
+        return (
+            "L'estratto non indica quale filosofo, autore o teoria sia coinvolto: "
+            "identificarlo richiederebbe aggiungere informazioni esterne al testo."
+        )
+    return primary
 
 
 def _response_similarity(previous: str, current: str) -> float:
@@ -207,6 +247,87 @@ def _repetition_fallback(student_move: str) -> str:
         "La risposta precedente non affrontava abbastanza il nuovo punto. "
         "Non voglio ripeterla: indicami il passaggio preciso a cui ti riferisci e rispondo solo a quello."
     )
+
+
+def _needs_reference_clarification(text: str) -> bool:
+    low = " ".join(text.casefold().split())
+    if not low or len(low.split()) > 12:
+        return False
+    if not re.search(r"\b(?:quest[oaie]|quell[oaie])\b", low):
+        return False
+    if re.search(r"\d|[=+*/÷()]", low):
+        return False
+    # A leading minus sign with no numeral still does not identify the expression.
+    return True
+
+
+def _brevity_request(text: str) -> str:
+    low = " ".join(text.casefold().split())
+    if "in una frase" in low or "una sola frase" in low:
+        return "one_sentence"
+    if any(cue in low for cue in ("poche parole", "molto breve", "brevissimo", "brevemente")):
+        return "short"
+    return ""
+
+
+def _trim_response(text: str, limit: int) -> str:
+    text = " ".join(text.split()).strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rstrip()
+    boundary = max(cut.rfind(". "), cut.rfind("? "), cut.rfind("! "))
+    if boundary >= max(80, limit // 2):
+        return cut[: boundary + 1].strip()
+    return cut.rsplit(" ", 1)[0].rstrip(" ,;:") + "."
+
+
+def _student_facing_guard(text: str) -> str:
+    value = " ".join(text.split()).strip()
+    low = value.casefold()
+    prefix = "non dire che "
+    if low.startswith(prefix):
+        return "Non è corretto dire che " + value[len(prefix):]
+    prefix = "non presentare "
+    if low.startswith(prefix):
+        return "Non è corretto presentare " + value[len(prefix):]
+    prefix = "non descrivere "
+    if low.startswith(prefix):
+        return "Non è corretto descrivere " + value[len(prefix):]
+    return value
+
+
+def _grounded_source_material(history: list[dict[str, Any]]) -> str:
+    for item in history:
+        request = item.get("student_request")
+        if not isinstance(request, dict):
+            continue
+        material = request.get("material")
+        if isinstance(material, str) and material.strip():
+            return material.strip()
+    return ""
+
+
+def _grounded_attribution_unsupported(question: str, material: str) -> bool:
+    if not question.strip() or not material.strip():
+        return False
+    low = question.casefold()
+    cues = (
+        "sicuramente", "sta parlando di", "parla di", "si riferisce a",
+        "quale filosofo", "quale autore", "chi intende", "chi sarebbe",
+    )
+    if not any(cue in low for cue in cues):
+        return False
+    generic = {
+        "autore", "parla", "parlando", "riferisce", "sicuramente", "intende",
+        "quale", "quali", "allora", "sarebbe", "testo", "estratto",
+    }
+    query_terms = _concept_terms(question) - generic
+    material_terms = _concept_terms(material)
+    unsupported = {
+        term for term in query_terms
+        if len(term) >= 5 and term not in material_terms
+    }
+    return bool(unsupported)
 
 
 def _student_move(core: Any | None, payload: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
@@ -524,27 +645,35 @@ class TeacherService:
                 else f"La risposta non è corretta. Il risultato dell'espressione è {evidence.get('expected')}."
             )
         else:
-            guidance = ""
-            hint_call = getattr(self.deterministic_core, "math_hint", None)
-            if callable(hint_call):
-                try:
-                    hint_evidence = hint_call(exercise, student_answer)
-                except Exception:
-                    hint_evidence = None
-                if isinstance(hint_evidence, dict) and hint_evidence.get("recognized") is True:
-                    guidance = str(hint_evidence.get("hint") or "").strip()
             response = "La risposta non è corretta."
-            if guidance:
-                response += " " + guidance
-            elif kind == "linear_equation":
+            if kind == "linear_equation":
                 response += (
-                    " Verifica il valore sostituendolo nell'equazione originale, "
-                    "oppure isola x applicando la stessa operazione a entrambi i membri."
+                    " Controlla il valore proposto sostituendolo nell'equazione originale: "
+                    "i due membri non coincidono. Poi riprendi dall'ultimo passaggio corretto "
+                    "applicando la stessa operazione a entrambi i membri."
+                )
+            elif kind == "percent_discount":
+                response += (
+                    " Controlla separatamente l'importo dello sconto usando la percentuale "
+                    "e il prezzo iniziale; poi sottrai quello sconto dal prezzo di partenza. "
+                    "Fermati prima del prezzo finale."
                 )
             else:
-                response += (
-                    " Ricontrolla il prossimo passaggio senza cambiare il risultato a caso."
-                )
+                guidance = ""
+                hint_call = getattr(self.deterministic_core, "math_hint", None)
+                if callable(hint_call):
+                    try:
+                        hint_evidence = hint_call(exercise, student_answer)
+                    except Exception:
+                        hint_evidence = None
+                    if isinstance(hint_evidence, dict) and hint_evidence.get("recognized") is True:
+                        guidance = str(hint_evidence.get("hint") or "").strip()
+                if guidance:
+                    response += " " + guidance
+                else:
+                    response += (
+                        " Ricontrolla il prossimo passaggio senza cambiare il risultato a caso."
+                    )
         output = {
             "ok": True,
             "action": "check_answer",
@@ -581,6 +710,75 @@ class TeacherService:
             self.deterministic_core, payload
         )
         student_text = _student_turn(payload)
+        if session.get("topic") == "Frazioni equivalenti":
+            relation_call = getattr(self.deterministic_core, "fraction_relation", None)
+            if callable(relation_call):
+                try:
+                    relation = relation_call(student_text)
+                except Exception:
+                    relation = None
+                if isinstance(relation, dict) and relation.get("recognized") is True:
+                    left = relation.get("left") or {}
+                    right = relation.get("right") or {}
+                    left_text = f"{left.get('numerator')}/{left.get('denominator')}"
+                    right_text = f"{right.get('numerator')}/{right.get('denominator')}"
+                    equivalent = bool(relation.get("equivalent"))
+                    try:
+                        cross_left = int(left.get("numerator")) * int(right.get("denominator"))
+                        cross_right = int(right.get("numerator")) * int(left.get("denominator"))
+                    except (TypeError, ValueError):
+                        cross_left = cross_right = None
+                    if cross_left is not None and cross_right is not None:
+                        comparison = (
+                            f"{left.get('numerator')}×{right.get('denominator')}={cross_left} e "
+                            f"{right.get('numerator')}×{left.get('denominator')}={cross_right}"
+                        )
+                        response = (
+                            f"Sì: {left_text} e {right_text} sono equivalenti; {comparison}."
+                            if equivalent
+                            else f"No: {left_text} e {right_text} non sono equivalenti; {comparison}, quindi i prodotti incrociati sono diversi."
+                        )
+                    else:
+                        response = (
+                            f"Sì: {left_text} e {right_text} sono equivalenti perché i prodotti incrociati coincidono."
+                            if equivalent
+                            else f"No: {left_text} e {right_text} non sono equivalenti perché i prodotti incrociati non coincidono."
+                        )
+                    student = self.store.student(session["student_id"])
+                    learner = profile_from_student(student)
+                    decision = select_pedagogy(
+                        learner,
+                        action=action,
+                        subject=session["subject"],
+                        topic=session["topic"],
+                        student_move=student_move,
+                    )
+                    if decision.micro_check:
+                        history = _history_context(self.store, session_id)
+                        if _last_tutor_response(history):
+                            response += " Quale confronto tra i due prodotti ti fa decidere?"
+                        else:
+                            response += " Vuoi provare a verificare la prossima coppia con lo stesso controllo?"
+                    output = {
+                        "ok": True,
+                        "action": action,
+                        "response": response,
+                        "source_mode": "deterministic_core",
+                        "deterministic": True,
+                        "core_evidence": relation,
+                        "pedagogy": decision.model_dump(mode="json"),
+                    }
+                    self.store.event(session_id, action, {
+                        "response": response,
+                        "request": _bounded_request(payload),
+                        "source_mode": "deterministic_core",
+                        "strategy": decision.strategy.value,
+                        "student_move": student_move,
+                        "mode": decision.mode.value,
+                        "model_path": "none",
+                        "core_tool": "core.fraction_relation",
+                    })
+                    return output
         evidence = _concept_evidence(
             self.deterministic_core, session.get("topic", "")
         )
@@ -590,8 +788,15 @@ class TeacherService:
         misconception = str(evidence.get("misconceptions") or "").strip()
         if not facts:
             return None
+        brevity = _brevity_request(student_text)
+        history = _history_context(self.store, session_id)
+        previous_response = _last_tutor_response(history)
         targeted_facts, fact_score = _targeted_concept_text(
-            facts, student_text, topic=session.get("topic", ""), max_sentences=2
+            facts,
+            student_text,
+            topic=session.get("topic", ""),
+            max_sentences=1 if (brevity or previous_response) else 2,
+            previous_response=previous_response,
         )
         targeted_guard, guard_score = _targeted_concept_text(
             misconception, student_text, topic=session.get("topic", ""), max_sentences=1
@@ -623,35 +828,62 @@ class TeacherService:
             student_move=effective_move,
         )
 
-        history = _history_context(self.store, session_id)
-        if effective_move in {"counterexample", "correction"}:
-            lead = "La tua obiezione va verificata sul criterio corretto."
-        elif effective_move == "claim_check":
-            lead = "Controlliamo la regola o l'ipotesi che stai proponendo."
-        elif effective_move == "confusion":
-            lead = "Ripartiamo da un solo punto sicuro."
-        elif effective_move == "request_example":
-            lead = "Cambiamo strada con un esempio concreto."
+        if brevity == "one_sentence":
+            parts = [targeted_facts]
+        elif decision.mode is SessionMode.LITERACY_L2:
+            parts = [targeted_facts]
+            if decision.micro_check:
+                parts.append("Come lo diresti adesso?")
         else:
-            lead = "Per la tua domanda, il punto rilevante è questo."
-        parts = [lead, targeted_facts]
-        if targeted_guard and guard_score > 0 and effective_move != "question":
-            parts.append("Attenzione: " + targeted_guard)
-        if history and effective_move in {"counterexample", "correction", "claim_check"}:
-            parts.append(
-                "Se prima avevo lasciato intendere il contrario, quella "
-                "spiegazione era troppo semplificata e va corretta."
-            )
-        if decision.micro_check:
-            if effective_move in {"counterexample", "correction", "claim_check"}:
-                parts.append("Qual è la regola corretta in una frase?")
+            if effective_move in {"counterexample", "correction"}:
+                lead = "Il punto del tuo esempio è questo."
+            elif effective_move == "claim_check":
+                lead = "Controlliamo questa idea."
             elif effective_move == "confusion":
-                parts.append("Quale parola o passaggio di questa frase non è chiaro?")
+                lead = "Ripartiamo da un solo punto sicuro."
+            elif effective_move == "request_example":
+                lead = "Cambiamo strada con un esempio concreto."
             else:
-                parts.append("Ti torna questo passaggio?")
-        response = " ".join(parts)
-        if len(response) > decision.max_response_chars:
-            response = response[: decision.max_response_chars].rsplit(" ", 1)[0] + "."
+                lead = "Il punto rilevante è questo."
+            parts = [lead, targeted_facts]
+            if targeted_guard and guard_score > 0 and effective_move in {"counterexample", "correction", "claim_check"}:
+                parts.append(_student_facing_guard(targeted_guard))
+            if decision.micro_check:
+                if brevity == "short":
+                    parts.append("Ti torna?")
+                elif effective_move in {"counterexample", "correction", "claim_check"}:
+                    parts.append("Qual è la regola corretta in una frase?")
+                elif effective_move == "confusion":
+                    parts.append("Quale parola o passaggio resta poco chiaro?")
+                else:
+                    parts.append("Ti torna questo passaggio?")
+        response = _trim_response(" ".join(parts), decision.max_response_chars)
+        if previous_response and _response_similarity(previous_response, response) >= 0.78:
+            if decision.mode is SessionMode.LITERACY_L2:
+                response = _trim_response(
+                    targeted_facts + " Ripeti solo la forma corretta.",
+                    decision.max_response_chars,
+                )
+            elif effective_move in {"counterexample", "correction"}:
+                response = _trim_response(
+                    targeted_facts + " Nel tuo esempio, quale dettaglio cambia la conclusione?",
+                    decision.max_response_chars,
+                )
+            elif effective_move == "claim_check":
+                response = _trim_response(
+                    targeted_facts + " Usa questa verifica sul caso che hai appena proposto.",
+                    decision.max_response_chars,
+                )
+            elif effective_move == "confusion":
+                response = _trim_response(
+                    targeted_facts + " Dimmi solo quale parola resta poco chiara.",
+                    decision.max_response_chars,
+                )
+            else:
+                response = _trim_response(
+                    targeted_facts + " Questo risponde al punto nuovo?",
+                    decision.max_response_chars,
+                )
 
         output = {
             "ok": True,
@@ -700,6 +932,26 @@ class TeacherService:
         response = str(evidence.get("hint") or "").strip()
         if evidence.get("recognized") is not True or not response:
             return None
+        history = _history_context(self.store, session_id)
+        previous_response = _last_tutor_response(history)
+        if previous_response and _response_similarity(previous_response, response) >= 0.78:
+            kind = str(evidence.get("kind") or "")
+            if kind == "percent_discount":
+                response = (
+                    "Cambio strada: calcola prima l'importo dello sconto con la percentuale "
+                    "e il prezzo iniziale, poi sottrai quella quantità dal prezzo di partenza. "
+                    "Fermati prima del risultato finale."
+                )
+            elif kind == "linear_equation":
+                response = (
+                    "Usa il passaggio che hai già ottenuto: se hai kx=c, dividi entrambi i membri "
+                    "per lo stesso coefficiente k e fermati prima di scrivere il valore finale di x."
+                )
+            elif "/" in exercise and any(op in exercise for op in ("+", "-")):
+                response = (
+                    "Non sommare direttamente sopra e sotto: scegli prima un denominatore comune, "
+                    "riscrivi le frazioni in parti della stessa grandezza e fermati prima del risultato."
+                )
         _student, _learner, decision = self._decision_for(session, "hint")
         output = {
             "ok": True,
@@ -785,7 +1037,7 @@ class TeacherService:
         _student, _learner, decision = self._decision_for(
             session, "summarize_material", material_supplied=True
         )
-        if decision.mode in {SessionMode.LITERACY_L2, SessionMode.SCHOLAR}:
+        if decision.mode is SessionMode.LITERACY_L2:
             return None
         if self._summary_requires_generation(objective):
             return None
@@ -814,6 +1066,39 @@ class TeacherService:
         })
         return output
 
+    def _deterministic_policy_reply(
+        self,
+        session_id: str,
+        action: str,
+        payload: dict[str, Any],
+        response: str,
+        *,
+        source_mode: str = "deterministic_policy",
+        core_tool: str = "policy.guard",
+        student_move: str = "clarification",
+    ) -> dict[str, Any]:
+        session = self.store.session(session_id)
+        _student, _learner, decision = self._decision_for(session, action)
+        output = {
+            "ok": True,
+            "action": action,
+            "response": response,
+            "source_mode": source_mode,
+            "deterministic": True,
+            "pedagogy": decision.model_dump(mode="json"),
+        }
+        self.store.event(session_id, action, {
+            "response": response,
+            "request": _bounded_request(payload),
+            "source_mode": source_mode,
+            "strategy": decision.strategy.value,
+            "student_move": student_move,
+            "mode": decision.mode.value,
+            "model_path": "none",
+            "core_tool": core_tool,
+        })
+        return output
+
     def explain(
         self,
         session_id: str,
@@ -828,6 +1113,23 @@ class TeacherService:
                 "Termina con una breve domanda di verifica."
             ),
         }
+        if _needs_reference_clarification(question):
+            low_question = " ".join(question.casefold().split())
+            clarification = (
+                "Scrivi il numero o l'espressione completa, compreso il segno meno, "
+                "così posso spiegare proprio quel caso."
+                if "meno" in low_question
+                else "Quale parola, espressione, azione o passaggio intendi? "
+                     "Scrivilo o descrivilo con poche parole, così non devo indovinare."
+            )
+            return self._deterministic_policy_reply(
+                session_id,
+                "explain",
+                payload,
+                clarification,
+                core_tool="policy.reference_clarification",
+                student_move="question",
+            )
         deterministic = self._core_concept_reply(
             session_id, "explain", payload
         )
@@ -853,6 +1155,15 @@ class TeacherService:
                 "un esempio concreto o un'analogia utile."
             ),
         }
+        if _needs_reference_clarification(concept):
+            return self._deterministic_policy_reply(
+                session_id,
+                "explain_differently",
+                payload,
+                "Quale parola, espressione o passaggio intendi? Copialo qui "
+                "e lo rispiego senza indovinare il riferimento.",
+                core_tool="policy.reference_clarification",
+            )
         deterministic = self._core_concept_reply(
             session_id, "explain_differently", payload
         )
@@ -1119,6 +1430,18 @@ class TeacherService:
             "context": context,
             "instruction": "Spiega il concetto in modo adatto allo studente. Se la domanda contiene un'obiezione o un controesempio, affrontalo prima della spiegazione generale. Termina con una breve domanda di verifica.",
         }
+        if _needs_reference_clarification(question):
+            deterministic = self._deterministic_policy_reply(
+                session_id,
+                "explain",
+                payload,
+                "Quale parola, espressione, azione o passaggio intendi? "
+                "Scrivilo o descrivilo con poche parole, così non devo indovinare.",
+                core_tool="policy.reference_clarification",
+            )
+            yield {"type": "delta", "text": deterministic["response"]}
+            yield {"type": "done", "result": deterministic}
+            return
         deterministic = self._core_concept_reply(
             session_id, "explain", payload
         )
@@ -1138,6 +1461,18 @@ class TeacherService:
             "context": context,
             "instruction": "Rispiega con un approccio diverso. Se lo studente sta contestando una regola, valuta prima il suo controesempio e correggi eventuali semplificazioni; poi usa un esempio concreto o un'analogia utile.",
         }
+        if _needs_reference_clarification(concept):
+            deterministic = self._deterministic_policy_reply(
+                session_id,
+                "explain_differently",
+                payload,
+                "Quale parola, espressione o passaggio intendi? Copialo qui "
+                "e lo rispiego senza indovinare il riferimento.",
+                core_tool="policy.reference_clarification",
+            )
+            yield {"type": "delta", "text": deterministic["response"]}
+            yield {"type": "done", "result": deterministic}
+            return
         deterministic = self._core_concept_reply(
             session_id, "explain_differently", payload
         )
@@ -1192,6 +1527,25 @@ class TeacherService:
             show_solution=False,
             student_move=student_move,
         )
+        grounded_material = _grounded_source_material(history)
+        if (
+            action in {"explain", "explain_differently"}
+            and grounded_material
+            and _grounded_attribution_unsupported(
+                _student_turn(payload), grounded_material
+            )
+        ):
+            result = self._deterministic_policy_reply(
+                session_id,
+                action,
+                payload,
+                _grounded_abstention_response(history),
+                source_mode="provided_material",
+                core_tool="policy.grounded_abstention",
+            )
+            yield {"type": "delta", "text": result["response"]}
+            yield {"type": "done", "result": result}
+            return
         context = {
             "action": action,
             "student": {
@@ -1312,6 +1666,34 @@ class TeacherService:
             show_solution=bool(payload.get("show_solution", False)),
             student_move=student_move,
         )
+        grounded_material = _grounded_source_material(history)
+        if (
+            action in {"explain", "explain_differently"}
+            and grounded_material
+            and _grounded_attribution_unsupported(
+                _student_turn(payload), grounded_material
+            )
+        ):
+            response = _grounded_abstention_response(history)
+            output = {
+                "ok": True,
+                "action": action,
+                "response": response,
+                "source_mode": "provided_material",
+                "deterministic": True,
+                "pedagogy": decision.model_dump(mode="json"),
+            }
+            self.store.event(session_id, action, {
+                "response": response,
+                "request": _bounded_request(payload),
+                "source_mode": "provided_material",
+                "strategy": decision.strategy.value,
+                "student_move": student_move,
+                "mode": decision.mode.value,
+                "model_path": "none",
+                "core_tool": "policy.grounded_abstention",
+            })
+            return output
         context = {
             "action": action,
             "student": {

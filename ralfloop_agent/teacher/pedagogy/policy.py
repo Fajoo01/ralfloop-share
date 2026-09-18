@@ -110,12 +110,14 @@ def _mode(profile: LearnerProfile, action: str, material_supplied: bool) -> Sess
 
 def _strategy(action: str, recent_errors: Iterable[str], mode: SessionMode, student_move: str = "") -> PedagogyStrategy:
     errors = tuple(recent_errors)
-    if student_move in {"counterexample", "correction", "claim_check"} and action in {"explain", "explain_differently"}:
+    if student_move in {"counterexample", "correction"} and action in {"explain", "explain_differently"}:
         return PedagogyStrategy.ERROR_ANALYSIS
     if mode is SessionMode.LITERACY_L2:
         return PedagogyStrategy.ORAL_REHEARSAL
     if mode is SessionMode.SCHOLAR and action in {"explain", "summarize_material"}:
         return PedagogyStrategy.ARGUMENT_CRITIQUE
+    if student_move == "claim_check" and action in {"explain", "explain_differently"}:
+        return PedagogyStrategy.ERROR_ANALYSIS
     if action == "hint":
         return PedagogyStrategy.FADED_WORKED_EXAMPLE
     if action == "explain_differently":

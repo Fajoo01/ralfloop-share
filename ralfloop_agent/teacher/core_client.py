@@ -11,6 +11,7 @@ TOOLS = {
     "core.study_plan",
     "core.math_check",
     "core.math_hint",
+    "core.fraction_relation",
     "core.classify_turn",
     "core.concept_evidence",
 }
@@ -89,6 +90,15 @@ class TeacherCoreClient:
                 session,
                 "core.math_hint",
                 {"text": text[:16000], "attempt": attempt[:512]},
+            )
+
+    def fraction_relation(self, text: str) -> dict[str, Any]:
+        with self._connection() as session:
+            self._surface(session)
+            return self._call(
+                session,
+                "core.fraction_relation",
+                {"text": text[:2000]},
             )
 
     def classify_turn(self, text: str) -> dict[str, Any]:

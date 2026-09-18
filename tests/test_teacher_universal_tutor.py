@@ -77,6 +77,32 @@ def test_scholar_mode_routes_to_deep_grounded_path():
     assert decision.max_response_chars >= 6000
 
 
+def test_claim_check_preserves_l2_access_strategy():
+    decision = select_pedagogy(
+        low_literacy_profile(),
+        action="explain",
+        subject="italiano L2",
+        topic="Azioni quotidiane",
+        student_move="claim_check",
+    )
+    assert decision.mode is SessionMode.LITERACY_L2
+    assert decision.strategy.value == "oral_rehearsal"
+    assert decision.access.audio_first is True
+
+
+def test_claim_check_preserves_scholar_argument_critique():
+    decision = select_pedagogy(
+        LearnerProfile(education_level=EducationLevel.MASTER),
+        action="explain",
+        subject="analisi matematica",
+        topic="Derivata e monotonia",
+        student_move="claim_check",
+    )
+    assert decision.mode is SessionMode.SCHOLAR
+    assert decision.strategy.value == "argument_critique"
+    assert decision.model_path.value == "deep"
+
+
 def test_bounded_mastery_weights_transfer_more_than_recognition():
     start = KnowledgeState(component="fractions.equivalence", probability=0.2)
     recognition = update_knowledge_state(start, correct=True, evidence_type=EvidenceType.RECOGNITION, now=100)
@@ -125,8 +151,8 @@ def test_service_persists_profile_and_injects_deterministic_policy(tmp_path):
     service = TeacherService(store, model_call=model)
     profile = low_literacy_profile().model_dump(mode="json")
     student = service.login("CARD-L2", "adulto", "", learner_profile=profile)["student"]
-    session = service.start_session(student["student_id"], "italiano L2", "azioni quotidiane")["session"]
-    result = service.explain(session["session_id"], "Come si dice questa azione?")
+    session = service.start_session(student["student_id"], "italiano L2", "saluti quotidiani")["session"]
+    result = service.explain(session["session_id"], "Come saluto il vicino al mattino?")
 
     assert result["pedagogy"]["mode"] == "literacy_l2"
     assert captured["payload"]["student"]["learner_profile"]["language_profile"]["reading"] == "pre-A1"
@@ -135,6 +161,24 @@ def test_service_persists_profile_and_injects_deterministic_policy(tmp_path):
 
     persisted = service.login("CARD-L2")["student"]
     assert persisted["preferences"]["learner_profile"]["education_level"] == "emergent_literacy"
+
+
+def test_l2_vague_reference_clarifies_without_math_example(tmp_path):
+    def model(*_):
+        raise AssertionError("LLM should not guess a vague reference")
+
+    store = TeacherStore(tmp_path / "teacher.sqlite3")
+    service = TeacherService(store, model_call=model)
+    profile = low_literacy_profile().model_dump(mode="json")
+    student = service.login("CARD-L2-VAGUE", "adulto", "", learner_profile=profile)["student"]
+    session = service.start_session(student["student_id"], "italiano L2", "azioni quotidiane")["session"]
+
+    result = service.explain(session["session_id"], "Come si dice questa azione?")
+
+    assert result["deterministic"] is True
+    assert result["pedagogy"]["mode"] == "literacy_l2"
+    assert "quale" in result["response"].casefold()
+    assert "-3 - 5" not in result["response"]
 
 
 
@@ -212,6 +256,43 @@ def test_claim_shaped_turn_uses_curated_evidence_without_llm(tmp_path):
     assert result["pedagogy"]["strategy"] == "error_analysis"
     assert "inclinazione" in result["response"]
     assert "distanza Terra-Sole" in result["response"]
+
+
+def test_counterexample_targeting_prefers_specific_rare_terms(tmp_path):
+    class Core:
+        def classify_turn(self, text):
+            return {"ok": True, "move": "counterexample", "signal": "counterexample_cue", "confidence": 0.93}
+
+        def concept_evidence(self, topic):
+            return {
+                "ok": True,
+                "found": True,
+                "topic": topic,
+                "evidence": (
+                    "Un fazzoletto è un solido flessibile che può adattarsi a un contenitore. "
+                    "Un liquido fluisce e assume la forma del recipiente. "
+                    "La sabbia è formata da granuli solidi che possono scorrere collettivamente."
+                ),
+                "misconceptions": "Scorrere o prendere la forma del contenitore non basta per essere un liquido.",
+            }
+
+    def model(*_):
+        raise AssertionError("specific counterexample should use curated evidence")
+
+    service = TeacherService(
+        TeacherStore(tmp_path / "specific-target.sqlite3"),
+        model_call=model,
+        deterministic_core=Core(),
+    )
+    student = service.login("SPECIFIC", "middle", "2")["student"]
+    session = service.start_session(student["student_id"], "scienze", "Gli stati dell'acqua")["session"]
+    result = service.explain(
+        session["session_id"],
+        "E la sabbia allora scorre e prende la forma del barattolo: è un liquido?",
+    )
+    assert result["deterministic"] is True
+    assert "sabbia" in result["response"].casefold()
+    assert "granuli" in result["response"].casefold()
 
 
 def test_open_question_uses_targeted_curated_sentence_when_supported(tmp_path):
@@ -501,7 +582,7 @@ def test_service_injects_bounded_multi_turn_history_and_source_material(tmp_path
         session["session_id"], material, "Riassumi senza aggiunte."
     )
     service.explain(
-        session["session_id"], "Quale filosofo intende allora?"
+        session["session_id"], "Quale criterio usa il testo per giustificare una regola?"
     )
 
     assert len(calls) == 2
@@ -512,6 +593,113 @@ def test_service_injects_bounded_multi_turn_history_and_source_material(tmp_path
     assert history[0]["student_request"]["material"] == material
     assert "eccezioni dichiarate" in history[0]["tutor_response"]
     assert calls[1]["pedagogy"]["require_grounding"] is True
+
+
+def test_grounded_material_abstains_from_unsupported_attribution(tmp_path):
+    calls = []
+
+    def model(system_prompt, user_prompt):
+        calls.append(json.loads(user_prompt))
+        return {"response": "Il testo dice che la regola richiede eccezioni dichiarate."}
+
+    service = TeacherService(
+        TeacherStore(tmp_path / "grounded-abstention.sqlite3"),
+        model_call=model,
+    )
+    student = service.login("GROUND-ABSTAIN", "university", "2")["student"]
+    session = service.start_session(
+        student["student_id"], "filosofia", "Argomentazione da testo fornito"
+    )["session"]
+    material = (
+        "Nel testo l'autore sostiene che una regola è giustificata soltanto "
+        "quando le sue eccezioni sono dichiarate."
+    )
+    service.summarize_material(
+        session["session_id"], material, "Riassumi senza aggiunte."
+    )
+    result = service.explain(
+        session["session_id"], "Quale filosofo intende allora?"
+    )
+
+    assert len(calls) == 1
+    assert result["deterministic"] is True
+    assert result["source_mode"] == "provided_material"
+    assert "non c'è abbastanza informazione" in result["response"].casefold()
+
+
+def test_deterministic_followup_prefers_new_relevant_evidence(tmp_path):
+    class Core:
+        def classify_turn(self, text):
+            move = "counterexample" if "macchina" in text else "question"
+            return {"ok": True, "move": move, "signal": "test", "confidence": 0.9}
+
+        def concept_evidence(self, topic):
+            return {
+                "ok": True, "found": True, "topic": topic,
+                "evidence": (
+                    "Se la velocità è costante, l'accelerazione è zero e la forza risultante è zero. "
+                    "In macchina la trazione e le resistenze si bilanciano: la forza risultante resta zero."
+                ),
+                "misconceptions": "Non confondere una singola forza con la forza risultante.",
+            }
+
+    def model(*_):
+        raise AssertionError("curated follow-up must not call the LLM")
+
+    service = TeacherService(TeacherStore(tmp_path / "novel-evidence.sqlite3"), model_call=model, deterministic_core=Core())
+    student = service.login("NOVEL", "middle", "2")["student"]
+    session = service.start_session(student["student_id"], "fisica", "Forza, accelerazione e velocità")["session"]
+    first = service.explain(session["session_id"], "Se la velocità è costante, che cosa dice F=ma?")
+    second = service.explain(session["session_id"], "Ma in macchina la trazione non sparisce: come funziona?")
+
+    assert first["deterministic"] is True and second["deterministic"] is True
+    assert second["response"] != first["response"]
+    assert "resistenze" in second["response"]
+
+
+def test_repeated_grounded_abstention_changes_wording_without_ungrounding(tmp_path):
+    calls = []
+
+    def model(system_prompt, user_prompt):
+        calls.append(json.loads(user_prompt))
+        return {"response": "Il testo parla soltanto di una regola e delle sue eccezioni."}
+
+    service = TeacherService(TeacherStore(tmp_path / "ground-repeat.sqlite3"), model_call=model)
+    student = service.login("GROUND-REPEAT", "university", "2")["student"]
+    session = service.start_session(student["student_id"], "filosofia", "Argomentazione da testo fornito")["session"]
+    material = "Nel testo l'autore sostiene che una regola è giustificata soltanto quando le sue eccezioni sono dichiarate."
+    service.summarize_material(session["session_id"], material, "Riassumi senza aggiunte.")
+    first = service.explain(session["session_id"], "Quindi sta parlando sicuramente di Popper?")
+    second = service.explain(session["session_id"], "Quale filosofo intende allora?")
+
+    assert len(calls) == 1
+    assert first["source_mode"] == second["source_mode"] == "provided_material"
+    assert first["response"] != second["response"]
+    assert "informazioni esterne" in second["response"].casefold()
+
+
+def test_repeated_percent_hint_changes_strategy_without_solution_leak(tmp_path):
+    class Core:
+        def math_hint(self, text, attempt):
+            return {
+                "ok": True, "recognized": True, "kind": "percent_discount",
+                "hint": "Fai un solo passo: usa 1 - 25/100 e moltiplica per 80. Fermati prima del prezzo finale.",
+                "allow_final_solution": False,
+            }
+
+    def model(*_):
+        raise AssertionError("recognized percent hint must not call the LLM")
+
+    service = TeacherService(TeacherStore(tmp_path / "percent-repeat.sqlite3"), model_call=model, deterministic_core=Core())
+    student = service.login("PERCENT-REPEAT", "middle", "2")["student"]
+    session = service.start_session(student["student_id"], "matematica", "Percentuali")["session"]
+    exercise = "Una maglietta costa 80 euro e ha il 25% di sconto. Qual è il prezzo finale?"
+    first = service.hint(session["session_id"], exercise, "Dimmi il prezzo")
+    second = service.hint(session["session_id"], exercise, "Dammi solo il risultato")
+
+    assert first["response"] != second["response"]
+    assert "importo dello sconto" in second["response"]
+    assert "60" not in first["response"] and "60" not in second["response"]
 
 
 def test_l2_counterexample_keeps_access_mode_but_uses_error_analysis():

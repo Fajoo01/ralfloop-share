@@ -340,6 +340,70 @@ static int eval_answer_numeric(const char *answer, long double *value) {
     return eval_expression(answer, value);
 }
 
+
+static int contains_ci_ascii(const char *text, const char *needle);
+
+static int parse_first_scalar(const char *text, long double *value) {
+    if (!text) return 0;
+    const char *p = text;
+    while (*p) {
+        if (isdigit((unsigned char)*p) ||
+            ((*p == '+' || *p == '-') && isdigit((unsigned char)p[1]))) {
+            errno = 0;
+            char *end = NULL;
+            long double parsed = strtold(p, &end);
+            if (!errno && end && end > p) {
+                *value = parsed;
+                return 1;
+            }
+        }
+        ++p;
+    }
+    return 0;
+}
+
+static int extract_percent_discount(
+    const char *text,
+    long double *base,
+    long double *percent,
+    long double *result
+) {
+    if (!text || !strchr(text, '%')) return 0;
+    if (!contains_ci_ascii(text, "sconto") &&
+        !contains_ci_ascii(text, "riduzion")) return 0;
+
+    const char *p = text;
+    long double last_plain = 0.0L;
+    int have_plain = 0;
+    while (*p) {
+        if (!isdigit((unsigned char)*p) &&
+            !((*p == '+' || *p == '-') && isdigit((unsigned char)p[1]))) {
+            ++p;
+            continue;
+        }
+        errno = 0;
+        char *end = NULL;
+        long double parsed = strtold(p, &end);
+        if (errno || !end || end == p) {
+            ++p;
+            continue;
+        }
+        const char *q = end;
+        while (*q && isspace((unsigned char)*q)) ++q;
+        if (*q == '%') {
+            if (!have_plain || parsed < 0.0L || parsed > 100.0L) return 0;
+            *base = last_plain;
+            *percent = parsed;
+            *result = last_plain * (1.0L - parsed / 100.0L);
+            return isfinite((double)*result) ? 1 : 0;
+        }
+        last_plain = parsed;
+        have_plain = 1;
+        p = end;
+    }
+    return 0;
+}
+
 typedef struct {
     size_t words;
     size_t sentences;
@@ -501,16 +565,97 @@ static void write_study_plan(FILE *out, int minutes, const char *mode) {
     fputs("],\"method\":\"deterministic_timeboxing\",\"writes\":0,\"external_side_effects\":0}", out);
 }
 
+static int parse_fraction_pair(
+    const char *text,
+    long long *n1,
+    long long *d1,
+    long long *n2,
+    long long *d2
+) {
+    long long nums[2] = {0, 0}, dens[2] = {0, 0};
+    int found = 0;
+    const char *p = text;
+    while (*p && found < 2) {
+        if (!isdigit((unsigned char)*p) &&
+            !((*p == '+' || *p == '-') && isdigit((unsigned char)p[1]))) {
+            ++p;
+            continue;
+        }
+        errno = 0;
+        char *num_end = NULL;
+        long long num = strtoll(p, &num_end, 10);
+        if (errno || !num_end || num_end == p) { ++p; continue; }
+        const char *slash = num_end;
+        while (*slash && isspace((unsigned char)*slash)) ++slash;
+        if (*slash != '/') { p = num_end; continue; }
+        const char *den_start = slash + 1;
+        while (*den_start && isspace((unsigned char)*den_start)) ++den_start;
+        errno = 0;
+        char *den_end = NULL;
+        long long den = strtoll(den_start, &den_end, 10);
+        if (errno || !den_end || den_end == den_start || den == 0) {
+            p = slash + 1; continue;
+        }
+        if (llabs(num) > 1000000LL || llabs(den) > 1000000LL) {
+            p = den_end; continue;
+        }
+        nums[found] = num;
+        dens[found] = den;
+        ++found;
+        p = den_end;
+    }
+    if (found != 2) return 0;
+    *n1 = nums[0]; *d1 = dens[0]; *n2 = nums[1]; *d2 = dens[1];
+    return 1;
+}
+
+static void write_fraction_relation(FILE *out, const char *text) {
+    long long n1 = 0, d1 = 0, n2 = 0, d2 = 0;
+    int recognized = parse_fraction_pair(text, &n1, &d1, &n2, &d2);
+    int equivalent = recognized && (n1 * d2 == n2 * d1);
+    fputs("{\"ok\":true,\"recognized\":", out);
+    fputs(recognized ? "true" : "false", out);
+    if (recognized) {
+        fprintf(out, ",\"left\":{\"numerator\":%lld,\"denominator\":%lld}", n1, d1);
+        fprintf(out, ",\"right\":{\"numerator\":%lld,\"denominator\":%lld}", n2, d2);
+    } else {
+        fputs(",\"left\":null,\"right\":null", out);
+    }
+    fputs(",\"equivalent\":", out); fputs(equivalent ? "true" : "false", out);
+    fputs(",\"method\":\"integer_cross_product\",\"writes\":0,\"external_side_effects\":0}", out);
+}
+
 static void write_math_check(FILE *out, const char *text, const char *answer) {
     char expression[512]; expression[0] = 0;
     long double expected = 0.0L, observed = 0.0L;
-    int equation = extract_linear_equation(text, expression, sizeof expression, &expected);
-    int recognized = equation;
-    if (!recognized) {
-        recognized = extract_expression(text, expression, sizeof expression) &&
-                     eval_expression(expression, &expected);
+    long double base = 0.0L, percent_value = 0.0L;
+    int percent_discount = extract_percent_discount(
+        text, &base, &percent_value, &expected
+    );
+    int equation = 0, arithmetic = 0;
+    if (!percent_discount) {
+        equation = extract_linear_equation(
+            text, expression, sizeof expression, &expected
+        );
+        if (!equation) {
+            arithmetic = extract_expression(text, expression, sizeof expression) &&
+                         eval_expression(expression, &expected);
+        }
+    } else {
+        snprintf(
+            expression, sizeof expression,
+            "%.17Lg with %.17Lg%% discount", base, percent_value
+        );
     }
-    int answer_ok = answer && *answer && eval_answer_numeric(answer, &observed);
+    int recognized = percent_discount || equation || arithmetic;
+    int answer_ok = 0;
+    if (answer && *answer) {
+        if (percent_discount) {
+            answer_ok = !strchr(answer, '%') && parse_first_scalar(answer, &observed);
+        } else {
+            answer_ok = eval_answer_numeric(answer, &observed);
+        }
+    }
     int equivalent = 0;
     if (recognized && answer_ok) {
         long double scale = fmaxl(1.0L, fmaxl(fabsl(expected), fabsl(observed)));
@@ -518,7 +663,8 @@ static void write_math_check(FILE *out, const char *text, const char *answer) {
     }
     fputs("{\"ok\":true,\"recognized\":", out); fputs(recognized ? "true" : "false", out);
     fputs(",\"answer_recognized\":", out); fputs(answer_ok ? "true" : "false", out);
-    fputs(",\"kind\":", out); json_text(out, equation ? "linear_equation" : recognized ? "arithmetic_expression" : "unknown");
+    fputs(",\"kind\":", out);
+    json_text(out, percent_discount ? "percent_discount" : equation ? "linear_equation" : arithmetic ? "arithmetic_expression" : "unknown");
     fputs(",\"expression\":", out); json_text(out, recognized ? expression : "");
     if (recognized) fprintf(out, ",\"expected\":%.17Lg", expected); else fputs(",\"expected\":null", out);
     if (answer_ok) fprintf(out, ",\"observed\":%.17Lg", observed); else fputs(",\"observed\":null", out);
@@ -529,15 +675,31 @@ static void write_math_check(FILE *out, const char *text, const char *answer) {
 static void write_math_hint(FILE *out, const char *text, const char *attempt) {
     char expression[512]; expression[0] = 0;
     long double expected = 0.0L;
-    int equation = extract_linear_equation(text, expression, sizeof expression, &expected);
-    int arithmetic = 0;
-    if (!equation) {
-        arithmetic = extract_expression(text, expression, sizeof expression) &&
-                     eval_expression(expression, &expected);
+    long double base = 0.0L, percent_value = 0.0L;
+    int percent_discount = extract_percent_discount(
+        text, &base, &percent_value, &expected
+    );
+    int equation = 0, arithmetic = 0;
+    if (!percent_discount) {
+        equation = extract_linear_equation(text, expression, sizeof expression, &expected);
+        if (!equation) {
+            arithmetic = extract_expression(text, expression, sizeof expression) &&
+                         eval_expression(expression, &expected);
+        }
     }
-    int recognized = equation || arithmetic;
+    int recognized = percent_discount || equation || arithmetic;
+    char hint_buffer[512]; hint_buffer[0] = 0;
     const char *hint = "";
-    if (equation) {
+    if (percent_discount) {
+        snprintf(
+            hint_buffer, sizeof hint_buffer,
+            "Fai un solo passo: parti da %.17Lg e usa lo sconto del %.17Lg%%. "
+            "Trova la frazione che resta, 1 - %.17Lg/100, e moltiplicala per %.17Lg. "
+            "Fermati prima del prezzo finale.",
+            base, percent_value, percent_value, base
+        );
+        hint = hint_buffer;
+    } else if (equation) {
         char attempt_expression[512]; attempt_expression[0] = 0;
         long double attempt_expected = 0.0L;
         int attempt_equation = attempt && *attempt &&
@@ -554,7 +716,8 @@ static void write_math_hint(FILE *out, const char *text, const char *attempt) {
         hint = "Fai soltanto il prossimo passaggio previsto dall'ordine delle operazioni e fermati prima del risultato finale.";
     }
     fputs("{\"ok\":true,\"recognized\":", out); fputs(recognized ? "true" : "false", out);
-    fputs(",\"kind\":", out); json_text(out, equation ? "linear_equation" : arithmetic ? "arithmetic_expression" : "unknown");
+    fputs(",\"kind\":", out);
+    json_text(out, percent_discount ? "percent_discount" : equation ? "linear_equation" : arithmetic ? "arithmetic_expression" : "unknown");
     fputs(",\"hint\":", out); json_text(out, hint);
     fputs(",\"help_level\":1,\"allow_final_solution\":false,\"writes\":0,\"external_side_effects\":0}", out);
 }
@@ -650,6 +813,10 @@ static void write_turn_classification(FILE *out, const char *text) {
         move = "request_example"; signal = "example_request"; confidence = 0.96;
     } else if (contains_ci_ascii(text, "non capisco") || contains_ci_ascii(text, "non ho capito") || contains_ci_ascii(text, "non mi e chiaro") || contains_ci_ascii(text, "che vuol dire") || contains_ci_ascii(text, "cosa significa")) {
         move = "confusion"; signal = "confusion_cue"; confidence = 0.94;
+    } else if (contains_ci_ascii(text, "perché non ") || contains_ci_ascii(text, "perche non ") ||
+               ((contains_ci_ascii(text, " perché ") || contains_ci_ascii(text, " perche ")) &&
+                (contains_ci_ascii(text, " fa ") || strchr(text, '=')))) {
+        move = "counterexample"; signal = "claim_rationale"; confidence = 0.88;
     } else if (starts_ci_ascii(text, "ma ")) {
         move = "counterexample"; signal = "contrastive_ma"; confidence = 0.90;
     } else if (starts_ci_ascii(text, "e ") && contains_ci_ascii(text, "allora")) {
@@ -675,6 +842,8 @@ static void write_tools(FILE *out, const char *js, const jsmntok_t *id) {
     fputs(",", out);
     fputs("{\"name\":\"core.math_hint\",\"description\":\"Deterministic one-step math scaffolding with a hard no-final-answer contract for recognized arithmetic and linear equations.\",\"inputSchema\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"text\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":16000},\"attempt\":{\"type\":\"string\",\"maxLength\":512}},\"required\":[\"text\"]}}", out);
     fputs(",", out);
+    fputs("{\"name\":\"core.fraction_relation\",\"description\":\"Exact bounded equivalence check for two rational fractions using integer cross-products.\",\"inputSchema\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"text\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000}},\"required\":[\"text\"]}}", out);
+    fputs(",", out);
     fputs("{\"name\":\"core.classify_turn\",\"description\":\"Deterministic discourse classification for objections, counterexamples, confusion and questions.\",\"inputSchema\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"text\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":6000}},\"required\":[\"text\"]}}", out);
     fputs(",", out);
     fputs("{\"name\":\"core.concept_evidence\",\"description\":\"Read-only curated concept evidence for factual guarding before model inference.\",\"inputSchema\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"topic\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":300}},\"required\":[\"topic\"]}}", out);
@@ -698,6 +867,7 @@ static void tool_result(FILE *out, const char *js, const jsmntok_t *id, const ch
     else if (strcmp(name, "core.study_plan") == 0) write_study_plan(out, number, mode);
     else if (strcmp(name, "core.math_check") == 0) write_math_check(out, text, answer);
     else if (strcmp(name, "core.math_hint") == 0) write_math_hint(out, text, answer);
+    else if (strcmp(name, "core.fraction_relation") == 0) write_fraction_relation(out, text);
     else if (strcmp(name, "core.classify_turn") == 0) write_turn_classification(out, text);
     else if (strcmp(name, "core.concept_evidence") == 0) write_concept_evidence(out, text);
     else { fputs("{\"ok\":false,\"error\":\"POLICY_DENIED\",\"writes\":0,\"external_side_effects\":0}", out); }
@@ -740,12 +910,15 @@ static void dispatch(FILE *out, const char *line) {
         if (topic_i < 0 || copy_json_string(line, &toks[topic_i], text, sizeof text) != 0 || strlen(text) > 300) {
             tool_error(out, line, id_i >= 0 ? &toks[id_i] : NULL, "INVALID_INPUT"); return;
         }
-    } else if (strcmp(name, "core.text_profile") == 0 || strcmp(name, "core.extractive_summary") == 0 || strcmp(name, "core.classify_turn") == 0) {
+    } else if (strcmp(name, "core.text_profile") == 0 || strcmp(name, "core.extractive_summary") == 0 || strcmp(name, "core.classify_turn") == 0 || strcmp(name, "core.fraction_relation") == 0) {
         int text_i = obj_get(line, toks, args_i, "text");
         if (text_i < 0 || copy_json_string(line, &toks[text_i], text, sizeof text) != 0) {
             tool_error(out, line, id_i >= 0 ? &toks[id_i] : NULL, "INVALID_INPUT"); return;
         }
         if (strcmp(name, "core.classify_turn") == 0 && strlen(text) > 6000) {
+            tool_error(out, line, id_i >= 0 ? &toks[id_i] : NULL, "INVALID_INPUT"); return;
+        }
+        if (strcmp(name, "core.fraction_relation") == 0 && strlen(text) > 2000) {
             tool_error(out, line, id_i >= 0 ? &toks[id_i] : NULL, "INVALID_INPUT"); return;
         }
         if (strcmp(name, "core.extractive_summary") == 0) {

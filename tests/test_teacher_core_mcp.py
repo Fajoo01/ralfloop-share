@@ -42,6 +42,7 @@ def test_core_mcp_real_tools_are_bounded_and_read_only():
             "core.study_plan",
             "core.math_check",
             "core.math_hint",
+            "core.fraction_relation",
             "core.classify_turn",
             "core.concept_evidence",
         }
@@ -94,6 +95,58 @@ def test_core_mcp_real_tools_are_bounded_and_read_only():
         assert fraction_hint["recognized"] is True
         assert "denominatore comune" in fraction_hint["hint"]
 
+        equivalent_pair = _payload(session.call_tool(
+            "core.fraction_relation", {"text": "2/3 e 4/6 qndi si?"}
+        ))
+        assert equivalent_pair["recognized"] is True
+        assert equivalent_pair["equivalent"] is True
+        assert equivalent_pair["left"] == {"numerator": 2, "denominator": 3}
+        assert equivalent_pair["right"] == {"numerator": 4, "denominator": 6}
+
+        different_pair = _payload(session.call_tool(
+            "core.fraction_relation", {"text": "2/3 e 5/6?"}
+        ))
+        assert different_pair["recognized"] is True
+        assert different_pair["equivalent"] is False
+
+        percent_wrong = _payload(session.call_tool(
+            "core.math_check",
+            {
+                "text": "Una maglietta costa 80 euro e ha il 25% di sconto. Qual è il prezzo finale?",
+                "answer": "55 euro",
+            },
+        ))
+        assert percent_wrong["recognized"] is True
+        assert percent_wrong["kind"] == "percent_discount"
+        assert percent_wrong["expected"] == 60
+        assert percent_wrong["answer_recognized"] is True
+        assert percent_wrong["equivalent"] is False
+
+        percent_right = _payload(session.call_tool(
+            "core.math_check",
+            {
+                "text": "Una maglietta costa 80 euro e ha il 25% di sconto. Qual è il prezzo finale?",
+                "answer": "60 euro",
+            },
+        ))
+        assert percent_right["equivalent"] is True
+
+        percent_hint = _payload(session.call_tool(
+            "core.math_hint",
+            {
+                "text": "Una maglietta costa 80 euro e ha il 25% di sconto. Qual è il prezzo finale?",
+                "attempt": "dimmi direttamente il prezzo",
+            },
+        ))
+        assert percent_hint["recognized"] is True
+        assert percent_hint["kind"] == "percent_discount"
+        assert percent_hint["allow_final_solution"] is False
+        assert "60" not in percent_hint["hint"]
+        assert "20" not in percent_hint["hint"]
+        assert "80" in percent_hint["hint"]
+        assert "25%" in percent_hint["hint"]
+        assert "1 - 25/100" in percent_hint["hint"]
+
         turn = _payload(session.call_tool(
             "core.classify_turn",
             {"text": "ma un fazzoletto prende la forma del contenitore ma non è liquido cosa c'entra il ghiaccio"},
@@ -104,6 +157,11 @@ def test_core_mcp_real_tools_are_bounded_and_read_only():
             "core.classify_turn", {"text": "Non ho capito che cosa significa."}
         ))
         assert confusion["move"] == "confusion"
+        formula_confusion = _payload(session.call_tool(
+            "core.classify_turn",
+            {"text": "So a memoria s=v*t ma non capisco perché si moltiplica."},
+        ))
+        assert formula_confusion["move"] == "confusion"
         example = _payload(session.call_tool(
             "core.classify_turn", {"text": "Fammi un esempio concreto"}
         ))
@@ -125,6 +183,8 @@ def test_core_mcp_real_tools_are_bounded_and_read_only():
             "Ma con correlazione così alta una causa ci deve essere per forza.",
             "Ma 5 elementi significa posizioni 1,2,3,4,5.",
             "E la sabbia allora scorre: è un liquido?",
+            "2+2 fa 5 perché io conto anche il pollice.",
+            "Se v=5 m/s per 3 secondi, perché non faccio 5+3?",
         ):
             classified = _payload(session.call_tool(
                 "core.classify_turn", {"text": objection}
