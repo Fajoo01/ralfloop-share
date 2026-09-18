@@ -17,6 +17,45 @@ from .domain_approval_store import DomainApprovalStore
 SIGNATURE_WINDOW_SEC = 300
 
 
+MCP_AUTO_EXECUTE_ACTIONS = {
+    "mailchimp_campaign_create",
+    "mailchimp_campaign_send",
+    "mailchimp_member_subscribe",
+    "whatsapp_send",
+    "whatsapp_reply",
+}
+
+
+def _execute_approved_mcp_request(
+    request_id: str,
+    *,
+    store: DomainApprovalStore,
+) -> dict[str, Any]:
+    """Execute one already-approved, hash-bound MCP action exactly once."""
+    row = store.get_request(request_id)
+    if not row:
+        return {"status": "not_found", "request_id": request_id}
+    action = str(row.get("action") or "")
+    scope = dict(row.get("scope") or {})
+    if action not in MCP_AUTO_EXECUTE_ACTIONS:
+        return {"status": "not_auto_executable", "request_id": request_id, "action": action}
+
+    if action.startswith("mailchimp_"):
+        from src.mailchimp import MailchimpApprovedMCPWorkflow
+
+        workflow = MailchimpApprovedMCPWorkflow()
+        if action == "mailchimp_campaign_create":
+            return workflow.execute_create(request_id, scope)
+        if action == "mailchimp_campaign_send":
+            return workflow.execute_send(request_id, scope)
+        return workflow.execute_subscribe(request_id, scope)
+
+    from src.whatsapp import WhatsAppMCPContext
+
+    with WhatsAppMCPContext.from_environment() as gateway:
+        return dict(gateway.execute_approved(store, request_id, scope))
+
+
 def sign_request(method: str, path: str, body: bytes, *, timestamp: int, nonce: str, key: bytes) -> str:
     body_hash = hash_bytes(body)
     msg = f"{method.upper()}\n{path}\n{timestamp}\n{nonce}\n{body_hash}".encode("utf-8")
@@ -107,12 +146,12 @@ def handle_decision_request(
         chat_type=str(payload.get("chat_type") or "private"),
     )
     result = store.decide(decision, scope_digest_short=str(payload.get("scope_digest_short") or ""))
-    if (
-        result.get("status") == "approved"
-        and os.getenv("RALFLOOP_EMAIL_OTP_REQUIRED", "0") == "1"
-    ):
+    if result.get("status") == "approved":
         row = store.get_request(request_id)
-        if row and row.get("action") in {"send_email", "reply_email"}:
+        if (
+            row and row.get("action") in {"send_email", "reply_email"}
+            and os.getenv("RALFLOOP_EMAIL_OTP_REQUIRED", "0") == "1"
+        ):
             try:
                 if email_otp_gate is None:
                     from ralfloop_agent.unified_assistant.email_otp import EmailOtpGate
@@ -121,6 +160,19 @@ def handle_decision_request(
             except Exception:
                 otp = {"status": "email_otp_request_failed", "requested": False}
             result = {**result, "email_otp": otp, "email_otp_required": True}
+        elif (
+            row and str(row.get("action") or "") in MCP_AUTO_EXECUTE_ACTIONS
+            and os.getenv("RALFLOOP_TELEGRAM_APPROVAL_AUTO_EXECUTE_MCP", "0") == "1"
+        ):
+            try:
+                execution = _execute_approved_mcp_request(request_id, store=store)
+            except Exception as exc:
+                execution = {
+                    "status": "EXECUTION_UNCERTAIN",
+                    "retry_allowed": False,
+                    "error_type": type(exc).__name__,
+                }
+            result = {**result, "auto_execute": True, "execution": execution}
     return result
 
 
