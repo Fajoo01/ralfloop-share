@@ -139,9 +139,7 @@ def test_service_persists_profile_and_injects_deterministic_policy(tmp_path):
 
 
 
-def test_counterexample_uses_core_mcp_signal_and_error_analysis(tmp_path):
-    captured = {}
-
+def test_counterexample_uses_core_evidence_without_llm(tmp_path):
     class Core:
         def classify_turn(self, text):
             assert "fazzoletto" in text
@@ -151,32 +149,69 @@ def test_counterexample_uses_core_mcp_signal_and_error_analysis(tmp_path):
         def concept_evidence(self, topic):
             assert topic == "Gli stati dell'acqua"
             return {"ok": True, "found": True, "topic": topic,
-                    "evidence": "Un liquido fluisce spontaneamente; deformarsi non basta.",
+                    "evidence": "Un solido può essere flessibile; un liquido fluisce spontaneamente e deformarsi non basta.",
                     "misconceptions": "Il ghiaccio è solo l'esempio dello stato solido dell'acqua.",
                     "writes": 0, "external_side_effects": 0}
 
-    def model(system_prompt, user_prompt):
-        captured["system"] = system_prompt
-        captured["payload"] = json.loads(user_prompt)
-        return {"response": "Hai ragione sul controesempio: adattarsi al recipiente non basta a definire un liquido."}
+    def model(*_):
+        raise AssertionError("LLM should not be called for curated counterexample")
 
-    service = TeacherService(TeacherStore(tmp_path / "teacher.sqlite3"), model_call=model, deterministic_core=Core())
+    service = TeacherService(
+        TeacherStore(tmp_path / "teacher.sqlite3"),
+        model_call=model,
+        deterministic_core=Core(),
+    )
     student = service.login("COUNTEREXAMPLE", "primary", "4")["student"]
-    session = service.start_session(student["student_id"], "scienze", "Gli stati dell'acqua")["session"]
+    session = service.start_session(
+        student["student_id"], "scienze", "Gli stati dell'acqua"
+    )["session"]
     result = service.explain(
         session["session_id"],
         "ma un fazzoletto prende la forma del contenitore ma non è liquido cosa c'entra il ghiaccio",
         context="Consegna: associa ghiaccio, acqua nel bicchiere e vapore a solido, liquido e gas.",
     )
 
+    assert result["deterministic"] is True
     assert result["pedagogy"]["strategy"] == "error_analysis"
-    assert captured["payload"]["interaction"]["student_move"] == "counterexample"
-    assert captured["payload"]["deterministic_evidence"]["turn_classification"]["signal"] == "counterexample_cue"
-    assert "fluisce" in captured["payload"]["deterministic_evidence"]["concept_evidence"]["evidence"]
-    assert "controesempio" in captured["system"].casefold()
+    assert result["core_evidence"]["turn_classification"]["signal"] == "counterexample_cue"
+    assert "flessibile" in result["response"]
+    assert "fluisce spontaneamente" in result["response"]
+    assert "troppo semplificata" in result["response"]
+
+
+def test_concept_evidence_is_binding_in_model_prompt_for_plain_question(tmp_path):
+    captured = {}
+
+    class Core:
+        def classify_turn(self, text):
+            return {"ok": True, "move": "question", "signal": "question_form",
+                    "confidence": 0.82, "writes": 0, "external_side_effects": 0}
+
+        def concept_evidence(self, topic):
+            return {"ok": True, "found": True, "topic": topic,
+                    "evidence": "Un liquido fluisce spontaneamente; deformarsi non basta.",
+                    "misconceptions": "Non usare la forma del contenitore come unico criterio.",
+                    "writes": 0, "external_side_effects": 0}
+
+    def model(system_prompt, user_prompt):
+        captured["system"] = system_prompt
+        captured["payload"] = json.loads(user_prompt)
+        return {"response": "Un liquido fluisce spontaneamente."}
+
+    service = TeacherService(
+        TeacherStore(tmp_path / "binding.sqlite3"),
+        model_call=model,
+        deterministic_core=Core(),
+    )
+    student = service.login("BINDING", "primary", "4")["student"]
+    session = service.start_session(
+        student["student_id"], "scienze", "Gli stati dell'acqua"
+    )["session"]
+    service.explain(session["session_id"], "Come riconosco un liquido?")
+
     assert "EVIDENZA CONCETTUALE VINCOLANTE" in captured["system"]
     assert "fluisce spontaneamente" in captured["system"]
-    assert captured["payload"]["request"]["context"].startswith("Consegna:")
+    assert captured["payload"]["deterministic_evidence"]["concept_evidence"]["found"] is True
 
 def test_service_injects_bounded_multi_turn_history_and_source_material(tmp_path):
     calls = []

@@ -344,12 +344,41 @@ class TeacherService:
             session, "check_answer", show_solution=show_solution
         )
         correct = bool(evidence.get("equivalent"))
+        kind = str(evidence.get("kind") or "")
         if correct:
-            response = "Corretto: la risposta è numericamente equivalente al risultato dell'espressione."
+            response = (
+                "Corretto: il valore proposto soddisfa l'equazione."
+                if kind == "linear_equation"
+                else "Corretto: la risposta è numericamente equivalente al risultato dell'espressione."
+            )
         elif show_solution:
-            response = f"La risposta non è corretta. Il risultato dell'espressione è {evidence.get('expected')}."
+            response = (
+                f"La risposta non è corretta. Il valore corretto è {evidence.get('expected')}."
+                if kind == "linear_equation"
+                else f"La risposta non è corretta. Il risultato dell'espressione è {evidence.get('expected')}."
+            )
         else:
-            response = "La risposta non è corretta. Ricontrolla segni, ordine delle operazioni e semplificazione, senza cambiare il risultato a caso."
+            guidance = ""
+            hint_call = getattr(self.deterministic_core, "math_hint", None)
+            if callable(hint_call):
+                try:
+                    hint_evidence = hint_call(exercise, student_answer)
+                except Exception:
+                    hint_evidence = None
+                if isinstance(hint_evidence, dict) and hint_evidence.get("recognized") is True:
+                    guidance = str(hint_evidence.get("hint") or "").strip()
+            response = "La risposta non è corretta."
+            if guidance:
+                response += " " + guidance
+            elif kind == "linear_equation":
+                response += (
+                    " Verifica il valore sostituendolo nell'equazione originale, "
+                    "oppure isola x applicando la stessa operazione a entrambi i membri."
+                )
+            else:
+                response += (
+                    " Ricontrolla il prossimo passaggio senza cambiare il risultato a caso."
+                )
         output = {
             "ok": True,
             "action": "check_answer",
@@ -370,6 +399,82 @@ class TeacherService:
             "source_mode": "deterministic_core",
             "strategy": decision.strategy.value, "mode": decision.mode.value,
             "model_path": "none", "core_tool": "core.math_check",
+        })
+        return output
+
+    def _core_concept_reply(
+        self,
+        session_id: str,
+        action: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if action not in {"explain", "explain_differently"}:
+            return None
+        session = self.store.session(session_id)
+        student_move, turn_evidence = _student_move(
+            self.deterministic_core, payload
+        )
+        if student_move not in {"counterexample", "correction"}:
+            return None
+        evidence = _concept_evidence(
+            self.deterministic_core, session.get("topic", "")
+        )
+        if evidence is None:
+            return None
+
+        student = self.store.student(session["student_id"])
+        learner = profile_from_student(student)
+        decision = select_pedagogy(
+            learner,
+            action=action,
+            subject=session["subject"],
+            topic=session["topic"],
+            student_move=student_move,
+        )
+        facts = str(evidence.get("evidence") or "").strip()
+        misconception = str(evidence.get("misconceptions") or "").strip()
+        if not facts:
+            return None
+
+        parts = [
+            "La tua obiezione va verificata sul criterio corretto.",
+            facts,
+        ]
+        if misconception:
+            parts.append("Da evitare come regola: " + misconception)
+        parts.append(
+            "Se prima avevo lasciato intendere il contrario, quella "
+            "spiegazione era troppo semplificata e va corretta."
+        )
+        if decision.micro_check:
+            parts.append(
+                "Prova a riformulare in una frase la regola corretta."
+            )
+        response = " ".join(parts)
+        if len(response) > decision.max_response_chars:
+            response = response[: decision.max_response_chars].rsplit(" ", 1)[0] + "."
+
+        output = {
+            "ok": True,
+            "action": action,
+            "response": response,
+            "source_mode": "deterministic_core",
+            "deterministic": True,
+            "core_evidence": {
+                "turn_classification": turn_evidence,
+                "concept_evidence": evidence,
+            },
+            "pedagogy": decision.model_dump(mode="json"),
+        }
+        self.store.event(session_id, action, {
+            "response": response,
+            "request": _bounded_request(payload),
+            "source_mode": "deterministic_core",
+            "strategy": decision.strategy.value,
+            "student_move": student_move,
+            "mode": decision.mode.value,
+            "model_path": "none",
+            "core_tool": "core.concept_evidence",
         })
         return output
 
@@ -515,17 +620,23 @@ class TeacherService:
         question: str,
         context: str = "",
     ) -> dict[str, Any]:
+        payload = {
+            "question": question,
+            "context": context,
+            "instruction": (
+                "Spiega il concetto in modo adatto allo studente. "
+                "Termina con una breve domanda di verifica."
+            ),
+        }
+        deterministic = self._core_concept_reply(
+            session_id, "explain", payload
+        )
+        if deterministic is not None:
+            return deterministic
         return self._teaching_call(
             session_id,
             "explain",
-            {
-                "question": question,
-                "context": context,
-                "instruction": (
-                    "Spiega il concetto in modo adatto allo studente. "
-                    "Termina con una breve domanda di verifica."
-                ),
-            },
+            payload,
         )
 
     def explain_differently(
@@ -534,17 +645,23 @@ class TeacherService:
         concept: str,
         context: str = "",
     ) -> dict[str, Any]:
+        payload = {
+            "concept": concept,
+            "context": context,
+            "instruction": (
+                "Rispiega con un approccio diverso, preferendo "
+                "un esempio concreto o un'analogia utile."
+            ),
+        }
+        deterministic = self._core_concept_reply(
+            session_id, "explain_differently", payload
+        )
+        if deterministic is not None:
+            return deterministic
         return self._teaching_call(
             session_id,
             "explain_differently",
-            {
-                "concept": concept,
-                "context": context,
-                "instruction": (
-                    "Rispiega con un approccio diverso, preferendo "
-                    "un esempio concreto o un'analogia utile."
-                ),
-            },
+            payload,
         )
 
     def hint(
@@ -797,25 +914,41 @@ class TeacherService:
         }
 
     def stream_explain(self, session_id: str, question: str, context: str = "") -> Iterator[dict[str, Any]]:
+        payload = {
+            "question": question,
+            "context": context,
+            "instruction": "Spiega il concetto in modo adatto allo studente. Se la domanda contiene un'obiezione o un controesempio, affrontalo prima della spiegazione generale. Termina con una breve domanda di verifica.",
+        }
+        deterministic = self._core_concept_reply(
+            session_id, "explain", payload
+        )
+        if deterministic is not None:
+            yield {"type": "delta", "text": deterministic["response"]}
+            yield {"type": "done", "result": deterministic}
+            return
         yield from self._stream_teaching_call(
             session_id,
             "explain",
-            {
-                "question": question,
-                "context": context,
-                "instruction": "Spiega il concetto in modo adatto allo studente. Se la domanda contiene un'obiezione o un controesempio, affrontalo prima della spiegazione generale. Termina con una breve domanda di verifica.",
-            },
+            payload,
         )
 
     def stream_explain_differently(self, session_id: str, concept: str, context: str = "") -> Iterator[dict[str, Any]]:
+        payload = {
+            "concept": concept,
+            "context": context,
+            "instruction": "Rispiega con un approccio diverso. Se lo studente sta contestando una regola, valuta prima il suo controesempio e correggi eventuali semplificazioni; poi usa un esempio concreto o un'analogia utile.",
+        }
+        deterministic = self._core_concept_reply(
+            session_id, "explain_differently", payload
+        )
+        if deterministic is not None:
+            yield {"type": "delta", "text": deterministic["response"]}
+            yield {"type": "done", "result": deterministic}
+            return
         yield from self._stream_teaching_call(
             session_id,
             "explain_differently",
-            {
-                "concept": concept,
-                "context": context,
-                "instruction": "Rispiega con un approccio diverso. Se lo studente sta contestando una regola, valuta prima il suo controesempio e correggi eventuali semplificazioni; poi usa un esempio concreto o un'analogia utile.",
-            },
+            payload,
         )
 
     def stream_hint(self, session_id: str, exercise: str, student_attempt: str = "") -> Iterator[dict[str, Any]]:

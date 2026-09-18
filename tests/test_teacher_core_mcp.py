@@ -131,8 +131,31 @@ def test_core_mcp_real_tools_are_bounded_and_read_only():
         ))
         assert concept["found"] is True
         assert "flessibile" in concept["evidence"]
+        assert "granuli solidi" in concept["evidence"]
         assert "non basta" in concept["evidence"]
         assert "contenitore" in concept["misconceptions"]
+
+        critical_topics = {
+            "Forza, accelerazione e velocità": "forza risultante",
+            "Equazioni di primo grado": "entrambi i membri",
+            "Derivata e monotonia": "punto stazionario",
+            "Probabilità condizionata e indipendenza": "P(A∩B)=P(A)P(B)",
+            "pH e diluizione": "aumenta il pH",
+            "Evoluzione e selezione naturale": "variazioni già presenti",
+            "Area del triangolo": "perpendicolare",
+            "Luna e luce": "satellite naturale",
+            "Entropia e probabilità": "entropia massima",
+            "Le stagioni": "inclinazione",
+            "Correlazione e causalità": "non dimostra da sola",
+            "Indici e array": "0 a n-1",
+            "Divisione fra frazioni": "reciproco",
+        }
+        for topic, expected in critical_topics.items():
+            guarded = _payload(session.call_tool(
+                "core.concept_evidence", {"topic": topic}
+            ))
+            assert guarded["found"] is True, topic
+            assert expected in guarded["evidence"], topic
 
 
 
