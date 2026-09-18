@@ -232,9 +232,13 @@ def _uncertain(reason: str) -> JudgeVerdict:
     )
 
 
-def _case_digest(case: JudgeCase) -> str:
+def judge_case_digest(case: JudgeCase) -> str:
     canonical = json.dumps(case.model_dump(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _case_digest(case: JudgeCase) -> str:
+    return judge_case_digest(case)
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:

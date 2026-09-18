@@ -81,3 +81,28 @@ def test_backend_dropin_shares_bounded_judge_environment():
     assert "BOTTAZZI_MOTOR_JUDGE_TOKENS=64" in env
     assert "BOTTAZZI_MOTOR_AUDIT_PATH=/home/sibilla-cumana/" in env
     assert "/home/bandi/" not in env
+
+
+def test_dense_readahead_is_disabled_by_default(monkeypatch, tmp_path):
+    _configure(monkeypatch, tmp_path)
+    cfg = load_service_config()
+    command, env = build_exec(cfg)
+    assert command
+    assert cfg["dense_readahead"] is False
+    assert env["DS4_CUDA_LOW_VRAM_DENSE_READAHEAD"] == "0"
+
+
+def test_dense_readahead_requires_explicit_opt_in(monkeypatch, tmp_path):
+    _configure(monkeypatch, tmp_path)
+    monkeypatch.setenv("BOTTAZZI_MOTOR_JUDGE_DENSE_READAHEAD", "1")
+    cfg = load_service_config()
+    _, env = build_exec(cfg)
+    assert cfg["dense_readahead"] is True
+    assert env["DS4_CUDA_LOW_VRAM_DENSE_READAHEAD"] == "1"
+
+
+def test_dense_readahead_rejects_invalid_boolean(monkeypatch, tmp_path):
+    _configure(monkeypatch, tmp_path)
+    monkeypatch.setenv("BOTTAZZI_MOTOR_JUDGE_DENSE_READAHEAD", "maybe")
+    with pytest.raises(ServiceConfigError, match="invalid_boolean"):
+        load_service_config()

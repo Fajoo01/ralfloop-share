@@ -50,3 +50,26 @@ def test_budget_assessment_marks_observed_band(monkeypatch):
         "within_observed_safe_band": False,
         "over_by": 1,
     }
+
+
+def test_protocol_comparison_measures_compact_system(monkeypatch):
+    import ralfloop_agent.integration.motor_prompt_budget as module
+
+    seen = []
+    monkeypatch.setattr(
+        module,
+        "count_rendered_tokens",
+        lambda rendered, **kwargs: seen.append(rendered) or (226 if len(seen) == 1 else 190),
+    )
+    result = module.compare_judge_protocols(
+        _case(), ds4_binary="ds4", model_path="model.gguf",
+        budget=MotorPromptBudget(observed_safe_tokens=192),
+    )
+    assert result == {
+        "current_tokens": 226,
+        "compact_system_tokens": 190,
+        "saved_tokens": 36,
+        "compact_system_within_observed_safe_band": True,
+    }
+    assert SYSTEM_PROMPT in seen[0]
+    assert module.COMPACT_JUDGE_SYSTEM_PROMPT in seen[1]

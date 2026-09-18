@@ -72,6 +72,30 @@ def count_rendered_tokens(
     return len(value)
 
 
+def compare_judge_protocols(
+    case: JudgeCase,
+    *,
+    ds4_binary: str | Path,
+    model_path: str | Path,
+    budget: MotorPromptBudget | None = None,
+) -> dict[str, Any]:
+    active = budget or MotorPromptBudget()
+    current_tokens = count_rendered_tokens(
+        render_ds41_judge_prompt(case),
+        ds4_binary=ds4_binary, model_path=model_path,
+    )
+    compact_tokens = count_rendered_tokens(
+        render_ds41_judge_prompt(case, system_prompt=COMPACT_JUDGE_SYSTEM_PROMPT),
+        ds4_binary=ds4_binary, model_path=model_path,
+    )
+    return {
+        "current_tokens": current_tokens,
+        "compact_system_tokens": compact_tokens,
+        "saved_tokens": current_tokens - compact_tokens,
+        "compact_system_within_observed_safe_band": compact_tokens <= active.observed_safe_tokens,
+    }
+
+
 def assess_judge_prompt(
     case: JudgeCase,
     *,
@@ -97,6 +121,7 @@ __all__ = [
     "COMPACT_JUDGE_SYSTEM_PROMPT",
     "MotorPromptBudget",
     "assess_judge_prompt",
+    "compare_judge_protocols",
     "count_rendered_tokens",
     "render_ds41_judge_prompt",
 ]

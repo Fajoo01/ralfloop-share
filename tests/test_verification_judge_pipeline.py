@@ -242,3 +242,91 @@ def test_admission_shadow_reports_missing_tokenizer_config(monkeypatch):
         "available": False,
         "reason": "tokenizer_config_missing",
     }
+
+
+def test_admission_enforce_blocks_over_budget_before_model(monkeypatch):
+    from ralfloop_agent.integration import verification_judge as module
+    from ralfloop_agent.integration.motor_admission import MotorAdmissionPlan
+    from ralfloop_agent.unified_assistant.judge_context import JudgeContext
+
+    monkeypatch.setenv("BOTTAZZI_MOTOR_ADMISSION_ENFORCE", "1")
+    monkeypatch.setenv("BOTTAZZI_MOTOR_TOKENIZER_BIN", "/tmp/ds4")
+    monkeypatch.setenv("BOTTAZZI_MOTOR_MODEL_PATH", "/tmp/model.gguf")
+    monkeypatch.setattr(module, "collect_judge_context", lambda goal: JudgeContext())
+    monkeypatch.setattr(module, "make_exact_token_counter", lambda **kwargs: lambda case: 250)
+    monkeypatch.setattr(module, "plan_motor_admission", lambda *args, **kwargs: MotorAdmissionPlan(
+        mode="REVIEW", raw_tokens=250, budget_tokens=192,
+        reason="safe_candidate_still_over_budget",
+    ))
+
+    class MustNotRun:
+        def judge(self, case):
+            raise AssertionError("model must not be called")
+
+    route = route_task("fix bug concreto con test")
+    result = module.run_verification_judge(
+        "fix bug concreto con test", route, None, "candidate",
+        {"task_id": "enforce-over"}, judge=MustNotRun(),
+    )
+    assert result["verdict"]["decision"] == "UNCERTAIN"
+    assert result["gate"]["status"] == "prompt_budget_guard"
+    assert result["gate"]["proceed_to_next_stage"] is False
+    assert result["motor_admission_enforced"]["mode"] == "REVIEW"
+
+
+def test_admission_enforce_allows_raw_inside_budget(monkeypatch):
+    from ralfloop_agent.integration import verification_judge as module
+    from ralfloop_agent.integration.bottazzi_motor_judge import JudgeOutcome, JudgeVerdict, JudgeGate
+    from ralfloop_agent.integration.motor_admission import MotorAdmissionPlan
+    from ralfloop_agent.unified_assistant.judge_context import JudgeContext
+
+    monkeypatch.setenv("BOTTAZZI_MOTOR_ADMISSION_ENFORCE", "1")
+    monkeypatch.setenv("BOTTAZZI_MOTOR_TOKENIZER_BIN", "/tmp/ds4")
+    monkeypatch.setenv("BOTTAZZI_MOTOR_MODEL_PATH", "/tmp/model.gguf")
+    monkeypatch.setattr(module, "collect_judge_context", lambda goal: JudgeContext())
+    monkeypatch.setattr(module, "make_exact_token_counter", lambda **kwargs: lambda case: 180)
+    monkeypatch.setattr(module, "plan_motor_admission", lambda *args, **kwargs: MotorAdmissionPlan(
+        mode="RAW", raw_tokens=180, budget_tokens=192, reason="raw_within_budget",
+    ))
+    called = {"value": False}
+
+    class FakeJudge:
+        def judge(self, case):
+            called["value"] = True
+            return JudgeOutcome(
+                case_digest="e" * 64,
+                verdict=JudgeVerdict(decision="PASS", confidence=0.9, risk="LOW", reason="ok"),
+                gate=JudgeGate(proceed_to_next_stage=True, status="judge_passed"),
+            )
+
+    route = route_task("fix bug concreto con test")
+    result = module.run_verification_judge(
+        "fix bug concreto con test", route, None, "candidate",
+        {"task_id": "enforce-raw"}, judge=FakeJudge(),
+    )
+    assert called["value"] is True
+    assert result["verdict"]["decision"] == "PASS"
+    assert result["motor_admission_enforced"]["mode"] == "RAW"
+
+
+def test_admission_enforce_missing_config_fails_closed(monkeypatch):
+    from ralfloop_agent.integration import verification_judge as module
+    from ralfloop_agent.unified_assistant.judge_context import JudgeContext
+
+    monkeypatch.setenv("BOTTAZZI_MOTOR_ADMISSION_ENFORCE", "1")
+    monkeypatch.delenv("BOTTAZZI_MOTOR_TOKENIZER_BIN", raising=False)
+    monkeypatch.delenv("BOTTAZZI_MOTOR_MODEL_PATH", raising=False)
+    monkeypatch.setattr(module, "collect_judge_context", lambda goal: JudgeContext())
+
+    class MustNotRun:
+        def judge(self, case):
+            raise AssertionError("model must not be called")
+
+    route = route_task("fix bug concreto con test")
+    result = module.run_verification_judge(
+        "fix bug concreto con test", route, None, "candidate",
+        {"task_id": "enforce-missing"}, judge=MustNotRun(),
+    )
+    assert result["verdict"]["decision"] == "UNCERTAIN"
+    assert result["gate"]["status"] == "prompt_budget_guard"
+    assert result["verdict"]["missing_evidence"] == ["admission_tokenizer_config_missing"]

@@ -130,3 +130,13 @@ Offline exact-token measurements on cases produced by the real `build_verificati
 - patch plus 12 context facts: 477 tokens; SAFE facts became 486, so the planner correctly reports no gain and keeps `REVIEW`.
 
 This shows that the current 192-token observed-safe bound is primarily a runtime/protocol constraint, not a long-context-compression problem. A research-only compact system prompt reduces the same cases to 190, 237 and 441 tokens respectively; only the base case crosses below the observed bound. No prompt protocol has been changed in production.
+
+## Root-cause correction: dense read-ahead half-bank exhaustion
+
+A deeper journal/code correlation changes the primary OOM diagnosis. The live `19196` process has `DS4_CUDA_LOW_VRAM_DENSE_READAHEAD=1`. In DS4, dense read-ahead splits the 768 MiB low-VRAM staging arena into two equal banks (`stage_budget / 2`), therefore only 384 MiB is available to the active layer window.
+
+Immediately before the layer-14 failure the journal already records a successful staging epoch reset. The next demand sequence stages about 373 MiB before requesting `attn_out_a` (34 MiB) / `attn_out_b` (42.5 MiB), with only 10.95 MiB left in the 384 MiB bank. This reproduces the arithmetic of the failure without requiring a poisoned prior epoch.
+
+Therefore the failure-only recovery fence remains a useful defensive measure after errors, but it is not the root fix for the first OOM. The Judge wrapper itself was forcing dense read-ahead on. The research branch now makes it an explicit `BOTTAZZI_MOTOR_JUDGE_DENSE_READAHEAD` boolean and defaults it to `0`, while writing an explicit `DS4_CUDA_LOW_VRAM_DENSE_READAHEAD=0` to prevent inherited environment state from re-enabling it.
+
+With the current real env file loaded read-only, the modified wrapper passes preflight and preserves port 19196, ctx 4096, stage 768 MiB and reserve 512 MiB while selecting dense read-ahead off. No service was restarted and the live env file was not modified.

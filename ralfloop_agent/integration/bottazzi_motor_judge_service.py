@@ -21,11 +21,24 @@ DEFAULTS = {
     "reserve_mb": 512,
     "expert_window": 32,
     "read_threads": 4,
+    "dense_readahead": False,
 }
 
 
 class ServiceConfigError(RuntimeError):
     pass
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = raw.strip().casefold()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ServiceConfigError(f"invalid_boolean:{name}")
+
 
 def _env_int(name: str, default: int) -> int:
     try:
@@ -69,6 +82,9 @@ def load_service_config() -> dict[str, Any]:
         "read_threads": _env_int(
             "BOTTAZZI_MOTOR_JUDGE_READ_THREADS", int(DEFAULTS["read_threads"])
         ),
+        "dense_readahead": _env_bool(
+            "BOTTAZZI_MOTOR_JUDGE_DENSE_READAHEAD", bool(DEFAULTS["dense_readahead"])
+        ),
         "lock_file": os.getenv(
             "BOTTAZZI_MOTOR_JUDGE_LOCK_FILE", "/run/ralfloop/bottazzi-motor-judge.lock"
         ),
@@ -103,6 +119,7 @@ def _public_config(cfg: dict[str, Any]) -> dict[str, Any]:
         "reserve_mb": cfg["reserve_mb"],
         "expert_window": cfg["expert_window"],
         "read_threads": cfg["read_threads"],
+        "dense_readahead": cfg["dense_readahead"],
     }
 
 
@@ -122,7 +139,9 @@ def build_exec(config: dict[str, Any] | None = None) -> tuple[list[str], dict[st
             "DS4_CUDA_V41_EXPERT_READ_THREADS": str(cfg["read_threads"]),
             "DS4_CUDA_V41_EXPERT_PACK_FILE": str(cfg["pack"]),
             "DS4_CUDA_V41_SMALL_PREFILL": "1",
-            "DS4_CUDA_LOW_VRAM_DENSE_READAHEAD": "1",
+            "DS4_CUDA_LOW_VRAM_DENSE_READAHEAD": (
+                "1" if cfg["dense_readahead"] else "0"
+            ),
             "DS4_CUDA_LOW_VRAM_HOST_CACHE_GB": "6",
             "DS4_CUDA_LOW_VRAM_HOST_CACHE_PINNED": "1",
             "DS4_CUDA_HOST_EXPERT_CHUNK_CACHE_GB": "16",
