@@ -80,3 +80,19 @@ On the current synthetic 10-turn approval context, using the real DeepSeek V4.1 
 - DENSE predicate/caveman: 385 payload; 420 rendered — about 29% fewer rendered tokens.
 
 Decision: KEEP SAFE as the current reference encoder. DENSE is useful research evidence but currently loses on actual tokenizer count despite fewer characters. Strange punctuation/mini-DSL syntax is not free under the pretrained tokenizer.
+
+## Real SessionStore benchmark
+
+Measured locally on the 10 largest non-trivial SessionStore records; raw message text was never printed or committed. Session IDs are represented only by short SHA-256 digests.
+
+Using the exact DS4 `--dump-tokens` tokenizer path, SAFE reduced 4,820 tokens to 4,186 (`0.8685`, about 13.2% saved). DENSE produced 4,265 (`0.8849`) and lost to SAFE in every case, so DENSE is research-only.
+
+Savings increase with context size. With an adaptive threshold of 1,000 raw characters, the eligible sample totals 3,656 -> 3,110 DS4 tokens (`0.8507`, about 14.9% saved). The longest real record measured 1,768 -> 1,391 tokens (`0.7868`).
+
+A fail-closed protected-atom guard now checks negation, condition/modality words, temporal operators, email addresses, URLs, numeric/alphanumeric IDs and comparison operators. Any mismatch causes that segment to fall back to normalized RAW text. The current 10-session SAFE benchmark triggered zero guard fallbacks.
+
+## Current 19196 admission boundary
+
+Read-only journal inspection shows the managed judge sidecar (`prefill_chunk=128`, stage 768 MiB, reserve 512 MiB) completed a 193-token rendered prompt on 2026-09-18, but later rendered prompts at 301, 323, 550 and 648 tokens all failed at V4.1 layer 14 with the same staging-space refusal (`attn_out_a`/`attn_out_b`).
+
+This makes long-context compression an admission-control concern as well as a latency optimization. No service was restarted or reconfigured during this investigation. Do not promote compressed prompts to authoritative Judge input until verdict-equivalence testing is available; for now the integration is telemetry-only behind `BOTTAZZI_MOTOR_SKELETON_SHADOW`.

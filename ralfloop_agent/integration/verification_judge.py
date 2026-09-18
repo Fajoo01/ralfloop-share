@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from ralfloop_agent.integration.bottazzi_motor_judge import (
@@ -8,6 +9,7 @@ from ralfloop_agent.integration.bottazzi_motor_judge import (
     JudgeOutcome,
 )
 from ralfloop_agent.unified_assistant.judge_context import collect_judge_context
+from ralfloop_agent.integration.motor_semantic_skeleton import skeleton_shadow_summary
 from src.models import CapabilityRoute, Evidence, PatchEvidence
 
 
@@ -85,7 +87,16 @@ def run_verification_judge(
             }
     case = build_verification_case(user_goal, route, evidence, candidate_answer, context)
     outcome: JudgeOutcome = (judge or BotTazziMotorJudge()).judge(case)
-    return outcome.model_dump()
+    trace = outcome.model_dump()
+    if os.getenv("BOTTAZZI_MOTOR_SKELETON_SHADOW", "").casefold() in {"1", "true", "yes", "on"}:
+        try:
+            trace["semantic_skeleton_shadow"] = skeleton_shadow_summary(case)
+        except Exception as exc:
+            trace["semantic_skeleton_shadow"] = {
+                "eligible": False,
+                "reason": f"shadow_unavailable:{type(exc).__name__}",
+            }
+    return trace
 
 
 def verification_blocks(route: CapabilityRoute, trace: dict[str, Any] | None) -> bool:

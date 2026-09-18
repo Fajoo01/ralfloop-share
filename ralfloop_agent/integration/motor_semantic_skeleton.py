@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
+import hashlib
 import json
 import re
 from typing import Any, Callable, Iterable, Mapping
@@ -64,6 +66,7 @@ class SemanticSkeleton:
     compact_chars: int
     grammar_tokens: int = 0
     grammar_hits: int = 0
+    guard_fallbacks: int = 0
 
     @property
     def ratio(self) -> float:
@@ -109,6 +112,30 @@ _AUX_LEMMAS = frozenset({"essere", "avere"})
 _MODAL_LEMMAS = frozenset({"dovere", "potere"})
 _FINITE_MODES = frozenset({"indicativo", "congiuntivo", "condizionale", "imperativo"})
 _ROLE_PREFIX_RE = re.compile(r"^([UAST?])>\s*", re.I)
+_IDENTIFIER_RE = re.compile(r"^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9._:/@+-]{4,}$")
+
+
+def protected_atoms(text: str) -> Counter[str]:
+    atoms: Counter[str] = Counter()
+    for token in tokenize(text):
+        key = token.casefold()
+        if key in CRITICAL_WORDS:
+            atoms[f"word:{key}"] += 1
+        elif "@" in token and token[:1].isalnum():
+            atoms[f"email:{key}"] += 1
+        elif token.startswith(("http://", "https://")):
+            atoms[f"url:{token}"] += 1
+        elif any(char.isdigit() for char in token) and (token[:1].isdigit() or _IDENTIFIER_RE.match(token)):
+            atoms[f"id:{key}"] += 1
+        elif token in {"=", "<", ">", "<=", ">=", "!=", "+", "-"}:
+            atoms[f"op:{token}"] += 1
+    return atoms
+
+
+def preserves_protected_atoms(original: str, compact: str) -> bool:
+    wanted = protected_atoms(original)
+    present = protected_atoms(compact)
+    return all(present[key] >= count for key, count in wanted.items())
 
 
 def tokenize(text: str) -> list[str]:
@@ -442,13 +469,18 @@ def compact_context(
         if profile == "dense" and grammar else {}
     )
     merged: dict[tuple[str, str, str], SkeletonEntry] = {}
+    guard_fallbacks = 0
     for item in source:
+        normalized = " ".join(item.text.split())
         if item.exact:
-            compact = " ".join(item.text.split())
+            compact = normalized
         elif profile == "dense":
             compact = dense_compact_text(item.text, grammar, valency)
         else:
             compact = compact_text(item.text, grammar)
+        if not preserves_protected_atoms(normalized, compact):
+            compact = normalized
+            guard_fallbacks += 1
         entry = SkeletonEntry(
             kind=item.kind,
             certainty=item.certainty,
@@ -484,6 +516,7 @@ def compact_context(
         compact_chars=len(packet),
         grammar_tokens=len(grammar),
         grammar_hits=grammar_hits,
+        guard_fallbacks=guard_fallbacks,
     )
 
 
@@ -531,13 +564,72 @@ def conversation_segments(
     return tuple(output)
 
 
+@dataclass(frozen=True)
+class SkeletonPolicy:
+    min_chars: int = 1000
+    min_segments: int = 4
+    profile: str = "safe"
+
+
+def compression_eligible(
+    segments: Iterable[ContextSegment],
+    policy: SkeletonPolicy | None = None,
+) -> bool:
+    selected = tuple(segments)
+    active = policy or SkeletonPolicy()
+    return (
+        len(selected) >= active.min_segments
+        and sum(len(item.text) for item in selected) >= active.min_chars
+    )
+
+
+def skeleton_shadow_summary(
+    case: Any,
+    *,
+    extra: Iterable[ContextSegment] = (),
+    policy: SkeletonPolicy | None = None,
+    use_grammar: bool = True,
+    grammar_session_factory: GrammarSessionFactory | None = None,
+) -> dict[str, Any]:
+    active = policy or SkeletonPolicy()
+    segments = judge_case_segments(case, extra)
+    raw_chars = sum(len(item.text) for item in segments)
+    summary: dict[str, Any] = {
+        "profile": active.profile,
+        "eligible": compression_eligible(segments, active),
+        "raw_segments": len(segments),
+        "raw_chars": raw_chars,
+    }
+    if not summary["eligible"]:
+        summary["reason"] = "below_threshold"
+        return summary
+    skeleton = compact_context(
+        segments,
+        use_grammar=use_grammar,
+        grammar_session_factory=grammar_session_factory,
+        profile=active.profile,
+    )
+    compact = "\n".join(skeleton.timeline_facts())
+    summary.update({
+        "compact_segments": len(skeleton.entries),
+        "compact_chars": len(compact),
+        "char_ratio": round(len(compact) / raw_chars, 4) if raw_chars else 1.0,
+        "grammar_tokens": skeleton.grammar_tokens,
+        "grammar_hits": skeleton.grammar_hits,
+        "guard_fallbacks": skeleton.guard_fallbacks,
+        "skeleton_sha256": hashlib.sha256(compact.encode("utf-8")).hexdigest(),
+    })
+    return summary
+
+
 def compact_judge_case(case: Any, **kwargs: Any) -> SemanticSkeleton:
     return compact_context(judge_case_segments(case), **kwargs)
 
 
 __all__ = [
     "CRITICAL_WORDS", "ContextSegment", "DEFAULT_GRAMMAR_SOCKET", "SemanticSkeleton",
-    "SkeletonEntry", "compact_context", "compact_judge_case", "compact_text",
-    "conversation_segments", "dense_compact_text", "judge_case_segments",
-    "lookup_grammar", "lookup_valency", "tokenize",
+    "SkeletonEntry", "SkeletonPolicy", "compact_context", "compact_judge_case", "compact_text",
+    "compression_eligible", "conversation_segments", "dense_compact_text", "judge_case_segments",
+    "lookup_grammar", "lookup_valency", "preserves_protected_atoms", "protected_atoms",
+    "skeleton_shadow_summary", "tokenize",
 ]

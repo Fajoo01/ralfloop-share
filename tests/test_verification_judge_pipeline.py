@@ -133,3 +133,34 @@ def test_run_verification_judge_collects_context_before_calling_model(monkeypatc
     assert "memory:doc#abc" in case.evidence_refs
     assert any("runts.context" in fact for fact in case.facts)
     assert case.metadata["retrieval_context"]["memory"]["status"] == "available"
+
+
+def test_semantic_skeleton_shadow_is_telemetry_only(monkeypatch):
+    from ralfloop_agent.integration import verification_judge as module
+    from ralfloop_agent.integration.bottazzi_motor_judge import JudgeOutcome, JudgeVerdict, JudgeGate
+    from ralfloop_agent.unified_assistant.judge_context import JudgeContext
+
+    monkeypatch.setenv("BOTTAZZI_MOTOR_SKELETON_SHADOW", "1")
+    monkeypatch.setattr(module, "collect_judge_context", lambda goal: JudgeContext())
+    monkeypatch.setattr(module, "skeleton_shadow_summary", lambda case: {
+        "eligible": True, "profile": "safe", "raw_chars": 1400,
+        "compact_chars": 1000, "char_ratio": 0.7143,
+        "skeleton_sha256": "a" * 64,
+    })
+
+    class FakeJudge:
+        def judge(self, case):
+            return JudgeOutcome(
+                case_digest="b" * 64,
+                verdict=JudgeVerdict(decision="PASS", confidence=0.9, risk="LOW", reason="ok"),
+                gate=JudgeGate(proceed_to_next_stage=True, status="judge_passed"),
+            )
+
+    route = route_task("fix bug concreto con test")
+    result = module.run_verification_judge(
+        "fix bug concreto con test", route, None, "candidate", {"task_id": "shadow"}, judge=FakeJudge()
+    )
+    assert result["verdict"]["decision"] == "PASS"
+    assert result["gate"]["proceed_to_next_stage"] is True
+    assert result["semantic_skeleton_shadow"]["profile"] == "safe"
+    assert "text" not in result["semantic_skeleton_shadow"]

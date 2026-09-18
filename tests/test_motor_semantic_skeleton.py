@@ -179,3 +179,53 @@ def test_invalid_profile_fails_before_silent_semantic_change():
 
     with pytest.raises(ValueError, match="semantic_skeleton_profile_invalid"):
         compact_context([ContextSegment("dato", "r")], profile="unknown")
+
+
+def test_adaptive_policy_skips_short_context_and_shadows_long_context_without_text_leak():
+    from ralfloop_agent.integration.motor_semantic_skeleton import (
+        SkeletonPolicy,
+        compression_eligible,
+        judge_case_segments,
+        skeleton_shadow_summary,
+    )
+
+    short = SimpleNamespace(goal="check", facts=["ok"], rules=["do not invent"], candidate_answer="pass")
+    assert not compression_eligible(judge_case_segments(short), SkeletonPolicy(min_chars=1000, min_segments=4))
+
+    repeated = "recipient unchanged content unchanged approval required " * 8
+    long = SimpleNamespace(
+        goal="verify exact approved action",
+        facts=[repeated, repeated, repeated, repeated],
+        rules=["Never bypass confirmation.", "Missing evidence means review."],
+        candidate_answer="advance only if exact",
+    )
+    summary = skeleton_shadow_summary(
+        long,
+        policy=SkeletonPolicy(min_chars=1000, min_segments=4),
+        use_grammar=False,
+    )
+    assert summary["eligible"] is True
+    assert summary["compact_segments"] < summary["raw_segments"]
+    assert len(summary["skeleton_sha256"]) == 64
+    assert "text" not in summary
+    assert "facts" not in summary
+
+
+def test_protected_atom_guard_preserves_negation_ids_numbers_and_email():
+    from ralfloop_agent.integration.motor_semantic_skeleton import preserves_protected_atoms
+
+    raw = "Non inviare a Alice@example.org prima del 18/09 se hash abc123 cambia."
+    good = "non inviare Alice@example.org prima 18/09 se hash abc123 cambia"
+    bad = "inviare Alice@example.org 18/09 hash abc123 cambia"
+    assert preserves_protected_atoms(raw, good) is True
+    assert preserves_protected_atoms(raw, bad) is False
+
+
+def test_guard_falls_back_to_raw_segment_when_compressor_drops_critical_atom(monkeypatch):
+    from ralfloop_agent.integration import motor_semantic_skeleton as module
+
+    monkeypatch.setattr(module, "compact_text", lambda text, analyses=None: "inviare destinatario")
+    segment = ContextSegment("Non inviare destinatario prima del 18/09.", "g1")
+    result = module.compact_context([segment], profile="safe")
+    assert result.guard_fallbacks == 1
+    assert result.entries[0].text == "Non inviare destinatario prima del 18/09."
