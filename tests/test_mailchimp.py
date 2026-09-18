@@ -244,3 +244,49 @@ def test_read_rejects_reported_effect(field):
         match=f"mailchimp_read_reported_{field}",
     ):
         gateway.invoke_read("mailchimp_ping")
+
+
+def test_approved_send_forwards_html_sha256_required_by_schema():
+    digest = "a" * 64
+    protected = schema({
+        "approval_request_id": {"type": "string", "minLength": 1},
+        "execution_id": {"type": "string", "minLength": 1},
+        "campaign_id": {"type": "string", "minLength": 1},
+        "list_id": {"type": "string", "minLength": 1},
+        "provider_campaign_sha256": {"type": "string", "minLength": 64},
+        "subject": {"type": "string", "minLength": 1},
+        "from_name": {"type": "string", "minLength": 1},
+        "reply_to": {"type": "string", "minLength": 1},
+        "content_sha256": {"type": "string", "minLength": 64},
+        "html_sha256": {"type": "string", "minLength": 64},
+        "provider_identity": {"type": "string", "minLength": 1},
+    })
+    protected["required"] = list(protected["properties"])
+    tools = [tool for tool in valid_tools() if tool.name != "mailchimp_send_approved_campaign"]
+    tools.append(SimpleNamespace(name="mailchimp_send_approved_campaign", input_schema=protected))
+    session = FakeSession(tools=tools, result={"ok": True, "status": "executed"})
+    gateway = MailchimpGateway(session)
+    gateway.discover()
+    scope = {
+        "action": "mailchimp_campaign_send", "version": 1,
+        "artifact_sha256": digest, "body_sha256": digest,
+        "campaign_id": "campaign_1", "list_id": "audience_1",
+        "provider_campaign_sha256": digest, "subject": "Subject",
+        "from_name": "Tiremm", "reply_to": "info@example.invalid",
+        "content_sha256": digest, "html_sha256": digest,
+        "provider_identity": "mailchimp.marketing",
+        "execution_id": "mcsend_" + "b" * 24,
+    }
+    from src.mailchimp import MailchimpApprovedMCPWorkflow
+    workflow = MailchimpApprovedMCPWorkflow(gateway_factory=lambda: _GatewayContext(gateway))
+    workflow.execute_send("apr_ABCDEFGH", scope)
+    assert session.calls[-1][1]["html_sha256"] == digest
+
+
+class _GatewayContext:
+    def __init__(self, gateway):
+        self.gateway = gateway
+    def __enter__(self):
+        return self.gateway
+    def __exit__(self, *args):
+        return None
