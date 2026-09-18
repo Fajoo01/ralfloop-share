@@ -10,6 +10,7 @@ from ralfloop_agent.integration.bottazzi_motor_judge import (
 )
 from ralfloop_agent.unified_assistant.judge_context import collect_judge_context
 from ralfloop_agent.integration.motor_semantic_skeleton import skeleton_shadow_summary
+from ralfloop_agent.integration.motor_admission import make_exact_token_counter, plan_motor_admission
 from src.models import CapabilityRoute, Evidence, PatchEvidence
 
 
@@ -95,6 +96,30 @@ def run_verification_judge(
             trace["semantic_skeleton_shadow"] = {
                 "eligible": False,
                 "reason": f"shadow_unavailable:{type(exc).__name__}",
+            }
+    if os.getenv("BOTTAZZI_MOTOR_ADMISSION_SHADOW", "").casefold() in {"1", "true", "yes", "on"}:
+        try:
+            ds4_binary = os.getenv("BOTTAZZI_MOTOR_TOKENIZER_BIN", "").strip()
+            model_path = os.getenv("BOTTAZZI_MOTOR_MODEL_PATH", "").strip()
+            if not ds4_binary or not model_path:
+                trace["motor_admission_shadow"] = {
+                    "available": False,
+                    "reason": "tokenizer_config_missing",
+                }
+            else:
+                counter = make_exact_token_counter(
+                    ds4_binary=ds4_binary,
+                    model_path=model_path,
+                )
+                plan = plan_motor_admission(case, token_counter=counter)
+                trace["motor_admission_shadow"] = {
+                    "available": True,
+                    **plan.as_telemetry(),
+                }
+        except Exception as exc:
+            trace["motor_admission_shadow"] = {
+                "available": False,
+                "reason": f"admission_shadow_unavailable:{type(exc).__name__}",
             }
     return trace
 

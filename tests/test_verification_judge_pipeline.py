@@ -164,3 +164,81 @@ def test_semantic_skeleton_shadow_is_telemetry_only(monkeypatch):
     assert result["gate"]["proceed_to_next_stage"] is True
     assert result["semantic_skeleton_shadow"]["profile"] == "safe"
     assert "text" not in result["semantic_skeleton_shadow"]
+
+
+def test_admission_shadow_is_telemetry_only(monkeypatch):
+    from ralfloop_agent.integration import verification_judge as module
+    from ralfloop_agent.integration.bottazzi_motor_judge import JudgeOutcome, JudgeVerdict, JudgeGate
+    from ralfloop_agent.integration.motor_admission import MotorAdmissionPlan
+    from ralfloop_agent.unified_assistant.judge_context import JudgeContext
+
+    monkeypatch.setenv("BOTTAZZI_MOTOR_ADMISSION_SHADOW", "1")
+    monkeypatch.setenv("BOTTAZZI_MOTOR_TOKENIZER_BIN", "/tmp/ds4")
+    monkeypatch.setenv("BOTTAZZI_MOTOR_MODEL_PATH", "/tmp/model.gguf")
+    monkeypatch.setattr(module, "collect_judge_context", lambda goal: JudgeContext())
+    monkeypatch.setattr(module, "make_exact_token_counter", lambda **kwargs: lambda case: 250)
+    monkeypatch.setattr(module, "plan_motor_admission", lambda *args, **kwargs: MotorAdmissionPlan(
+        mode="REVIEW", raw_tokens=250, budget_tokens=192,
+        safe_tokens=220, reason="safe_candidate_still_over_budget",
+    ))
+
+    class FakeJudge:
+        def judge(self, case):
+            return JudgeOutcome(
+                case_digest="c" * 64,
+                verdict=JudgeVerdict(decision="PASS", confidence=0.9, risk="LOW", reason="ok"),
+                gate=JudgeGate(proceed_to_next_stage=True, status="judge_passed"),
+            )
+
+    route = route_task("fix bug concreto con test")
+    result = module.run_verification_judge(
+        "fix bug concreto con test", route, None, "candidate",
+        {"task_id": "admission-shadow"}, judge=FakeJudge(),
+    )
+    assert result["verdict"]["decision"] == "PASS"
+    assert result["gate"]["proceed_to_next_stage"] is True
+    assert result["motor_admission_shadow"] == {
+        "available": True,
+        "mode": "REVIEW",
+        "raw_tokens": 250,
+        "budget_tokens": 192,
+        "safe_tokens": 220,
+        "reason": "safe_candidate_still_over_budget",
+        "guard_fallbacks": 0,
+    }
+
+
+def test_admission_shadow_reports_missing_tokenizer_config(monkeypatch):
+    from ralfloop_agent.integration import verification_judge as module
+    from ralfloop_agent.integration.bottazzi_motor_judge import JudgeOutcome, JudgeVerdict, JudgeGate
+    from ralfloop_agent.unified_assistant.judge_context import JudgeContext
+
+    monkeypatch.setenv("BOTTAZZI_MOTOR_ADMISSION_SHADOW", "1")
+    monkeypatch.delenv("BOTTAZZI_MOTOR_TOKENIZER_BIN", raising=False)
+    monkeypatch.delenv("BOTTAZZI_MOTOR_MODEL_PATH", raising=False)
+    monkeypatch.setattr(module, "collect_judge_context", lambda goal: JudgeContext())
+
+    class FakeJudge:
+        def judge(self, case):
+            return JudgeOutcome(
+                case_digest="d" * 64,
+                verdict=JudgeVerdict(
+                    decision="REQUEST_REVIEW", confidence=0.9,
+                    risk="MEDIUM", reason="review",
+                ),
+                gate=JudgeGate(
+                    proceed_to_next_stage=False,
+                    status="review", requires_human_review=True,
+                ),
+            )
+
+    route = route_task("fix bug concreto con test")
+    result = module.run_verification_judge(
+        "fix bug concreto con test", route, None, "candidate",
+        {"task_id": "admission-shadow-missing"}, judge=FakeJudge(),
+    )
+    assert result["verdict"]["decision"] == "REQUEST_REVIEW"
+    assert result["motor_admission_shadow"] == {
+        "available": False,
+        "reason": "tokenizer_config_missing",
+    }

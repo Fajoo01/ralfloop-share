@@ -116,3 +116,17 @@ A minimal failure-only patch calls `ds4_gpu_synchronize()` after logging a faile
 The isolated recovery worktree `/home/bandi/ds4-stage-recovery-20260918` was rebuilt with `make -B ds4-server CUDA_ARCH=sm_75`. Full CUDA compilation and final link completed with exit 0; the resulting `ds4-server --help` executes successfully. The patch also applies cleanly in dry-run against the current live-WIP source tree.
 
 This is build validation only. No recovery binary was started against the model, no deliberate OOM was triggered, and neither the 19194 production service nor the 19196 Judge sidecar was restarted or replaced.
+
+## Admission planner shadow checkpoint
+
+A pure admission planner now evaluates the authoritative Judge request before any inference. It returns only `RAW`, `SAFE_CANDIDATE`, or `REVIEW`; it never executes a model request and never authorizes an action. Exact token counting remains externalized through a counter so tests do not require DS4.
+
+`BOTTAZZI_MOTOR_ADMISSION_SHADOW=1` adds telemetry only. Exact tokenizer/model paths must be supplied through `BOTTAZZI_MOTOR_TOKENIZER_BIN` and `BOTTAZZI_MOTOR_MODEL_PATH`; missing configuration fails closed in telemetry and does not alter the Judge result.
+
+Offline exact-token measurements on cases produced by the real `build_verification_case()` path:
+
+- base verification case: 226 tokens -> `REVIEW` at budget 192;
+- normal patch evidence: 273 tokens -> `REVIEW`;
+- patch plus 12 context facts: 477 tokens; SAFE facts became 486, so the planner correctly reports no gain and keeps `REVIEW`.
+
+This shows that the current 192-token observed-safe bound is primarily a runtime/protocol constraint, not a long-context-compression problem. A research-only compact system prompt reduces the same cases to 190, 237 and 441 tokens respectively; only the base case crosses below the observed bound. No prompt protocol has been changed in production.
