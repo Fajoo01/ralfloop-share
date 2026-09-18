@@ -33,7 +33,8 @@ class FakeClient:
         self.campaign = {
             "campaign_id": "campaign_1", "list_id": scope["list_id"],
             "subject": scope["subject"], "from_name": scope["from_name"],
-            "reply_to": scope["reply_to"], "content_sha256": scope["body_sha256"],
+            "reply_to": scope["reply_to"], "preheader": scope["preheader"],
+            "title": scope["internal_title"], "content_sha256": scope["body_sha256"],
             "html_sha256": scope["html_sha256"], "content_verified": True,
             "sent": False, "provider_status": "save",
         }

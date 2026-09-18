@@ -79,11 +79,17 @@ def build_mailchimp_campaign_send_scope(payload: Mapping[str, Any]) -> dict[str,
         "subject": str(payload.get("subject") or ""),
         "from_name": str(payload.get("from_name") or ""),
         "reply_to": str(payload.get("reply_to") or ""),
+        "preheader": str(payload.get("preheader") or ""),
+        "title": str(payload.get("title") or ""),
         "content_sha256": str(payload.get("content_sha256") or ""),
         "html_sha256": str(payload.get("html_sha256") or ""),
         "provider_identity": str(payload.get("provider_identity") or "mailchimp.marketing"),
     }
-    if not all(artifact.values()):
+    required = (
+        "campaign_id", "list_id", "provider_campaign_sha256", "subject",
+        "from_name", "reply_to", "content_sha256", "html_sha256", "provider_identity",
+    )
+    if not all(artifact[key] for key in required):
         raise ValueError("mailchimp_send_scope_incomplete")
     artifact_sha256 = _canonical_digest(artifact)
     return {
@@ -140,6 +146,8 @@ def campaign_fingerprint(campaign: Mapping[str, Any]) -> str:
         "subject": str(campaign.get("subject") or ""),
         "from_name": str(campaign.get("from_name") or ""),
         "reply_to": str(campaign.get("reply_to") or ""),
+        "preheader": str(campaign.get("preheader") or ""),
+        "title": str(campaign.get("title") or ""),
         "content_sha256": str(campaign.get("content_sha256") or ""),
         "html_sha256": str(campaign.get("html_sha256") or ""),
     }
@@ -172,6 +180,7 @@ class MailchimpCampaignWorkflow:
                 "campaign_id": campaign_id, "list_id": current_scope["list_id"],
                 "subject": current_scope["subject"], "from_name": current_scope["from_name"],
                 "reply_to": current_scope["reply_to"],
+                "preheader": current_scope["preheader"], "title": current_scope["internal_title"],
                 "content_sha256": current_scope["body_sha256"],
                 "html_sha256": current_scope["html_sha256"], "sent": False,
             }
@@ -204,9 +213,9 @@ class MailchimpCampaignWorkflow:
         if (
             bool(before.get("sent"))
             or campaign_fingerprint(before) != str(current_scope.get("provider_campaign_sha256"))
-            or any(before.get(k) != current_scope.get(k) for k in (
+            or any(str(before.get(k) or "") != str(current_scope.get(k) or "") for k in (
                 "campaign_id", "list_id", "subject", "from_name", "reply_to",
-                "content_sha256", "html_sha256"
+                "preheader", "title", "content_sha256", "html_sha256"
             ))
         ):
             self.store.mark_stale(request_id, ["mailchimp_provider_campaign_changed"])

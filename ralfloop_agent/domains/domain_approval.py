@@ -283,6 +283,16 @@ def render_telegram_request(request: DomainApprovalRequest) -> str:
         f"Digest: {request.scope_digest_short}",
         f"Scadenza: {time.strftime('%d/%m/%Y %H:%M UTC', time.gmtime(request.expires_at))}",
     ]
+    if request.action in {"mailchimp_campaign_create", "mailchimp_campaign_send"}:
+        subject = str(request.scope.get("subject") or "")
+        preheader = str(request.scope.get("preheader") or "")
+        title = str(request.scope.get("title") or request.scope.get("internal_title") or "")
+        lines.extend(["", f"Oggetto: {subject[:300]}"])
+        if preheader:
+            lines.append(f"Preheader: {preheader[:300]}")
+        if title:
+            lines.append(f"Titolo interno: {title[:300]}")
+
     canary = request.scope.get("canary_plan") or {}
     if canary:
         lines.extend(

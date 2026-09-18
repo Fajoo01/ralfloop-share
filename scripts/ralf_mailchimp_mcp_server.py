@@ -81,6 +81,7 @@ DIGEST = {"type": "string", "pattern": r"^[a-f0-9]{64}$"}
 EXECUTION_ID = {"type": "string", "pattern": r"^mc(?:create|send|subscribe)_[a-f0-9]{24}$"}
 REQUEST_ID = {"type": "string", "pattern": r"^apr_[A-Za-z0-9_-]{8,128}$"}
 SHORT_TEXT = {"type": "string", "minLength": 1, "maxLength": 255}
+OPTIONAL_TEXT = {"type": "string", "maxLength": 255}
 BODY_TEXT = {"type": "string", "minLength": 1, "maxLength": 200000}
 EMAIL_ADDRESS = {"type": "string", "minLength": 3, "maxLength": 320, "pattern": r"^[^@\s]+@[^@\s]+\.[^@\s]+$"}
 NAME_TEXT = {"type": "string", "maxLength": 255}
@@ -141,10 +142,11 @@ TOOLS: dict[str, dict[str, Any]] = {
         "campaign_id": RESOURCE_ID, "list_id": RESOURCE_ID,
         "provider_campaign_sha256": DIGEST, "subject": SHORT_TEXT,
         "from_name": SHORT_TEXT, "reply_to": SHORT_TEXT,
+        "preheader": OPTIONAL_TEXT, "title": OPTIONAL_TEXT,
         "content_sha256": DIGEST, "html_sha256": DIGEST, "provider_identity": SHORT_TEXT,
     }, ("approval_request_id", "execution_id", "campaign_id", "list_id",
         "provider_campaign_sha256", "subject", "from_name", "reply_to",
-        "content_sha256", "html_sha256", "provider_identity")),
+        "preheader", "title", "content_sha256", "html_sha256", "provider_identity")),
     "mailchimp_subscribe_approved_member": _schema({
         "approval_request_id": REQUEST_ID, "execution_id": EXECUTION_ID,
         "list_id": RESOURCE_ID, "email_address": EMAIL_ADDRESS,
@@ -334,6 +336,8 @@ class MailchimpClient:
             "subject": str(settings.get("subject_line") or ""),
             "from_name": str(settings.get("from_name") or ""),
             "reply_to": str(settings.get("reply_to") or ""),
+            "preheader": str(settings.get("preview_text") or ""),
+            "title": str(settings.get("title") or ""),
             "content_sha256": hashlib.sha256(plain.encode()).hexdigest(),
             "html_sha256": hashlib.sha256(html_content.encode()).hexdigest(),
             "sent": str(info.get("status") or "") in {"sending", "sent"},
@@ -787,9 +791,9 @@ class MailchimpMCPServer:
                         if (
                             before.get("sent")
                             or campaign_fingerprint(before) != scope["provider_campaign_sha256"]
-                            or any(before.get(key) != scope.get(key) for key in (
+                            or any(str(before.get(key) or "") != str(scope.get(key) or "") for key in (
                                 "campaign_id", "list_id", "subject", "from_name", "reply_to",
-                                "content_sha256", "html_sha256"
+                                "preheader", "title", "content_sha256", "html_sha256"
                             ))
                         ):
                             self.approval_store.mark_stale(request_id, ["mailchimp_provider_campaign_changed"])
