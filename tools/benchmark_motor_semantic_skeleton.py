@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
+from pathlib import Path
+import subprocess
+import tempfile
 import time
 
 from ralfloop_agent.integration.bottazzi_motor_judge import (
@@ -47,17 +51,14 @@ def raw_facts() -> list[str]:
     ]
 
 
-def compact_facts() -> tuple[list[str], object]:
+def compact_facts(profile: str) -> tuple[list[str], object]:
     skeleton = compact_context(
         conversation_segments(TURNS, recent_exact=2),
         use_grammar=True,
         max_unique_grammar_tokens=192,
+        profile=profile,
     )
-    facts = [
-        " ".join(part for part in (entry.timestamp or "", entry.text) if part)
-        for entry in skeleton.entries
-    ]
-    return facts, skeleton
+    return skeleton.timeline_facts(), skeleton
 
 
 def make_case(case_id: str, facts: list[str]) -> JudgeCase:
@@ -76,6 +77,25 @@ def make_case(case_id: str, facts: list[str]) -> JudgeCase:
 def lexical_count(case: JudgeCase) -> int:
     payload = json.dumps(case.model_dump(exclude_none=True), ensure_ascii=False, separators=(",", ":"))
     return len(tokenize(payload))
+
+
+def exact_ds4_token_count(text: str, ds4_bin: str, model: str, *, raw: bool) -> int:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".txt", delete=False) as handle:
+        handle.write(text)
+        prompt_path = handle.name
+    command = [ds4_bin, "-m", model, "--dump-tokens"]
+    if raw:
+        command.append("--raw")
+    command.extend(["--prompt-file", prompt_path])
+    try:
+        result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=30)
+        first = result.stdout.splitlines()[0]
+        token_ids = ast.literal_eval(first)
+        if not isinstance(token_ids, list):
+            raise ValueError("ds4_token_dump_not_list")
+        return len(token_ids)
+    finally:
+        Path(prompt_path).unlink(missing_ok=True)
 
 
 def run_live(label: str, case: JudgeCase, url: str) -> dict:
@@ -100,26 +120,49 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--url", default="http://127.0.0.1:19196")
+    parser.add_argument("--live-profile", choices=("safe", "dense"), default="dense")
+    parser.add_argument("--ds4-bin")
+    parser.add_argument("--model")
     args = parser.parse_args()
 
     raw = make_case("semantic-skeleton-raw", raw_facts())
-    compact_rows, skeleton = compact_facts()
-    compact = make_case("semantic-skeleton-compact", compact_rows)
+    variants = {}
+    skeletons = {}
+    for profile in ("safe", "dense"):
+        rows, skeleton = compact_facts(profile)
+        variants[profile] = make_case(f"semantic-skeleton-{profile}", rows)
+        skeletons[profile] = skeleton
     raw_json = json.dumps(raw.model_dump(exclude_none=True), ensure_ascii=False, separators=(",", ":"))
-    compact_json = json.dumps(compact.model_dump(exclude_none=True), ensure_ascii=False, separators=(",", ":"))
     report = {
         "raw": {"facts": len(raw.facts), "chars": len(raw_json), "lexical_tokens": lexical_count(raw)},
-        "compact": {"facts": len(compact.facts), "chars": len(compact_json), "lexical_tokens": lexical_count(compact)},
-        "char_ratio": round(len(compact_json) / len(raw_json), 4),
-        "lexical_ratio": round(lexical_count(compact) / lexical_count(raw), 4),
-        "grammar_tokens": skeleton.grammar_tokens,
-        "grammar_hits": skeleton.grammar_hits,
-        "skeleton_wire": skeleton.wire(),
+        "variants": {},
     }
+    for profile, case in variants.items():
+        encoded = json.dumps(case.model_dump(exclude_none=True), ensure_ascii=False, separators=(",", ":"))
+        report["variants"][profile] = {
+            "facts": len(case.facts), "chars": len(encoded), "lexical_tokens": lexical_count(case),
+            "char_ratio": round(len(encoded) / len(raw_json), 4),
+            "lexical_ratio": round(lexical_count(case) / lexical_count(raw), 4),
+            "grammar_tokens": skeletons[profile].grammar_tokens,
+            "grammar_hits": skeletons[profile].grammar_hits,
+            "skeleton_wire": skeletons[profile].wire(),
+        }
+    if bool(args.ds4_bin) != bool(args.model):
+        parser.error("--ds4-bin and --model must be supplied together")
+    if args.ds4_bin and args.model:
+        token_counts = {}
+        for label, case in (("raw", raw), *variants.items()):
+            text = json.dumps(case.model_dump(exclude_none=True), ensure_ascii=False, separators=(",", ":"))
+            token_counts[label] = {
+                "raw_payload": exact_ds4_token_count(text, args.ds4_bin, args.model, raw=True),
+                "cli_rendered": exact_ds4_token_count(text, args.ds4_bin, args.model, raw=False),
+            }
+        report["ds4_tokens"] = token_counts
     if args.live:
+        selected = variants[args.live_profile]
         report["live"] = [
             run_live("raw", raw, args.url),
-            run_live("compact", compact, args.url),
+            run_live(args.live_profile, selected, args.url),
         ]
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0

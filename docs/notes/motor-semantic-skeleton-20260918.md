@@ -68,3 +68,15 @@ This is not evidence that RAW and compact semantics agree. It is evidence that l
 3. latency and bytes read only for successful runs.
 
 Do not restart or alter production `19194`/judge `19196` as part of this research branch. Fix/benchmark the runtime separately or use a bounded context that completes on both paths.
+
+## Exact DS4 tokenizer checkpoint
+
+The benchmark now supports optional exact token counting through `ds4 --dump-tokens`; paths are supplied as CLI arguments and are not hard-coded.
+
+On the current synthetic 10-turn approval context, using the real DeepSeek V4.1 tokenizer:
+
+- RAW payload: 558 tokens; CLI-rendered: 593 tokens.
+- SAFE grammar+timeline: 373 payload; 408 rendered — about 31% fewer rendered tokens.
+- DENSE predicate/caveman: 385 payload; 420 rendered — about 29% fewer rendered tokens.
+
+Decision: KEEP SAFE as the current reference encoder. DENSE is useful research evidence but currently loses on actual tokenizer count despite fewer characters. Strange punctuation/mini-DSL syntax is not free under the pretrained tokenizer.

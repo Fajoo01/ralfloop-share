@@ -128,3 +128,54 @@ def test_conversation_context_keeps_recent_turns_exact_and_compresses_old_turns(
     recent = next(entry for entry in result.entries if "t3" in entry.refs)
     assert "documento" in old.text
     assert recent.text == "U>Non inviarli ancora"
+
+
+def test_dense_profile_uses_determiner_to_prefer_noun_reading():
+    from ralfloop_agent.integration.motor_semantic_skeleton import dense_compact_text
+
+    grammar = {
+        "la": [{"category": "articolo_determinativo", "features": {"lemma": "il"}}],
+        "verifica": [
+            {"category": "nome_comune", "features": {"lemma": "verifica"}},
+            {"category": "verbo", "features": {"lemma": "verificare", "modo": "indicativo"}},
+        ],
+        "è": [{"category": "verbo", "features": {"lemma": "essere", "modo": "indicativo"}}],
+        "completata": [{"category": "verbo", "features": {"lemma": "completare", "modo": "participio", "tempo": "passato"}}],
+    }
+    result = dense_compact_text("A>La verifica è completata", grammar, {})
+    assert "verificare(" not in result
+    assert "verifica=completata" in result.casefold()
+
+
+def test_dense_profile_does_not_read_determined_texto_as_verb():
+    from ralfloop_agent.integration.motor_semantic_skeleton import dense_compact_text
+
+    grammar = {
+        "controlla": [{"category": "verbo", "features": {"lemma": "controllare", "modo": "imperativo"}}],
+        "il": [{"category": "articolo_determinativo", "features": {"lemma": "il"}}],
+        "testo": [
+            {"category": "nome_comune", "features": {"lemma": "testo"}},
+            {"category": "verbo", "features": {"lemma": "testare", "modo": "indicativo"}},
+        ],
+    }
+    result = dense_compact_text("U>Controlla il testo", grammar, {"controllare": ("[Human] controllare [Artifact]",)})
+    assert "testare" not in result
+    assert "testo" in result
+
+
+def test_timeline_facts_use_one_base_and_relative_offsets():
+    result = compact_context([
+        ContextSegment("primo fatto", "a", timestamp="2026-09-18T09:00:00+02:00"),
+        ContextSegment("secondo fatto", "b", timestamp="2026-09-18T09:12:00+02:00"),
+    ])
+    facts = result.timeline_facts()
+    assert facts[0] == "T0=2026-09-18T09:00+02:00"
+    assert any(line.startswith("+0m ") for line in facts[1:])
+    assert any(line.startswith("+12m ") for line in facts[1:])
+
+
+def test_invalid_profile_fails_before_silent_semantic_change():
+    import pytest
+
+    with pytest.raises(ValueError, match="semantic_skeleton_profile_invalid"):
+        compact_context([ContextSegment("dato", "r")], profile="unknown")
