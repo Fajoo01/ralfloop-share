@@ -229,3 +229,31 @@ def test_guard_falls_back_to_raw_segment_when_compressor_drops_critical_atom(mon
     result = module.compact_context([segment], profile="safe")
     assert result.guard_fallbacks == 1
     assert result.entries[0].text == "Non inviare destinatario prima del 18/09."
+
+
+def test_compress_judge_case_facts_changes_only_facts():
+    from ralfloop_agent.integration.bottazzi_motor_judge import JudgeCase
+    from ralfloop_agent.integration.motor_semantic_skeleton import (
+        SkeletonPolicy,
+        compress_judge_case_facts,
+    )
+
+    repeated = "recipient unchanged content unchanged approval required " * 8
+    case = JudgeCase(
+        case_id="compress-1",
+        goal="keep this goal exact",
+        facts=[repeated, repeated, repeated, repeated],
+        rules=["keep this rule exact"],
+        candidate_actions=["PASS", "REQUEST_REVIEW"],
+        candidate_answer="keep answer exact",
+    )
+    compact, skeleton = compress_judge_case_facts(
+        case,
+        policy=SkeletonPolicy(min_chars=1000, min_segments=4),
+        use_grammar=False,
+    )
+    assert skeleton is not None
+    assert len(compact.facts) < len(case.facts)
+    assert compact.goal == case.goal
+    assert compact.rules == case.rules
+    assert compact.candidate_answer == case.candidate_answer

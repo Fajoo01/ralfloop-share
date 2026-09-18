@@ -104,10 +104,7 @@ class BotTazziMotorJudge:
     def _request(self, case: JudgeCase) -> str:
         payload = {
             "model": self.config.model,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": json.dumps(_prompt_case_payload(case), ensure_ascii=False, sort_keys=True, separators=(",", ":"))},
-            ],
+            "messages": judge_request_messages(case),
             "temperature": 0,
             "max_tokens": self.config.max_tokens,
             "think": False,
@@ -181,6 +178,21 @@ class BotTazziMotorJudge:
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
 
+
+
+def judge_request_messages(case: JudgeCase) -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": json.dumps(
+                _prompt_case_payload(case),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        },
+    ]
 
 
 def _prompt_case_payload(case: JudgeCase) -> dict[str, Any]:

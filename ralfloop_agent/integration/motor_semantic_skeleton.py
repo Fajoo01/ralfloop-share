@@ -622,6 +622,32 @@ def skeleton_shadow_summary(
     return summary
 
 
+def compress_judge_case_facts(
+    case: Any,
+    *,
+    policy: SkeletonPolicy | None = None,
+    use_grammar: bool = True,
+    grammar_session_factory: GrammarSessionFactory | None = None,
+) -> tuple[Any, SemanticSkeleton | None]:
+    active = policy or SkeletonPolicy()
+    segments = tuple(
+        ContextSegment(str(text), f"fact:{index}", kind="fact", priority=70)
+        for index, text in enumerate(getattr(case, "facts", ()) or ())
+    )
+    if not compression_eligible(segments, active):
+        return case, None
+    skeleton = compact_context(
+        segments,
+        use_grammar=use_grammar,
+        grammar_session_factory=grammar_session_factory,
+        profile=active.profile,
+    )
+    facts = [entry.text for entry in skeleton.entries]
+    if hasattr(case, "model_copy"):
+        return case.model_copy(update={"facts": facts}), skeleton
+    raise TypeError("judge_case_does_not_support_model_copy")
+
+
 def compact_judge_case(case: Any, **kwargs: Any) -> SemanticSkeleton:
     return compact_context(judge_case_segments(case), **kwargs)
 
@@ -629,6 +655,7 @@ def compact_judge_case(case: Any, **kwargs: Any) -> SemanticSkeleton:
 __all__ = [
     "CRITICAL_WORDS", "ContextSegment", "DEFAULT_GRAMMAR_SOCKET", "SemanticSkeleton",
     "SkeletonEntry", "SkeletonPolicy", "compact_context", "compact_judge_case", "compact_text",
+    "compress_judge_case_facts",
     "compression_eligible", "conversation_segments", "dense_compact_text", "judge_case_segments",
     "lookup_grammar", "lookup_valency", "preserves_protected_atoms", "protected_atoms",
     "skeleton_shadow_summary", "tokenize",

@@ -96,3 +96,23 @@ A fail-closed protected-atom guard now checks negation, condition/modality words
 Read-only journal inspection shows the managed judge sidecar (`prefill_chunk=128`, stage 768 MiB, reserve 512 MiB) completed a 193-token rendered prompt on 2026-09-18, but later rendered prompts at 301, 323, 550 and 648 tokens all failed at V4.1 layer 14 with the same staging-space refusal (`attn_out_a`/`attn_out_b`).
 
 This makes long-context compression an admission-control concern as well as a latency optimization. No service was restarted or reconfigured during this investigation. Do not promote compressed prompts to authoritative Judge input until verdict-equivalence testing is available; for now the integration is telemetry-only behind `BOTTAZZI_MOTOR_SKELETON_SHADOW`.
+
+## Exact prompt-budget preflight
+
+The research branch now renders the exact DeepSeek V4.1 Judge `system + user + assistant-prefix` shape and verifies it byte-for-byte against `ds4_test --ds41-render`. Exact token counts are obtained offline with `ds4 --dump-tokens`, so admission can be decided before inference.
+
+A minimal current Judge request is already 164 rendered tokens. The observed healthy live request was 193 tokens; current research budget is therefore conservatively 192 until the runtime is repaired/rebenchmarked.
+
+A compact system-prompt candidate was measured at 134 tokens for the same minimal dossier versus 164 with the current system prompt, saving 30 fixed tokens. It is research-only: no live Judge prompt has been changed.
+
+## Post-OOM staging recovery candidate
+
+Source inspection explains why 19196 stays broken after one long-prefill failure: CUDA `ds4_gpu_commands_active()` is always false, so the normal conditional end-command fence is skipped; the low-VRAM staging epoch is reset only after successful explicit fences. A V4.1 layer failure can therefore leave the arena logically occupied and poison later requests, including small ones.
+
+A minimal failure-only patch calls `ds4_gpu_synchronize()` after logging a failed streaming V4.1 layer. The successful hot path is unchanged. The standalone patch is stored at `docs/patches/ds4-v41-stage-recovery-20260918.patch`; it is not deployed to 19196 and must pass isolated CUDA build/testing first.
+
+### Recovery build validation
+
+The isolated recovery worktree `/home/bandi/ds4-stage-recovery-20260918` was rebuilt with `make -B ds4-server CUDA_ARCH=sm_75`. Full CUDA compilation and final link completed with exit 0; the resulting `ds4-server --help` executes successfully. The patch also applies cleanly in dry-run against the current live-WIP source tree.
+
+This is build validation only. No recovery binary was started against the model, no deliberate OOM was triggered, and neither the 19194 production service nor the 19196 Judge sidecar was restarted or replaced.
