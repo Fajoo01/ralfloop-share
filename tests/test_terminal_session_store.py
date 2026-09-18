@@ -147,3 +147,37 @@ def test_email_reply_seed_with_thread_context_is_persistable(tmp_path):
     adapter.save(record["session_id"], manager)
 
     assert adapter.load(record["session_id"]).state == manager.state
+
+
+def test_session_introspection_archive_preserves_rolled_out_turns(tmp_path):
+    sessions = tmp_path / "sessions"
+    archive = tmp_path / "introspection"
+    store = SessionStore(sessions, introspection_root=archive)
+    record = store.create(cwd=str(tmp_path), model="local-model")
+    record["history"] = [
+        {"role": "user", "content": "u1"},
+        {"role": "assistant", "content": "a1"},
+    ]
+    store.save(record)
+    record["history"] = [
+        {"role": "user", "content": "u1"},
+        {"role": "assistant", "content": "a1"},
+        {"role": "user", "content": "u2"},
+        {"role": "assistant", "content": "a2"},
+    ]
+    store.save(record)
+    record["history"] = [
+        {"role": "user", "content": "u2"},
+        {"role": "assistant", "content": "a2"},
+        {"role": "user", "content": "u3"},
+        {"role": "assistant", "content": "a3"},
+    ]
+    store.save(record)
+
+    path = archive / f"{record['session_id']}.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert [row["content"] for row in payload["history"]] == [
+        "u1", "a1", "u2", "a2", "u3", "a3",
+    ]
+    assert stat.S_IMODE(archive.stat().st_mode) == 0o750
+    assert stat.S_IMODE(path.stat().st_mode) == 0o640
