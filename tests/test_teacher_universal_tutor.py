@@ -174,7 +174,48 @@ def test_counterexample_uses_core_mcp_signal_and_error_analysis(tmp_path):
     assert captured["payload"]["deterministic_evidence"]["turn_classification"]["signal"] == "counterexample_cue"
     assert "fluisce" in captured["payload"]["deterministic_evidence"]["concept_evidence"]["evidence"]
     assert "controesempio" in captured["system"].casefold()
+    assert "EVIDENZA CONCETTUALE VINCOLANTE" in captured["system"]
+    assert "fluisce spontaneamente" in captured["system"]
     assert captured["payload"]["request"]["context"].startswith("Consegna:")
+
+def test_service_injects_bounded_multi_turn_history_and_source_material(tmp_path):
+    calls = []
+
+    def model(system_prompt, user_prompt):
+        payload = json.loads(user_prompt)
+        calls.append(payload)
+        if payload["action"] == "summarize_material":
+            return {"response": "Il testo dice che la regola richiede eccezioni dichiarate."}
+        return {"response": "Non posso attribuire al testo un autore che non è indicato."}
+
+    service = TeacherService(
+        TeacherStore(tmp_path / "history.sqlite3"),
+        model_call=model,
+    )
+    student = service.login("HISTORY", "university", "2")["student"]
+    session = service.start_session(
+        student["student_id"], "filosofia", "Argomentazione da testo fornito"
+    )["session"]
+    material = (
+        "Nel testo l'autore sostiene che una regola è giustificata soltanto "
+        "quando le sue eccezioni sono dichiarate."
+    )
+    service.summarize_material(
+        session["session_id"], material, "Riassumi senza aggiunte."
+    )
+    service.explain(
+        session["session_id"], "Quale filosofo intende allora?"
+    )
+
+    assert len(calls) == 2
+    assert "history" not in calls[0]
+    history = calls[1]["history"]
+    assert len(history) == 1
+    assert history[0]["action"] == "summarize_material"
+    assert history[0]["student_request"]["material"] == material
+    assert "eccezioni dichiarate" in history[0]["tutor_response"]
+    assert calls[1]["pedagogy"]["require_grounding"] is True
+
 
 def test_l2_counterexample_keeps_access_mode_but_uses_error_analysis():
     decision = select_pedagogy(

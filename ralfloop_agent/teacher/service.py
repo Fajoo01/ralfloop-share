@@ -100,6 +100,118 @@ def _concept_evidence(core: Any | None, topic: str) -> dict[str, Any] | None:
     return evidence
 
 
+_HISTORY_TEXT_LIMITS = {
+    "question": 3000,
+    "concept": 3000,
+    "exercise": 4000,
+    "student_attempt": 3000,
+    "student_answer": 1200,
+    "context": 5000,
+    "material": 8000,
+    "objective": 2000,
+    "topic": 1000,
+    "difficulty": 200,
+}
+
+
+def _bounded_request(payload: dict[str, Any]) -> dict[str, Any]:
+    bounded: dict[str, Any] = {}
+    for key, limit in _HISTORY_TEXT_LIMITS.items():
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            bounded[key] = value.strip()[:limit]
+    if isinstance(payload.get("show_solution"), bool):
+        bounded["show_solution"] = payload["show_solution"]
+    return bounded
+
+
+def _history_has_grounded_source(history: list[dict[str, Any]]) -> bool:
+    for item in history:
+        if item.get("source_mode") == "provided_material":
+            return True
+        request = item.get("student_request")
+        if isinstance(request, dict) and isinstance(request.get("material"), str):
+            if request["material"].strip():
+                return True
+    return False
+
+
+def _history_context(store: TeacherStore, session_id: str) -> list[dict[str, Any]]:
+    budget = 9000
+    selected: list[dict[str, Any]] = []
+    try:
+        events = store.recent_events(session_id, limit=8)
+    except Exception:
+        return []
+    for event in reversed(events):
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        request = payload.get("request")
+        item: dict[str, Any] = {
+            "action": str(event.get("kind") or ""),
+        }
+        if isinstance(request, dict) and request:
+            item["student_request"] = request
+        response = payload.get("response")
+        if isinstance(response, str) and response.strip():
+            item["tutor_response"] = response.strip()[:3000]
+        source_mode = payload.get("source_mode")
+        if isinstance(source_mode, str) and source_mode:
+            item["source_mode"] = source_mode
+        if len(item) == 1:
+            continue
+        encoded = json.dumps(item, ensure_ascii=False)
+        if len(encoded) > budget and selected:
+            break
+        if len(encoded) > budget:
+            if "tutor_response" in item:
+                item["tutor_response"] = item["tutor_response"][:1200]
+            request_value = item.get("student_request")
+            if isinstance(request_value, dict) and isinstance(request_value.get("material"), str):
+                request_value = dict(request_value)
+                request_value["material"] = request_value["material"][:3500]
+                item["student_request"] = request_value
+            encoded = json.dumps(item, ensure_ascii=False)
+        if len(encoded) > budget:
+            continue
+        selected.append(item)
+        budget -= len(encoded)
+    selected.reverse()
+    return selected
+
+
+def _teacher_system_prompt(
+    decision: Any,
+    *,
+    concept_evidence: dict[str, Any] | None,
+    grounding_active: bool,
+) -> str:
+    prompt = (
+        PEDAGOGY_PROMPT
+        + "\n\nDECISIONE PEDAGOGICA DETERMINISTICA:\n"
+        + decision.prompt_contract()
+    )
+    if concept_evidence is not None:
+        evidence = str(concept_evidence.get("evidence") or "").strip()
+        misconceptions = str(concept_evidence.get("misconceptions") or "").strip()
+        prompt += (
+            "\n\nEVIDENZA CONCETTUALE VINCOLANTE:\n"
+            "- Non contraddire i fatti curati seguenti.\n"
+            f"- Fatti: {evidence}\n"
+            f"- Misconception da non rafforzare: {misconceptions}\n"
+            "- Se una tua spiegazione precedente li contraddice, correggila esplicitamente."
+        )
+    if grounding_active:
+        prompt += (
+            "\n\nGROUNDING PERSISTENTE VINCOLANTE:\n"
+            "- Se la history contiene materiale fornito dallo studente, quel materiale resta la fonte del follow-up.\n"
+            "- Non attribuire autore, teoria, posizione o fatti che non compaiono nel materiale.\n"
+            "- Se il materiale non basta, dillo esplicitamente invece di completare dalla memoria del modello."
+        )
+    return prompt
+
+
 TEACHER_RESPONSE_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -249,9 +361,62 @@ class TeacherService:
             "pedagogy": decision.model_dump(mode="json"),
         }
         self.store.event(session_id, "check_answer", {
-            "response": response, "source_mode": "deterministic_core",
+            "response": response,
+            "request": _bounded_request({
+                "exercise": exercise,
+                "student_answer": student_answer,
+                "show_solution": show_solution,
+            }),
+            "source_mode": "deterministic_core",
             "strategy": decision.strategy.value, "mode": decision.mode.value,
             "model_path": "none", "core_tool": "core.math_check",
+        })
+        return output
+
+    def _core_math_hint(
+        self,
+        session_id: str,
+        exercise: str,
+        student_attempt: str,
+    ) -> dict[str, Any] | None:
+        if self.deterministic_core is None:
+            return None
+        session = self.store.session(session_id)
+        scope = f"{session.get('subject', '')} {session.get('topic', '')}".casefold()
+        if not any(word in scope for word in ("mat", "aritmet", "algebr", "fraz", "fisic", "chimic")):
+            return None
+        hint_call = getattr(self.deterministic_core, "math_hint", None)
+        if not callable(hint_call):
+            return None
+        try:
+            evidence = hint_call(exercise, student_attempt)
+        except Exception:
+            return None
+        response = str(evidence.get("hint") or "").strip()
+        if evidence.get("recognized") is not True or not response:
+            return None
+        _student, _learner, decision = self._decision_for(session, "hint")
+        output = {
+            "ok": True,
+            "action": "hint",
+            "response": response,
+            "source_mode": "deterministic_core",
+            "deterministic": True,
+            "core_evidence": evidence,
+            "pedagogy": decision.model_dump(mode="json"),
+        }
+        self.store.event(session_id, "hint", {
+            "response": response,
+            "request": _bounded_request({
+                "exercise": exercise,
+                "student_attempt": student_attempt,
+            }),
+            "source_mode": "deterministic_core",
+            "strategy": decision.strategy.value,
+            "student_move": "neutral",
+            "mode": decision.mode.value,
+            "model_path": "none",
+            "core_tool": "core.math_hint",
         })
         return output
 
@@ -332,7 +497,13 @@ class TeacherService:
             "core_evidence": evidence, "pedagogy": decision.model_dump(mode="json"),
         }
         self.store.event(session_id, "summarize_material", {
-            "response": response[:4000], "source_mode": "provided_material",
+            "response": response[:4000],
+            "request": _bounded_request({
+                "material": material,
+                "objective": objective,
+                "source_mode": "provided_material",
+            }),
+            "source_mode": "provided_material",
             "strategy": decision.strategy.value, "mode": decision.mode.value,
             "model_path": "none", "core_tool": "core.extractive_summary",
         })
@@ -382,6 +553,11 @@ class TeacherService:
         exercise: str,
         student_attempt: str = "",
     ) -> dict[str, Any]:
+        deterministic = self._core_math_hint(
+            session_id, exercise, student_attempt
+        )
+        if deterministic is not None:
+            return deterministic
         return self._teaching_call(
             session_id,
             "hint",
@@ -643,6 +819,13 @@ class TeacherService:
         )
 
     def stream_hint(self, session_id: str, exercise: str, student_attempt: str = "") -> Iterator[dict[str, Any]]:
+        deterministic = self._core_math_hint(
+            session_id, exercise, student_attempt
+        )
+        if deterministic is not None:
+            yield {"type": "delta", "text": deterministic["response"]}
+            yield {"type": "done", "result": deterministic}
+            return
         yield from self._stream_teaching_call(
             session_id,
             "hint",
@@ -664,13 +847,15 @@ class TeacherService:
         session = self.store.session(session_id)
         student = self.store.student(session["student_id"])
         learner = profile_from_student(student)
+        history = _history_context(self.store, session_id)
+        grounded_history = _history_has_grounded_source(history)
         student_move, turn_evidence = _student_move(self.deterministic_core, payload)
         decision = select_pedagogy(
             learner,
             action=action,
             subject=session["subject"],
             topic=session["topic"],
-            material_supplied=False,
+            material_supplied=grounded_history,
             show_solution=False,
             student_move=student_move,
         )
@@ -686,6 +871,8 @@ class TeacherService:
             "interaction": {"student_move": student_move},
             "request": payload,
         }
+        if history:
+            context["history"] = history
         deterministic_evidence: dict[str, Any] = {}
         if turn_evidence is not None:
             deterministic_evidence["turn_classification"] = turn_evidence
@@ -697,7 +884,11 @@ class TeacherService:
         grammar_context = self._grammar_context(session, payload)
         if grammar_context is not None:
             context["grammar_evidence"] = grammar_context
-        system_prompt = PEDAGOGY_PROMPT + "\n\nDECISIONE PEDAGOGICA DETERMINISTICA:\n" + decision.prompt_contract()
+        system_prompt = _teacher_system_prompt(
+            decision,
+            concept_evidence=concept_evidence,
+            grounding_active=grounded_history,
+        )
         user_prompt = json.dumps(context, ensure_ascii=False)
         ensure_session = getattr(self.model_call, "ensure_session", None)
         release_session = getattr(self.model_call, "release_session", None)
@@ -738,7 +929,11 @@ class TeacherService:
             "ok": True,
             "action": action,
             "response": response,
-            "source_mode": "general_model_knowledge",
+            "source_mode": (
+                "provided_material"
+                if grounded_history
+                else "general_model_knowledge"
+            ),
             "pedagogy": decision.model_dump(mode="json"),
         }
         self.store.event(
@@ -746,7 +941,8 @@ class TeacherService:
             action,
             {
                 "response": response[:4000],
-                "source_mode": "general_model_knowledge",
+                "request": _bounded_request(payload),
+                "source_mode": output["source_mode"],
                 "strategy": decision.strategy.value,
                 "student_move": student_move,
                 "mode": decision.mode.value,
@@ -766,13 +962,20 @@ class TeacherService:
         student = self.store.student(session["student_id"])
 
         learner = profile_from_student(student)
+        history = _history_context(self.store, session_id)
+        grounded_history = _history_has_grounded_source(history)
+        current_material = (
+            "material" in payload
+            or payload.get("source_mode") == "provided_material"
+        )
+        grounding_active = bool(current_material or grounded_history)
         student_move, turn_evidence = _student_move(self.deterministic_core, payload)
         decision = select_pedagogy(
             learner,
             action=action,
             subject=session["subject"],
             topic=session["topic"],
-            material_supplied=("material" in payload or payload.get("source_mode") == "provided_material"),
+            material_supplied=grounding_active,
             show_solution=bool(payload.get("show_solution", False)),
             student_move=student_move,
         )
@@ -791,6 +994,8 @@ class TeacherService:
             "interaction": {"student_move": student_move},
             "request": payload,
         }
+        if history:
+            context["history"] = history
         deterministic_evidence: dict[str, Any] = {}
         if turn_evidence is not None:
             deterministic_evidence["turn_classification"] = turn_evidence
@@ -820,7 +1025,11 @@ class TeacherService:
 
         try:
             result = self.model_call(
-                PEDAGOGY_PROMPT + "\n\nDECISIONE PEDAGOGICA DETERMINISTICA:\n" + decision.prompt_contract(),
+                _teacher_system_prompt(
+                    decision,
+                    concept_evidence=concept_evidence,
+                    grounding_active=grounding_active,
+                ),
                 json.dumps(context, ensure_ascii=False),
             )
         except Exception:
@@ -843,7 +1052,7 @@ class TeacherService:
             "response": response,
             "source_mode": (
                 "provided_material"
-                if "material" in payload or payload.get("source_mode") == "provided_material"
+                if grounding_active
                 else "general_model_knowledge"
             ),
             "pedagogy": decision.model_dump(mode="json"),
@@ -857,6 +1066,7 @@ class TeacherService:
             action,
             {
                 "response": response[:4000],
+                "request": _bounded_request(payload),
                 "source_mode": output["source_mode"],
                 "strategy": decision.strategy.value,
                 "student_move": student_move,

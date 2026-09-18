@@ -268,6 +268,40 @@ class TeacherStore:
             )
             conn.commit()
 
+    def recent_events(
+        self,
+        session_id: str,
+        *,
+        limit: int = 6,
+    ) -> list[dict[str, Any]]:
+        self.session(session_id)
+        safe_limit = max(1, min(int(limit), 12))
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT event_id, kind, payload_json, created_at
+                FROM events
+                WHERE session_id = ?
+                ORDER BY event_id DESC
+                LIMIT ?
+                """,
+                (session_id, safe_limit),
+            ).fetchall()
+
+        events: list[dict[str, Any]] = []
+        for row in reversed(rows):
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+            except json.JSONDecodeError:
+                payload = {}
+            events.append({
+                "event_id": row["event_id"],
+                "kind": row["kind"],
+                "payload": payload if isinstance(payload, dict) else {},
+                "created_at": row["created_at"],
+            })
+        return events
+
     def update_progress(
         self,
         *,

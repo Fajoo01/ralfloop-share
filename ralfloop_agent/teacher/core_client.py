@@ -10,6 +10,7 @@ TOOLS = {
     "core.extractive_summary",
     "core.study_plan",
     "core.math_check",
+    "core.math_hint",
     "core.classify_turn",
     "core.concept_evidence",
 }
@@ -79,6 +80,15 @@ class TeacherCoreClient:
                 session,
                 "core.math_check",
                 {"text": text[:16000], "answer": answer[:256]},
+            )
+
+    def math_hint(self, text: str, attempt: str = "") -> dict[str, Any]:
+        with self._connection() as session:
+            self._surface(session)
+            return self._call(
+                session,
+                "core.math_hint",
+                {"text": text[:16000], "attempt": attempt[:512]},
             )
 
     def classify_turn(self, text: str) -> dict[str, Any]:

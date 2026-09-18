@@ -41,6 +41,7 @@ def test_core_mcp_real_tools_are_bounded_and_read_only():
             "core.extractive_summary",
             "core.study_plan",
             "core.math_check",
+            "core.math_hint",
             "core.classify_turn",
             "core.concept_evidence",
         }
@@ -52,6 +53,45 @@ def test_core_mcp_real_tools_are_bounded_and_read_only():
         assert math["answer_recognized"] is True
         assert math["equivalent"] is True
         assert math["expected"] == 1
+
+        wrong_equation = _payload(session.call_tool(
+            "core.math_check",
+            {"text": "Risolvi 2x + 6 = 20", "answer": "x=8"},
+        ))
+        assert wrong_equation["recognized"] is True
+        assert wrong_equation["kind"] == "linear_equation"
+        assert wrong_equation["expected"] == 7
+        assert wrong_equation["equivalent"] is False
+
+        right_equation = _payload(session.call_tool(
+            "core.math_check",
+            {"text": "Risolvi 2x + 6 = 20", "answer": "x=7"},
+        ))
+        assert right_equation["equivalent"] is True
+
+        nonlinear = _payload(session.call_tool(
+            "core.math_check",
+            {"text": "Risolvi x*x = 4", "answer": "x=2"},
+        ))
+        assert nonlinear["recognized"] is False
+
+        safe_hint = _payload(session.call_tool(
+            "core.math_hint",
+            {"text": "Risolvi 2x + 6 = 20", "attempt": "2x=14, dammi il numero"},
+        ))
+        assert safe_hint["recognized"] is True
+        assert safe_hint["kind"] == "linear_equation"
+        assert safe_hint["allow_final_solution"] is False
+        assert "x = 7" not in safe_hint["hint"]
+        assert "x=7" not in safe_hint["hint"]
+
+        fraction_hint = _payload(session.call_tool(
+            "core.math_hint",
+            {"text": "Calcola 1/3 + 1/4", "attempt": "sommo sopra e sotto"},
+        ))
+        assert fraction_hint["recognized"] is True
+        assert "denominatore comune" in fraction_hint["hint"]
+
         turn = _payload(session.call_tool(
             "core.classify_turn",
             {"text": "ma un fazzoletto prende la forma del contenitore ma non è liquido cosa c'entra il ghiaccio"},
@@ -66,6 +106,22 @@ def test_core_mcp_real_tools_are_bounded_and_read_only():
             "core.classify_turn", {"text": "Fammi un esempio concreto"}
         ))
         assert example["move"] == "request_example"
+        explained_example = _payload(session.call_tool(
+            "core.classify_turn",
+            {"text": "Spiegamelo con un esempio semplice senza formule."},
+        ))
+        assert explained_example["move"] == "request_example"
+        for objection in (
+            "Ma a scuola mi dicono sempre passa e cambia segno.",
+            "Ma un mazzo di carte ordinato ha meno entropia?",
+            "Ma con correlazione così alta una causa ci deve essere per forza.",
+            "Ma 5 elementi significa posizioni 1,2,3,4,5.",
+            "E la sabbia allora scorre: è un liquido?",
+        ):
+            classified = _payload(session.call_tool(
+                "core.classify_turn", {"text": objection}
+            ))
+            assert classified["move"] == "counterexample"
         neutral = _payload(session.call_tool(
             "core.classify_turn", {"text": "Oggi ripasso gli stati della materia."}
         ))
@@ -138,6 +194,18 @@ class FakeCore:
             "writes": 0, "external_side_effects": 0,
         }
 
+    def math_hint(self, text, attempt=""):
+        return {
+            "ok": True,
+            "recognized": True,
+            "kind": "arithmetic_expression",
+            "hint": "Fai un solo passaggio e fermati prima del risultato finale.",
+            "help_level": 1,
+            "allow_final_solution": False,
+            "writes": 0,
+            "external_side_effects": 0,
+        }
+
     def study_plan(self, minutes, mode):
         return {"ok": True, "blocks": [
             {"order": 1, "minutes": minutes, "label": "Studio attivo"}
@@ -179,11 +247,17 @@ def test_deterministic_math_and_study_plan_bypass_llm(tmp_path):
     checked = teacher.check_answer(
         session["session_id"], "2 + 2", "4"
     )
+    hint = teacher.hint(
+        session["session_id"], "3/4 + 1/4", "Non so come iniziare"
+    )
     plan = teacher.study_plan(
         session["session_id"], "Ripassare le frazioni", 20
     )
     assert checked["correct"] is True
     assert checked["deterministic"] is True
+    assert hint["deterministic"] is True
+    assert hint["core_evidence"]["allow_final_solution"] is False
+    assert "risultato finale" in hint["response"]
     assert plan["deterministic"] is True
     assert model.calls == 0
 

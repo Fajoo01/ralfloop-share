@@ -146,6 +146,8 @@ static void tool_error(FILE *out, const char *js, const jsmntok_t *id, const cha
 typedef struct {
     const char *p;
     int ok;
+    int allow_x;
+    long double x_value;
 } expr_parser_t;
 
 static void expr_ws(expr_parser_t *p) { while (isspace((unsigned char)*p->p)) ++p->p; }
@@ -164,6 +166,10 @@ static long double expr_parse_factor(expr_parser_t *p) {
         ++p->p;
         return (long double)sign * value;
     }
+    if (p->allow_x && (*p->p == 'x' || *p->p == 'X')) {
+        ++p->p;
+        return (long double)sign * p->x_value;
+    }
     char number[128]; size_t used = 0; int digits = 0, decimal = 0;
     while (*p->p && used + 1 < sizeof number) {
         unsigned char c = (unsigned char)*p->p;
@@ -177,6 +183,10 @@ static long double expr_parse_factor(expr_parser_t *p) {
     errno = 0;
     long double value = strtold(number, &end);
     if (errno || !end || *end) { p->ok = 0; return 0; }
+    if (p->allow_x && (*p->p == 'x' || *p->p == 'X')) {
+        ++p->p;
+        value *= p->x_value;
+    }
     return (long double)sign * value;
 }
 
@@ -210,12 +220,21 @@ static long double expr_parse_expr(expr_parser_t *p) {
     return value;
 }
 
-static int eval_expression(const char *text, long double *value) {
-    expr_parser_t p = {text, 1};
+static int eval_expression_with_x(
+    const char *text,
+    int allow_x,
+    long double x_value,
+    long double *value
+) {
+    expr_parser_t p = {text, 1, allow_x, x_value};
     long double result = expr_parse_expr(&p);
     expr_ws(&p);
     if (!p.ok || *p.p) return 0;
     *value = result; return 1;
+}
+
+static int eval_expression(const char *text, long double *value) {
+    return eval_expression_with_x(text, 0, 0.0L, value);
 }
 
 static int expression_char(unsigned char c) {
@@ -246,6 +265,79 @@ static int extract_expression(const char *text, char *out, size_t cap) {
         }
     }
     return best ? 1 : 0;
+}
+
+static int linear_equation_char(unsigned char c) {
+    return expression_char(c) || c == 'x' || c == 'X';
+}
+
+static char *trim_in_place(char *text) {
+    while (*text && isspace((unsigned char)*text)) ++text;
+    char *end = text + strlen(text);
+    while (end > text && isspace((unsigned char)end[-1])) --end;
+    *end = 0;
+    return text;
+}
+
+static int extract_linear_equation(
+    const char *text,
+    char *out,
+    size_t cap,
+    long double *solution
+) {
+    for (const char *eq = strchr(text, '='); eq; eq = strchr(eq + 1, '=')) {
+        const char *left_start = eq;
+        while (left_start > text && linear_equation_char((unsigned char)left_start[-1])) --left_start;
+        const char *right_end = eq + 1;
+        while (*right_end && linear_equation_char((unsigned char)*right_end)) ++right_end;
+
+        size_t left_n = (size_t)(eq - left_start);
+        size_t right_n = (size_t)(right_end - (eq + 1));
+        if (!left_n || !right_n || left_n >= 512 || right_n >= 512) continue;
+
+        char left_raw[512], right_raw[512];
+        memcpy(left_raw, left_start, left_n); left_raw[left_n] = 0;
+        memcpy(right_raw, eq + 1, right_n); right_raw[right_n] = 0;
+        char *left = trim_in_place(left_raw);
+        char *right = trim_in_place(right_raw);
+        if (!*left || !*right) continue;
+        if (!strchr(left, 'x') && !strchr(left, 'X') &&
+            !strchr(right, 'x') && !strchr(right, 'X')) continue;
+
+        long double l0, l1, l2, r0, r1, r2;
+        if (!eval_expression_with_x(left, 1, 0.0L, &l0) ||
+            !eval_expression_with_x(left, 1, 1.0L, &l1) ||
+            !eval_expression_with_x(left, 1, 2.0L, &l2) ||
+            !eval_expression_with_x(right, 1, 0.0L, &r0) ||
+            !eval_expression_with_x(right, 1, 1.0L, &r1) ||
+            !eval_expression_with_x(right, 1, 2.0L, &r2)) continue;
+
+        long double d0 = l0 - r0;
+        long double d1 = l1 - r1;
+        long double d2 = l2 - r2;
+        long double a = d1 - d0;
+        long double scale = fmaxl(1.0L, fmaxl(fabsl(d0), fmaxl(fabsl(d1), fabsl(d2))));
+        if (fabsl((d2 - d1) - a) > 1e-12L * scale || fabsl(a) <= 1e-15L * scale) continue;
+
+        long double root = -d0 / a;
+        if (!isfinite((double)root)) continue;
+        int written = snprintf(out, cap, "%s=%s", left, right);
+        if (written < 0 || (size_t)written >= cap) continue;
+        *solution = root;
+        return 1;
+    }
+    return 0;
+}
+
+static int eval_answer_numeric(const char *answer, long double *value) {
+    if (!answer) return 0;
+    const char *eq = strchr(answer, '=');
+    if (eq) {
+        const char *rhs = eq + 1;
+        while (*rhs && isspace((unsigned char)*rhs)) ++rhs;
+        return eval_expression(rhs, value);
+    }
+    return eval_expression(answer, value);
 }
 
 typedef struct {
@@ -412,8 +504,13 @@ static void write_study_plan(FILE *out, int minutes, const char *mode) {
 static void write_math_check(FILE *out, const char *text, const char *answer) {
     char expression[512]; expression[0] = 0;
     long double expected = 0.0L, observed = 0.0L;
-    int recognized = extract_expression(text, expression, sizeof expression) && eval_expression(expression, &expected);
-    int answer_ok = answer && *answer && eval_expression(answer, &observed);
+    int equation = extract_linear_equation(text, expression, sizeof expression, &expected);
+    int recognized = equation;
+    if (!recognized) {
+        recognized = extract_expression(text, expression, sizeof expression) &&
+                     eval_expression(expression, &expected);
+    }
+    int answer_ok = answer && *answer && eval_answer_numeric(answer, &observed);
     int equivalent = 0;
     if (recognized && answer_ok) {
         long double scale = fmaxl(1.0L, fmaxl(fabsl(expected), fabsl(observed)));
@@ -421,11 +518,41 @@ static void write_math_check(FILE *out, const char *text, const char *answer) {
     }
     fputs("{\"ok\":true,\"recognized\":", out); fputs(recognized ? "true" : "false", out);
     fputs(",\"answer_recognized\":", out); fputs(answer_ok ? "true" : "false", out);
+    fputs(",\"kind\":", out); json_text(out, equation ? "linear_equation" : recognized ? "arithmetic_expression" : "unknown");
     fputs(",\"expression\":", out); json_text(out, recognized ? expression : "");
     if (recognized) fprintf(out, ",\"expected\":%.17Lg", expected); else fputs(",\"expected\":null", out);
     if (answer_ok) fprintf(out, ",\"observed\":%.17Lg", observed); else fputs(",\"observed\":null", out);
     fputs(",\"equivalent\":", out); fputs(equivalent ? "true" : "false", out);
     fputs(",\"writes\":0,\"external_side_effects\":0}", out);
+}
+
+static void write_math_hint(FILE *out, const char *text, const char *attempt) {
+    char expression[512]; expression[0] = 0;
+    long double expected = 0.0L;
+    int equation = extract_linear_equation(text, expression, sizeof expression, &expected);
+    int arithmetic = 0;
+    if (!equation) {
+        arithmetic = extract_expression(text, expression, sizeof expression) &&
+                     eval_expression(expression, &expected);
+    }
+    int recognized = equation || arithmetic;
+    const char *hint = "";
+    if (equation) {
+        if (attempt && strchr(attempt, '=')) {
+            hint = "Fai un solo passo: usa l'operazione inversa necessaria per lasciare x da sola, applicandola a entrambi i membri. Fermati prima di calcolare il valore finale di x.";
+        } else {
+            hint = "Fai un solo passo verso x isolata: applica la stessa operazione a entrambi i membri dell'equazione. Fermati prima di trovare il valore finale di x.";
+        }
+    } else if (arithmetic && strchr(expression, '/') &&
+               (strchr(expression, '+') || strchr(expression, '-'))) {
+        hint = "Fai un solo passo: se stai combinando frazioni, rendi prima confrontabili le parti usando un denominatore comune. Fermati prima del risultato finale.";
+    } else if (arithmetic) {
+        hint = "Fai soltanto il prossimo passaggio previsto dall'ordine delle operazioni e fermati prima del risultato finale.";
+    }
+    fputs("{\"ok\":true,\"recognized\":", out); fputs(recognized ? "true" : "false", out);
+    fputs(",\"kind\":", out); json_text(out, equation ? "linear_equation" : arithmetic ? "arithmetic_expression" : "unknown");
+    fputs(",\"hint\":", out); json_text(out, hint);
+    fputs(",\"help_level\":1,\"allow_final_solution\":false,\"writes\":0,\"external_side_effects\":0}", out);
 }
 
 
@@ -511,12 +638,16 @@ static void write_turn_classification(FILE *out, const char *text) {
         move = "correction"; signal = "correction_cue"; confidence = 0.94;
     } else if (contains_ci_ascii(text, "cosa c'entra") || contains_ci_ascii(text, "che c'entra") || contains_ci_ascii(text, "non c'entra") || contains_ci_ascii(text, "non torna") || contains_ci_ascii(text, "eppure") || contains_ci_ascii(text, "invece") || contains_ci_ascii(text, "ma allora") || contains_ci_ascii(text, "allora perche") || contains_ci_ascii(text, "però") || contains_ci_ascii(text, "pero'")) {
         move = "counterexample"; signal = "counterexample_cue"; confidence = 0.93;
-    } else if (starts_ci_ascii(text, "ma ") && (contains_ci_ascii(text, " non ") || contains_ci_ascii(text, "anche ") || contains_ci_ascii(text, " prende "))) {
-        move = "counterexample"; signal = "contrastive_ma"; confidence = 0.88;
-    } else if (contains_ci_ascii(text, "fammi un esempio") || contains_ci_ascii(text, "fai un esempio") || contains_ci_ascii(text, "esempio concreto")) {
+    } else if (contains_ci_ascii(text, "fammi un esempio") || contains_ci_ascii(text, "fai un esempio") ||
+               contains_ci_ascii(text, "con un esempio") || contains_ci_ascii(text, "esempio concreto") ||
+               contains_ci_ascii(text, "fammi vedere") || contains_ci_ascii(text, "mostrami")) {
         move = "request_example"; signal = "example_request"; confidence = 0.96;
     } else if (contains_ci_ascii(text, "non capisco") || contains_ci_ascii(text, "non ho capito") || contains_ci_ascii(text, "non mi e chiaro") || contains_ci_ascii(text, "che vuol dire") || contains_ci_ascii(text, "cosa significa")) {
         move = "confusion"; signal = "confusion_cue"; confidence = 0.94;
+    } else if (starts_ci_ascii(text, "ma ")) {
+        move = "counterexample"; signal = "contrastive_ma"; confidence = 0.90;
+    } else if (starts_ci_ascii(text, "e ") && contains_ci_ascii(text, "allora")) {
+        move = "counterexample"; signal = "contrastive_followup"; confidence = 0.86;
     } else if (strchr(text, '?') || starts_ci_ascii(text, "perche ") || starts_ci_ascii(text, "come ") || starts_ci_ascii(text, "cosa ") || starts_ci_ascii(text, "quale ") || starts_ci_ascii(text, "che ")) {
         move = "question"; signal = "question_form"; confidence = 0.82;
     }
@@ -534,7 +665,9 @@ static void write_tools(FILE *out, const char *js, const jsmntok_t *id) {
     fputs(",", out);
     fputs("{\"name\":\"core.study_plan\",\"description\":\"Deterministic pedagogical timeboxing without model inference.\",\"inputSchema\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"minutes\":{\"type\":\"integer\",\"minimum\":10,\"maximum\":240},\"mode\":{\"type\":\"string\",\"enum\":[\"standard\",\"literacy_l2\",\"scholar\"]}},\"required\":[\"minutes\",\"mode\"]}}", out);
     fputs(",", out);
-    fputs("{\"name\":\"core.math_check\",\"description\":\"Bounded arithmetic expression recognition and numeric answer equivalence.\",\"inputSchema\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"text\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":16000},\"answer\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":256}},\"required\":[\"text\",\"answer\"]}}", out);
+    fputs("{\"name\":\"core.math_check\",\"description\":\"Bounded arithmetic and linear-equation answer verification.\",\"inputSchema\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"text\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":16000},\"answer\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":256}},\"required\":[\"text\",\"answer\"]}}", out);
+    fputs(",", out);
+    fputs("{\"name\":\"core.math_hint\",\"description\":\"Deterministic one-step math scaffolding with a hard no-final-answer contract for recognized arithmetic and linear equations.\",\"inputSchema\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"text\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":16000},\"attempt\":{\"type\":\"string\",\"maxLength\":512}},\"required\":[\"text\"]}}", out);
     fputs(",", out);
     fputs("{\"name\":\"core.classify_turn\",\"description\":\"Deterministic discourse classification for objections, counterexamples, confusion and questions.\",\"inputSchema\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"text\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":6000}},\"required\":[\"text\"]}}", out);
     fputs(",", out);
@@ -558,6 +691,7 @@ static void tool_result(FILE *out, const char *js, const jsmntok_t *id, const ch
     else if (strcmp(name, "core.extractive_summary") == 0) write_extractive_summary(out, text, number);
     else if (strcmp(name, "core.study_plan") == 0) write_study_plan(out, number, mode);
     else if (strcmp(name, "core.math_check") == 0) write_math_check(out, text, answer);
+    else if (strcmp(name, "core.math_hint") == 0) write_math_hint(out, text, answer);
     else if (strcmp(name, "core.classify_turn") == 0) write_turn_classification(out, text);
     else if (strcmp(name, "core.concept_evidence") == 0) write_concept_evidence(out, text);
     else { fputs("{\"ok\":false,\"error\":\"POLICY_DENIED\",\"writes\":0,\"external_side_effects\":0}", out); }
@@ -625,11 +759,21 @@ static void dispatch(FILE *out, const char *line) {
         if (number < 10 || number > 240 || (strcmp(mode, "standard") && strcmp(mode, "literacy_l2") && strcmp(mode, "scholar"))) {
             tool_error(out, line, id_i >= 0 ? &toks[id_i] : NULL, "INVALID_INPUT"); return;
         }
-    } else if (strcmp(name, "core.math_check") == 0) {
+    } else if (strcmp(name, "core.math_check") == 0 || strcmp(name, "core.math_hint") == 0) {
         int text_i = obj_get(line, toks, args_i, "text");
-        int answer_i = obj_get(line, toks, args_i, "answer");
-        if (text_i < 0 || answer_i < 0 || copy_json_string(line, &toks[text_i], text, sizeof text) != 0 || copy_json_string(line, &toks[answer_i], answer, sizeof answer) != 0) {
+        if (text_i < 0 || copy_json_string(line, &toks[text_i], text, sizeof text) != 0 || strlen(text) > 16000) {
             tool_error(out, line, id_i >= 0 ? &toks[id_i] : NULL, "INVALID_INPUT"); return;
+        }
+        if (strcmp(name, "core.math_check") == 0) {
+            int answer_i = obj_get(line, toks, args_i, "answer");
+            if (answer_i < 0 || copy_json_string(line, &toks[answer_i], answer, sizeof answer) != 0) {
+                tool_error(out, line, id_i >= 0 ? &toks[id_i] : NULL, "INVALID_INPUT"); return;
+            }
+        } else {
+            int attempt_i = obj_get(line, toks, args_i, "attempt");
+            if (attempt_i >= 0 && copy_json_string(line, &toks[attempt_i], answer, sizeof answer) != 0) {
+                tool_error(out, line, id_i >= 0 ? &toks[id_i] : NULL, "INVALID_INPUT"); return;
+            }
         }
     } else {
         tool_error(out, line, id_i >= 0 ? &toks[id_i] : NULL, "POLICY_DENIED"); return;
