@@ -344,7 +344,7 @@ def render_report(results: list[dict], metadata: dict) -> str:
     lines = ["# Teacher Bot-tazzi — baseline red-team pedagogica 2026-09-18","",
              "## Esecuzione",
              f"- casi: {len(results)}; turni: {sum(len(x['turns']) for x in results)}",
-             f"- modello baseline: {metadata['model']} via Ollama CPU (num_gpu=0)",
+             f"- modello baseline: {metadata['model']} su inferenza locale CPU-only controllata",
              "- superficie: Teacher MCP reale; DB temporaneo; Core MCP C temporaneo; Grammar MCP reale",
              f"- tool esposti: {metadata.get('tool_count')} (attesi 13)",
              f"- backend produzione osservato e non modificato: {metadata.get('production_current')}","",
@@ -375,7 +375,7 @@ def render_report(results: list[dict], metadata: dict) -> str:
                 continue
             lines.append(f"### {case['id']} · turno {turn['index']} · {turn['tool']}")
             lines.append("Studente: " + turn["student_text"])
-            lines.append("Tutor: " + turn["response"])
+            lines.append("Tutor: " + str(turn.get("response") or turn.get("error") or "[nessuna risposta]"))
             lines.append("Failure: " + ", ".join(turn["failure_classes"]))
             lines.append("")
             shown += 1
@@ -385,7 +385,7 @@ def render_report(results: list[dict], metadata: dict) -> str:
             break
     lines += ["## Limiti della baseline","",
               "- Le metriche lessicali sono conservative: segnalano candidati failure, non sostituiscono una revisione pedagogica umana.",
-              "- Il modello di prova è Gemma 3 4B CPU; il routing fast/deep viene verificato dalla decisione pedagogica, ma entrambi i percorsi usano la stessa replica CPU in questo run isolato.",
+              f"- Il modello di prova è {metadata.get('model','unknown')} CPU; il routing fast/deep viene verificato dalla decisione pedagogica, ma entrambi i percorsi usano la stessa classe di replica CPU in questo run isolato.",
               "- Il corpus è avversariale e piccolo: serve come regression suite, non come stima della qualità media.",
               "- La UI non è esercitata in questo blocco: il test passa dalla superficie MCP studente.",""]
     return "\n".join(lines)
