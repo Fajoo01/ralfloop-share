@@ -7,9 +7,9 @@ Wants=network-online.target
 Type=simple
 User=sibilla-cumana
 Group=sibilla-cumana
-WorkingDirectory=/home/sibilla-cumana/ralfloop-production/current
+WorkingDirectory=/home/sibilla-cumana/ralfloop-motor-judge/current
 Environment=PYTHONUNBUFFERED=1
-Environment=PYTHONPATH=/home/sibilla-cumana/ralfloop-production/current
+Environment=PYTHONPATH=/home/sibilla-cumana/ralfloop-motor-judge/current
 EnvironmentFile=/etc/ralfloop/bottazzi-motor-judge.env
 RuntimeDirectory=ralfloop
 RuntimeDirectoryMode=0770

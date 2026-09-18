@@ -67,6 +67,9 @@ def test_exec_plan_contains_stable_motor_settings(monkeypatch, tmp_path):
 def test_systemd_unit_is_restartable_and_gated():
     unit = Path("deploy/systemd/bottazzi-motor-judge.service").read_text()
     assert "EnvironmentFile=/etc/ralfloop/bottazzi-motor-judge.env" in unit
+    assert "WorkingDirectory=/home/sibilla-cumana/ralfloop-motor-judge/current" in unit
+    assert "PYTHONPATH=/home/sibilla-cumana/ralfloop-motor-judge/current" in unit
+    assert "/home/sibilla-cumana/ralfloop-production/current" not in unit
     assert "bottazzi_motor_judge_service preflight" in unit
     assert "bottazzi_motor_judge_service wait-ready --timeout 180" in unit
     assert "Restart=on-failure" in unit
