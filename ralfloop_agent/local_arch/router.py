@@ -93,6 +93,13 @@ class ToolRegistry:
             return True
         return any(tool.compact_id == action and tool.name == target and tool.availability == "available" for tool in self.tools)
 
+    def unique_available_target(self, action: str) -> str | None:
+        targets = {
+            tool.name for tool in self.tools
+            if tool.compact_id == action and tool.availability == "available"
+        }
+        return next(iter(targets)) if len(targets) == 1 else None
+
     def compact_catalog(self, candidates: Iterable[ToolRecord]) -> list[dict[str, Any]]:
         return [
             {"a": item.compact_id, "t": item.name, "cap": list(item.capabilities), "av": item.availability}
@@ -152,7 +159,12 @@ def _native_fields(raw: str) -> dict[str, Any]:
     return fields
 
 
-def parse_native_function_call(raw: str, registry: ToolRegistry | None = None) -> CompactRoute:
+def parse_native_function_call(
+    raw: str,
+    registry: ToolRegistry | None = None,
+    *,
+    repair_unique_target: bool = False,
+) -> CompactRoute:
     """Parse exactly one non-executing FunctionGemma native call."""
     if not isinstance(raw, str) or not raw or len(raw.encode("utf-8")) > 2048:
         raise ContractError("native_call_size")
@@ -180,6 +192,10 @@ def parse_native_function_call(raw: str, registry: ToolRegistry | None = None) -
     fields = _native_fields(body[brace + 1:-1])
     if any(key in fields for key in ("properties", "required", "schema", "$schema", "enum")):
         raise ContractError("schema_echo")
+    if set(fields) == {"confidence"} and repair_unique_target and registry is not None:
+        target = registry.unique_available_target(name)
+        if target is not None:
+            fields = {"target": target, **fields}
     if set(fields) != {"target", "confidence"}:
         raise ContractError("invalid_native_schema")
     target = fields["target"]
@@ -288,7 +304,7 @@ class FunctionGemmaClient:
         content = choice.get("content")
         if isinstance(content, str) and content:
             self.last_native_output = content
-            route = parse_native_function_call(content, registry)
+            route = parse_native_function_call(content, registry, repair_unique_target=True)
             self.last_metrics["valid_native_call"] = True
             self.last_metrics["valid_compact_route"] = True
             return route

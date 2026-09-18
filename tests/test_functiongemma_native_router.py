@@ -48,3 +48,11 @@ def test_native_end_marker_is_accepted(registry):
         registry,
     )
     assert route.t == "shortest_path"
+
+
+def test_missing_target_can_be_repaired_only_from_unique_registry_target(registry):
+    raw = "<start_function_call>call:VR{confidence:1}"
+    with pytest.raises(ContractError, match="invalid_native_schema"):
+        parse_native_function_call(raw, registry)
+    route = parse_native_function_call(raw, registry, repair_unique_target=True)
+    assert (route.a, route.t, route.c) == ("VR", "visual_rag", 1.0)
