@@ -1,0 +1,33 @@
+[Unit]
+Description=Ralf ABC relationship analysis MCP broker
+After=local-fs.target
+
+[Service]
+Type=simple
+User=sibilla-cumana
+Group=sibilla-cumana
+WorkingDirectory=/home/sibilla-cumana/ralf-abc-relation-mcp/current
+UMask=0077
+RuntimeDirectory=ralf-abc-relation-mcp
+RuntimeDirectoryMode=0700
+StateDirectory=ralf-abc-relation-mcp
+StateDirectoryMode=0700
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=ABC_RELATION_DB=/var/lib/ralf-abc-relation-mcp/abc_relation.sqlite3
+Environment=ABC_MCP_ALLOW_LOCAL_WRITES=1
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralf-abc-relation-mcp/current/scripts/ralf_abc_relation_mcp_broker.py --socket /run/ralf-abc-relation-mcp/mcp.sock --allow-uid 1000 --command /home/sibilla-cumana/ralf-abc-relation-mcp/current/scripts/ralf_abc_relation_mcp_server.py --idle-timeout 120
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=multi-user.target
