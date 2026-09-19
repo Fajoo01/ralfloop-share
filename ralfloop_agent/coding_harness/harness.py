@@ -18,7 +18,7 @@ from ralfloop_agent.shell_judge import (
 from .judge import ResidentDs4CodingJudge
 
 
-PI = "/home/sibilla-cumana/.local/node_modules/.bin/pi"
+PI = os.environ.get("RALF_PI_BIN", "/home/sibilla-cumana/.local/node_modules/.bin/pi")
 MAX_TEXT_BYTES = 512 * 1024
 MAX_PACKET_DIFF = 24_000
 MAX_OUTPUT = 16_000

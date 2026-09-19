@@ -130,6 +130,7 @@ def test_patch_allowed_terminal_cwd_uses_coding_harness(monkeypatch, tmp_path):
     def fake_harness(config):
         observed["workdir"] = str(config.workdir)
         observed["validator"] = config.validator_command
+        observed["worker_user"] = config.worker_user
         return {"final_status": "pass", "decision": "deterministic_fast_path", "changed_files": []}
 
     monkeypatch.setattr(
@@ -150,7 +151,11 @@ def test_patch_allowed_terminal_cwd_uses_coding_harness(monkeypatch, tmp_path):
     assert response.status_code == 200
     assert payload["ok"] is True
     assert payload["capability"] == "local_code_patch"
-    assert observed == {"workdir": str(tmp_path.resolve()), "validator": "git diff --check"}
+    assert observed == {
+        "workdir": str(tmp_path.resolve()),
+        "validator": "git diff --check",
+        "worker_user": "sibilla-cumana",
+    }
 
 
 def test_patch_allowed_rejects_non_git_terminal_cwd(monkeypatch, tmp_path):

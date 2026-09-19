@@ -1296,7 +1296,6 @@ def _local_code_workdir(req: TaskRunRequest) -> Path | None:
 
 
 def _run_local_code_patch(req: TaskRunRequest, route_model, capability_route: dict):
-    import pwd
     from ralfloop_agent.coding_harness.harness import HarnessConfig, run_harness
 
     workdir = _local_code_workdir(req)
@@ -1315,7 +1314,7 @@ def _run_local_code_patch(req: TaskRunRequest, route_model, capability_route: di
             "artifacts": [],
             "audit_summary": ["local_code_patch::worktree_rejected"],
         }
-    owner = pwd.getpwuid(workdir.stat().st_uid).pw_name
+    worker_user = os.environ.get("RALF_CODE_WORKER_USER", "sibilla-cumana").strip() or "sibilla-cumana"
     validator = str(
         ((req.extra_context or {}).get("terminal_client") or {}).get("validator_command")
         or "git diff --check"
@@ -1324,7 +1323,7 @@ def _run_local_code_patch(req: TaskRunRequest, route_model, capability_route: di
         workdir=workdir,
         task=req.user_goal,
         validator_command=validator,
-        worker_user=owner,
+        worker_user=worker_user,
         allow_test_changes=False,
     ))
     passed = report.get("final_status") == "pass"

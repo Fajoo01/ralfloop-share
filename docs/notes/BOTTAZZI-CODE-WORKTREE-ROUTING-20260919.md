@@ -40,3 +40,8 @@ A further live canary showed that local patch tasks still entered the generic Ag
 `local_maintenance + patch_allowed` now bypasses the generic reasoning/GPU handoff and dispatches directly to the bounded coding harness. Other agent tasks retain the existing GPU handoff.
 
 Targeted routing/backend suite remains 28/28 green.
+
+## Coding worker identity
+The first real coding-harness canary failed because integration selected the worktree owner (`bandi`) as worker, while the installed `pi` coding worker belongs to `sibilla-cumana` and is not traversable from `bandi`'s process context.
+
+The integration now uses `RALF_CODE_WORKER_USER` (default `sibilla-cumana`) and the harness accepts `RALF_PI_BIN`. On this host `sibilla-cumana` is in group `bandi`, so the dedicated worker can write the Baffoflix worktree without changing ownership.
