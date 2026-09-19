@@ -15,7 +15,7 @@ from ralfloop_agent.shell_judge import (
     RalfShellJudge, ShellDecision, ShellPolicy, safe_execution_environment,
 )
 
-BASE_DIR = Path("/home/sibilla-cumana/ralfloop_agent_scaffold/.openshell_backend")
+BASE_DIR = Path(os.environ.get("RALF_OPEN_SHELL_STATE_DIR", "/home/sibilla-cumana/ralfloop_agent_scaffold/.openshell_backend")).expanduser()
 BASE_DIR.mkdir(parents=True, exist_ok=True)
 
 AUDIT_LOG = BASE_DIR / "audit.jsonl"
@@ -41,7 +41,8 @@ try:
 except Exception as exc:
     audit("atm_telegram_router_load_failed", error=repr(exc))
 
-BACKEND_VENV_BIN = os.path.expanduser("~/ralfloop_agent_scaffold/.venv/bin")
+BACKEND_VENV_BIN = os.path.expanduser(os.environ.get("RALF_BACKEND_VENV_BIN", "~/ralfloop_agent_scaffold/.venv/bin"))
+SELF_BASE_URL = os.environ.get("RALF_OPEN_SHELL_BASE_URL", "http://127.0.0.1:19090").rstrip("/")
 
 
 def audit(event: str, **fields) -> None:
@@ -1804,7 +1805,7 @@ def _run_task_impl(req: TaskRunRequest):
     from ralfloop_agent.logging.audit import AuditLogger
     from ralfloop_agent.providers.ollama import OllamaPlanner, DeterministicPlanner
 
-    adapter = OpenShellAdapterReal(base_url="http://127.0.0.1:19090")
+    adapter = OpenShellAdapterReal(base_url=SELF_BASE_URL)
 
     planner = OllamaPlanner(
         base_url="http://127.0.0.1:11434",
