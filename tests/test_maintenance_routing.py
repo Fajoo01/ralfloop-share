@@ -44,6 +44,22 @@ def test_username_and_pathname_are_not_grant_intent(goal):
     assert not any(skill.startswith("bandi") for skill in route_task(goal).skills_used)
 
 
+@pytest.mark.parametrize(
+    "goal",
+    (
+        "Patch local source code in repository worktree only. Do not restart any service.",
+        "Fix repository code without restarting the service.",
+        "Patch the local worktree; never restart Bot-tazzi.",
+    ),
+)
+def test_negated_restart_keeps_local_code_patch_in_patch_allowed(goal):
+    route = route_task(goal)
+
+    assert route.mode == "patch_allowed"
+    assert "local_maintenance" in route.skills_used
+    assert route.requires_confirmation is False
+
+
 def test_true_grant_application_keeps_bandi_browser_handoff(monkeypatch):
     monkeypatch.setattr(
         "ralfloop_agent.domains.bandi_runtime_context.load_bandi_runtime_context",

@@ -8,7 +8,7 @@ import re
 from typing import Any
 
 
-NEGATION_WORDS = frozenset({"non", "senza"})
+NEGATION_WORDS = frozenset({"non", "senza", "not", "never", "without", "dont"})
 NEGATION_SCOPE_WORDS = 8
 CLAUSE_BREAK_RE = re.compile(r"(?:[.;!?]|\b(?:ma|però|pero|tuttavia|invece)\b)", re.IGNORECASE)
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
