@@ -33,3 +33,10 @@ Fixes:
 - deterministic validator defaults to `git diff --check`.
 
 Verification after wiring: 28 targeted tests passed.
+
+## Deterministic patch fast-path
+A further live canary showed that local patch tasks still entered the generic AgentGpuCoordinator before the coding harness. That could return `llama_cpp_unmanaged_process_on_port` or block while the shared GPU lifecycle was unrelated to the patch.
+
+`local_maintenance + patch_allowed` now bypasses the generic reasoning/GPU handoff and dispatches directly to the bounded coding harness. Other agent tasks retain the existing GPU handoff.
+
+Targeted routing/backend suite remains 28/28 green.

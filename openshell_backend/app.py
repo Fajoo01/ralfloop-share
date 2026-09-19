@@ -2073,6 +2073,10 @@ def run_task(req: TaskRunRequest):
         return _run_task_impl(req)
     if classified.mode == "external_action" and classified.requires_confirmation:
         return _run_task_impl(req)
+    if classified.mode == "patch_allowed" and is_local_maintenance_intent(req.user_goal):
+        # The coding harness owns its worker/judge lifecycle. Do not require the
+        # generic shared-GPU handoff before a bounded local worktree patch.
+        return _run_task_impl(req)
 
     from ralfloop_agent.providers.agent_gpu_handoff import AgentGpuCoordinator, AgentGpuHandoffError
 

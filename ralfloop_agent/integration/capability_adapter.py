@@ -20,6 +20,11 @@ _router = CapabilityRouter(skills_registry)
 def route_task(user_goal: str, mode: str | None = None) -> CapabilityRoute:
     request = TaskRequest(user_goal=user_goal, mode=mode)
     route = _router.route(request.user_goal)
+    # Local software maintenance is fully classified by deterministic policy.
+    # Do not add an LLM reasoning-cycle dependency before a bounded coding or
+    # canonical maintenance workflow can even start.
+    if "local_maintenance" in route.skills_used:
+        return route
     if run_reasoning_cycle is None:
         return route
     try:
