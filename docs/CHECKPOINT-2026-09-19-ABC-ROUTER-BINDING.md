@@ -31,18 +31,20 @@ Il percorso normale usa soltanto letture. Di default legge:
 - `abc_get_state`
 - `abc_analyze`
 
-Timeline e biblioteca di psicologia/dialogo sono caricate solo quando la richiesta le nomina esplicitamente.
+Timeline viene caricata soltanto per richieste cronologiche. La biblioteca di psicologia/dialogo viene caricata per richieste che citano manuali/modelli oppure che chiedono come dialogare, comunicare, scrivere o rispondere.
 
 Nessun nome personale è stato aggiunto ai trigger di routing.
 
-## Fallback
+## Runtime e fallback
 
-Se il broker/socket ABC non è disponibile, il resolver restituisce uno stato di indisponibilità esplicito e richiede il fallback locale:
+Quando `abc_relation` è disponibile, `abc_memory` e `abc_relcalc` restano visibili nel route trace come compatibilità legacy ma non vengono eseguite in parallelo.
+
+Se il broker/socket ABC non è disponibile, il resolver restituisce uno stato di indisponibilità esplicito e attiva soltanto allora il fallback locale:
 
 - `abc_memory`
 - `abc_relcalc`
 
-Non viene simulata una risposta MCP vuota e non si tenta alcuna scrittura.
+Non viene simulata una risposta MCP vuota, non si tenta alcuna scrittura e una normale richiesta ABC non esegue più `ls -la` come falsa evidenza: il TaskResponse usa evidenza sintetica `mcp:abc_relation:read_only`.
 
 ## Manuali
 
@@ -62,7 +64,9 @@ Il nuovo test copre:
 
 ## Stato della verifica
 
-Le modifiche sono state scritte direttamente sul branch privato via GitHub. In questa sessione Remote Desktop Commander risulta connesso a Sibilla ma le chiamate filesystem/process sono sospese dal limite del connector, quindi questi nuovi test non vengono dichiarati eseguiti localmente finché non esiste un risultato reale di CI o una successiva esecuzione su Sibilla.
+Le modifiche sono state scritte direttamente sul branch privato via GitHub. In questa sessione Remote Desktop Commander risulta connesso a Sibilla ma le chiamate filesystem/process sono sospese dal limite del connector. Il repository non espone una workflow GitHub Actions sul branch, quindi questi nuovi test non vengono dichiarati eseguiti finché non esiste una successiva esecuzione reale su Sibilla.
+
+Il checkpoint MCP v1 precedente resta valido per la suite già eseguita prima di questo binding (`15 passed`); quel risultato non viene esteso artificialmente alle modifiche di routing presenti qui.
 
 ## Live deployment
 
