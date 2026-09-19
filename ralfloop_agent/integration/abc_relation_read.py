@@ -30,6 +30,12 @@ REFERENCE_TRIGGERS = (
     "investment model",
     "interdipendenza",
     "attaccamento",
+    "dialogo",
+    "comunicazione",
+    "cosa dire",
+    "cosa scrivere",
+    "come rispondere",
+    "messaggio",
 )
 TIMELINE_TRIGGERS = ("timeline", "cronologia", "ultimi eventi", "eventi recenti")
 
@@ -78,7 +84,7 @@ class ABCRelationReadAdapter:
             if any(trigger in goal for trigger in REFERENCE_TRIGGERS):
                 context["references"] = client.references()
             return ABCReadResolution(available=True, context=context)
-        except Exception as exc:  # availability failures must degrade to legacy, never writes
+        except (OSError, TimeoutError, RuntimeError) as exc:
             return ABCReadResolution(
                 available=False,
                 context={},
