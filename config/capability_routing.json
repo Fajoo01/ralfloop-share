@@ -62,6 +62,27 @@
     {"name": "google_workspace.drive", "triggers": ["drive", "docs", "scrivi su drive"]},
     {"name": "browser", "triggers": ["browser", "portale", "pagina", "url", "compila candidatura", "carica allegato", "carica allegati"]}
   ],
+  "read_mcp_keywords": [
+    {
+      "name": "abc_relation",
+      "triggers": [
+        "rl:abc",
+        "rsc",
+        "abc_memory",
+        "abc_relcalc",
+        "rlcalc",
+        "rlfull",
+        "relazionale",
+        "calcolatrice relazionale",
+        "calcolatrice strategica",
+        "strategia relazionale",
+        "curva relazionale",
+        "dinamica relazionale",
+        "segnale affettivo",
+        "rapporto personale"
+      ]
+    }
+  ],
   "jury": {
     "mode_file": "/home/sibilla-cumana/gatto/cat/_ralfloop_hold/modes/jury.json",
     "fallback_roles": ["planner", "coder", "critic", "judge", "reviewer"],
