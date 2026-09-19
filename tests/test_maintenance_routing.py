@@ -119,3 +119,49 @@ def test_local_maintenance_http_surface_rejects_arbitrary_shell():
     assert listed["arbitrary_shell"] is False
     assert "shell.arbitrary" not in listed["canonical_actions"]
     assert rejected["status"] == "unsupported_canonical_local_action"
+
+
+def test_patch_allowed_terminal_cwd_uses_coding_harness(monkeypatch, tmp_path):
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    observed = {}
+
+    def fake_harness(config):
+        observed["workdir"] = str(config.workdir)
+        observed["validator"] = config.validator_command
+        return {"final_status": "pass", "decision": "deterministic_fast_path", "changed_files": []}
+
+    monkeypatch.setattr(
+        "ralfloop_agent.coding_harness.harness.run_harness", fake_harness
+    )
+    monkeypatch.setenv("RALF_CODE_WORKTREE_ROOTS", str(tmp_path.parent))
+    response = TestClient(app).post(
+        "/tasks/run",
+        json={
+            "user_goal": "correggi codice nel repository e verifica il diff",
+            "extra_context": {
+                "source": "ralf_terminal",
+                "terminal_client": {"cwd": str(tmp_path)},
+            },
+        },
+    )
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["capability"] == "local_code_patch"
+    assert observed == {"workdir": str(tmp_path.resolve()), "validator": "git diff --check"}
+
+
+def test_patch_allowed_rejects_non_git_terminal_cwd(monkeypatch, tmp_path):
+    monkeypatch.setenv("RALF_CODE_WORKTREE_ROOTS", str(tmp_path.parent))
+    response = TestClient(app).post(
+        "/tasks/run",
+        json={
+            "user_goal": "correggi codice nel repository",
+            "extra_context": {"terminal_client": {"cwd": str(tmp_path)}},
+        },
+    )
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["stop_reason"] == "trusted_git_worktree_required"

@@ -19,3 +19,17 @@ Exact regression sentence now routes to `patch_allowed`, `requires_confirmation=
 `/home/bandi/ralfloop-code-maintenance-20260919`
 Branch: `fix/code-worktree-maintenance-20260919`
 Base: production commit `b5005a2`.
+
+## Worktree execution wiring
+Additional defects found during live canary:
+- backend state/audit path was hardcoded to the historical scaffold;
+- the real OpenShell adapter self-targeted port 19090 even for alternate backend instances;
+- terminal `--cwd` was metadata only, while patch workflows received an empty sandbox.
+
+Fixes:
+- configurable `RALF_OPEN_SHELL_STATE_DIR` and `RALF_OPEN_SHELL_BASE_URL`, production defaults unchanged;
+- `patch_allowed + local_maintenance` now dispatches to the existing coding harness when terminal cwd is an allowed Git worktree root;
+- fail closed for non-Git/untrusted cwd;
+- deterministic validator defaults to `git diff --check`.
+
+Verification after wiring: 28 targeted tests passed.

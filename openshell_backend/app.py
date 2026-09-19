@@ -1267,6 +1267,83 @@ def _run_read_only_system_inspection(req: TaskRunRequest, route_model, capabilit
         ],
     }
 
+def _local_code_workdir(req: TaskRunRequest) -> Path | None:
+    terminal = dict((req.extra_context or {}).get("terminal_client") or {})
+    raw = str(terminal.get("cwd") or "").strip()
+    if not raw:
+        return None
+    requested = Path(raw).expanduser()
+    if not requested.is_absolute() or not requested.is_dir():
+        return None
+    resolved = requested.resolve()
+    roots = os.environ.get(
+        "RALF_CODE_WORKTREE_ROOTS", "/home/bandi:/home/sibilla-cumana"
+    ).split(":")
+    allowed_roots = [Path(item).expanduser().resolve() for item in roots if item.strip()]
+    if not any(resolved == root or resolved.is_relative_to(root) for root in allowed_roots):
+        return None
+    result = subprocess.run(
+        ["git", "-C", str(resolved), "rev-parse", "--show-toplevel"],
+        check=False, text=True, capture_output=True, timeout=5,
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        git_root = Path(result.stdout.strip()).resolve()
+    except (OSError, RuntimeError):
+        return None
+    return resolved if git_root == resolved else None
+
+
+def _run_local_code_patch(req: TaskRunRequest, route_model, capability_route: dict):
+    import pwd
+    from ralfloop_agent.coding_harness.harness import HarnessConfig, run_harness
+
+    workdir = _local_code_workdir(req)
+    if workdir is None:
+        return {
+            "ok": False,
+            "mode": req.mode,
+            "current_role": "local_code_patch",
+            "role_history": ["capability_router", "local_code_patch"],
+            "stop_reason": "trusted_git_worktree_required",
+            "interaction_mode": "agent",
+            "capability": "local_code_patch",
+            "approval_required": False,
+            "capability_route": capability_route,
+            "final_answer": "Patch locale non eseguita: serve un cwd che sia la radice di un worktree Git locale consentito.",
+            "artifacts": [],
+            "audit_summary": ["local_code_patch::worktree_rejected"],
+        }
+    owner = pwd.getpwuid(workdir.stat().st_uid).pw_name
+    validator = str(
+        ((req.extra_context or {}).get("terminal_client") or {}).get("validator_command")
+        or "git diff --check"
+    )
+    report = run_harness(HarnessConfig(
+        workdir=workdir,
+        task=req.user_goal,
+        validator_command=validator,
+        worker_user=owner,
+        allow_test_changes=False,
+    ))
+    passed = report.get("final_status") == "pass"
+    return {
+        "ok": passed,
+        "mode": req.mode,
+        "current_role": "local_code_patch",
+        "role_history": ["capability_router", "local_code_patch"],
+        "stop_reason": "local_code_patch_completed" if passed else "local_code_patch_failed",
+        "interaction_mode": "agent",
+        "capability": "local_code_patch",
+        "approval_required": False,
+        "capability_route": capability_route,
+        "final_answer": json.dumps(report, ensure_ascii=False, sort_keys=True),
+        "artifacts": [],
+        "audit_summary": [f"local_code_patch::{report.get('decision', 'unknown')}::{report.get('final_status', 'unknown')}"] ,
+    }
+
+
 def _run_task_impl(req: TaskRunRequest):
     import json as _json
     import re as _re
@@ -1354,6 +1431,12 @@ def _run_task_impl(req: TaskRunRequest):
         return _run_read_only_system_inspection(
             req, route_model, capability_route
         )
+
+    if (
+        route_model.mode == "patch_allowed"
+        and is_local_maintenance_intent(req.user_goal)
+    ):
+        return _run_local_code_patch(req, route_model, capability_route)
 
     if (
         route_model.mode == "external_action"
