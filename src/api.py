@@ -30,6 +30,7 @@ router = CapabilityRouter(skills_registry)
 executor = ShellExecutor()
 mcp = MCPClient()
 abc_relation_read = ABCRelationReadAdapter()
+ABC_LEGACY_SKILLS = frozenset({"abc_memory", "abc_relcalc"})
 
 
 class LabRecursiveMASRunRequest(BaseModel):
@@ -155,15 +156,20 @@ def run_task(request: TaskRequest) -> TaskResponse:
     if request.mode == "route_only":
         return _response(route=route, evidence=None, message="route_only", collaboration_trace=collaboration_trace)
 
-    skill_messages = [skills_registry.run(skill, request.user_goal) for skill in route.skills_used]
-    if "abc_relation" in route.mcp_used and route.mode != "external_action":
-        resolution = abc_relation_read.resolve(request.user_goal)
-        if resolution.available:
-            skill_messages.append(resolution.render())
-        else:
-            skill_messages.append(resolution.render())
-            for skill in resolution.fallback_skills:
-                if skill not in route.skills_used:
+    abc_selected = "abc_relation" in route.mcp_used and route.mode != "external_action"
+    skills_to_run = [
+        skill
+        for skill in route.skills_used
+        if not (abc_selected and skill in ABC_LEGACY_SKILLS)
+    ]
+    skill_messages = [skills_registry.run(skill, request.user_goal) for skill in skills_to_run]
+    abc_resolution = None
+    if abc_selected:
+        abc_resolution = abc_relation_read.resolve(request.user_goal)
+        skill_messages.append(abc_resolution.render())
+        if not abc_resolution.available:
+            for skill in abc_resolution.fallback_skills:
+                if skill not in skills_to_run:
                     skill_messages.append(skills_registry.run(skill, request.user_goal))
 
     collaboration_message = summarize_text_mas_trace(collaboration_trace)
@@ -171,7 +177,11 @@ def run_task(request: TaskRequest) -> TaskResponse:
         skill_messages.append(collaboration_message)
 
     if route.mode == "check_only":
-        evidence = executor.run("ls -la")
+        evidence = (
+            Evidence(command="mcp:abc_relation:read_only", path="abc_relation", exit_code=0)
+            if abc_selected
+            else executor.run("ls -la")
+        )
         return _response(
             route=route,
             evidence=evidence,
