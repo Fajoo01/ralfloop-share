@@ -10,6 +10,7 @@ from src.routing_config import (
     local_jury_style,
     local_jury_style_source,
     mcp_keywords,
+    read_mcp_keywords,
     verification_config,
 )
 from src.skills import SkillsRegistry, is_local_maintenance_intent
@@ -17,6 +18,7 @@ from src.skills import SkillsRegistry, is_local_maintenance_intent
 
 ROUTING_CONFIG = load_routing_config()
 MCP_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = mcp_keywords(ROUTING_CONFIG)
+READ_MCP_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = read_mcp_keywords(ROUTING_CONFIG)
 
 
 class CapabilityRouter:
@@ -25,6 +27,7 @@ class CapabilityRouter:
         self.mode_keywords = dict(self.config.get("mode_keywords") or {})
         self.jury_config = dict(self.config.get("jury") or {})
         self.mcp_keywords = mcp_keywords(self.config)
+        self.read_mcp_keywords = read_mcp_keywords(self.config)
         self.jury_roles = configured_jury_roles(self.config)
         self.skills = skills_registry or SkillsRegistry()
 
@@ -43,11 +46,12 @@ class CapabilityRouter:
             ]
             if "local_maintenance" not in skills_used:
                 skills_used.insert(0, "local_maintenance")
-        mcp_used = (
-            self._match_mcp(user_goal)
-            if mode == "external_action" and not local_maintenance
-            else []
-        )
+        if mode == "external_action" and not local_maintenance:
+            mcp_used = self._match_mcp(user_goal)
+        elif not local_maintenance:
+            mcp_used = self._match_read_mcp(user_goal)
+        else:
+            mcp_used = []
         requires_confirmation = mode == "external_action" and any(connector != "browser" for connector in mcp_used)
         if mode == "external_action" and not mcp_used:
             requires_confirmation = True
@@ -118,6 +122,14 @@ class CapabilityRouter:
         matched = []
         for connector, words in self.mcp_keywords:
             if any_unnegated_trigger_matches(words, goal):
+                matched.append(connector)
+        return matched
+
+    def _match_read_mcp(self, user_goal: str) -> list[str]:
+        goal = user_goal.lower()
+        matched = []
+        for connector, words in self.read_mcp_keywords:
+            if any_trigger_matches(words, goal):
                 matched.append(connector)
         return matched
 
