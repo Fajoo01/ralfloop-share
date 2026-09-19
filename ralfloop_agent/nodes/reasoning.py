@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import uuid4
 
+from ralfloop_agent.integration.abc_relation_read import ABCRelationReadAdapter
 from ralfloop_agent.integration.capability_adapter import route_task
-from ralfloop_agent.integration.read_mcp import run_read_mcp
 from ralfloop_agent.models.result_envelope import ResultEnvelope
 from ralfloop_agent.integration.verification_judge import run_verification_judge, verification_blocks
 from src import audit
@@ -15,11 +15,21 @@ from src.models import Evidence, PatchEvidence
 from src.text_mas_proxy import build_text_mas_trace
 
 
-def _read_mcp_evidence(user_goal: str, route) -> Evidence | None:
-    if route.mode != "check_only" or not route.mcp_used:
-        return None
-    connector = route.mcp_used[0]
-    return run_read_mcp(connector, user_goal)
+def _abc_read_evidence(user_goal: str) -> tuple[Evidence, dict]:
+    resolution = ABCRelationReadAdapter().resolve(user_goal)
+    evidence = Evidence(
+        command="mcp:abc_relation:read_only",
+        path="abc_relation",
+        exit_code=0 if resolution.available else 1,
+        stdout=resolution.render(),
+        stderr=None if resolution.available else resolution.error,
+    )
+    meta = {
+        "read_mcp": "abc_relation",
+        "read_mcp_available": resolution.available,
+        "fallback_skills": list(resolution.fallback_skills),
+    }
+    return evidence, meta
 
 
 def run_capability_reasoning_cycle(user_goal: str, context: dict | None = None) -> ResultEnvelope:
@@ -35,36 +45,13 @@ def run_capability_reasoning_cycle(user_goal: str, context: dict | None = None) 
     audit.log_operation("sandbox_initialized", {"task_id": task_id, "sandbox_path": str(executor.base_dir)})
 
     if route.mode == "check_only":
-        try:
-            evidence = _read_mcp_evidence(user_goal, route)
-        except Exception as exc:
-            connector = route.mcp_used[0] if route.mcp_used else "unknown"
-            evidence = Evidence(
-                command=f"mcp:{connector}:read",
-                path="mcp",
-                exit_code=1,
-                stdout=None,
-                stderr=type(exc).__name__,
-            )
-            envelope = ResultEnvelope(
-                route=route,
-                evidence=evidence,
-                jury_policy=route.jury_policy,
-                collaboration_backend=route.collaboration_backend,
-                verification_policy=route.verification_policy,
-                collaboration_trace=collaboration_trace,
-                jury_trace=collaboration_trace,
-                answer="read_mcp_failed",
-                meta={**meta, "read_mcp": connector, "error_type": type(exc).__name__},
-            )
-            audit.log_operation("reasoning_cycle_read_mcp_failed", envelope.model_dump(mode="json"))
-            return envelope
-        if evidence is None:
+        if "abc_relation" in route.mcp_used:
+            evidence, read_meta = _abc_read_evidence(user_goal)
+            meta.update(read_meta)
+            answer = "read_mcp evidence collected" if evidence.exit_code == 0 else "read_mcp unavailable"
+        else:
             evidence = executor.run_in_sandbox(["ls", "-la"], cwd=".")
             answer = "check_only evidence collected"
-        else:
-            answer = "read_mcp evidence collected"
-            meta["read_mcp"] = route.mcp_used[0]
         envelope = ResultEnvelope(
             route=route,
             evidence=evidence,
