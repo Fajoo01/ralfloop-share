@@ -97,14 +97,22 @@ def configured_jury_roles(config: dict[str, Any]) -> list[str]:
     return _dedupe(str(role) for role in jury.get("fallback_roles", []) if role)
 
 
-def mcp_keywords(config: dict[str, Any]) -> tuple[tuple[str, tuple[str, ...]], ...]:
+def _keyword_entries(config: dict[str, Any], key: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
     entries = []
-    for item in config.get("mcp_keywords", []) or []:
+    for item in config.get(key, []) or []:
         name = str(item.get("name") or "").strip()
         triggers = tuple(str(value).lower() for value in item.get("triggers", []) if str(value).strip())
         if name and triggers:
             entries.append((name, triggers))
     return tuple(entries)
+
+
+def mcp_keywords(config: dict[str, Any]) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    return _keyword_entries(config, "mcp_keywords")
+
+
+def read_mcp_keywords(config: dict[str, Any]) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    return _keyword_entries(config, "read_mcp_keywords")
 
 
 def local_jury_style(config: dict[str, Any], trigger: str | None = None) -> str:
