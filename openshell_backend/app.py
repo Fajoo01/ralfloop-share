@@ -1315,6 +1315,10 @@ def _run_local_code_patch(req: TaskRunRequest, route_model, capability_route: di
             "audit_summary": ["local_code_patch::worktree_rejected"],
         }
     worker_user = os.environ.get("RALF_CODE_WORKER_USER", "sibilla-cumana").strip() or "sibilla-cumana"
+    worker_provider = os.environ.get("RALF_CODE_PROVIDER", "agentcpm-local").strip() or "agentcpm-local"
+    worker_model = os.environ.get("RALF_CODE_MODEL", "AgentCPM-Explore").strip() or "AgentCPM-Explore"
+    fallback_provider = os.environ.get("RALF_CODE_FALLBACK_PROVIDER", "").strip() or None
+    fallback_model = os.environ.get("RALF_CODE_FALLBACK_MODEL", "").strip() or None
     validator = str(
         ((req.extra_context or {}).get("terminal_client") or {}).get("validator_command")
         or "git diff --check"
@@ -1324,6 +1328,10 @@ def _run_local_code_patch(req: TaskRunRequest, route_model, capability_route: di
         task=req.user_goal,
         validator_command=validator,
         worker_user=worker_user,
+        provider=worker_provider,
+        model=worker_model,
+        fallback_provider=fallback_provider,
+        fallback_model=fallback_model,
         allow_test_changes=False,
     ))
     passed = report.get("final_status") == "pass"

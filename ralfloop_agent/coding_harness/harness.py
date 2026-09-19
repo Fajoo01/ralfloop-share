@@ -47,6 +47,8 @@ class HarnessConfig:
     worker_user: str = "sibilla-cumana"
     provider: str = "agentcpm-local"
     model: str = "AgentCPM-Explore"
+    fallback_provider: str | None = None
+    fallback_model: str | None = None
     allow_test_changes: bool = False
     protected_globs: tuple[str, ...] = ()
     ds4_base_url: str = "http://127.0.0.1:19194"
@@ -256,8 +258,16 @@ def _run_shell(command: str, root: Path, timeout_sec: int) -> tuple[int, str]:
         return 124, _trim(output + "\nVALIDATOR_TIMEOUT")
 
 
-def _pi_command(config: HarnessConfig, prompt: str) -> list[str]:
+def _pi_command(
+    config: HarnessConfig,
+    prompt: str,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+) -> list[str]:
     current = pwd.getpwuid(os.geteuid()).pw_name
+    selected_provider = provider or config.provider
+    selected_model = model or config.model
 
     command: list[str] = [
         "/usr/bin/timeout",
@@ -272,8 +282,8 @@ def _pi_command(config: HarnessConfig, prompt: str) -> list[str]:
     command += [
         PI,
         "--no-session",
-        "--provider", config.provider,
-        "--model", config.model,
+        "--provider", selected_provider,
+        "--model", selected_model,
         "--tools", "read,edit,write,bash",
         "--mode", "json",
         "-p", prompt,
@@ -281,10 +291,16 @@ def _pi_command(config: HarnessConfig, prompt: str) -> list[str]:
     return command
 
 
-def _run_worker(config: HarnessConfig, prompt: str) -> tuple[int, str]:
+def _run_worker_once(
+    config: HarnessConfig,
+    prompt: str,
+    *,
+    provider: str,
+    model: str,
+) -> tuple[int, str]:
     try:
         result = subprocess.run(
-            _pi_command(config, prompt),
+            _pi_command(config, prompt, provider=provider, model=model),
             cwd=config.workdir,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -298,6 +314,31 @@ def _run_worker(config: HarnessConfig, prompt: str) -> tuple[int, str]:
         if isinstance(output, bytes):
             output = output.decode("utf-8", errors="replace")
         return 124, _trim(output + "\nWORKER_OUTER_TIMEOUT")
+
+
+def _run_worker(config: HarnessConfig, prompt: str) -> tuple[int, str]:
+    primary_rc, primary_output = _run_worker_once(
+        config, prompt, provider=config.provider, model=config.model
+    )
+    fallback_provider = (config.fallback_provider or "").strip()
+    fallback_model = (config.fallback_model or "").strip()
+    if primary_rc == 0 or not fallback_provider or not fallback_model:
+        return primary_rc, primary_output
+    if (fallback_provider, fallback_model) == (config.provider, config.model):
+        return primary_rc, primary_output
+
+    fallback_rc, fallback_output = _run_worker_once(
+        config, prompt, provider=fallback_provider, model=fallback_model
+    )
+    combined = _trim(
+        "PRIMARY_WORKER_FAILED "
+        f"provider={config.provider} model={config.model} rc={primary_rc}\n"
+        f"{primary_output}\n"
+        "FALLBACK_WORKER "
+        f"provider={fallback_provider} model={fallback_model} rc={fallback_rc}\n"
+        f"{fallback_output}"
+    )
+    return fallback_rc, combined
 
 
 def _worker_prompt(config: HarnessConfig) -> str:

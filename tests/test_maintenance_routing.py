@@ -131,12 +131,20 @@ def test_patch_allowed_terminal_cwd_uses_coding_harness(monkeypatch, tmp_path):
         observed["workdir"] = str(config.workdir)
         observed["validator"] = config.validator_command
         observed["worker_user"] = config.worker_user
+        observed["provider"] = config.provider
+        observed["model"] = config.model
+        observed["fallback_provider"] = config.fallback_provider
+        observed["fallback_model"] = config.fallback_model
         return {"final_status": "pass", "decision": "deterministic_fast_path", "changed_files": []}
 
     monkeypatch.setattr(
         "ralfloop_agent.coding_harness.harness.run_harness", fake_harness
     )
     monkeypatch.setenv("RALF_CODE_WORKTREE_ROOTS", str(tmp_path.parent))
+    monkeypatch.setenv("RALF_CODE_PROVIDER", "llamacpp-code-local")
+    monkeypatch.setenv("RALF_CODE_MODEL", "qwen2.5-coder-7b")
+    monkeypatch.setenv("RALF_CODE_FALLBACK_PROVIDER", "agentcpm-local")
+    monkeypatch.setenv("RALF_CODE_FALLBACK_MODEL", "AgentCPM-Explore")
     response = TestClient(app).post(
         "/tasks/run",
         json={
@@ -155,6 +163,10 @@ def test_patch_allowed_terminal_cwd_uses_coding_harness(monkeypatch, tmp_path):
         "workdir": str(tmp_path.resolve()),
         "validator": "git diff --check",
         "worker_user": "sibilla-cumana",
+        "provider": "llamacpp-code-local",
+        "model": "qwen2.5-coder-7b",
+        "fallback_provider": "agentcpm-local",
+        "fallback_model": "AgentCPM-Explore",
     }
 
 

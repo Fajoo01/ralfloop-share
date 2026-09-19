@@ -7,6 +7,7 @@ from ralfloop_agent.coding_harness.harness import (
     build_diff,
     changed_paths,
     protected_changes,
+    _run_worker,
 )
 
 
@@ -74,3 +75,34 @@ def test_snapshot_delta_and_diff():
     assert "return a+b" in diff
     assert lines == 2
     assert truncated is False
+
+
+def test_worker_uses_configured_fallback_after_primary_failure(monkeypatch, tmp_path: Path):
+    calls = []
+
+    def fake_once(config, prompt, *, provider, model):
+        calls.append((provider, model))
+        if provider == "broken-local":
+            return 124, "timeout"
+        return 0, "done"
+
+    monkeypatch.setattr(
+        "ralfloop_agent.coding_harness.harness._run_worker_once", fake_once
+    )
+    config = HarnessConfig(
+        workdir=tmp_path,
+        task="x",
+        validator_command="true",
+        provider="broken-local",
+        model="broken-model",
+        fallback_provider="llamacpp-code-local",
+        fallback_model="qwen2.5-coder-7b",
+    )
+    rc, output = _run_worker(config, "prompt")
+    assert rc == 0
+    assert calls == [
+        ("broken-local", "broken-model"),
+        ("llamacpp-code-local", "qwen2.5-coder-7b"),
+    ]
+    assert "PRIMARY_WORKER_FAILED" in output
+    assert "FALLBACK_WORKER" in output
