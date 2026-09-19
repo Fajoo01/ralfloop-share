@@ -11,6 +11,7 @@ import signal
 import socket
 import struct
 import subprocess
+import sys
 import time
 
 
@@ -23,9 +24,17 @@ def _peer_uid(conn: socket.socket) -> int:
     return uid
 
 
+def _server_argv(command: str) -> list[str]:
+    """Treat broker command as trusted config, never through a shell."""
+    path = Path(command)
+    if path.suffix == ".py" and path.is_file() and not os.access(path, os.X_OK):
+        return [sys.executable, str(path)]
+    return [command]
+
+
 def _relay(conn: socket.socket, command: str, idle_timeout: float) -> None:
     process = subprocess.Popen(
-        [command],
+        _server_argv(command),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
