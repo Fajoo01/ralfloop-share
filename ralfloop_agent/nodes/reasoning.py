@@ -4,14 +4,22 @@ from datetime import datetime
 from uuid import uuid4
 
 from ralfloop_agent.integration.capability_adapter import route_task
+from ralfloop_agent.integration.read_mcp import run_read_mcp
 from ralfloop_agent.models.result_envelope import ResultEnvelope
 from ralfloop_agent.integration.verification_judge import run_verification_judge, verification_blocks
 from src import audit
 from src.confirmation import get_confirmation
 from src.executor import ShellExecutor
 from src.mcp_client import MCPClient, NeedsConfirmationError
-from src.models import PatchEvidence
+from src.models import Evidence, PatchEvidence
 from src.text_mas_proxy import build_text_mas_trace
+
+
+def _read_mcp_evidence(user_goal: str, route) -> Evidence | None:
+    if route.mode != "check_only" or not route.mcp_used:
+        return None
+    connector = route.mcp_used[0]
+    return run_read_mcp(connector, user_goal)
 
 
 def run_capability_reasoning_cycle(user_goal: str, context: dict | None = None) -> ResultEnvelope:
@@ -27,7 +35,36 @@ def run_capability_reasoning_cycle(user_goal: str, context: dict | None = None) 
     audit.log_operation("sandbox_initialized", {"task_id": task_id, "sandbox_path": str(executor.base_dir)})
 
     if route.mode == "check_only":
-        evidence = executor.run_in_sandbox(["ls", "-la"], cwd=".")
+        try:
+            evidence = _read_mcp_evidence(user_goal, route)
+        except Exception as exc:
+            connector = route.mcp_used[0] if route.mcp_used else "unknown"
+            evidence = Evidence(
+                command=f"mcp:{connector}:read",
+                path="mcp",
+                exit_code=1,
+                stdout=None,
+                stderr=type(exc).__name__,
+            )
+            envelope = ResultEnvelope(
+                route=route,
+                evidence=evidence,
+                jury_policy=route.jury_policy,
+                collaboration_backend=route.collaboration_backend,
+                verification_policy=route.verification_policy,
+                collaboration_trace=collaboration_trace,
+                jury_trace=collaboration_trace,
+                answer="read_mcp_failed",
+                meta={**meta, "read_mcp": connector, "error_type": type(exc).__name__},
+            )
+            audit.log_operation("reasoning_cycle_read_mcp_failed", envelope.model_dump(mode="json"))
+            return envelope
+        if evidence is None:
+            evidence = executor.run_in_sandbox(["ls", "-la"], cwd=".")
+            answer = "check_only evidence collected"
+        else:
+            answer = "read_mcp evidence collected"
+            meta["read_mcp"] = route.mcp_used[0]
         envelope = ResultEnvelope(
             route=route,
             evidence=evidence,
@@ -36,7 +73,7 @@ def run_capability_reasoning_cycle(user_goal: str, context: dict | None = None) 
             verification_policy=route.verification_policy,
             collaboration_trace=collaboration_trace,
             jury_trace=collaboration_trace,
-            answer="check_only evidence collected",
+            answer=answer,
             meta=meta,
         )
         audit.log_operation("reasoning_cycle_check_only", envelope.model_dump(mode="json"))
