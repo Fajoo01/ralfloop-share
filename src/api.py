@@ -11,6 +11,7 @@ from ralfloop_agent.domains.promotion import DomainPromotionService
 from ralfloop_agent.domains.registry import DomainRegistry
 from ralfloop_agent.domains.resolver import DomainResolver
 from ralfloop_agent.domains.validator import DomainValidator
+from ralfloop_agent.integration.abc_relation_read import ABCRelationReadAdapter
 from ralfloop_agent.integration.recursive_mas_runtime import RecursiveMASRuntimeController
 from src.confirmation import confirm_action, reject_action
 from src.executor import ShellExecutor
@@ -28,6 +29,7 @@ skills_registry = SkillsRegistry()
 router = CapabilityRouter(skills_registry)
 executor = ShellExecutor()
 mcp = MCPClient()
+abc_relation_read = ABCRelationReadAdapter()
 
 
 class LabRecursiveMASRunRequest(BaseModel):
@@ -62,8 +64,6 @@ def recursive_mas_lab_run(request: LabRecursiveMASRunRequest) -> dict:
     if status in {"disabled", "circuit_open", "backend_unavailable"}:
         raise HTTPException(status_code=503, detail=result)
     raise HTTPException(status_code=500, detail=result)
-
-
 
 
 class DomainGoalRequest(BaseModel):
@@ -156,6 +156,16 @@ def run_task(request: TaskRequest) -> TaskResponse:
         return _response(route=route, evidence=None, message="route_only", collaboration_trace=collaboration_trace)
 
     skill_messages = [skills_registry.run(skill, request.user_goal) for skill in route.skills_used]
+    if "abc_relation" in route.mcp_used and route.mode != "external_action":
+        resolution = abc_relation_read.resolve(request.user_goal)
+        if resolution.available:
+            skill_messages.append(resolution.render())
+        else:
+            skill_messages.append(resolution.render())
+            for skill in resolution.fallback_skills:
+                if skill not in route.skills_used:
+                    skill_messages.append(skills_registry.run(skill, request.user_goal))
+
     collaboration_message = summarize_text_mas_trace(collaboration_trace)
     if collaboration_message:
         skill_messages.append(collaboration_message)
