@@ -261,3 +261,55 @@ Restano inoltre conservati i release precedenti `d4d81810995eaa35911d642a681fc71
 ### Esito
 
 Il binding live `/tasks/run -> abc_relation -> reasoning cycle read-only -> broker MCP` è ora validato end-to-end. Il vecchio planner sandbox non viene più avviato per le quattro query ABC previste.
+
+## Hardening overlay e startup canary — 2026-09-20
+
+Il rischio residuo del rollout ABC è stato eliminato alla radice. Il vecchio
+`99-memory-rag-overlay.conf` montava l'intera directory `ralf-memory-rag/current/config`
+sopra `ralfloop-production/current/config`, permettendo a un overlay più vecchio di
+nascondere `capability_routing.json` del release canonico.
+
+Correzione definitiva:
+
+- i config live necessari di Memory RAG sono stati integrati nel release Bot-tazzi;
+- il drop-in Memory RAG ora monta soltanto i moduli Python necessari;
+- non esiste più un bind Memory RAG dell'intera directory `production/current/config`;
+- `mcp_catalog_v1.json` resta sovrapposto singolarmente dal drop-in Meta Social;
+- aggiunto `scripts/check_abc_live_routing.py`;
+- aggiunto `98-abc-routing-canary.conf` con `ExecStartPre` fail-closed;
+- il canary stabile è installato in `/usr/local/libexec/ralfloop-check-abc-routing.py`;
+- `RALFLOOP_RELEASE_ROOT` è fissato esplicitamente a `production/current`.
+
+Il primo tentativo del canary stabile ha rilevato un falso project root `/usr/local`
+per la presenza di `/usr/local/src`; il backend non è partito, come previsto dal
+fail-closed. È stato corretto passando esplicitamente `RALFLOOP_RELEASE_ROOT`, quindi
+`ExecStartPre` è passato con `status=0` e il backend è tornato `active`.
+Verifica finale:
+
+- regressione overlay/canary/config: `72 passed, 2 warnings`;
+- suite ABC mirata dopo il canary stabile: `16 passed, 2 warnings`;
+- `git diff --check`: OK;
+- un test Unified Assistant (`bandi -> email draft`) resta rosso anche col vecchio config:
+  baseline preesistente, non introdotto da questo hardening;
+- quattro smoke HTTP ABC reali: tutti `ok=true`, `approval_required=false`,
+  `mcp=["abc_relation"]`, evidence `mcp:abc_relation:read_only`, `exit=0`;
+- `mostrami gli ultimi eventi`: 12 note legacy;
+- query manuali/dialogo: 5 riferimenti;
+- `/health`: `ok`;
+- `ExecStartPre`: `status=0`;
+- nessun bind Memory RAG di `production/current/config` nel namespace finale.
+
+Commit principali hardening:
+
+- `0f0d35c` — integra config runtime e aggiunge overlay ristretto + canary;
+- `813d772` — rende il canary indipendente dal singolo release;
+- `fd30fd3` — fissa esplicitamente la root live del canary.
+
+Release live finale:
+`/home/sibilla-cumana/ralfloop-production/releases/fd30fd3b905a1d543958b56d307c3b4ca535353c`
+
+Rollback immediato:
+`/home/sibilla-cumana/ralfloop-production/releases/813d772be2574481f953a406f4c76109224d48f7`
+
+Backup del vecchio drop-in full-config, non caricato da systemd:
+`/etc/systemd/system/ralfloop-backend.service.d/99-memory-rag-overlay.conf.pre-20260920.bak`.
