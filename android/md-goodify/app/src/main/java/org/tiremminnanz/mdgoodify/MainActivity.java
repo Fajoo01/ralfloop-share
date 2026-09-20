@@ -26,9 +26,6 @@ import com.google.zxing.MultiFormatReader;
 import com.google.zxing.RGBLuminanceSource;
 import com.google.zxing.Result;
 import com.google.zxing.common.HybridBinarizer;
-import com.google.zxing.integration.android.IntentIntegrator;
-import com.google.zxing.integration.android.IntentResult;
-
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
@@ -38,13 +35,13 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
-import java.util.Collections;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity {
     private static final int CAMERA_REQUEST = 41;
     private static final int NOTIFICATION_REQUEST = 42;
+    private static final int SCAN_REQUEST = 43;
     private static final String CHANNEL_ID = "md_goodify_wins";
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -232,12 +229,7 @@ public final class MainActivity extends Activity {
             requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_REQUEST);
             return;
         }
-        IntentIntegrator integrator = new IntentIntegrator(this);
-        integrator.setDesiredBarcodeFormats(Collections.singleton(IntentIntegrator.QR_CODE));
-        integrator.setPrompt("Inquadra il QR MD");
-        integrator.setBeepEnabled(false);
-        integrator.setOrientationLocked(false);
-        integrator.initiateScan();
+        startActivityForResult(new Intent(this, QrScanActivity.class), SCAN_REQUEST);
     }
 
     @Override
@@ -250,10 +242,10 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        IntentResult result = IntentIntegrator.parseActivityResult(requestCode, resultCode, data);
-        if (result != null) {
-            if (result.getContents() != null) {
-                processQr(result.getContents());
+        if (requestCode == SCAN_REQUEST) {
+            if (resultCode == RESULT_OK && data != null) {
+                String qr = data.getStringExtra(QrScanActivity.EXTRA_QR_TEXT);
+                if (qr != null) processQr(qr);
             }
             return;
         }
