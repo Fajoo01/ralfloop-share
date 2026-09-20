@@ -154,6 +154,29 @@ def test_purchase_payload_tool_redacts_token_and_never_submits():
     assert result["token_source"] == "runtime_access_token"
 
 
+def test_process_qr_tool_accepts_only_qr_and_fixed_backend_recipient(monkeypatch):
+    import scripts.ralf_md_goodify_mcp_server as server_mod
+
+    assert set(server_mod.TOOLS["md_goodify_process_qr"]["properties"]) == {"qr_code"}
+
+    class FakeFlow:
+        def process_qr(self, qr_code):
+            assert qr_code == "QR-ABC"
+            return {"ok": True, "status": "DONATED_TO_TIREMM", "recipient": {"name": "TIREMM INNANZ APS"}}
+
+    monkeypatch.setattr(server_mod, "MdGoodifyFlow", FakeFlow)
+    response = server_mod.MdGoodifyMCPServer().call("md_goodify_process_qr", {"qr_code": "QR-ABC"})
+    result = response["structuredContent"]
+    assert result["ok"] is True
+    assert result["operation"] == "process_qr"
+    assert result["recipient"]["name"] == "TIREMM INNANZ APS"
+
+    denied = server_mod.MdGoodifyMCPServer().call("md_goodify_process_qr", {
+        "qr_code": "QR-ABC", "nonprofit": "Other"
+    })
+    assert denied["structuredContent"]["status"] == "POLICY_DENIED"
+
+
 def test_get_donations_tool_never_accepts_token_argument(monkeypatch):
     import scripts.ralf_md_goodify_mcp_server as server_mod
 

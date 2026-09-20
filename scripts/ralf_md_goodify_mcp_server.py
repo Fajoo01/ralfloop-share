@@ -26,6 +26,7 @@ from ralfloop_agent.unified_assistant.md_goodify_api import (
     preview_purchase_donation_body,
 )
 from ralfloop_agent.unified_assistant.md_goodify_readonly import MdGoodifyReadOnlyClient
+from ralfloop_agent.unified_assistant.md_goodify_transactional import MdGoodifyFlow
 from src.mcp_transport import MCP_PROTOCOL_VERSION
 
 TEXT = {"type": "string", "minLength": 1, "maxLength": 4096}
@@ -42,6 +43,7 @@ TOOLS: dict[str, dict[str, Any]] = {
     "md_goodify_parse_api_response": _schema({"response_json": TEXT}, ("response_json",)),
     "md_goodify_get_donations": _schema({}),
     "md_goodify_build_purchase_payload": _schema({"qr_code": TEXT}, ("qr_code",)),
+    "md_goodify_process_qr": _schema({"qr_code": TEXT}, ("qr_code",)),
     "md_goodify_decode_qr_image": _schema({"image_path": PATH}, ("image_path",)),
     "md_goodify_probe_public_flow": _schema({"payload": TEXT}, ("payload",)),
     "md_goodify_prepare_donation": _schema({
@@ -63,6 +65,7 @@ class MdGoodifyMCPServer:
             "md_goodify_parse_api_response": "Parse an already obtained MD Goodify JSON response; no network access.",
             "md_goodify_get_donations": "Read MD Goodify donation history using an internal protected token; no mutations.",
             "md_goodify_build_purchase_payload": "Build and redact the local purchasedonation JSON body; never submits it.",
+            "md_goodify_process_qr": "Process one user-provided MD QR through the guarded idempotent flow; recipient is fixed to verified TIREMM INNANZ APS server-side.",
             "md_goodify_decode_qr_image": "Decode an MD/Goodify QR from the configured Bot-tazzi spool directory.",
             "md_goodify_probe_public_flow": "Follow only allow-listed public HTTPS redirects and describe the Goodify web flow.",
             "md_goodify_prepare_donation": "Prepare a donation routing plan for a named nonprofit; does not submit forms.",
@@ -84,6 +87,8 @@ class MdGoodifyMCPServer:
                 result = {"ok": True, "operation": "get_donations", **MdGoodifyReadOnlyClient().get_donations()}
             elif name == "md_goodify_build_purchase_payload":
                 result = {"ok": True, "operation": "build_purchase_payload", **preview_purchase_donation_body(str(arguments["qr_code"]))}
+            elif name == "md_goodify_process_qr":
+                result = {"operation": "process_qr", **MdGoodifyFlow().process_qr(str(arguments["qr_code"]))}
             elif name == "md_goodify_decode_qr_image":
                 qr = decode_qr_image(str(arguments["image_path"]))
                 result = {"ok": True, "operation": "decode_qr_image", **qr.__dict__, "side_effects": 0}
