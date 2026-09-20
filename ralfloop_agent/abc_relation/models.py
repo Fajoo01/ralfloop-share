@@ -101,6 +101,7 @@ class RelationSnapshot(BaseModel):
     strategy_rules: tuple[StrategyRule, ...] = ()
     warnings: tuple[str, ...] = ()
     source_refs: tuple[str, ...] = ()
+    legacy_timeline: tuple[dict[str, Any], ...] = ()
     score_payload: dict[str, Any] = Field(default_factory=dict)
 
 

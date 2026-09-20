@@ -197,12 +197,14 @@ class RelationService:
         strategy_rules: tuple[Any, ...] = (),
         warnings: tuple[str, ...] = (),
         source_refs: tuple[str, ...] = (),
+        legacy_timeline: tuple[dict[str, Any], ...] = (),
     ) -> RelationSnapshot:
         analysis = self.analyze().model_dump(mode="json")
         identity = {
             "label": label,
             "state_summary": state_summary,
             "source_refs": source_refs,
+            "legacy_timeline": legacy_timeline,
             "analysis": analysis,
         }
         snapshot = RelationSnapshot(
@@ -213,6 +215,7 @@ class RelationService:
             strategy_rules=strategy_rules,
             warnings=warnings,
             source_refs=source_refs,
+            legacy_timeline=legacy_timeline,
             score_payload=analysis,
         )
         self.store.put_snapshot(snapshot)

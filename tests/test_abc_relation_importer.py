@@ -28,18 +28,25 @@ def test_import_legacy_bundle_creates_snapshot_without_turning_probs_into_facts(
             "dont": ["non interrogare"],
         }
     }), encoding="utf-8")
+    timeline = tmp_path / "timeline.json"
+    timeline.write_text(json.dumps({
+        "recent_timeline": [{"event": "cena condivisa", "meaning": "ipotesi di vicinanza"}],
+    }), encoding="utf-8")
 
     service = RelationService(RelationStore(tmp_path / "abc.sqlite3"))
-    result = import_legacy_bundle(service, [state, probability, strategy])
+    result = import_legacy_bundle(service, [state, probability, strategy, timeline])
 
-    assert result["imported_files"] == 3
+    assert result["imported_files"] == 4
     snapshot = service.store.latest_snapshot()
     assert snapshot is not None
     assert LEGACY_WARNING in snapshot.warnings
     assert "quasi-coppia implicita" in snapshot.state_summary
     assert all(row.status == "weak" for row in snapshot.hypotheses)
     assert all(row.confidence <= 0.35 for row in snapshot.hypotheses)
+    assert snapshot.legacy_timeline[0]["event"] == "cena condivisa"
+    assert snapshot.legacy_timeline[0]["status"] == "weak_historical_note"
     assert service.store.counts()["observed_fact"] == 0
+    assert service.store.counts()["inference"] == 0
 
 
 def test_missing_files_are_skipped_but_reported(tmp_path):

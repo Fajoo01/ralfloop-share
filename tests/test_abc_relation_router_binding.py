@@ -29,6 +29,16 @@ class _FakeClient:
         return [{"key": "dialogo_strategico"}]
 
 
+class _LegacyTimelineClient(_FakeClient):
+    def get_state(self):
+        self.calls.append("abc_get_state")
+        return {"snapshot": {"legacy_timeline": [{"event": "legacy event"}]}}
+
+    def timeline(self, *, limit=100, kind=None):
+        self.calls.append("abc_get_timeline")
+        return []
+
+
 class _BrokenClient:
     def get_state(self):
         raise OSError("socket unavailable")
@@ -40,6 +50,18 @@ def test_relational_query_routes_to_read_mcp_without_confirmation():
     assert route.mode == "check_only"
     assert "abc_relation" in route.mcp_used
     assert route.requires_confirmation is False
+
+
+def test_requested_runtime_phrases_route_to_abc():
+    router = CapabilityRouter()
+    for query in (
+        "mostrami gli ultimi eventi",
+        "analizza la situazione usando anche dialogo strategico e manuali di psicologia",
+    ):
+        route = router.route(query)
+        assert route.mode == "check_only"
+        assert "abc_relation" in route.mcp_used
+        assert route.requires_confirmation is False
 
 
 def test_unrelated_project_report_does_not_route_to_abc():
@@ -85,6 +107,15 @@ def test_read_adapter_adds_timeline_and_manuals_only_when_requested():
         "abc_get_reference_library",
     ]
     assert set(result.context) == {"state", "analysis", "timeline", "references"}
+
+
+def test_read_adapter_uses_snapshot_legacy_timeline_when_event_store_is_empty():
+    client = _LegacyTimelineClient()
+    result = ABCRelationReadAdapter(lambda: client).resolve("rsc mostrami gli ultimi eventi")
+
+    assert result.available is True
+    assert result.context["timeline"] == [{"event": "legacy event"}]
+    assert client.calls[:3] == ["abc_get_state", "abc_analyze", "abc_get_timeline"]
 
 
 def test_read_adapter_falls_back_to_legacy_without_writes():

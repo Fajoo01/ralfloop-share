@@ -139,6 +139,25 @@ def _hypotheses(payloads: list[tuple[Path, dict[str, Any]]]) -> tuple[Hypothesis
     return tuple(rows[:50])
 
 
+def _legacy_timeline(payloads: list[tuple[Path, dict[str, Any]]]) -> tuple[dict[str, Any], ...]:
+    rows: list[dict[str, Any]] = []
+    for path, data in payloads:
+        timeline = data.get("recent_timeline")
+        if not isinstance(timeline, list):
+            continue
+        for item in timeline:
+            if not isinstance(item, dict) or not str(item.get("event") or "").strip():
+                continue
+            rows.append({
+                "event": str(item["event"]).strip(),
+                "meaning": str(item.get("meaning") or "").strip(),
+                "status": "weak_historical_note",
+                "confidence": 0.35,
+                "source_ref": f"legacy_json:{path.name}",
+            })
+    return tuple(rows[:100])
+
+
 def import_legacy_bundle(service: RelationService, paths: Iterable[str | Path]) -> dict[str, Any]:
     payloads: list[tuple[Path, dict[str, Any]]] = []
     source_refs: list[str] = []
@@ -173,6 +192,7 @@ def import_legacy_bundle(service: RelationService, paths: Iterable[str | Path]) 
         strategy_rules=_strategy_rules(payloads),
         warnings=tuple(sorted(set(warnings))),
         source_refs=tuple(source_refs[:50]),
+        legacy_timeline=_legacy_timeline(payloads),
     )
     return {
         "snapshot": snapshot.model_dump(mode="json"),

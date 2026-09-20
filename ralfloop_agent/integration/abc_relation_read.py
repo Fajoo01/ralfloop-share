@@ -75,12 +75,20 @@ class ABCRelationReadAdapter:
         goal = user_goal.casefold()
         try:
             client = self._client_factory()
+            state = client.get_state()
             context: dict[str, Any] = {
-                "state": client.get_state(),
+                "state": state,
                 "analysis": client.analyze(),
             }
             if any(trigger in goal for trigger in TIMELINE_TRIGGERS):
-                context["timeline"] = client.timeline(limit=30)
+                timeline = client.timeline(limit=30)
+                if not timeline and isinstance(state, Mapping):
+                    snapshot = state.get("snapshot")
+                    if isinstance(snapshot, Mapping):
+                        legacy_timeline = snapshot.get("legacy_timeline")
+                        if isinstance(legacy_timeline, (list, tuple)):
+                            timeline = list(legacy_timeline)[-30:]
+                context["timeline"] = timeline
             if any(trigger in goal for trigger in REFERENCE_TRIGGERS):
                 context["references"] = client.references()
             return ABCReadResolution(available=True, context=context)
