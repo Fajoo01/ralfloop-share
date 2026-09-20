@@ -313,3 +313,25 @@ Rollback immediato:
 
 Backup del vecchio drop-in full-config, non caricato da systemd:
 `/etc/systemd/system/ralfloop-backend.service.d/99-memory-rag-overlay.conf.pre-20260920.bak`.
+
+## Revalidation operativa — 2026-09-20 23:44 CEST
+
+Ripresa dal prompt che indicava ancora `d4d8181`: il branch privato era già avanzato fino all'hardening finale e il worktree risultava pulito.
+
+Verifica rieseguita sul runtime corrente:
+
+- branch/upstream privato: `feat/abc-relation-live-integration-20260920` a `95de3fe` prima di questa nota;
+- release produzione live: `fd30fd3b905a1d543958b56d307c3b4ca535353c`;
+- broker ABC live: release `d4d81810995eaa35911d642a681fc719efbb5bb8`;
+- `ralfloop-backend.service`: active;
+- `ralf-abc-relation-mcp-broker.service`: active;
+- suite router/runtime/chat/reasoning: `79 passed, 2 warnings in 2.59s`;
+- `git diff --check`: OK;
+- quattro smoke HTTP reali: tutti `ok=true`, capability `abc_relation`, `approval_required=false`, evidence `mcp:abc_relation:read_only`, `exit_code=0`;
+- log worker dopo gli smoke: quattro `POST /tasks/run 200`, nessun `[LOOP]`, `sandbox_read_file` o `ls -la`;
+- timeline live: 12 note legacy, tutte `weak_historical_note`, confidence `0.35`;
+- reference library live: 5 framework;
+- `abc_relcalc`: score `50`, confidence `0`, evidence count `0`;
+- nessun call-site di `abc_record_event` / `abc_create_snapshot` nei percorsi normali; compaiono solo nella dichiarazione `WRITE_TOOLS` dell'adapter.
+
+Non è stato necessario modificare o riavviare il runtime: il binding live risulta già valido e resta sul release atomico `fd30fd3`.
