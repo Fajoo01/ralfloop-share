@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import importlib
 import json
+
+from fastapi.testclient import TestClient
 
 from ralfloop_agent.integration.abc_relation_read import (
     ABCReadResolution,
@@ -75,3 +78,31 @@ def test_reasoning_cycle_does_not_fake_shell_evidence_when_abc_is_unavailable(mo
     assert envelope.evidence.exit_code == 1
     assert envelope.meta["read_mcp_available"] is False
     assert envelope.meta["fallback_skills"] == ["abc_memory", "abc_relcalc"]
+
+
+def test_openshell_tasks_run_shortcuts_abc_before_legacy_agent(monkeypatch, tmp_path):
+    openshell_app = importlib.import_module("openshell_backend.app")
+    monkeypatch.setenv("RALF_SANDBOX_PATH", str(tmp_path))
+    monkeypatch.setenv("RALF_AUDIT_PATH", str(tmp_path / "audit.jsonl"))
+    monkeypatch.setattr(reasoning, "ABCRelationReadAdapter", lambda: _AvailableAdapter())
+
+    def _legacy_agent_must_not_run(_req):
+        raise AssertionError("legacy planner/sandbox loop must not run for abc_relation")
+
+    monkeypatch.setattr(openshell_app, "_run_task_impl", _legacy_agent_must_not_run)
+    response = TestClient(openshell_app.app).post(
+        "/tasks/run",
+        json={"user_goal": "analizza la strategia relazionale"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["capability"] == "abc_relation"
+    assert payload["approval_required"] is False
+    assert "abc_relation" in payload["capability_route"]["mcp_connectors"]
+    assert payload["result_envelope"]["evidence"]["command"] == "mcp:abc_relation:read_only"
+    assert payload["result_envelope"]["evidence"]["exit_code"] == 0
+    assert json.loads(payload["final_answer"])["source"] == "abc_relation_mcp_read_only"
+    assert "sandbox_read_file" not in response.text
+    assert "ls -la" not in response.text
