@@ -57,3 +57,49 @@ def test_login_matches_apk_contract_and_persists_only_tokens(tmp_path: Path):
         connection_factory=factory,
     )
     result = auth.login("fabio@example.test", "password-once")
+
+
+def test_refresh_matches_current_apk_contract(tmp_path: Path):
+    api_key = _private(tmp_path / "api-key", "apk-key")
+    device_id = _private(tmp_path / "device-id", "0123456789abcdef")
+    access = _private(tmp_path / "access-token", "access-old")
+    refresh = _private(tmp_path / "refresh-token", "refresh-old")
+    connections = []
+
+    class RefreshResponse:
+        status = 200
+        def read(self, _limit):
+            return json.dumps({"payload": {
+                "access_token": "access-new",
+                "refresh_token": "refresh-new",
+            }}).encode("utf-8")
+
+    class RefreshConnection(FakeConnection):
+        def getresponse(self):
+            return RefreshResponse()
+
+    def factory(host, port, *, timeout):
+        conn = RefreshConnection(host, port, timeout=timeout)
+        connections.append(conn)
+        return conn
+
+    auth = MdGoodifyAuthenticator(
+        api_key_path=api_key,
+        device_id_path=device_id,
+        access_token_path=access,
+        refresh_token_path=refresh,
+        connection_factory=factory,
+    )
+    result = auth.refresh()
+    assert result["access_token_saved"] is True
+    assert access.read_text(encoding="utf-8").strip() == "access-new"
+    assert refresh.read_text(encoding="utf-8").strip() == "refresh-new"
+    method, path, body, headers = connections[0].request_args
+    assert method == "POST"
+    assert path == "/auth/refresh-token"
+    assert json.loads(body) == {"refresh_token": "refresh-old"}
+    assert headers["apikey"] == "apk-key"
+    assert headers["id_dispositivo"] == "0123456789abcdef"
+    serialized = json.dumps(result)
+    assert "refresh-old" not in serialized
+    assert "access-new" not in serialized

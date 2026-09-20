@@ -177,3 +177,20 @@ def test_concurrent_duplicate_is_processing_without_second_side_effect(tmp_path:
     assert purchase.calls == 0
     assert gql.change_calls == 0
     assert gql.verify_calls == 0
+
+
+def test_refresh_failure_releases_qr_without_purchase_side_effect(tmp_path: Path):
+    class PreflightFailPurchase(FakePurchase):
+        def preflight(self):
+            raise OSError("refresh unavailable")
+
+    purchase = PreflightFailPurchase()
+    gql = FakeGraphQL()
+    store = FlowStore(tmp_path / "state.sqlite3")
+    flow = MdGoodifyFlow(purchase_client=purchase, graphql_client=gql,
+                         store=store, telegram_outbox=tmp_path / "out.jsonl")
+    result = flow.process_qr("QR-REAL-123")
+    assert result["status"] == "AUTH_REFRESH_FAILED"
+    assert purchase.calls == 0
+    _, fingerprint = qr_fingerprint("QR-REAL-123")
+    assert store.get(fingerprint) is None

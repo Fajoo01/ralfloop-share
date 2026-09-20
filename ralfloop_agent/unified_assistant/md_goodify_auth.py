@@ -12,6 +12,7 @@ from typing import Any, Callable, Mapping
 
 AUTH_HOST = "api.platform-backend.mdspa.it"
 LOGIN_PATH = "/auth/login"
+REFRESH_PATH = "/auth/refresh-token"
 BUILD_VERSION = "216"
 ROOT = Path("/var/lib/ralfloop/md-goodify")
 API_KEY_FILE = ROOT / "api-key"
@@ -159,5 +160,59 @@ class MdGoodifyAuthenticator:
             "ok": True,
             "access_token_saved": True,
             "refresh_token_saved": bool(refresh_token),
+            "credentials_saved": False,
+        }
+
+    def refresh(self) -> dict[str, Any]:
+        api_key = _load_private_text(self.api_key_path, max_bytes=512)
+        device_id = ensure_device_id(self.device_id_path)
+        refresh_token = _load_private_text(self.refresh_token_path, max_bytes=16384)
+        body = json.dumps(
+            {"refresh_token": refresh_token},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        connection = self.connection_factory(AUTH_HOST, 443, timeout=self.timeout)
+        try:
+            connection.request(
+                "POST",
+                REFRESH_PATH,
+                body=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "apikey": api_key,
+                    "id_dispositivo": device_id,
+                    "Sistemaoperativo": "Android",
+                    "BuildVersion": BUILD_VERSION,
+                },
+            )
+            response = connection.getresponse()
+            raw = response.read(MAX_RESPONSE_BYTES + 1)
+        finally:
+            connection.close()
+        if len(raw) > MAX_RESPONSE_BYTES:
+            raise RuntimeError("md_refresh_response_too_large")
+        try:
+            value = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("md_refresh_invalid_response") from exc
+        if not isinstance(value, Mapping):
+            raise RuntimeError("md_refresh_invalid_response")
+        if response.status < 200 or response.status >= 300:
+            raise MdLoginRejected(str(value.get("messaggio") or f"HTTP {response.status}")[:240])
+        payload = value.get("payload")
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("md_refresh_payload_missing")
+        access_token = str(payload.get("access_token") or payload.get("token") or "").strip()
+        new_refresh_token = str(payload.get("refresh_token") or payload.get("refreshToken") or "").strip()
+        if not access_token:
+            raise RuntimeError("md_refresh_access_token_missing")
+        _write_private_text(self.access_token_path, access_token + "\n")
+        if new_refresh_token:
+            _write_private_text(self.refresh_token_path, new_refresh_token + "\n")
+        return {
+            "ok": True,
+            "access_token_saved": True,
+            "refresh_token_saved": bool(new_refresh_token),
             "credentials_saved": False,
         }

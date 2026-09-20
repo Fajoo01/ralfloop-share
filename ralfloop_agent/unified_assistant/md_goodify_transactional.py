@@ -21,6 +21,7 @@ from typing import Any, Callable, Mapping
 from urllib.parse import urlparse
 
 from .md_goodify_api import build_purchase_donation_body, parse_goodify_response
+from .md_goodify_auth import MdGoodifyAuthenticator
 from .md_goodify_readonly import load_access_token
 
 MD_GOODIFY_HOST = "catalogomdapp.dedagroupwiz.it"
@@ -89,10 +90,20 @@ def parse_goodify_donation_id(url: str) -> str:
 
 class MdPurchaseClient:
     def __init__(self, *, token_path: Path | None = None, timeout: float = 12.0,
-                 connection_factory: ConnectionFactory = http.client.HTTPSConnection) -> None:
+                 connection_factory: ConnectionFactory = http.client.HTTPSConnection,
+                 authenticator: Any | None = None) -> None:
         self.token_path = token_path
         self.timeout = timeout
         self.connection_factory = connection_factory
+        if authenticator is not None:
+            self.authenticator = authenticator
+        elif token_path is not None:
+            self.authenticator = MdGoodifyAuthenticator(access_token_path=token_path)
+        else:
+            self.authenticator = MdGoodifyAuthenticator()
+
+    def preflight(self) -> dict[str, Any]:
+        return self.authenticator.refresh()
 
     def purchase(self, qr_code: str) -> dict[str, Any]:
         token = load_access_token(self.token_path)
@@ -247,6 +258,16 @@ class FlowStore:
             row = db.execute("SELECT * FROM qr_flow WHERE fingerprint=?", (fingerprint,)).fetchone()
             return dict(row) if row is not None else None
 
+    def release_if_phase(self, fingerprint: str, phase: str) -> bool:
+        with _private_db(self.path) as db:
+            db.execute("BEGIN IMMEDIATE")
+            cursor = db.execute(
+                "DELETE FROM qr_flow WHERE fingerprint=? AND phase=? AND donation_id IS NULL",
+                (fingerprint, phase),
+            )
+            db.commit()
+            return cursor.rowcount == 1
+
 
 def _recipient_is_tiremm(donation: Mapping[str, Any], recipient: Mapping[str, Any]) -> bool:
     current = donation.get("recipient")
@@ -328,6 +349,14 @@ class MdGoodifyFlow:
             return self._finish(fingerprint, result, "COMPLETE_WIN_UNKNOWN")
 
         recipient = self.graphql.resolve_tiremm_recipient()
+
+        if not donation_id and hasattr(self.purchase_client, "preflight"):
+            try:
+                self.purchase_client.preflight()
+            except Exception:
+                self.store.release_if_phase(fingerprint, "RECEIVED")
+                return {"ok": False, "status": "AUTH_REFRESH_FAILED", "qr_fingerprint": fingerprint,
+                        "message": "Token MD non rinnovabile; nessun QR è stato inviato a purchasedonation."}
 
         if not donation_id:
             self.store.update(fingerprint, "PURCHASE_SUBMITTING")
