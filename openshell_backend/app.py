@@ -1944,23 +1944,6 @@ def run_task(req: TaskRunRequest):
         except Exception:
             return _run_task_impl(req)
     classified = classify_task(req.user_goal)
-    if any(
-        marker in (req.user_goal or "").casefold()
-        for marker in ("relaz", "dialogo strategico", "manuali di psicologia")
-    ):
-        import src.router as _entry_router
-        import src.routing_config as _entry_routing_config
-
-        audit(
-            "abc_entrypoint_classified",
-            mode=classified.mode,
-            mcp_used=list(classified.mcp_used),
-            router_file=str(getattr(_entry_router, "__file__", "")),
-            routing_config_file=str(_entry_routing_config.DEFAULT_ROUTING_CONFIG),
-            read_mcp_names=[name for name, _ in _entry_router.READ_MCP_KEYWORDS],
-            router_config_keys=sorted(_entry_router.ROUTING_CONFIG),
-            live_config_keys=sorted(_entry_routing_config.load_routing_config()),
-        )
     if req.mode == "route_only":
         return _run_task_impl(req)
     if classified.mode == "read_only_system_inspection":

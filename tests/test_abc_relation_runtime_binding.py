@@ -106,3 +106,25 @@ def test_openshell_tasks_run_shortcuts_abc_before_legacy_agent(monkeypatch, tmp_
     assert json.loads(payload["final_answer"])["source"] == "abc_relation_mcp_read_only"
     assert "sandbox_read_file" not in response.text
     assert "ls -la" not in response.text
+
+
+def test_read_resolution_default_budget_keeps_timeline_and_references():
+    resolution = ABCReadResolution(
+        available=True,
+        context={
+            "state": {"snapshot": {"state_summary": "x" * 14000}},
+            "analysis": {"score": 50, "confidence": 0.0},
+            "timeline": [
+                {"status": "weak_historical_note", "confidence": 0.35, "event": index}
+                for index in range(12)
+            ],
+            "references": [{"framework": f"framework-{index}"} for index in range(5)],
+        },
+    )
+
+    payload = json.loads(resolution.render())
+
+    assert len(payload["context"]["timeline"]) == 12
+    assert len(payload["context"]["references"]) == 5
+    assert payload["context"]["timeline"][0]["status"] == "weak_historical_note"
+    assert payload["context"]["timeline"][0]["confidence"] == 0.35

@@ -47,7 +47,7 @@ class ABCReadResolution:
     fallback_skills: tuple[str, ...] = ()
     error: str | None = None
 
-    def render(self, *, max_chars: int = 12000) -> str:
+    def render(self, *, max_chars: int = 32768) -> str:
         payload = {
             "source": "abc_relation_mcp_read_only",
             "available": self.available,
