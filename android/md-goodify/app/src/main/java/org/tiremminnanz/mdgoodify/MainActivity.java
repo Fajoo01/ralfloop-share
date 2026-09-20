@@ -160,11 +160,12 @@ public final class MainActivity extends Activity {
                 connection.setConnectTimeout(8000);
                 connection.setReadTimeout(8000);
                 connection.setRequestProperty("Accept", "application/json");
+                connection.setRequestProperty("Authorization", "Bearer " + BuildConfig.API_TOKEN);
                 JSONObject response = readJson(connection.getInputStream());
                 boolean linked = response.optBoolean("enrolled", false);
                 runOnUiThread(() -> setEnrollmentState(linked));
             } catch (Exception ignored) {
-                runOnUiThread(() -> setBusy(false, "Errore rete: VPN/Tiremm Remote non raggiungibile"));
+                runOnUiThread(() -> setBusy(false, "Errore rete: servizio Tiremm non raggiungibile"));
             } finally {
                 if (connection != null) connection.disconnect();
             }
@@ -193,6 +194,7 @@ public final class MainActivity extends Activity {
             connection.setDoOutput(true);
             connection.setRequestProperty("Content-Type", "application/json");
             connection.setRequestProperty("Accept", "application/json");
+            connection.setRequestProperty("Authorization", "Bearer " + BuildConfig.API_TOKEN);
             byte[] body = new JSONObject().put("email", email).put("password", password)
                     .toString().getBytes(StandardCharsets.UTF_8);
             connection.setFixedLengthStreamingMode(body.length);
@@ -211,7 +213,7 @@ public final class MainActivity extends Activity {
         } catch (Exception ignored) {
             runOnUiThread(() -> {
                 passwordView.setText("");
-                setBusy(false, "Errore rete: VPN/Tiremm Remote non raggiungibile");
+                setBusy(false, "Errore rete: servizio Tiremm non raggiungibile");
             });
         } finally {
             password = "";
@@ -322,6 +324,7 @@ public final class MainActivity extends Activity {
             connection.setDoOutput(true);
             connection.setRequestProperty("Content-Type", "application/json");
             connection.setRequestProperty("Accept", "application/json");
+            connection.setRequestProperty("Authorization", "Bearer " + BuildConfig.API_TOKEN);
             connection.setUseCaches(false);
 
             byte[] body = new JSONObject().put("qr_code", qr).toString().getBytes(StandardCharsets.UTF_8);
@@ -335,7 +338,7 @@ public final class MainActivity extends Activity {
             JSONObject response = readJson(stream);
             runOnUiThread(() -> renderResponse(code, response));
         } catch (Exception ignored) {
-            runOnUiThread(() -> setBusy(false, "Errore rete: VPN/Tiremm Remote non raggiungibile"));
+            runOnUiThread(() -> setBusy(false, "Errore rete: servizio Tiremm non raggiungibile"));
         } finally {
             if (connection != null) connection.disconnect();
         }

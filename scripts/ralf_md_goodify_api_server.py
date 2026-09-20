@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import hmac
 import json
 import os
 from pathlib import Path
@@ -18,12 +19,34 @@ if str(PROJECT_ROOT) not in sys.path:
 from ralfloop_agent.unified_assistant.md_goodify_auth import (
     ACCESS_TOKEN_FILE,
     REFRESH_TOKEN_FILE,
+    ROOT,
     MdGoodifyAuthenticator,
     MdLoginRejected,
+    _load_private_text,
 )
 from ralfloop_agent.unified_assistant.md_goodify_transactional import MdGoodifyFlow
 
 MAX_BODY = 16384
+APP_TOKEN_FILE = ROOT / "app-token"
+
+
+def load_app_token() -> str:
+    return _load_private_text(APP_TOKEN_FILE, max_bytes=512)
+
+
+def authorized_header(value: str, expected_token: str) -> bool:
+    prefix = "Bearer "
+    if not isinstance(value, str) or not value.startswith(prefix):
+        return False
+    supplied = value[len(prefix):]
+    return bool(supplied) and hmac.compare_digest(supplied, expected_token)
+
+
+def token_pair_present() -> bool:
+    try:
+        return ACCESS_TOKEN_FILE.exists() and REFRESH_TOKEN_FILE.exists()
+    except OSError:
+        return False
 
 
 class ApiApplication:
@@ -32,7 +55,7 @@ class ApiApplication:
         self.authenticator = authenticator or MdGoodifyAuthenticator()
 
     def health(self) -> dict[str, Any]:
-        enrolled = ACCESS_TOKEN_FILE.exists() and REFRESH_TOKEN_FILE.exists()
+        enrolled = token_pair_present()
         return {
             "ok": True,
             "service": "md-goodify",
@@ -89,6 +112,13 @@ class Handler(BaseHTTPRequestHandler):
     def app(self) -> ApiApplication:
         return self.server.app  # type: ignore[attr-defined]
 
+    @property
+    def api_token(self) -> str:
+        return self.server.api_token  # type: ignore[attr-defined]
+
+    def _authorized(self) -> bool:
+        return authorized_header(self.headers.get("Authorization", ""), self.api_token)
+
     def _json(self, status: int, value: Mapping[str, Any]) -> None:
         raw = json.dumps(dict(value), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         self.send_response(status)
@@ -100,12 +130,18 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self) -> None:  # noqa: N802
+        if not self._authorized():
+            self._json(401, {"ok": False, "status": "UNAUTHORIZED"})
+            return
         if self.path != "/health":
             self._json(404, {"ok": False, "status": "NOT_FOUND"})
             return
         self._json(200, self.app.health())
 
     def do_POST(self) -> None:  # noqa: N802
+        if not self._authorized():
+            self._json(401, {"ok": False, "status": "UNAUTHORIZED"})
+            return
         if self.path not in {"/v1/process-qr", "/v1/enroll"}:
             self._json(404, {"ok": False, "status": "NOT_FOUND"})
             return
@@ -140,11 +176,12 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--bind", default=os.getenv("RALFLOOP_MD_GOODIFY_API_BIND", "10.252.14.7"))
+    parser.add_argument("--bind", default=os.getenv("RALFLOOP_MD_GOODIFY_API_BIND", "10.44.0.1"))
     parser.add_argument("--port", type=int, default=int(os.getenv("RALFLOOP_MD_GOODIFY_API_PORT", "19234")))
     args = parser.parse_args()
     server = ThreadingHTTPServer((args.bind, args.port), Handler)
     server.app = ApiApplication()  # type: ignore[attr-defined]
+    server.api_token = load_app_token()  # type: ignore[attr-defined]
     server.serve_forever(poll_interval=0.5)
     return 0
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from scripts.ralf_md_goodify_api_server import ApiApplication
+from scripts.ralf_md_goodify_api_server import ApiApplication, authorized_header
 
 
 class FakeFlow:
@@ -76,3 +76,11 @@ def test_enroll_rejects_bad_credentials_without_echoing_them():
     assert code == 401
     assert result == {"ok": False, "status": "LOGIN_REJECTED"}
     assert "secret" not in str(result)
+
+
+def test_authorized_header_requires_exact_bearer_token():
+    token = "a" * 64
+    assert authorized_header(f"Bearer {token}", token) is True
+    assert authorized_header(token, token) is False
+    assert authorized_header("Bearer wrong", token) is False
+    assert authorized_header("", token) is False

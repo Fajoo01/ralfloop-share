@@ -10,7 +10,7 @@ Group=ralf-mcp
 UMask=0077
 Environment=RALFLOOP_MD_GOODIFY_ROOT=/home/sibilla-cumana/ralf-md-goodify-mcp/current
 Environment=RALFLOOP_RUNTIME_PYTHON=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python
-Environment=RALFLOOP_MD_GOODIFY_API_BIND=10.252.14.7
+Environment=RALFLOOP_MD_GOODIFY_API_BIND=10.44.0.1
 Environment=RALFLOOP_MD_GOODIFY_API_PORT=19234
 Environment=RALFLOOP_MD_GOODIFY_RECIPIENT_CANONICAL=TIREMM INNANZ APS
 ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralf-md-goodify-mcp/current/scripts/ralf_md_goodify_api_server.py

@@ -9,7 +9,7 @@
     <application
         android:allowBackup="false"
         android:label="Tiremm MD Goodify"
-        android:usesCleartextTraffic="true"
+        android:usesCleartextTraffic="false"
         android:theme="@android:style/Theme.Material.NoActionBar">
         <activity
             android:name=".MainActivity"
