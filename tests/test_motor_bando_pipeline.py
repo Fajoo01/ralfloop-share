@@ -98,15 +98,15 @@ def test_atomic_fact_over_budget_fails_closed():
         )
 
 
-def test_aggregate_requires_chunk_agreement():
+def test_aggregate_reject_dominates_pass():
     case = _case()
     verdict, gate = aggregate_bando_outcomes(case, [
         _chunk(0, _outcome("PASS", "LOW", True)),
         _chunk(1, _outcome("REJECT", "HIGH", False)),
     ])
-    assert verdict.decision == "UNCERTAIN"
+    assert verdict.decision == "REJECT"
     assert verdict.risk == "HIGH"
-    assert verdict.reason == "chunk_decision_conflict"
+    assert verdict.reason == "chunk_reject"
     assert not gate.proceed_to_next_stage
 
 def test_aggregate_runtime_failure_is_uncertain():
@@ -152,7 +152,7 @@ def test_aggregate_does_not_report_pass_when_a_chunk_gate_blocks():
         _chunk(0, _outcome("PASS", "LOW", True)),
         _chunk(1, _outcome("PASS", "LOW", False, missing=["more evidence"])),
     ])
-    assert verdict.decision == "UNCERTAIN"
+    assert verdict.decision == "REQUEST_REVIEW"
     assert verdict.reason == "chunk_gate_blocked"
     assert not gate.proceed_to_next_stage
 
@@ -168,3 +168,28 @@ def test_report_is_hash_and_metrics_only():
     rendered = repr(result.as_dict())
     assert "Sensitive source sentence" not in rendered
     assert "missing_evidence_count" in rendered
+
+
+def test_chunks_use_section_local_goal_not_global_goal():
+    case = _case(goal="Valuta l'intero dossier", facts=["Sezione uno.", "Sezione due."])
+    chunks = build_bando_chunks(
+        case,
+        token_counter=lambda chunk: 200,
+        config=MotorBandoPipelineConfig(max_rendered_tokens=360, use_grammar=False),
+    )
+    assert chunks
+    assert all(chunk.case.goal != case.goal for chunk in chunks)
+    assert all("section only" in chunk.case.goal for chunk in chunks)
+    assert all("bando_global_goal_sha256" in chunk.case.metadata for chunk in chunks)
+
+
+def test_aggregate_review_dominates_pass_without_authorizing_progress():
+    case = _case()
+    verdict, gate = aggregate_bando_outcomes(case, [
+        _chunk(0, _outcome("PASS", "LOW", True)),
+        _chunk(1, _outcome("REQUEST_REVIEW", "MEDIUM", True)),
+    ])
+    assert verdict.decision == "REQUEST_REVIEW"
+    assert verdict.risk == "MEDIUM"
+    assert verdict.reason == "chunk_review_required"
+    assert not gate.proceed_to_next_stage

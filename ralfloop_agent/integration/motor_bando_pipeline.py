@@ -21,6 +21,10 @@ from ralfloop_agent.integration.motor_semantic_skeleton import (
 )
 
 DEFAULT_MAX_RENDERED_TOKENS = 360
+CHUNK_GOAL = (
+    "Judge this dossier section only. Ignore absent other sections. "
+    "Flag only local missing/conflicting evidence; missing_evidence max 2 short items."
+)
 _RUNTIME_FAILURE_REASONS = frozenset({
     "judge_runtime_unavailable",
     "invalid_judge_output",
@@ -123,9 +127,16 @@ def _chunk_case_id(case: JudgeCase, index: int) -> str:
 
 
 def _case_with_units(case: JudgeCase, units: Iterable[str], index: int) -> JudgeCase:
+    metadata = dict(case.metadata)
+    metadata["bando_global_goal_sha256"] = hashlib.sha256(
+        case.goal.encode("utf-8")
+    ).hexdigest()
+    metadata["bando_chunk_index"] = index
     return case.model_copy(update={
         "case_id": _chunk_case_id(case, index),
+        "goal": CHUNK_GOAL,
         "facts": list(units),
+        "metadata": metadata,
     })
 
 def _safe_chunk(
@@ -254,20 +265,29 @@ def aggregate_bando_outcomes(
     elif "UNCERTAIN" in decisions:
         decision = "UNCERTAIN"
         reason = "chunk_uncertain"
-    elif len(decisions) != 1:
-        decision = "UNCERTAIN"
-        reason = "chunk_decision_conflict"
-        if reason not in missing:
-            missing.append(reason)
-    else:
-        decision = next(iter(decisions))
-        if decision == "PASS" and not all_chunk_gates:
-            decision = "UNCERTAIN"
+    elif "REJECT" in decisions:
+        decision = "REJECT"
+        reason = "chunk_reject"
+    elif "REQUEST_REVIEW" in decisions:
+        decision = "REQUEST_REVIEW"
+        reason = "chunk_review_required"
+    elif decisions == {"PASS"}:
+        if not all_chunk_gates:
+            decision = "REQUEST_REVIEW"
             reason = "chunk_gate_blocked"
             if reason not in missing:
                 missing.append(reason)
         else:
-            reason = "all_chunks_agree"
+            decision = "PASS"
+            reason = "all_chunks_pass"
+    elif len(decisions) == 1:
+        decision = next(iter(decisions))
+        reason = "all_chunks_agree"
+    else:
+        decision = "UNCERTAIN"
+        reason = "chunk_decision_conflict"
+        if reason not in missing:
+            missing.append(reason)
 
     confidence = min((outcome.verdict.confidence for outcome in outcomes), default=0.0)
     verdict = JudgeVerdict(
@@ -278,7 +298,7 @@ def aggregate_bando_outcomes(
         missing_evidence=missing,
         provider="bottazzi_motor_bando_pipeline",
     )
-    proceed = complete and decision != "UNCERTAIN" and all_chunk_gates and not missing
+    proceed = complete and decision == "PASS" and all_chunk_gates and not missing
     requires_confirmation = any(
         outcome.gate.requires_human_confirmation for outcome in outcomes
     )
