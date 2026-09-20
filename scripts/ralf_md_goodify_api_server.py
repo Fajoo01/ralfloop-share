@@ -15,17 +15,48 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from ralfloop_agent.unified_assistant.md_goodify_auth import (
+    ACCESS_TOKEN_FILE,
+    REFRESH_TOKEN_FILE,
+    MdGoodifyAuthenticator,
+    MdLoginRejected,
+)
 from ralfloop_agent.unified_assistant.md_goodify_transactional import MdGoodifyFlow
 
-MAX_BODY = 8192
+MAX_BODY = 16384
 
 
 class ApiApplication:
-    def __init__(self, flow: Any | None = None) -> None:
+    def __init__(self, flow: Any | None = None, authenticator: Any | None = None) -> None:
         self.flow = flow or MdGoodifyFlow()
+        self.authenticator = authenticator or MdGoodifyAuthenticator()
 
     def health(self) -> dict[str, Any]:
-        return {"ok": True, "service": "md-goodify", "recipient": "TIREMM INNANZ APS"}
+        enrolled = ACCESS_TOKEN_FILE.exists() and REFRESH_TOKEN_FILE.exists()
+        return {
+            "ok": True,
+            "service": "md-goodify",
+            "recipient": "TIREMM INNANZ APS",
+            "enrolled": enrolled,
+        }
+
+    def enroll(self, value: Mapping[str, Any]) -> tuple[int, dict[str, Any]]:
+        if set(value) != {"email", "password"}:
+            return 400, {"ok": False, "status": "INVALID_REQUEST"}
+        email = value.get("email")
+        password = value.get("password")
+        if not isinstance(email, str) or not isinstance(password, str):
+            return 400, {"ok": False, "status": "INVALID_REQUEST"}
+        try:
+            result = self.authenticator.login(email, password)
+        except (MdLoginRejected, ValueError):
+            return 401, {"ok": False, "status": "LOGIN_REJECTED"}
+        except Exception:
+            return 502, {"ok": False, "status": "LOGIN_ERROR"}
+        return 200, {
+            "ok": bool(result.get("access_token_saved")),
+            "status": "ENROLLED" if result.get("access_token_saved") else "LOGIN_ERROR",
+        }
 
     def process(self, value: Mapping[str, Any]) -> tuple[int, dict[str, Any]]:
         if set(value) != {"qr_code"}:
@@ -75,7 +106,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, self.app.health())
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path != "/v1/process-qr":
+        if self.path not in {"/v1/process-qr", "/v1/enroll"}:
             self._json(404, {"ok": False, "status": "NOT_FOUND"})
             return
         if self.headers.get("Content-Type", "").split(";", 1)[0].strip().casefold() != "application/json":
@@ -97,7 +128,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"ok": False, "status": "INVALID_REQUEST"})
             return
         try:
-            code, result = self.app.process(value)
+            if self.path == "/v1/enroll":
+                code, result = self.app.enroll(value)
+            else:
+                code, result = self.app.process(value)
         except Exception:
             self._json(502, {"ok": False, "status": "BACKEND_ERROR"})
             return

@@ -12,9 +12,11 @@ import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
@@ -49,6 +51,11 @@ public final class MainActivity extends Activity {
     private TextView stateView;
     private ProgressBar progress;
     private Button scanButton;
+    private Button connectButton;
+    private LinearLayout loginBox;
+    private EditText emailView;
+    private EditText passwordView;
+    private boolean enrolled;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -56,6 +63,7 @@ public final class MainActivity extends Activity {
         buildUi();
         createNotificationChannel();
         requestNotificationPermissionOnce();
+        checkBackend();
         handleIncomingIntent(getIntent());
     }
 
@@ -84,13 +92,43 @@ public final class MainActivity extends Activity {
         subtitle.setText("MD → Goodify → Tiremm");
         subtitle.setTextSize(17);
         subtitle.setGravity(Gravity.CENTER);
-        subtitle.setPadding(0, 0, 0, dp(36));
+        subtitle.setPadding(0, 0, 0, dp(24));
         root.addView(subtitle, new LinearLayout.LayoutParams(-1, -2));
+
+        loginBox = new LinearLayout(this);
+        loginBox.setOrientation(LinearLayout.VERTICAL);
+        loginBox.setPadding(0, 0, 0, dp(24));
+
+        TextView loginHint = new TextView(this);
+        loginHint.setText("Collega una volta il tuo account MD. La password non viene salvata.");
+        loginHint.setTextSize(16);
+        loginHint.setGravity(Gravity.CENTER);
+        loginHint.setPadding(0, 0, 0, dp(12));
+        loginBox.addView(loginHint, new LinearLayout.LayoutParams(-1, -2));
+
+        emailView = new EditText(this);
+        emailView.setHint("Email MD");
+        emailView.setSingleLine(true);
+        emailView.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+        loginBox.addView(emailView, new LinearLayout.LayoutParams(-1, -2));
+
+        passwordView = new EditText(this);
+        passwordView.setHint("Password MD");
+        passwordView.setSingleLine(true);
+        passwordView.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        loginBox.addView(passwordView, new LinearLayout.LayoutParams(-1, -2));
+
+        connectButton = new Button(this);
+        connectButton.setText("Collega account MD");
+        connectButton.setOnClickListener(v -> enrollMd());
+        loginBox.addView(connectButton, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(loginBox, new LinearLayout.LayoutParams(-1, -2));
 
         scanButton = new Button(this);
         scanButton.setText("Scansiona QR MD");
         scanButton.setTextSize(20);
         scanButton.setMinHeight(dp(64));
+        scanButton.setEnabled(false);
         scanButton.setOnClickListener(v -> startScanner());
         root.addView(scanButton, new LinearLayout.LayoutParams(-1, -2));
 
@@ -102,13 +140,89 @@ public final class MainActivity extends Activity {
         root.addView(progress, progressParams);
 
         stateView = new TextView(this);
-        stateView.setText("Pronto");
+        stateView.setText("Verifica collegamento…");
         stateView.setTextSize(18);
         stateView.setGravity(Gravity.CENTER);
         stateView.setPadding(0, dp(24), 0, 0);
         root.addView(stateView, new LinearLayout.LayoutParams(-1, -2));
 
         setContentView(root);
+    }
+
+    private void checkBackend() {
+        setBusy(true, "Verifica collegamento…");
+        executor.execute(() -> {
+            HttpURLConnection connection = null;
+            try {
+                String base = BuildConfig.API_BASE_URL.replaceAll("/+$", "");
+                connection = (HttpURLConnection) new URL(base + "/health").openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(8000);
+                connection.setReadTimeout(8000);
+                connection.setRequestProperty("Accept", "application/json");
+                JSONObject response = readJson(connection.getInputStream());
+                boolean linked = response.optBoolean("enrolled", false);
+                runOnUiThread(() -> setEnrollmentState(linked));
+            } catch (Exception ignored) {
+                runOnUiThread(() -> setBusy(false, "Errore rete: VPN/Tiremm Remote non raggiungibile"));
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+        });
+    }
+
+    private void enrollMd() {
+        String email = emailView.getText().toString().trim();
+        String password = passwordView.getText().toString();
+        if (email.isEmpty() || password.isEmpty()) {
+            stateView.setText("Inserisci email e password MD");
+            return;
+        }
+        setBusy(true, "Collegamento account MD…");
+        executor.execute(() -> callEnroll(email, password));
+    }
+
+    private void callEnroll(String email, String password) {
+        HttpURLConnection connection = null;
+        try {
+            String base = BuildConfig.API_BASE_URL.replaceAll("/+$", "");
+            connection = (HttpURLConnection) new URL(base + "/v1/enroll").openConnection();
+            connection.setRequestMethod("POST");
+            connection.setConnectTimeout(8000);
+            connection.setReadTimeout(20000);
+            connection.setDoOutput(true);
+            connection.setRequestProperty("Content-Type", "application/json");
+            connection.setRequestProperty("Accept", "application/json");
+            byte[] body = new JSONObject().put("email", email).put("password", password)
+                    .toString().getBytes(StandardCharsets.UTF_8);
+            connection.setFixedLengthStreamingMode(body.length);
+            try (OutputStream output = connection.getOutputStream()) {
+                output.write(body);
+            }
+            int code = connection.getResponseCode();
+            InputStream stream = code >= 400 ? connection.getErrorStream() : connection.getInputStream();
+            JSONObject response = readJson(stream);
+            boolean ok = code == 200 && "ENROLLED".equals(response.optString("status"));
+            runOnUiThread(() -> {
+                passwordView.setText("");
+                if (ok) setEnrollmentState(true);
+                else setBusy(false, code == 401 ? "Email o password MD non corretti" : "Accesso MD non riuscito");
+            });
+        } catch (Exception ignored) {
+            runOnUiThread(() -> {
+                passwordView.setText("");
+                setBusy(false, "Errore rete: VPN/Tiremm Remote non raggiungibile");
+            });
+        } finally {
+            password = "";
+            if (connection != null) connection.disconnect();
+        }
+    }
+
+    private void setEnrollmentState(boolean linked) {
+        enrolled = linked;
+        loginBox.setVisibility(linked ? View.GONE : View.VISIBLE);
+        setBusy(false, linked ? "Pronto" : "Collega il tuo account MD");
     }
 
     private void startScanner() {
@@ -184,6 +298,10 @@ public final class MainActivity extends Activity {
     }
 
     private void processQr(String qr) {
+        if (!enrolled) {
+            setBusy(false, "Collega prima il tuo account MD");
+            return;
+        }
         if (qr == null || qr.trim().isEmpty() || qr.length() > 4096) {
             setBusy(false, "Errore: QR non valido");
             return;
@@ -258,7 +376,8 @@ public final class MainActivity extends Activity {
 
     private void setBusy(boolean busy, String message) {
         progress.setVisibility(busy ? View.VISIBLE : View.GONE);
-        scanButton.setEnabled(!busy);
+        scanButton.setEnabled(!busy && enrolled);
+        if (connectButton != null) connectButton.setEnabled(!busy);
         stateView.setText(message);
     }
 

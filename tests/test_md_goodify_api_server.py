@@ -13,6 +13,19 @@ class FakeFlow:
         return dict(self.result)
 
 
+class FakeAuthenticator:
+    def __init__(self, result=None, error=None):
+        self.result = result or {"access_token_saved": True}
+        self.error = error
+        self.calls = []
+
+    def login(self, email, password):
+        self.calls.append((email, password))
+        if self.error:
+            raise self.error
+        return dict(self.result)
+
+
 def test_api_accepts_only_qr_code():
     flow = FakeFlow({"ok": True, "status": "DONATED_TO_TIREMM"})
     app = ApiApplication(flow)
@@ -36,5 +49,30 @@ def test_api_maps_processing_and_ambiguous_states():
 
 
 def test_health_declares_fixed_recipient():
-    health = ApiApplication(FakeFlow({})).health()
-    assert health == {"ok": True, "service": "md-goodify", "recipient": "TIREMM INNANZ APS"}
+    health = ApiApplication(FakeFlow({}), FakeAuthenticator()).health()
+    assert health["ok"] is True
+    assert health["service"] == "md-goodify"
+    assert health["recipient"] == "TIREMM INNANZ APS"
+    assert isinstance(health["enrolled"], bool)
+
+
+def test_enroll_accepts_only_email_and_password():
+    auth = FakeAuthenticator()
+    app = ApiApplication(FakeFlow({}), auth)
+    code, result = app.enroll({"email": "f@example.test", "password": "secret"})
+    assert code == 200
+    assert result == {"ok": True, "status": "ENROLLED"}
+    assert auth.calls == [("f@example.test", "secret")]
+
+    code, result = app.enroll({"email": "f@example.test", "password": "secret", "save": True})
+    assert code == 400
+    assert result["status"] == "INVALID_REQUEST"
+    assert auth.calls == [("f@example.test", "secret")]
+
+
+def test_enroll_rejects_bad_credentials_without_echoing_them():
+    auth = FakeAuthenticator(error=ValueError("bad credentials"))
+    code, result = ApiApplication(FakeFlow({}), auth).enroll({"email": "f@example.test", "password": "secret"})
+    assert code == 401
+    assert result == {"ok": False, "status": "LOGIN_REJECTED"}
+    assert "secret" not in str(result)
