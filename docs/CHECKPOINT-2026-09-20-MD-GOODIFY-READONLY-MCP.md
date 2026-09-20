@@ -80,3 +80,18 @@ result field, log field, fixture, or Git-tracked value.
 New MCP tool: `md_goodify_get_donations`, with an empty input schema.
 It reports `network_requests=1`, `mutations=0`,
 `submission_performed=false`, and parsed donation history only.
+
+## One-time normal MD login enrollment
+
+Added `md_goodify_auth.py` and `scripts/ralf_md_goodify_enroll.py`.
+Enrollment binds only to `127.0.0.1:19197`, uses a random form nonce,
+disables request logging, and never persists the email/password.
+It calls only the APK-confirmed `POST /auth/login` on
+`api.platform-backend.mdspa.it` with the APK-confirmed Android headers.
+
+On success only `access-token` and `refresh-token` are stored under
+`/var/lib/ralfloop/md-goodify/` with mode `0600`; MCP never accepts them as
+arguments. The client API key is extracted locally from the installed APK into
+a `0600` runtime file and its value is not present in Git.
+
+Targeted suite after this addition: 20 passed.
