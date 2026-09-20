@@ -97,6 +97,7 @@ class EquivalenceReport:
         decisions = sum(row.decision_equal for row in rows)
         gates = sum(row.gate_equal for row in rows)
         risks = sum(row.risk_equal for row in rows)
+        guard_fallbacks = sum(row.guard_fallbacks for row in rows)
         token_rows = [row for row in rows if row.raw_tokens is not None and row.safe_tokens is not None]
         raw_tokens = sum(int(row.raw_tokens or 0) for row in token_rows)
         safe_tokens = sum(int(row.safe_tokens or 0) for row in token_rows)
@@ -127,6 +128,7 @@ class EquivalenceReport:
             "decision_agreement": round(decisions / total, 4) if total else 0.0,
             "gate_agreement": round(gates / total, 4) if total else 0.0,
             "risk_agreement": round(risks / total, 4) if total else 0.0,
+            "guard_fallbacks": guard_fallbacks,
             "token_pairs": len(token_rows),
             "raw_tokens": raw_tokens if token_rows else None,
             "safe_tokens": safe_tokens if token_rows else None,
