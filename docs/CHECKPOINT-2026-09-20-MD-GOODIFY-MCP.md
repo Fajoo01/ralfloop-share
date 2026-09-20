@@ -76,3 +76,38 @@ Il provider da registrare nel catalogo live è
 Serve un QR MD reale non ancora usato. Con quello si acquisiscono URL finale e form pubblico,
 si aggiunge soltanto il binding specifico necessario alla scelta di Tiremm e si verifica il
 post-condition della donazione. Nessun reverse engineering di autenticazioni o protezioni.
+
+## Rollout live completato — 2026-09-20 18:10 CEST
+
+Feature commit iniziale: `0235b2c`.
+Deployment-root hardening: `8f6949a`.
+Catalogo live: branch `feat/meta-social-catalog-20260919`, commit `3d674a7`.
+
+Release MCP attivo:
+`/home/sibilla-cumana/ralf-md-goodify-mcp/releases/8f6949a`
+con symlink `current`.
+
+Servizi abilitati e `active`:
+
+- `ralf-md-goodify-mcp-broker.service`;
+- `ralf-md-goodify-worker.service`;
+- `ralfloop-backend.service` resta `active` dopo il rollout.
+
+Socket live: `/run/ralf-md-goodify-mcp/mcp.sock`, owner `sibilla-cumana:ralf-mcp`.
+
+Verifiche live post-rollout:
+
+- broker MCP da UID produzione: 5/5 tool scoperti;
+- `md_goodify_prepare_donation`: risposta valida, side effects 0;
+- `md_goodify_poll_mail`: OK, `processed_now=0`, `wins=0`, `side_effects=0`;
+- catalogo nel mount namespace del backend contiene `md_goodify`;
+- `LiveMCPCatalog` marca `md_goodify` come `available`, `tool_count=5`;
+- discovery `MD Goodify QR Tiremm donazione` restituisce tutti i tool MD/Goodify;
+- `ABC_ROUTING_CANARY_OK` al riavvio del backend;
+- `http://127.0.0.1:19090/openapi.json`: OK.
+
+Configurazione runtime attuale: account sorgente e destinatario sono entrambi
+`fabio@tiremminnanz.com`; quindi il worker monitora la casella ma evita correttamente
+un forward verso sé stesso. Per usare una seconda casella sorgente basta collegarla al
+Google Workspace MCP e cambiare `RALFLOOP_MD_GOODIFY_ACCOUNT`, lasciando il destinatario
+su `fabio@tiremminnanz.com`.
