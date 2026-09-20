@@ -10,6 +10,7 @@ from __future__ import annotations
 from html import escape
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+import os
 import secrets
 import sys
 import threading
@@ -25,7 +26,7 @@ from ralfloop_agent.unified_assistant.md_goodify_auth import (
 )
 
 HOST = "127.0.0.1"
-PORT = 19197
+PORT = int(os.environ.get("RALFLOOP_MD_GOODIFY_ENROLL_PORT", "19235"))
 MAX_FORM_BYTES = 16384
 
 
