@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import sys
 
-ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ROOT = Path(__file__).resolve().parents[1]
+LIVE_ROOT = Path("/home/sibilla-cumana/ralfloop-production/current")
+ROOT = Path(
+    os.getenv("RALFLOOP_RELEASE_ROOT")
+    or (SOURCE_ROOT if (SOURCE_ROOT / "src").is_dir() else LIVE_ROOT)
+).resolve()
 CONFIG = ROOT / "config" / "capability_routing.json"
 QUERIES = (
     "analizza la strategia relazionale",
@@ -19,11 +25,11 @@ def validate() -> None:
     names = {str(item.get("name")) for item in payload.get("read_mcp_keywords", [])}
     if "abc_relation" not in names:
         raise RuntimeError("abc_relation missing from read_mcp_keywords")
-
     root = str(ROOT)
     if root not in sys.path:
         sys.path.insert(0, root)
     from src.router import route_task
+
     for query in QUERIES:
         route = route_task(query)
         if "abc_relation" not in route.mcp_used or route.mode == "external_action":
