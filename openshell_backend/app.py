@@ -1944,6 +1944,15 @@ def run_task(req: TaskRunRequest):
         except Exception:
             return _run_task_impl(req)
     classified = classify_task(req.user_goal)
+    if any(
+        marker in (req.user_goal or "").casefold()
+        for marker in ("relaz", "dialogo strategico", "manuali di psicologia")
+    ):
+        audit(
+            "abc_entrypoint_classified",
+            mode=classified.mode,
+            mcp_used=list(classified.mcp_used),
+        )
     if req.mode == "route_only":
         return _run_task_impl(req)
     if classified.mode == "read_only_system_inspection":
