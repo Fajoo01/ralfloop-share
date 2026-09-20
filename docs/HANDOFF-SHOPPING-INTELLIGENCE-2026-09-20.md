@@ -51,3 +51,18 @@ Do not begin with Vinted scraping, browser automation, checkout or grocery optim
 ## Definition of done for first slice
 
 A query can return normalized offers from at least two heterogeneous connector implementations; observations are persisted; repeated observations can form price history; tests cover product identity and price normalization; no existing Bot-tazzi service is broken.
+
+## 2026-09-20 implementation update
+
+The first vertical slice has now been implemented and validated.
+Read next:
+
+`docs/CHECKPOINT-SHOPPING-INTELLIGENCE-VERTICAL-SLICE-2026-09-20.md`
+
+Current executable path:
+- package: `ralfloop_agent/shopping_intelligence/`
+- API: `ralfloop_agent.shopping_intelligence.api:app`
+- tests: `tests/test_shopping_intelligence.py`
+
+Do not replace the connector abstraction with site-specific core logic.
+The next concrete external dependency is eBay Developer credentials for a live Browse API canary; absence of credentials must continue to degrade only that connector.
