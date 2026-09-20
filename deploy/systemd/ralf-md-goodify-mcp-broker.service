@@ -1,0 +1,26 @@
+[Unit]
+Description=Bot-tazzi MD/Goodify semantic MCP broker
+After=local-fs.target ralf-google-workspace-mcp-broker.service
+Wants=ralf-google-workspace-mcp-broker.service
+
+[Service]
+Type=simple
+User=sibilla-cumana
+Group=ralf-mcp
+UMask=0007
+RuntimeDirectory=ralf-md-goodify-mcp
+RuntimeDirectoryMode=0750
+Environment=RALFLOOP_MD_GOODIFY_ROOT=/opt/ralfloop
+Environment=RALFLOOP_RUNTIME_PYTHON=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /opt/ralfloop/scripts/ralf_google_workspace_mcp_broker.py --socket /run/ralf-md-goodify-mcp/mcp.sock --allow-uid 1000 --command /opt/ralfloop/scripts/ralf_md_goodify_mcp_server.sh --idle-timeout 90
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/ralfloop /run/ralf-md-goodify-mcp
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,24 @@
+[Unit]
+Description=Bot-tazzi MD/Goodify Gmail watcher
+After=network-online.target ralf-google-workspace-mcp-broker.service meowgram.service
+Wants=network-online.target ralf-google-workspace-mcp-broker.service
+
+[Service]
+Type=simple
+User=sibilla-cumana
+Group=ralf-mcp
+WorkingDirectory=/opt/ralfloop
+EnvironmentFile=/etc/ralfloop/md-goodify.env
+Environment=PYTHONPATH=/opt/ralfloop
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /opt/ralfloop/scripts/ralf_md_goodify_worker.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/ralfloop
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
