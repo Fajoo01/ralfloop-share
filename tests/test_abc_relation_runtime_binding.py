@@ -128,3 +128,29 @@ def test_read_resolution_default_budget_keeps_timeline_and_references():
     assert len(payload["context"]["references"]) == 5
     assert payload["context"]["timeline"][0]["status"] == "weak_historical_note"
     assert payload["context"]["timeline"][0]["confidence"] == 0.35
+
+
+def test_abc_live_routing_canary_executes_from_file():
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, str(root / "scripts" / "check_abc_live_routing.py")],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "ABC_ROUTING_CANARY_OK" in result.stdout
+
+
+def test_memory_rag_overlay_does_not_shadow_production_config_directory():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    dropin = (root / "deploy/systemd/ralfloop-backend-memory-rag-overlay.conf").read_text()
+    assert "/ralf-memory-rag/current/config:" not in dropin
+    assert "/ralfloop-production/current/config" not in dropin

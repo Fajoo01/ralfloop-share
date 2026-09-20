@@ -1,0 +1,7 @@
+{
+  "default_runtime": "openai_compat",
+  "runtimes": {
+    "openai_compat": {"type":"openai_compat","base_url":"http://127.0.0.1:19110","models":{"default":"qwen2.5-3b","planner":"qwen2.5-3b","chat":"qwen2.5-3b"}},
+    "embeddings": {"type":"openai_compat","base_url":"http://127.0.0.1:19111","models":{"default":"qwen3-embedding-4b"}}
+  }
+}
