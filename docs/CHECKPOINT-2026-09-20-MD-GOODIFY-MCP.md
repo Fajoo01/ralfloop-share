@@ -111,3 +111,19 @@ Configurazione runtime attuale: account sorgente e destinatario sono entrambi
 un forward verso sé stesso. Per usare una seconda casella sorgente basta collegarla al
 Google Workspace MCP e cambiare `RALFLOOP_MD_GOODIFY_ACCOUNT`, lasciando il destinatario
 su `fabio@tiremminnanz.com`.
+
+## Aggiornamento inoltro Gmail — 2026-09-20
+
+L'inoltro della casella personale non richiede un secondo account Google Workspace MCP.
+Su `fagioli.fabio.86@gmail.com` è stato creato il filtro Gmail:
+
+- criterio: `from:(info@goodify.com)`;
+- azione: inoltra a `fabio@tiremminnanz.com`;
+- inoltro generale della casella: disattivato.
+
+Il worker Bot-tazzi continua quindi a monitorare soltanto `fabio@tiremminnanz.com`, dove
+arrivano le nuove email Goodify tramite il filtro Gmail. Test live del worker dopo il riavvio:
+`ok=true`, `processed_now=0`, `wins=0`; Meowgram e il relay Telegram risultano `active`.
+
+Il prossimo input esterno necessario resta un QR MD reale non ancora usato, per acquisire
+il contratto effettivo del flusso pubblico Goodify/MD e completare il binding di donazione.
