@@ -43,3 +43,23 @@ No phone interaction or traffic capture was required.
 
 Targeted tests: `14 passed`.
 The production MCP runtime was not restarted or changed in this checkpoint.
+
+## Live rollout
+
+Released commit `19757dd` to:
+
+`/home/sibilla-cumana/ralf-md-goodify-mcp/releases/19757dd`
+
+and atomically switched `current` to that release.
+
+Restarted only:
+
+- `ralf-md-goodify-mcp-broker.service`
+- `ralf-md-goodify-worker.service`
+
+`ralfloop-backend.service` remained active.
+
+Live broker smoke test from the production UID reports 7 tools. Both new tools
+returned successfully with zero side effects. The payload builder reported
+`submission_performed=false` and did not receive or expose a raw access token.
+Post-restart journal contains clean stop/start events and no errors.
