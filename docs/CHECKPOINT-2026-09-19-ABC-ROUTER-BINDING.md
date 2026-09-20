@@ -83,3 +83,181 @@ Questo step non modifica il sistema live. Restano da fare con accesso operativo 
 3. verificare `/run/ralf-abc-relation-mcp/mcp.sock`;
 4. eseguire suite mirata e smoke end-to-end sia su `/tasks/run` sia sul reasoning cycle;
 5. solo dopo attivare il branch nel runtime Bot-tazzi.
+
+
+---
+
+## Aggiornamento live — 2026-09-20
+
+Questa sezione sostituisce lo stato `non live` descritto sopra.
+
+### Bug `/tasks/run` confermato
+
+Il primo smoke HTTP reale su `POST http://127.0.0.1:19090/tasks/run` mostrava che il route ABC finiva ancora nel vecchio `RalfloopAgent -> planner/coder/judge`, con tentativi `sandbox_read_file` su path inventati.
+
+È stato aggiunto in `openshell_backend/app.py::run_task()` uno shortcut read-only prima del GPU handoff / planner loop. Quando `abc_relation` è selezionato e la route non è `external_action`, l'entrypoint delega a `run_capability_reasoning_cycle()` e restituisce:
+
+- `capability_route`;
+- `result_envelope`;
+- evidence `mcp:abc_relation:read_only`;
+- `approval_required=false`;
+- nessuna chiamata al planner sandbox.
+
+La regressione `test_openshell_tasks_run_shortcuts_abc_before_legacy_agent` sostituisce `_run_task_impl` con una funzione che fallisce se viene invocata, così un ritorno futuro al vecchio loop viene rilevato direttamente dal test.
+
+### Causa reale del routing live mancante
+
+Durante il rollout iniziale il codice e il JSON del release risultavano corretti fuori dal worker, ma nel processo uvicorn `read_mcp_keywords` risultava vuoto.
+
+La causa è stata isolata nel drop-in systemd:
+
+`/etc/systemd/system/ralfloop-backend.service.d/99-memory-rag-overlay.conf`
+
+che monta read-only l'intera directory:
+
+`/home/sibilla-cumana/ralf-memory-rag/current/config`
+
+sopra:
+
+`/home/sibilla-cumana/ralfloop-production/current/config`
+
+Il vecchio overlay Memory RAG conteneva un `capability_routing.json` precedente all'introduzione di `read_mcp_keywords`, quindi mascherava il file corretto del release produzione.
+
+Non sono stati aggiunti trigger hardcoded nell'entrypoint. È stato invece creato un nuovo release atomico dell'overlay Memory RAG, identico al precedente salvo la sezione `read_mcp_keywords`, copiata dal routing canonico del release produzione:
+
+`/home/sibilla-cumana/ralf-memory-rag/releases/32d0bc9ed2b1f102015f4750cdf955fb93c7417c-abc-routing-5182440`
+
+Rollback overlay immediato:
+
+`/home/sibilla-cumana/ralf-memory-rag/releases/32d0bc9ed2b1f102015f4750cdf955fb93c7417c-mailchimp-preview`
+
+Le modifiche diagnostiche temporanee usate per isolare il problema sono state rimosse dalla versione finale.
+
+### Payload ABC read-only
+
+Il payload live dello stato ABC supera 12 KiB. Il limite di rendering dell'adapter è stato portato da `12000` a `32768` caratteri, sufficiente allo stato live corrente e alle sezioni timeline/reference richieste.
+
+È stata aggiunta una regressione che verifica che un contesto equivalente contenga integralmente:
+
+- 12 entry timeline;
+- 5 riferimenti;
+- status `weak_historical_note`;
+- confidence `0.35`.
+
+### Test finali eseguiti realmente su Sibilla
+
+Interprete:
+
+`/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python`
+
+Suite ABC/router binding:
+
+`pytest -q tests/test_abc_relation_router_binding.py tests/test_abc_relation_runtime_binding.py`
+
+Risultato: `14 passed, 2 warnings in 1.08s`.
+
+Regressioni router/runtime/chat/reasoning:
+
+`pytest -q tests/test_capability_router.py tests/test_capability_runtime_integration.py tests/test_chat_api.py tests/test_reasoning_cycle_node.py`
+
+Risultato: `63 passed, 2 warnings in 1.65s`.
+
+`git diff --check` -> OK.
+
+Durante l'indagine sono state eseguite anche suite più larghe. Hanno evidenziato failure preesistenti/non pertinenti al diff ABC: una in `tests/test_routing.py::test_patch_allowed_mode` (`evidence.tests` vuoto) e dieci nel legacy `tests/test_abc_formula_loop.py`. Le suite finali sopra, che coprono il percorso modificato e le regressioni richieste, sono verdi.
+
+### Smoke HTTP reali finali
+
+Eseguite realmente contro `http://127.0.0.1:19090/tasks/run` le quattro query previste:
+
+1. `analizza la strategia relazionale`
+2. `come è messa la curva relazionale?`
+3. `mostrami gli ultimi eventi`
+4. `analizza la situazione usando anche dialogo strategico e manuali di psicologia`
+
+Tutte e quattro restituiscono:
+
+- `ok=true`;
+- `capability=abc_relation`;
+- `approval_required=false`;
+- `stop_reason=abc_relation_read_completed`;
+- `mcp_connectors=["abc_relation"]`;
+- evidence `mcp:abc_relation:read_only`;
+- `exit_code=0`.
+
+Verifica timeline live:
+
+- timeline canonica MCP: `0` eventi atomici;
+- fallback `legacy_timeline`: `12` entry;
+- status univoco: `weak_historical_note`;
+- confidence univoca: `0.35`.
+
+Verifica reference library live: `5` riferimenti:
+
+- `dialogo_strategico`;
+- `motivational_interviewing`;
+- `investment_model_interdependence`;
+- `interdependence_theory`;
+- `attachment_secure_base`.
+
+Sul PID finale del worker backend, dopo i quattro smoke:
+
+- `[LOOP]`: `0`;
+- `sandbox_read_file`: `0`;
+- `ls -la`: `0`;
+- vecchi log `[TASKS_RUN]`: `0`;
+- `POST /tasks/run`: `4`.
+
+### Write policy
+
+Il normale percorso ABC resta strettamente read-only.
+
+`abc_record_event` e `abc_create_snapshot` compaiono nei file live soltanto nella dichiarazione `WRITE_TOOLS`; non esistono call-site in:
+
+- `openshell_backend/app.py`;
+- `ralfloop_agent/nodes/reasoning.py`;
+- `ralfloop_agent/integration/abc_relation_read.py`.
+
+La regressione mantiene `READ_ONLY_TOOLS.isdisjoint(WRITE_TOOLS)`.
+
+### Broker e import live
+
+`ralf-abc-relation-mcp-broker.service` -> `active`.
+
+Il broker resta sul release già validato:
+
+`/home/sibilla-cumana/ralf-abc-relation-mcp/releases/d4d81810995eaa35911d642a681fc719efbb5bb8`
+
+Socket canonico:
+
+`/run/ralf-abc-relation-mcp/mcp.sock`
+
+Il client live come utente `sibilla-cumana` ha verificato:
+
+- timeline canonica `0`;
+- legacy timeline `12`;
+- reference library `5`.
+
+Non è stato rifatto l'import: resta valido l'import già verificato di esattamente 5 JSON strutturati, senza dump WhatsApp RAW. Lo score canonico resta neutro in assenza di eventi atomici: score `50`, confidence `0`, evidence count `0`.
+
+### Release produzione e rollback
+
+Release codice live finale:
+
+`/home/sibilla-cumana/ralfloop-production/releases/310a9180635414e51f37af643464fb0a1574f24e`
+
+Commit codice:
+
+`310a9180635414e51f37af643464fb0a1574f24e` — `abc: finalize live read-only task binding`
+
+`ralfloop-backend.service` -> `active`.
+
+Rollback immediato produzione:
+
+`/home/sibilla-cumana/ralfloop-production/releases/5182440b30d61f91b5de84a94ec9f04b16769065`
+
+Restano inoltre conservati i release precedenti `d4d81810995eaa35911d642a681fc719efbb5bb8` e `b5005a2c05e25699d44394463e8988cce0f9ddb4`.
+
+### Esito
+
+Il binding live `/tasks/run -> abc_relation -> reasoning cycle read-only -> broker MCP` è ora validato end-to-end. Il vecchio planner sandbox non viene più avviato per le quattro query ABC previste.
