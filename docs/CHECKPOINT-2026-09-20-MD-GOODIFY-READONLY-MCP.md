@@ -63,3 +63,20 @@ Live broker smoke test from the production UID reports 7 tools. Both new tools
 returned successfully with zero side effects. The payload builder reported
 `submission_performed=false` and did not receive or expose a raw access token.
 Post-restart journal contains clean stop/start events and no errors.
+
+## Read-only getdonation wiring
+
+Added `ralfloop_agent/unified_assistant/md_goodify_readonly.py`.
+The only live MD/Goodify API operation implemented there is donation-history
+reading via `catalogomdapp.dedagroupwiz.it:443` and exact path
+`/api/goodify/getdonation`.
+
+The token is loaded internally from a private regular file, default:
+`/var/lib/ralfloop/md-goodify/access-token`.
+It is rejected if the file is a symlink, has group/world permissions, has an
+unexpected owner, is empty, or is oversized. The token is never an MCP input,
+result field, log field, fixture, or Git-tracked value.
+
+New MCP tool: `md_goodify_get_donations`, with an empty input schema.
+It reports `network_requests=1`, `mutations=0`,
+`submission_performed=false`, and parsed donation history only.

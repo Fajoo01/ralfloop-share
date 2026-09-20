@@ -152,3 +152,29 @@ def test_purchase_payload_tool_redacts_token_and_never_submits():
     assert result["side_effects"] == 0
     assert result["qr_code"] == "QR-ABC"
     assert result["token_source"] == "runtime_access_token"
+
+
+def test_get_donations_tool_never_accepts_token_argument(monkeypatch):
+    import scripts.ralf_md_goodify_mcp_server as server_mod
+
+    assert server_mod.TOOLS["md_goodify_get_donations"]["properties"] == {}
+
+    class FakeReadOnlyClient:
+        def get_donations(self):
+            return {
+                "code": "",
+                "message": "ok",
+                "donations": [{"Goodify_donationId": "d-1"}],
+                "network_requests": 1,
+                "mutations": 0,
+                "submission_performed": False,
+                "side_effects": 0,
+            }
+
+    monkeypatch.setattr(server_mod, "MdGoodifyReadOnlyClient", FakeReadOnlyClient)
+    response = server_mod.MdGoodifyMCPServer().call("md_goodify_get_donations", {})
+    result = response["structuredContent"]
+    assert result["ok"] is True
+    assert result["operation"] == "get_donations"
+    assert result["mutations"] == 0
+    assert "token" not in json.dumps(result).casefold()
