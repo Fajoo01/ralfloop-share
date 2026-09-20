@@ -67,9 +67,9 @@ già riportato dalla fonte Goodify/MD.
 Il runtime Python previsto è quello canonico di Bot-tazzi:
 `/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python`.
 
-Prima dell'attivazione live va creato un release isolato e registrato il provider
-`md_goodify -> /run/ralf-md-goodify-mcp/mcp.sock` nel catalogo MCP live senza
-rimpiazzare gli altri provider correnti.
+Il deployment usa un release isolato in `/home/sibilla-cumana/ralf-md-goodify-mcp/current`.
+Il provider da registrare nel catalogo live è
+`md_goodify -> /run/ralf-md-goodify-mcp/mcp.sock`, senza rimpiazzare gli altri provider correnti.
 
 ## Prossimo test necessario
 

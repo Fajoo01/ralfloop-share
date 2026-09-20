@@ -10,9 +10,9 @@ Group=ralf-mcp
 UMask=0007
 RuntimeDirectory=ralf-md-goodify-mcp
 RuntimeDirectoryMode=0750
-Environment=RALFLOOP_MD_GOODIFY_ROOT=/opt/ralfloop
+Environment=RALFLOOP_MD_GOODIFY_ROOT=/home/sibilla-cumana/ralf-md-goodify-mcp/current
 Environment=RALFLOOP_RUNTIME_PYTHON=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python
-ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /opt/ralfloop/scripts/ralf_google_workspace_mcp_broker.py --socket /run/ralf-md-goodify-mcp/mcp.sock --allow-uid 1000 --command /opt/ralfloop/scripts/ralf_md_goodify_mcp_server.sh --idle-timeout 90
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_google_workspace_mcp_broker.py --socket /run/ralf-md-goodify-mcp/mcp.sock --allow-uid 1000 --command /home/sibilla-cumana/ralf-md-goodify-mcp/current/scripts/ralf_md_goodify_mcp_server.sh --idle-timeout 90
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=true

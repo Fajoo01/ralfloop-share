@@ -7,10 +7,10 @@ Wants=network-online.target ralf-google-workspace-mcp-broker.service
 Type=simple
 User=sibilla-cumana
 Group=ralf-mcp
-WorkingDirectory=/opt/ralfloop
+WorkingDirectory=/home/sibilla-cumana/ralf-md-goodify-mcp/current
 EnvironmentFile=/etc/ralfloop/md-goodify.env
-Environment=PYTHONPATH=/opt/ralfloop
-ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /opt/ralfloop/scripts/ralf_md_goodify_worker.py
+Environment=PYTHONPATH=/home/sibilla-cumana/ralf-md-goodify-mcp/current
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralf-md-goodify-mcp/current/scripts/ralf_md_goodify_worker.py
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
