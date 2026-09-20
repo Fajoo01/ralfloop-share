@@ -1959,8 +1959,7 @@ def run_task(req: TaskRunRequest):
             routing_config_file=str(_entry_routing_config.DEFAULT_ROUTING_CONFIG),
             read_mcp_names=[name for name, _ in _entry_router.READ_MCP_KEYWORDS],
             router_config_keys=sorted(_entry_router.ROUTING_CONFIG),
-            cached_config_keys=sorted(_entry_routing_config.load_routing_config()),
-            routing_cache=str(_entry_routing_config.load_routing_config.cache_info()),
+            live_config_keys=sorted(_entry_routing_config.load_routing_config()),
         )
     if req.mode == "route_only":
         return _run_task_impl(req)

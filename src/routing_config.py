@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from functools import lru_cache
 import json
 import os
 from pathlib import Path
@@ -15,7 +14,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ROUTING_CONFIG = PROJECT_ROOT / "config" / "capability_routing.json"
 
 
-@lru_cache(maxsize=4)
 def load_routing_config(path: str | None = None) -> dict[str, Any]:
     config_path = Path(path or os.getenv("RALF_ROUTING_CONFIG") or DEFAULT_ROUTING_CONFIG)
     try:
