@@ -125,3 +125,30 @@ def test_mail_worker_forwards_allowlisted_win_and_queues_telegram(monkeypatch, t
         gmail_socket="/fake.sock",
     )
     assert again["processed_now"] == 0
+
+
+def test_api_response_parser_tool_is_read_only():
+    server = MdGoodifyMCPServer()
+    raw = json.dumps({
+        "messaggio": "ok",
+        "payload": [{"Donation": [{
+            "Goodify_associationName": "Tiremm Innanz APS",
+            "Goodify_UrldonationId": "https://example.test/d/1",
+        }]}],
+    })
+    response = server.call("md_goodify_parse_api_response", {"response_json": raw})
+    result = response["structuredContent"]
+    assert result["ok"] is True
+    assert result["side_effects"] == 0
+    assert result["donations"][0]["Goodify_associationName"] == "Tiremm Innanz APS"
+
+
+def test_purchase_payload_tool_redacts_token_and_never_submits():
+    server = MdGoodifyMCPServer()
+    response = server.call("md_goodify_build_purchase_payload", {"qr_code": "QR-ABC"})
+    result = response["structuredContent"]
+    assert result["ok"] is True
+    assert result["submission_performed"] is False
+    assert result["side_effects"] == 0
+    assert result["qr_code"] == "QR-ABC"
+    assert result["token_source"] == "runtime_access_token"
