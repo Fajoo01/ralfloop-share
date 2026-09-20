@@ -159,3 +159,21 @@ def test_no_instant_win_campaign_skips_verify(tmp_path: Path):
     result = flow.process_qr("QR-REAL-123")
     assert result["instant_win"]["status"] == "NOT_AVAILABLE"
     assert gql.verify_calls == 0
+
+
+def test_concurrent_duplicate_is_processing_without_second_side_effect(tmp_path: Path):
+    purchase = FakePurchase()
+    gql = FakeGraphQL()
+    store = FlowStore(tmp_path / "state.sqlite3")
+    _, fingerprint = qr_fingerprint("QR-REAL-123")
+    is_new, _ = store.reserve(fingerprint, len("QR-REAL-123"))
+    assert is_new is True
+
+    flow = MdGoodifyFlow(purchase_client=purchase, graphql_client=gql,
+                         store=store, telegram_outbox=tmp_path / "out.jsonl")
+    result = flow.process_qr("QR-REAL-123")
+    assert result["status"] == "PROCESSING"
+    assert result["already_processed"] is True
+    assert purchase.calls == 0
+    assert gql.change_calls == 0
+    assert gql.verify_calls == 0

@@ -308,9 +308,15 @@ class MdGoodifyFlow:
         donation_id = str(row.get("donation_id") or "")
         donation_url = str(row.get("donation_url") or "")
 
+        active_phases = {
+            "RECEIVED", "PURCHASE_SUBMITTING", "PURCHASED",
+            "RECIPIENT_SUBMITTING", "RECIPIENT_SET", "INSTANT_WIN_SUBMITTING",
+        }
+        if not is_new and phase in active_phases and age < self.stale_after:
+            return {"ok": True, "status": "PROCESSING", "already_processed": True,
+                    "qr_fingerprint": fingerprint}
+
         if not is_new and phase == "PURCHASE_SUBMITTING":
-            if age < self.stale_after:
-                return {"ok": True, "status": "PROCESSING", "already_processed": True, "qr_fingerprint": fingerprint}
             result = {"ok": False, "status": "AMBIGUOUS_PURCHASE", "qr_fingerprint": fingerprint,
                       "message": "Il QR non viene reinviato automaticamente: l'esito del precedente POST MD è incerto."}
             return self._finish(fingerprint, result, "AMBIGUOUS")
