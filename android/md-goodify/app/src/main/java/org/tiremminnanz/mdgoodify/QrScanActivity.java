@@ -22,6 +22,8 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayDeque;
 import java.util.Collections;
 import java.util.List;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -30,6 +32,7 @@ public final class QrScanActivity extends Activity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ArrayDeque<String> recent = new ArrayDeque<>();
+    private final Set<String> sessionSeenQr = new HashSet<>();
 
     private DecoratedBarcodeView scanner;
     private TextView statusView;
@@ -86,6 +89,7 @@ public final class QrScanActivity extends Activity {
             if (busy || result == null || result.getText() == null) return;
             String qr = result.getText().trim();
             if (qr.isEmpty()) return;
+            if (!sessionSeenQr.add(qr)) return;
             busy = true;
             scanner.pause();
             statusView.setText("QR LETTO — REGISTRAZIONE…");
