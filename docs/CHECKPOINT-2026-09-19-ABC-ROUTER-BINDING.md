@@ -395,3 +395,37 @@ Verifica dopo l'aggiunta del tool:
 - smoke `mostrami gli ultimi eventi`: timeline canonica `8`, legacy timeline nello snapshot `12`.
 
 Nessun restart del backend è richiesto per questo helper offline; il runtime live continua a usare il release già validato `fd30fd3`.
+
+## Human-readable ABC answers — 2026-09-21
+
+Il percorso live ABC non restituisce più il payload JSON come `final_answer`. Il JSON read-only resta integralmente in `result_envelope.evidence.stdout`, mentre `final_answer` viene renderizzato in forma leggibile e prudenziale.
+
+Guardrail espliciti nel renderer:
+
+- lo score ABC è un indicatore tecnico rispetto al neutro 50, non una probabilità di successo;
+- la confidence misura qualità/coerenza dell'evidenza registrata, non certezza sulle intenzioni dell'altra persona;
+- i manuali restano euristiche e non prove di stati mentali nascosti;
+- la strategia viene resa solo tramite le safe action del calcolatore.
+
+Test prima del rollout:
+
+- `py_compile`: OK;
+- suite ABC/router/runtime/chat/reasoning: `84 passed, 2 warnings in 2.07s`;
+- `git diff --check`: OK.
+Commit codice rollout:
+
+`b39b6f882c9627bd8a2bdae84a9fbab0fedeb042` — `abc: render human-readable live relation answers`
+
+Release live:
+
+`/home/sibilla-cumana/ralfloop-production/releases/b39b6f882c9627bd8a2bdae84a9fbab0fedeb042`
+
+Rollback immediato:
+
+`/home/sibilla-cumana/ralfloop-production/releases/fd30fd3b905a1d543958b56d307c3b4ca535353c`
+
+`ExecStartPre` ABC -> status `0`; backend e broker restano active; `/health` -> `ok`.
+
+Quattro smoke HTTP reali hanno restituito `ok=true`, `approval_required=false`, evidence `mcp:abc_relation:read_only`, `exit_code=0`. Score live: `69`, evidence count `8`, safe action `light_non_pressing_presence`; timeline `8`; reference library `5`. Nessun `[LOOP]`, `sandbox_read_file` o `ls -la` nei log del nuovo worker.
+
+Gli 8 summary iniziali in inglese sono stati superseduti nel DB da equivalenti italiani tramite la semantica nativa `supersedes_event_id`: restano 8 eventi attivi, score e confidence invariati, provenance conservata. Backup SQLite creato prima della sostituzione; nessun dato relazionale privato è stato committato su GitHub.
