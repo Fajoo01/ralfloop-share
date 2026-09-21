@@ -5,7 +5,7 @@
   "benchmark": "assistant-v1-grounded-aps-quality",
   "citations": [
     {
-      "content_hash": "d3e5a01f2ec2d2792e1536baf3dd33ca7c3f82e572dfe9f84096bab74d24379a",
+      "content_hash": "36536d9ec85716fe038bb8fe0ecef34e92434b76dd7bf27af09f169545ef73a8",
       "opened": true,
       "source_id": "S1",
       "title": "Codice del Terzo Settore | Ministero del Lavoro e delle Politiche Sociali",
@@ -14,10 +14,12 @@
   ],
   "errors": [],
   "gates": {
+    "aps_expansion_present": true,
     "authoritative_source_present": true,
     "citations_present": true,
     "d_lgs_117_2017_present": true,
     "grounded_artifact_completed": true,
+    "navigation_noise_absent": true,
     "no_approval_required": true,
     "read_only_network": true,
     "route_is_research_deep": true,
@@ -26,7 +28,7 @@
   "partial": false,
   "pass": true,
   "query": "Cos'è una APS in Italia?",
-  "response": "Codice del Terzo Settore | Ministero del Lavoro e delle Politiche Sociali Salta al contenuto principale Vai al footer Codice del Terzo Settore Il Codice del Terzo Settore - Decreto legislativo 3 luglio 2017 n.117 e ss.mm.ii. 32 e ss.); le associazioni di promozione sociale (APS) (artt. 117 del 2017 (Codice del Terzo Settore), concernente l'individuazione di criteri e limiti delle attività diverse. 4 del Codice sono Enti del Terzo Settore , se iscritti al Registro Unico Nazionale del Terzo Settore: le organizzazioni di volontariato (ODV) (artt. 66 del 20 marzo 2026) Disposizioni modificative e integrative al decreto del Ministro del Lavoro e delle Politiche Sociali del 15 settembre 2020, n. 117 del 2017 (Codice del Terzo Settore), concernente la definizione dei criteri per il riconoscimento in ambito scolastico e lavorativo delle competenze acquisite nello svolgimento di attività o percorsi di volontariato.\n\nFonti:\n[S1] Codice del Terzo Settore | Ministero del Lavoro e delle Politiche Sociali — https://www.lavoro.gov.it/temi-e-priorita/terzo-settore-e-responsabilita-sociale-imprese/focus-on/riforma-terzo-settore/pagine/codice-del-terzo-settore",
+  "response": "- Le associazioni di promozione sociale (APS) (artt. 35 e ss.). [S1]\n- Il Codice del Terzo Settore - Decreto legislativo 3 luglio 2017 n.117 e ss.mm.ii. [S1]\n\nFonti:\n[S1] Codice del Terzo Settore | Ministero del Lavoro e delle Politiche Sociali — https://www.lavoro.gov.it/temi-e-priorita/terzo-settore-e-responsabilita-sociale-imprese/focus-on/riforma-terzo-settore/pagine/codice-del-terzo-settore",
   "result_ok": true,
   "route": {
     "arguments": {
@@ -56,8 +58,8 @@
     "task_mode": "tool_backed_read",
     "write_policy": "no_write"
   },
-  "run_id": "5a3a4093d5b647899ea98cbbdcb541d7",
+  "run_id": "637811f420b34e13b0392ffb46048d2b",
   "schema_version": 1,
-  "trace_path": "/home/bandi/.local/state/ralf/model_tool_runs/deep_web_research/5a3a4093d5b647899ea98cbbdcb541d7/trace.jsonl",
-  "wall_ms": 12857
+  "trace_path": "/home/bandi/.local/state/ralf/model_tool_runs/deep_web_research/637811f420b34e13b0392ffb46048d2b/trace.jsonl",
+  "wall_ms": 12928
 }

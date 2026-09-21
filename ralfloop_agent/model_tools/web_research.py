@@ -1088,7 +1088,7 @@ def _numeric_claim_supported(
     normalized = claim_match.group(0).rstrip("%").replace(",", ".")
     number_regex = re.escape(normalized).replace(r"\.", r"[.,]")
     evidence_pattern = re.compile(
-        rf"(?<![\d.,]){number_regex}%?(?![\d.,])",
+        rf"(?<!\d)(?<!\d[.,]){number_regex}%?(?!\d|[.,]\d)",
         re.IGNORECASE,
     )
     evidence_matches = list(evidence_pattern.finditer(raw_evidence))
@@ -1280,6 +1280,7 @@ _FALLBACK_BOILERPLATE_PATTERNS = (
     re.compile(r"\b(?:all rights reserved|copyright|terms (?:and conditions|of use))\b", re.I),
     re.compile(r"\b(?:(?:log|sign)\s+in|register|subscribe|enable javascript)\b", re.I),
     re.compile(r"\b(?:main|primary|site)\s+navigation\b", re.I),
+    re.compile(r"\b(?:skip to (?:the )?(?:main )?content|go to footer|salta al contenuto principale|vai al footer)\b", re.I),
     re.compile(
         r"\b(?:does not constitute|for informational purposes only|"
         r"no warranty|not intended as|non costituisce|nessuna garanzia|"
@@ -1436,7 +1437,8 @@ def _extractive_fallback_finish(
     )
     for source_id in ordered_source_ids:
         source = sources.get(source_id, {})
-        body = re.sub(r"\s+", " ", opened[source_id]).strip()
+        raw_body = opened[source_id].strip()
+        body = re.sub(r"\s+", " ", raw_body).strip()
         if not body:
             continue
         title_terms = set(_search_terms(str(source.get("title") or "")))
@@ -1453,10 +1455,17 @@ def _extractive_fallback_finish(
             if len(snippet_terms & body_terms) >= required_body_overlap:
                 segments.append((snippet, 80))
         segments.extend(
-            (sentence, 0)
+            (re.sub(r"\s+", " ", part).strip(), 24)
+            for line in raw_body.splitlines()
+            for part in re.split(r"\s*[•·¶§]\s*", line)
+            if part.strip()
+            and not re.search(r"(?<=[.!?])\s+[A-ZÀ-Ý]", part.strip())
+        )
+        segments.extend(
+            (re.sub(r"\s+", " ", sentence).strip(), 0)
             for sentence in re.split(
-                r"(?<=[.!?])\s+|\s*[•·¶§]\s*",
-                body,
+                r"(?<=[.!?])\s+|[\r\n]+|\s*[•·¶§]\s*",
+                raw_body,
             )
         )
         for sentence, source_bonus in segments:
@@ -1481,6 +1490,10 @@ def _extractive_fallback_finish(
             terms = set(_search_terms(sentence))
             overlap = len(terms & query_terms)
             title_overlap = len(terms & title_terms)
+            if sentence[:1].isdigit() and overlap == 0:
+                continue
+            if re.search(r"\b(?:n|art|artt|comma|commi)\.\s*$", sentence, re.I):
+                continue
             if source_bonus > 0:
                 if overlap == 0 and query_title_overlap < 2:
                     continue
@@ -1553,7 +1566,16 @@ def _extractive_fallback_finish(
         claims.append({"text": claim_text, "citation_ids": [source_id]})
         covered_so_far.update(covered_aspects)
 
-    answer = " ".join(row["text"] for row in claims)
+    rendered_claims = []
+    for row in claims:
+        text = str(row["text"]).strip().rstrip(" ;")
+        if text[:1].islower():
+            text = text[:1].upper() + text[1:]
+        if text and text[-1] not in ".!?":
+            text += "."
+        source_ids = ", ".join(str(item) for item in row.get("citation_ids", ()))
+        rendered_claims.append(f"- {text}" + (f" [{source_ids}]" if source_ids else ""))
+    answer = "\n".join(rendered_claims)
     return answer, claims
 
 

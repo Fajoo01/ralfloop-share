@@ -53,13 +53,22 @@ def run_case(query: str) -> dict:
     citation_urls = [str(item.get("url") or "") for item in citations]
     authority_urls = [url for url in citation_urls if any(_host(url).endswith(host) for host in AUTHORITY_HOSTS)]
     response = str(result.get("final_answer") or result.get("response") or "")
-    normalized = response.casefold().replace(" ", "")
+    folded_response = response.casefold()
+    normalized = folded_response.replace(" ", "")
     gates = {
         "route_is_research_deep": bool(route and route.get("skills_used") == ["research.deep"]),
         "runtime_ok": bool(result.get("ok")),
         "grounded_artifact_completed": artifact.get("status") == "completed",
         "citations_present": bool(citations),
         "authoritative_source_present": bool(authority_urls),
+        "aps_expansion_present": (
+            "associazioni di promozione sociale" in folded_response
+            and "aps" in folded_response
+        ),
+        "navigation_noise_absent": not any(
+            phrase in folded_response
+            for phrase in ("salta al contenuto principale", "vai al footer", "skip to main content")
+        ),
         "d_lgs_117_2017_present": (
             "117/2017" in normalized
             or "decretolegislativo3luglio2017,n.117" in normalized

@@ -917,6 +917,53 @@ def test_extractive_fallback_skips_truncated_search_snippets() -> None:
     assert "Atlas compiler reduces runtime memory" in answer
 
 
+def test_extractive_fallback_preserves_newlines_and_skips_navigation() -> None:
+    sources = {
+        "S1": {
+            "source_id": "S1",
+            "url": "https://ministero.example/codice",
+            "title": "Codice del Terzo Settore",
+            "snippet": "",
+            "opened": True,
+        }
+    }
+    opened = {
+        "S1": (
+            "Codice del Terzo Settore\nSalta al contenuto principale\nVai al footer\n"
+            "Il Codice del Terzo Settore è il Decreto legislativo 3 luglio 2017 n.117.\n"
+            "Le associazioni di promozione sociale (APS) sono disciplinate dagli articoli 35 e seguenti."
+        )
+    }
+
+    answer, claims = web_research._extractive_fallback_finish(
+        "Cos'è una APS secondo il Codice del Terzo Settore?", sources, opened
+    )
+
+    assert claims
+    assert "Salta al contenuto principale" not in answer
+    assert "Vai al footer" not in answer
+    assert "Decreto legislativo 3 luglio 2017 n.117" in answer
+    assert "associazioni di promozione sociale (APS)" in answer
+
+
+def test_web_claim_numeric_boundary_allows_sentence_punctuation_only() -> None:
+    web_research._validate_web_claim(
+        "Decreto legislativo n.117.",
+        ["S1"],
+        {"S1": "Decreto legislativo n.117."},
+    )
+
+    with pytest.raises(
+        web_research.WebResearchError,
+        match="web_finish_web_number_unsupported",
+    ):
+        web_research._validate_web_claim(
+            "Quota 117 unità.",
+            ["S1"],
+            {"S1": "Quota 117.5 unità."},
+        )
+
+
 def test_forced_finish_schema_only_allows_opened_sources() -> None:
     opened = ("S1", "S3")
     tools = web_research._tools_for_turn(
