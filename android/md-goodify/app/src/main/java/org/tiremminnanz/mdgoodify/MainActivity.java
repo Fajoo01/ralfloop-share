@@ -157,7 +157,10 @@ public final class MainActivity extends Activity {
                 connection.setReadTimeout(8000);
                 connection.setRequestProperty("Accept", "application/json");
                 connection.setRequestProperty("Authorization", "Bearer " + BuildConfig.API_TOKEN);
-                JSONObject response = readJson(connection.getInputStream());
+                int code = connection.getResponseCode();
+                InputStream stream = code >= 400 ? connection.getErrorStream() : connection.getInputStream();
+                JSONObject response = readJson(stream);
+                if (code == 401) { runOnUiThread(() -> setBusy(false, "App non autorizzata — aggiorna l’app")); return; }
                 boolean linked = response.optBoolean("enrolled", false);
                 runOnUiThread(() -> setEnrollmentState(linked));
             } catch (Exception ignored) {
