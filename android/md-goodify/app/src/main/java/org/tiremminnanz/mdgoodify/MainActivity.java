@@ -45,6 +45,7 @@ public final class MainActivity extends Activity {
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private TextView stateView;
+    private TextView statsView;
     private ProgressBar progress;
     private Button scanButton;
     private Button connectButton;
@@ -70,6 +71,12 @@ public final class MainActivity extends Activity {
         handleIncomingIntent(intent);
     }
 
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (enrolled) loadStats();
+    }
+
     private void buildUi() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -88,8 +95,16 @@ public final class MainActivity extends Activity {
         subtitle.setText("MD → Goodify → Tiremm");
         subtitle.setTextSize(17);
         subtitle.setGravity(Gravity.CENTER);
-        subtitle.setPadding(0, 0, 0, dp(24));
+        subtitle.setPadding(0, 0, 0, dp(18));
         root.addView(subtitle, new LinearLayout.LayoutParams(-1, -2));
+
+        statsView = new TextView(this);
+        statsView.setText("Totale MD — …\nTiremm via Bot-tazzi — …");
+        statsView.setTextSize(20);
+        statsView.setGravity(Gravity.CENTER);
+        statsView.setPadding(dp(12), dp(16), dp(12), dp(16));
+        statsView.setVisibility(View.GONE);
+        root.addView(statsView, new LinearLayout.LayoutParams(-1, -2));
 
         loginBox = new LinearLayout(this);
         loginBox.setOrientation(LinearLayout.VERTICAL);
@@ -220,10 +235,37 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void loadStats() {
+        executor.execute(() -> {
+            try {
+                GoodifyApiClient.ApiResponse result = GoodifyApiClient.getStats();
+                if (result.httpCode != 200) return;
+                JSONObject body = result.body;
+                String md = body.optString("md_total_eur", "");
+                String tiremm = body.optString("tiremm_total_eur", "");
+                int count = body.optInt("tiremm_completed_count", 0);
+                runOnUiThread(() -> {
+                    String mdLine = md.isEmpty() ? "Totale MD — non disponibile" : "Totale MD — € " + euro(md);
+                    String tiremmLine = tiremm.isEmpty()
+                            ? "Tiremm via Bot-tazzi — " + count + " donazioni"
+                            : "Tiremm via Bot-tazzi — € " + euro(tiremm) + "  (" + count + ")";
+                    statsView.setText(mdLine + "\n" + tiremmLine);
+                });
+            } catch (Exception ignored) {
+            }
+        });
+    }
+
+    private String euro(String value) {
+        return value.replace('.', ',');
+    }
+
     private void setEnrollmentState(boolean linked) {
         enrolled = linked;
         loginBox.setVisibility(linked ? View.GONE : View.VISIBLE);
+        statsView.setVisibility(linked ? View.VISIBLE : View.GONE);
         setBusy(false, linked ? "Pronto" : "Collega il tuo account MD");
+        if (linked) loadStats();
     }
 
     private void startScanner() {

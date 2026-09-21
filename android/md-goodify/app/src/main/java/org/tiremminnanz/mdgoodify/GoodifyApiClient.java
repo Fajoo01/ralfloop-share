@@ -24,6 +24,23 @@ final class GoodifyApiClient {
     private GoodifyApiClient() {
     }
 
+    static ApiResponse getStats() throws Exception {
+        String base = BuildConfig.API_BASE_URL.replaceAll("/+$", "");
+        HttpURLConnection connection = (HttpURLConnection) new URL(base + "/v1/stats").openConnection();
+        try {
+            connection.setRequestMethod("GET");
+            connection.setConnectTimeout(8000);
+            connection.setReadTimeout(30000);
+            connection.setRequestProperty("Accept", "application/json");
+            connection.setRequestProperty("Authorization", "Bearer " + BuildConfig.API_TOKEN);
+            int code = connection.getResponseCode();
+            InputStream stream = code >= 400 ? connection.getErrorStream() : connection.getInputStream();
+            return new ApiResponse(code, readJson(stream));
+        } finally {
+            connection.disconnect();
+        }
+    }
+
     static ApiResponse processQr(String qr) throws Exception {
         String base = BuildConfig.API_BASE_URL.replaceAll("/+$", "");
         HttpURLConnection connection = (HttpURLConnection) new URL(base + "/v1/process-qr").openConnection();

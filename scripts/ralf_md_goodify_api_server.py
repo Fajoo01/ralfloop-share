@@ -9,7 +9,9 @@ import hmac
 import json
 import os
 from pathlib import Path
+import sqlite3
 import sys
+from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -24,7 +26,8 @@ from ralfloop_agent.unified_assistant.md_goodify_auth import (
     MdLoginRejected,
     _load_private_text,
 )
-from ralfloop_agent.unified_assistant.md_goodify_transactional import MdGoodifyFlow
+from ralfloop_agent.unified_assistant.md_goodify_readonly import MdGoodifyReadOnlyClient
+from ralfloop_agent.unified_assistant.md_goodify_transactional import DEFAULT_STATE_DB, MdGoodifyFlow
 
 MAX_BODY = 16384
 APP_TOKEN_FILE = ROOT / "app-token"
@@ -49,10 +52,35 @@ def token_pair_present() -> bool:
         return False
 
 
+def _eur(value: Any) -> Decimal | None:
+    text = str(value or "").strip().replace("€", "").replace(" ", "")
+    if not text:
+        return None
+    if "," in text:
+        text = text.replace(".", "").replace(",", ".")
+    try:
+        return Decimal(text)
+    except InvalidOperation:
+        return None
+
+
+def _completed_tiremm_count(db_path: Path = DEFAULT_STATE_DB) -> int:
+    try:
+        with sqlite3.connect(db_path) as db:
+            row = db.execute(
+                "SELECT COUNT(*) FROM qr_flow WHERE phase IN ('COMPLETE','COMPLETE_WIN_UNKNOWN')"
+            ).fetchone()
+        return int(row[0] if row else 0)
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        return 0
+
+
 class ApiApplication:
-    def __init__(self, flow: Any | None = None, authenticator: Any | None = None) -> None:
+    def __init__(self, flow: Any | None = None, authenticator: Any | None = None,
+                 history_client: Any | None = None) -> None:
         self.flow = flow or MdGoodifyFlow()
         self.authenticator = authenticator or MdGoodifyAuthenticator()
+        self.history = history_client or MdGoodifyReadOnlyClient(timeout=20.0)
 
     def health(self) -> dict[str, Any]:
         enrolled = token_pair_present()
@@ -62,6 +90,30 @@ class ApiApplication:
             "recipient": "TIREMM INNANZ APS",
             "enrolled": enrolled,
         }
+
+    def stats(self) -> tuple[int, dict[str, Any]]:
+        try:
+            history = self.history.get_donations()
+            rows = history.get("donations") if isinstance(history, Mapping) else None
+            if not isinstance(rows, list):
+                raise ValueError("history_invalid")
+            amounts = [amount for row in rows if isinstance(row, Mapping)
+                       and (amount := _eur(row.get("Goodify_donatedAmount"))) is not None]
+            unique = {amount for amount in amounts if amount > 0}
+            unit = next(iter(unique)) if len(unique) == 1 else None
+            total = unit * len(rows) if unit is not None else sum(amounts, Decimal("0"))
+            tiremm_count = _completed_tiremm_count()
+            tiremm_total = unit * tiremm_count if unit is not None else None
+            return 200, {
+                "ok": True,
+                "md_donations_count": len(rows),
+                "md_total_eur": format(total, ".2f"),
+                "unit_donation_eur": format(unit, ".2f") if unit is not None else None,
+                "tiremm_completed_count": tiremm_count,
+                "tiremm_total_eur": format(tiremm_total, ".2f") if tiremm_total is not None else None,
+            }
+        except Exception:
+            return 502, {"ok": False, "status": "STATS_UNAVAILABLE"}
 
     def enroll(self, value: Mapping[str, Any]) -> tuple[int, dict[str, Any]]:
         if set(value) != {"email", "password"}:
@@ -133,10 +185,14 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorized():
             self._json(401, {"ok": False, "status": "UNAUTHORIZED"})
             return
-        if self.path != "/health":
-            self._json(404, {"ok": False, "status": "NOT_FOUND"})
+        if self.path == "/health":
+            self._json(200, self.app.health())
             return
-        self._json(200, self.app.health())
+        if self.path == "/v1/stats":
+            code, result = self.app.stats()
+            self._json(code, result)
+            return
+        self._json(404, {"ok": False, "status": "NOT_FOUND"})
 
     def do_POST(self) -> None:  # noqa: N802
         if not self._authorized():

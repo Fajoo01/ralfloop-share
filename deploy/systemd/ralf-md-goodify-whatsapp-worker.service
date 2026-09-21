@@ -1,0 +1,26 @@
+[Unit]
+Description=Tiremm MD Goodify WhatsApp QR worker
+After=network-online.target ralf-md-goodify-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sibilla-cumana
+Group=ralf-mcp
+WorkingDirectory=/home/sibilla-cumana/ralf-md-goodify-mcp/current
+Environment=PYTHONPATH=/home/sibilla-cumana/ralf-md-goodify-mcp/current
+Environment=RALFLOOP_MD_GOODIFY_WHATSAPP_POLL_SEC=5
+Environment=RALFLOOP_MD_GOODIFY_WHATSAPP_BACKFILL_SEC=86400
+EnvironmentFile=-/etc/ralfloop/md-goodify-whatsapp.env
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralf-md-goodify-mcp/current/scripts/ralf_md_goodify_whatsapp_worker.py
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/ralfloop/md-goodify
+ReadOnlyPaths=/var/lib/ralf-whatsapp-baileys
+
+[Install]
+WantedBy=multi-user.target

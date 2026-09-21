@@ -84,3 +84,28 @@ def test_authorized_header_requires_exact_bearer_token():
     assert authorized_header(token, token) is False
     assert authorized_header("Bearer wrong", token) is False
     assert authorized_header("", token) is False
+
+
+class FakeHistory:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def get_donations(self):
+        return {"donations": list(self.rows)}
+
+
+def test_stats_sums_md_history_and_derives_unit(monkeypatch):
+    rows = [
+        {"Goodify_donatedAmount": "1,00"},
+        {"Goodify_donatedAmount": "1,00"},
+        {"Goodify_donatedAmount": ""},
+    ]
+    monkeypatch.setattr("scripts.ralf_md_goodify_api_server._completed_tiremm_count", lambda: 2)
+    app = ApiApplication(FakeFlow({}), FakeAuthenticator(), FakeHistory(rows))
+    code, result = app.stats()
+    assert code == 200
+    assert result["md_donations_count"] == 3
+    assert result["md_total_eur"] == "3.00"
+    assert result["unit_donation_eur"] == "1.00"
+    assert result["tiremm_completed_count"] == 2
+    assert result["tiremm_total_eur"] == "2.00"
