@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 
 from .md_goodify_api import build_purchase_donation_body, parse_goodify_response
 from .md_goodify_auth import MdGoodifyAuthenticator
-from .md_goodify_readonly import load_access_token
+from .md_goodify_readonly import MdGoodifyReadOnlyClient, load_access_token
 
 MD_GOODIFY_HOST = "catalogomdapp.dedagroupwiz.it"
 MD_PURCHASE_PATH = "/api/goodify/purchasedonation"
@@ -38,6 +38,10 @@ ConnectionFactory = Callable[..., http.client.HTTPSConnection]
 
 class MdPurchaseRejected(RuntimeError):
     """A definite MD application-level rejection; safe to report without retrying."""
+
+
+class MdPurchaseAmbiguous(RuntimeError):
+    """Network failure after purchasedonation may have reached MD; never blind-retry."""
 
 
 class GoodifyProtocolError(RuntimeError):
@@ -68,7 +72,7 @@ def qr_fingerprint(qr_code: str) -> tuple[str, str]:
     return qr, hashlib.sha256(qr.encode("utf-8")).hexdigest()
 
 
-def parse_goodify_donation_id(url: str) -> str:
+def _parse_goodify_path_id(url: str, segment: str, *, label: str) -> str:
     parsed = urlparse(str(url or "").strip())
     host = str(parsed.hostname or "").casefold().rstrip(".")
     if parsed.scheme.casefold() != "https" or not host:
@@ -79,17 +83,25 @@ def parse_goodify_donation_id(url: str) -> str:
         raise GoodifyProtocolError("goodify_invalid_donation_authority")
     parts = [part for part in parsed.path.split("/") if part]
     try:
-        index = parts.index("donation")
-        donation_id = parts[index + 1]
+        index = parts.index(segment)
+        value = parts[index + 1]
     except (ValueError, IndexError) as exc:
-        raise GoodifyProtocolError("goodify_donation_id_missing") from exc
-    if not DONATION_ID_RE.fullmatch(donation_id):
-        raise GoodifyProtocolError("goodify_donation_id_invalid")
-    return donation_id
+        raise GoodifyProtocolError(f"goodify_{label}_missing") from exc
+    if not DONATION_ID_RE.fullmatch(value):
+        raise GoodifyProtocolError(f"goodify_{label}_invalid")
+    return value
+
+
+def parse_goodify_donation_id(url: str) -> str:
+    return _parse_goodify_path_id(url, "donation", label="donation_id")
+
+
+def parse_goodify_redirect_id(url: str) -> str:
+    return _parse_goodify_path_id(url, "view", label="redirect_id")
 
 
 class MdPurchaseClient:
-    def __init__(self, *, token_path: Path | None = None, timeout: float = 12.0,
+    def __init__(self, *, token_path: Path | None = None, timeout: float = 30.0,
                  connection_factory: ConnectionFactory = http.client.HTTPSConnection,
                  authenticator: Any | None = None) -> None:
         self.token_path = token_path
@@ -110,11 +122,14 @@ class MdPurchaseClient:
         body = _json_bytes(build_purchase_donation_body(token, qr_code))
         connection = self.connection_factory(MD_GOODIFY_HOST, 443, timeout=self.timeout)
         try:
-            connection.request("POST", MD_PURCHASE_PATH, body=body, headers={
-                "Content-Type": "application/json", "Accept": "application/json"
-            })
-            response = connection.getresponse()
-            value = _read_json_response(response)
+            try:
+                connection.request("POST", MD_PURCHASE_PATH, body=body, headers={
+                    "Content-Type": "application/json", "Accept": "application/json"
+                })
+                response = connection.getresponse()
+                value = _read_json_response(response)
+            except (OSError, http.client.HTTPException, TimeoutError, GoodifyProtocolError) as exc:
+                raise MdPurchaseAmbiguous("md_goodify_purchase_network_uncertain") from exc
         finally:
             connection.close()
         if response.status < 200 or response.status >= 300:
@@ -124,10 +139,17 @@ class MdPurchaseClient:
             raise MdPurchaseRejected("md_goodify_purchase_rejected")
         donation = parsed.first_donation
         if not donation:
-            raise MdPurchaseRejected("md_goodify_purchase_missing_donation")
+            raise MdPurchaseAmbiguous("md_goodify_purchase_missing_donation")
         donation_url = str(donation.get("Goodify_UrldonationId") or "").strip()
-        donation_id = parse_goodify_donation_id(donation_url)
-        return {"donation_id": donation_id, "donation_url": donation_url}
+        try:
+            donation_id = parse_goodify_donation_id(donation_url)
+            return {"donation_id": donation_id, "donation_url": donation_url}
+        except GoodifyProtocolError as donation_error:
+            try:
+                redirect_id = parse_goodify_redirect_id(donation_url)
+            except GoodifyProtocolError:
+                raise MdPurchaseAmbiguous("md_goodify_purchase_unrecognized_url") from donation_error
+            return {"redirect_id": redirect_id, "donation_url": donation_url}
 
 
 class GoodifyGraphQLClient:
@@ -181,6 +203,19 @@ class GoodifyGraphQLClient:
         if not isinstance(row, Mapping) or str(row.get("id") or "") != donation_id:
             raise GoodifyProtocolError("goodify_donation_not_found")
         return dict(row)
+
+    def redeem_redirect(self, redirect_id: str) -> str:
+        data = self._post(
+            "mutation RedeemRedirect($id:ID!){redeemRedirect(id:$id){type id}}",
+            {"id": redirect_id},
+        )
+        row = data.get("redeemRedirect")
+        if not isinstance(row, Mapping) or row.get("type") != "DONATION":
+            raise GoodifyProtocolError("goodify_redirect_not_donation")
+        donation_id = str(row.get("id") or "").strip()
+        if not DONATION_ID_RE.fullmatch(donation_id):
+            raise GoodifyProtocolError("goodify_redirect_donation_id_invalid")
+        return donation_id
 
     def change_recipient(self, donation_id: str, recipient_id: str) -> None:
         data = self._post(
@@ -274,6 +309,31 @@ def _recipient_is_tiremm(donation: Mapping[str, Any], recipient: Mapping[str, An
     return isinstance(current, Mapping) and current.get("id") == recipient.get("id") and current.get("name") == recipient.get("name")
 
 
+def _history_identity(row: Mapping[str, Any]) -> str:
+    numeric_id = str(row.get("Goodify_id") or "").strip()
+    if numeric_id:
+        return "id:" + numeric_id
+    redirect_id = str(row.get("Goodify_donationId") or "").strip()
+    if redirect_id:
+        return "redirect:" + redirect_id
+    url = str(row.get("Goodify_UrldonationId") or "").strip()
+    return "url:" + url if url else ""
+
+
+def _history_purchase_reference(row: Mapping[str, Any]) -> dict[str, str]:
+    donation_url = str(row.get("Goodify_UrldonationId") or "").strip()
+    if not donation_url:
+        raise GoodifyProtocolError("md_history_missing_goodify_url")
+    try:
+        return {"donation_id": parse_goodify_donation_id(donation_url), "donation_url": donation_url}
+    except GoodifyProtocolError as donation_error:
+        try:
+            redirect_id = parse_goodify_redirect_id(donation_url)
+        except GoodifyProtocolError:
+            raise GoodifyProtocolError("md_history_unrecognized_goodify_url") from donation_error
+        return {"redirect_id": redirect_id, "donation_url": donation_url}
+
+
 def _instant_result(value: Any) -> dict[str, Any]:
     if value:
         return {"status": "WIN", "amount": value}
@@ -292,10 +352,17 @@ def _queue_win(donation_id: str, value: Any, outbox: Path) -> str:
 
 class MdGoodifyFlow:
     def __init__(self, *, purchase_client: Any | None = None, graphql_client: Any | None = None,
-                 store: FlowStore | None = None, telegram_outbox: Path = DEFAULT_TELEGRAM_OUTBOX,
-                 stale_after: int = 180) -> None:
+                 history_client: Any | None = None, store: FlowStore | None = None,
+                 telegram_outbox: Path = DEFAULT_TELEGRAM_OUTBOX, stale_after: int = 180) -> None:
+        production_purchase = purchase_client is None
         self.purchase_client = purchase_client or MdPurchaseClient()
         self.graphql = graphql_client or GoodifyGraphQLClient()
+        if history_client is not None:
+            self.history = history_client
+        elif production_purchase:
+            self.history = MdGoodifyReadOnlyClient(timeout=30.0)
+        else:
+            self.history = None
         self.store = store or FlowStore()
         self.telegram_outbox = telegram_outbox
         self.stale_after = stale_after
@@ -316,6 +383,47 @@ class MdGoodifyFlow:
     def _finish(self, fingerprint: str, result: dict[str, Any], phase: str = "COMPLETE") -> dict[str, Any]:
         self.store.update(fingerprint, phase, result=result)
         return result
+
+    def _history_snapshot(self) -> set[str] | None:
+        if self.history is None:
+            return None
+        try:
+            value = self.history.get_donations()
+            rows = value.get("donations") if isinstance(value, Mapping) else None
+            if not isinstance(rows, list):
+                return None
+            return {key for row in rows if isinstance(row, Mapping) and (key := _history_identity(row))}
+        except Exception:
+            return None
+
+    def _recover_purchase_from_history(self, baseline: set[str] | None) -> dict[str, str] | None:
+        if self.history is None or baseline is None:
+            return None
+        try:
+            value = self.history.get_donations()
+            rows = value.get("donations") if isinstance(value, Mapping) else None
+            if not isinstance(rows, list):
+                return None
+            fresh = [row for row in rows if isinstance(row, Mapping)
+                     and (key := _history_identity(row)) and key not in baseline]
+            if len(fresh) != 1:
+                return None
+            return _history_purchase_reference(fresh[0])
+        except Exception:
+            return None
+
+    def _resolve_purchase_reference(self, purchased: Mapping[str, Any]) -> tuple[str, str]:
+        donation_url = str(purchased.get("donation_url") or "").strip()
+        donation_id = str(purchased.get("donation_id") or "").strip()
+        if donation_id:
+            if not DONATION_ID_RE.fullmatch(donation_id):
+                raise GoodifyProtocolError("goodify_donation_id_invalid")
+            return donation_id, donation_url or f"https://me.goodify.com/donation/{donation_id}"
+        redirect_id = str(purchased.get("redirect_id") or "").strip()
+        if not redirect_id:
+            redirect_id = parse_goodify_redirect_id(donation_url)
+        donation_id = self.graphql.redeem_redirect(redirect_id)
+        return donation_id, f"https://me.goodify.com/donation/{donation_id}"
 
     def process_qr(self, qr_code: str) -> dict[str, Any]:
         qr, fingerprint = qr_fingerprint(qr_code)
@@ -359,18 +467,31 @@ class MdGoodifyFlow:
                         "message": "Token MD non rinnovabile; nessun QR è stato inviato a purchasedonation."}
 
         if not donation_id:
+            history_baseline = self._history_snapshot()
             self.store.update(fingerprint, "PURCHASE_SUBMITTING")
             try:
                 purchased = self.purchase_client.purchase(qr)
             except MdPurchaseRejected as exc:
                 result = {"ok": False, "status": "MD_REJECTED", "qr_fingerprint": fingerprint, "message": str(exc)}
                 return self._finish(fingerprint, result, "FAILED_SAFE")
-            except Exception:
+            except MdPurchaseAmbiguous:
+                purchased = self._recover_purchase_from_history(history_baseline)
+                if purchased is None:
+                    result = {"ok": False, "status": "AMBIGUOUS_PURCHASE", "qr_fingerprint": fingerprint,
+                              "message": "MD potrebbe avere acquisito il QR, ma lo storico non consente una riconciliazione univoca."}
+                    return self._finish(fingerprint, result, "AMBIGUOUS")
+            except Exception as exc:
                 result = {"ok": False, "status": "AMBIGUOUS_PURCHASE", "qr_fingerprint": fingerprint,
-                          "message": "Connessione interrotta durante purchasedonation; il QR non verrà reinviato automaticamente."}
+                          "message": "Risposta MD non interpretabile dopo purchasedonation; il QR non verrà reinviato.",
+                          "error_class": type(exc).__name__}
                 return self._finish(fingerprint, result, "AMBIGUOUS")
-            donation_id = str(purchased["donation_id"])
-            donation_url = str(purchased["donation_url"])
+            try:
+                donation_id, donation_url = self._resolve_purchase_reference(purchased)
+            except Exception as exc:
+                result = {"ok": False, "status": "AMBIGUOUS_REDIRECT", "qr_fingerprint": fingerprint,
+                          "message": "MD ha acquisito il QR, ma Goodify non ha restituito in modo sicuro l ID della donazione.",
+                          "error_class": type(exc).__name__}
+                return self._finish(fingerprint, result, "AMBIGUOUS")
             self.store.update(fingerprint, "PURCHASED", donation_id=donation_id, donation_url=donation_url)
             phase = "PURCHASED"
 

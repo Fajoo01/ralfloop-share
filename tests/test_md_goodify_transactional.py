@@ -9,8 +9,10 @@ from ralfloop_agent.unified_assistant.md_goodify_transactional import (
     FlowStore,
     GoodifyProtocolError,
     MdGoodifyFlow,
+    MdPurchaseAmbiguous,
     MdPurchaseRejected,
     parse_goodify_donation_id,
+    parse_goodify_redirect_id,
     qr_fingerprint,
 )
 
@@ -52,6 +54,10 @@ class FakeGraphQL:
         recipient = {"id": RECIPIENT["id"], "name": RECIPIENT["name"]} if self.changed else None
         return {"id": donation_id, "recipient": recipient, "status": "CREATED", "recipientType": "MANUAL",
                 "campaign": {"id": "campaign-1", "instantWinIntegration": self.instant}}
+
+    def redeem_redirect(self, redirect_id: str):
+        assert redirect_id == "redirect_REAL_123"
+        return DONATION_ID
 
     def change_recipient(self, donation_id: str, recipient_id: str):
         self.change_calls += 1
@@ -194,3 +200,77 @@ def test_refresh_failure_releases_qr_without_purchase_side_effect(tmp_path: Path
     assert purchase.calls == 0
     _, fingerprint = qr_fingerprint("QR-REAL-123")
     assert store.get(fingerprint) is None
+
+
+class FakeHistory:
+    def __init__(self, snapshots):
+        self.snapshots = list(snapshots)
+        self.calls = 0
+
+    def get_donations(self):
+        index = min(self.calls, len(self.snapshots) - 1)
+        self.calls += 1
+        return {"donations": list(self.snapshots[index])}
+
+
+def test_parse_goodify_view_redirect_is_strict():
+    url = "https://me.goodify.com/view/redirect_REAL_123"
+    assert parse_goodify_redirect_id(url) == "redirect_REAL_123"
+    with pytest.raises(GoodifyProtocolError, match="host"):
+        parse_goodify_redirect_id("https://evilgoodify.com/view/redirect_REAL_123")
+    with pytest.raises(GoodifyProtocolError, match="redirect_id_missing"):
+        parse_goodify_redirect_id("https://me.goodify.com/donation/redirect_REAL_123")
+
+
+def test_view_redirect_is_redeemed_before_recipient_change(tmp_path: Path):
+    class RedirectPurchase(FakePurchase):
+        def purchase(self, qr_code: str):
+            self.calls += 1
+            assert qr_code == "QR-REAL-123"
+            return {
+                "redirect_id": "redirect_REAL_123",
+                "donation_url": "https://me.goodify.com/view/redirect_REAL_123",
+            }
+
+    purchase = RedirectPurchase()
+    gql = FakeGraphQL(win=None)
+    flow = MdGoodifyFlow(
+        purchase_client=purchase,
+        graphql_client=gql,
+        store=FlowStore(tmp_path / "state.sqlite3"),
+        telegram_outbox=tmp_path / "out.jsonl",
+    )
+    result = flow.process_qr("QR-REAL-123")
+    assert result["ok"] is True
+    assert result["donation_id"] == DONATION_ID
+    assert result["recipient"]["name"] == "TIREMM INNANZ APS"
+    assert purchase.calls == 1
+    assert gql.change_calls == 1
+
+
+def test_uncertain_purchase_reconciles_single_new_md_history_row(tmp_path: Path):
+    purchase = FakePurchase(fail=MdPurchaseAmbiguous("socket reset"))
+    gql = FakeGraphQL(win=None)
+    before = [{
+        "Goodify_id": "100",
+        "Goodify_donationId": "old_redirect_123",
+        "Goodify_UrldonationId": "https://me.goodify.com/view/old_redirect_123",
+    }]
+    after = before + [{
+        "Goodify_id": "101",
+        "Goodify_donationId": "redirect_REAL_123",
+        "Goodify_UrldonationId": "https://me.goodify.com/view/redirect_REAL_123",
+    }]
+    history = FakeHistory([before, after])
+    flow = MdGoodifyFlow(
+        purchase_client=purchase,
+        graphql_client=gql,
+        history_client=history,
+        store=FlowStore(tmp_path / "state.sqlite3"),
+        telegram_outbox=tmp_path / "out.jsonl",
+    )
+    result = flow.process_qr("QR-REAL-123")
+    assert result["status"] == "DONATED_TO_TIREMM"
+    assert result["donation_id"] == DONATION_ID
+    assert purchase.calls == 1
+    assert history.calls == 2

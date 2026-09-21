@@ -41,7 +41,6 @@ import java.util.concurrent.Executors;
 public final class MainActivity extends Activity {
     private static final int CAMERA_REQUEST = 41;
     private static final int NOTIFICATION_REQUEST = 42;
-    private static final int SCAN_REQUEST = 43;
     private static final String CHANNEL_ID = "md_goodify_wins";
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -229,7 +228,7 @@ public final class MainActivity extends Activity {
             requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_REQUEST);
             return;
         }
-        startActivityForResult(new Intent(this, QrScanActivity.class), SCAN_REQUEST);
+        startActivity(new Intent(this, QrScanActivity.class));
     }
 
     @Override
@@ -240,17 +239,6 @@ public final class MainActivity extends Activity {
         }
     }
 
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        if (requestCode == SCAN_REQUEST) {
-            if (resultCode == RESULT_OK && data != null) {
-                String qr = data.getStringExtra(QrScanActivity.EXTRA_QR_TEXT);
-                if (qr != null) processQr(qr);
-            }
-            return;
-        }
-        super.onActivityResult(requestCode, resultCode, data);
-    }
 
     private void handleIncomingIntent(Intent intent) {
         if (intent == null || !Intent.ACTION_SEND.equals(intent.getAction())) {
@@ -305,34 +293,11 @@ public final class MainActivity extends Activity {
     }
 
     private void callBackend(String qr) {
-        HttpURLConnection connection = null;
         try {
-            String base = BuildConfig.API_BASE_URL.replaceAll("/+$", "");
-            URL endpoint = new URL(base + "/v1/process-qr");
-            connection = (HttpURLConnection) endpoint.openConnection();
-            connection.setRequestMethod("POST");
-            connection.setConnectTimeout(8000);
-            connection.setReadTimeout(25000);
-            connection.setDoOutput(true);
-            connection.setRequestProperty("Content-Type", "application/json");
-            connection.setRequestProperty("Accept", "application/json");
-            connection.setRequestProperty("Authorization", "Bearer " + BuildConfig.API_TOKEN);
-            connection.setUseCaches(false);
-
-            byte[] body = new JSONObject().put("qr_code", qr).toString().getBytes(StandardCharsets.UTF_8);
-            connection.setFixedLengthStreamingMode(body.length);
-            try (OutputStream output = connection.getOutputStream()) {
-                output.write(body);
-            }
-
-            int code = connection.getResponseCode();
-            InputStream stream = code >= 400 ? connection.getErrorStream() : connection.getInputStream();
-            JSONObject response = readJson(stream);
-            runOnUiThread(() -> renderResponse(code, response));
+            GoodifyApiClient.ApiResponse result = GoodifyApiClient.processQr(qr);
+            runOnUiThread(() -> renderResponse(result.httpCode, result.body));
         } catch (Exception ignored) {
             runOnUiThread(() -> setBusy(false, "Errore rete: servizio Tiremm non raggiungibile"));
-        } finally {
-            if (connection != null) connection.disconnect();
         }
     }
 
