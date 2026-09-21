@@ -304,3 +304,29 @@ def test_normative_admin_question_enters_grounded_unified_route() -> None:
     assert route["task_mode"] == "tool_backed_read"
     assert route["mcp_connectors"] == ["model_tool.deep_web_research"]
     assert route["requires_confirmation"] is False
+
+
+def test_bottazzi_ui_is_served_by_assistant_v1_router() -> None:
+    client = _client(
+        FakeProvider(),
+        route_probe=_no_route,
+        unified_runner=_unexpected_unified,
+    )
+    response = client.get("/assistant/v1")
+
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert "Bot-tazzi" in response.text
+    assert "Assistente autonomo" in response.text
+    assert "/assistant/v1/chat" in response.text
+    assert "localStorage" in response.text
+    assert "openai.com" not in response.text.casefold()
+
+
+def test_assistant_status_declares_local_branded_surface() -> None:
+    payload = assistant_v1_api.assistant_v1_status()
+
+    assert payload["assistant_name"] == "Bot-tazzi"
+    assert payload["local_only"] is True
+    assert payload["cloud_llm_required"] is False
+    assert payload["ui_path"] == "/assistant/v1"

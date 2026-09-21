@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from functools import lru_cache
 import os
+from pathlib import Path
 import re
 import time
 from typing import Annotated, Any, Callable, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from openshell_backend.chat_api import (
@@ -32,6 +34,7 @@ from ralfloop_agent.unified_assistant.runtime import (
     unified_route_probe,
 )
 router = APIRouter(prefix="/assistant/v1", tags=["assistant-v1"])
+ASSISTANT_UI_PATH = Path(__file__).with_name("bottazzi_ui.html")
 
 DEEP_HINT_RE = re.compile(
     r"\b(?:analizza|approfondisci|architettura|debug|benchmark|confronta|"
@@ -203,6 +206,14 @@ def _unified_route(
         context,
         flags_override=flags,
     ), context
+
+
+@router.get("", response_class=HTMLResponse, include_in_schema=False)
+@router.get("/ui", response_class=HTMLResponse, include_in_schema=False)
+def assistant_v1_ui() -> HTMLResponse:
+    return HTMLResponse(ASSISTANT_UI_PATH.read_text(encoding="utf-8"))
+
+
 @router.post("/chat", response_model=AssistantV1Response)
 def assistant_v1_chat(
     request: AssistantV1Request,
@@ -324,7 +335,10 @@ def assistant_v1_status() -> dict[str, Any]:
     return {
         "ok": True,
         "assistant_version": 1,
+        "assistant_name": "Bot-tazzi",
         "local_only": True,
+        "cloud_llm_required": False,
+        "ui_path": "/assistant/v1",
         "routes": ["unified", "local_chat", "deep_chat"],
         "model_policy": "small_first",
         "fast_model_configured": bool(
