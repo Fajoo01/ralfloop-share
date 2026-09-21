@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
+import tempfile
 from typing import Any, Callable, Mapping, Sequence
 
 from ralfloop_agent.domains.domain_approval import (
@@ -14,7 +16,7 @@ from ralfloop_agent.domains.domain_approval import (
     scope_digest,
 )
 from ralfloop_agent.domains.domain_approval_store import DomainApprovalStore
-from src.mcp_transport import MCPClientSession, MCPProtocolError, UnixMCPTransport
+from src.mcp_transport import MCPClientSession, MCPError, MCPProtocolError, UnixMCPTransport
 
 from .contracts import PlanAssignment
 from .conversation import PendingAction, approval_matches, payload_matches
@@ -53,8 +55,27 @@ def _canonical_hash(value: Any) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _stable_snapshot_text(text: str) -> str:
+    page_start = text.find("### Page")
+    snapshot_start = text.find("### Snapshot")
+    start = page_start if page_start >= 0 else snapshot_start
+    if start < 0:
+        return text.strip()
+    events_start = text.find("\n### Events", max(start, snapshot_start))
+    end = events_start if events_start >= 0 else len(text)
+    return text[start:end].strip()
+
+
 def _snapshot_hash(text: str) -> str:
-    return hashlib.sha256(text.encode()).hexdigest()
+    return hashlib.sha256(_stable_snapshot_text(text).encode()).hexdigest()
 
 
 def _target_present(snapshot: str, target: str) -> bool:
@@ -121,6 +142,7 @@ class BrowserMCPApprovalProvider:
         socket_path: str | None = None,
         session_factory: Callable[[], Any] | None = None,
         upload_roots: Sequence[str | Path] | None = None,
+        upload_staging_dir: str | Path | None = None,
         timeout: float = 10.0,
     ) -> None:
         self.socket_path = socket_path or os.getenv(
@@ -132,11 +154,22 @@ class BrowserMCPApprovalProvider:
             Path(item).expanduser().resolve()
             for item in (upload_roots if upload_roots is not None else self._upload_roots_from_env())
         )
+        self.upload_staging_dir = Path(
+            upload_staging_dir if upload_staging_dir is not None else self._upload_staging_dir_from_env()
+        ).expanduser().resolve()
 
     @staticmethod
     def _upload_roots_from_env() -> tuple[str, ...]:
         raw = os.getenv("RALFLOOP_BROWSER_UPLOAD_ROOTS", "")
         return tuple(item.strip() for item in raw.split(os.pathsep) if item.strip())
+
+    @staticmethod
+    def _upload_staging_dir_from_env() -> str:
+        configured = os.getenv("RALFLOOP_BROWSER_UPLOAD_STAGING_DIR", "").strip()
+        if configured:
+            return configured
+        output_root = os.getenv("RALF_PLAYWRIGHT_MCP_OUTPUT_DIR", "/tmp/ralf-playwright-mcp")
+        return str(Path(output_root) / "approved-uploads")
 
     def _session(self):
         if self._session_factory is not None:
@@ -192,6 +225,37 @@ class BrowserMCPApprovalProvider:
             raise ValueError("browser_upload_paths_required")
         return paths
 
+    @staticmethod
+    def _upload_file_metadata(paths: Sequence[str]) -> list[dict[str, Any]]:
+        return [
+            {
+                "path": path,
+                "size": Path(path).stat().st_size,
+                "sha256": _file_sha256(Path(path)),
+            }
+            for path in paths
+        ]
+
+    def _stage_upload_paths(self, paths: Sequence[str]) -> tuple[list[str], Path]:
+        self.upload_staging_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.upload_staging_dir, 0o700)
+        stage_dir = Path(tempfile.mkdtemp(prefix="approved-", dir=self.upload_staging_dir))
+        os.chmod(stage_dir, 0o700)
+        staged: list[str] = []
+        try:
+            for index, value in enumerate(paths):
+                source = Path(value)
+                slot = stage_dir / str(index)
+                slot.mkdir(mode=0o700)
+                destination = slot / source.name
+                shutil.copyfile(source, destination)
+                os.chmod(destination, 0o600)
+                staged.append(str(destination))
+        except Exception:
+            shutil.rmtree(stage_dir, ignore_errors=True)
+            raise
+        return staged, stage_dir
+
     def normalize_payload(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         action = str(payload.get("logical_action") or payload.get("action") or "").strip().casefold()
         if action not in LOGICAL_ACTIONS:
@@ -213,7 +277,14 @@ class BrowserMCPApprovalProvider:
             values = payload.get("paths")
             if not isinstance(values, (list, tuple)):
                 raise ValueError("browser_upload_paths_required")
-            normalized["paths"] = self._validated_upload_paths(values)
+            paths = self._validated_upload_paths(values)
+            upload_files = self._upload_file_metadata(paths)
+            expected = payload.get("upload_files")
+            if expected is not None:
+                if not isinstance(expected, (list, tuple)) or list(expected) != upload_files:
+                    raise ValueError("browser_upload_file_changed")
+            normalized["paths"] = paths
+            normalized["upload_files"] = upload_files
         return normalized
 
     def apply(self, scope: Mapping[str, Any]) -> dict[str, Any]:
@@ -245,16 +316,20 @@ class BrowserMCPApprovalProvider:
                 result = self._checked_call(client, "browser_type", arguments)
                 calls.append({"tool": "browser_type", "arguments": arguments, "result": _text_result(result)})
             else:
-                click_args = {"target": target, **({"element": element} if element else {})}
-                click_result = self._checked_call(client, "browser_click", click_args)
-                calls.append({"tool": "browser_click", "arguments": click_args, "result": _text_result(click_result)})
-                upload_args = {"paths": list(payload["paths"])}
-                upload_result = self._checked_call(client, "browser_file_upload", upload_args)
-                calls.append({
-                    "tool": "browser_file_upload",
-                    "arguments": upload_args,
-                    "result": _text_result(upload_result),
-                })
+                staged_paths, stage_dir = self._stage_upload_paths(payload["paths"])
+                try:
+                    click_args = {"target": target, **({"element": element} if element else {})}
+                    click_result = self._checked_call(client, "browser_click", click_args)
+                    calls.append({"tool": "browser_click", "arguments": click_args, "result": _text_result(click_result)})
+                    upload_args = {"paths": staged_paths}
+                    upload_result = self._checked_call(client, "browser_file_upload", upload_args)
+                    calls.append({
+                        "tool": "browser_file_upload",
+                        "arguments": {"paths": list(payload["paths"]), "staged": True},
+                        "result": _text_result(upload_result),
+                    })
+                finally:
+                    shutil.rmtree(stage_dir, ignore_errors=True)
         return {
             "ok": True,
             "logical_action": action,
@@ -281,11 +356,14 @@ def prepare_browser_interaction_payload(
     if normalized["logical_action"] == "type":
         summary.append(f"testo={normalized['text']}")
     if normalized["logical_action"] == "upload":
-        summary.extend(f"file={path}" for path in normalized["paths"])
+        for item in normalized["upload_files"]:
+            summary.append(
+                f"file={item['path']} sha256={item['sha256'][:12]} size={item['size']}"
+            )
     return {
         **normalized,
         "pre_snapshot_sha256": str(before["sha256"]),
-        "pre_snapshot_excerpt": str(before["text"])[:4000],
+        "pre_snapshot_excerpt": _stable_snapshot_text(str(before["text"]))[:4000],
         "approval_summary": summary,
     }
 
@@ -317,6 +395,7 @@ def build_browser_interaction_scope(pending: PendingAction) -> dict[str, Any]:
         scope["text"] = str(payload.get("text") or "")
     if logical_action == "upload":
         scope["paths"] = [str(item) for item in payload.get("paths") or ()]
+        scope["upload_files"] = [dict(item) for item in payload.get("upload_files") or ()]
     scope["artifact_sha256"] = _canonical_hash(scope)
     return scope
 
@@ -488,6 +567,8 @@ class UnifiedBrowserApprovalExecutor:
                 "retry_allowed": False,
                 "reason": type(exc).__name__,
             }
+            if isinstance(exc, MCPError):
+                result["error_detail"] = str(exc)[:500]
             self.store.finish_claimed_execution(
                 request_id,
                 action=BROWSER_INTERACT_ACTION,

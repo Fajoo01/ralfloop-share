@@ -32,7 +32,12 @@ from .home import HomeEntityRegistry, HomeWorkflow
 from .home_provider import HomeAssistantProviderError, HomeAssistantRESTBackend
 from .memory import MemoryRouter, tiremm_profile_items
 from .atm_mcp_adapter import ATMMCPReadOnly
-from .browser_mcp_adapter import browser_inspect_adapter
+from .browser_mcp_adapter import (
+    BrowserMCPApprovalProvider,
+    UnifiedBrowserApprovalCoordinator,
+    UnifiedBrowserApprovalExecutor,
+    browser_inspect_adapter,
+)
 from .editorial_mcp_adapter import EditorialMCPContext
 from .bandi_mcp_adapter import BandiMCPContext
 from .meteo_mcp_adapter import MeteoMCPReadOnly
@@ -325,12 +330,18 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
     mailchimp_approval_executor = None
     jellyfin_approval_coordinator = None
     jellyfin_approval_executor = None
+    browser_approval_coordinator = None
+    browser_approval_executor = None
+    browser_interaction_provider = (
+        BrowserMCPApprovalProvider() if flags.browser_interact_live else None
+    )
     jellyfin_identity_provider = (
         JellyfinIdentityMCPProvider() if flags.jellyfin_identity_write_live else None
     )
     if (
         flags.email_assistant_live or flags.whatsapp_assistant_live
         or flags.mailchimp_campaign_live or flags.jellyfin_identity_write_live
+        or flags.browser_interact_live
     ):
         policy = DomainApprovalPolicy.from_env()
         if policy.enabled:
@@ -365,23 +376,32 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
                 jellyfin_approval_executor = UnifiedJellyfinApprovalExecutor(
                     approval_store, jellyfin_identity_provider, write_enabled=True,
                 )
+            if flags.browser_interact_live and browser_interaction_provider is not None:
+                browser_approval_coordinator = UnifiedBrowserApprovalCoordinator(
+                    approval_store, policy=policy,
+                )
+                browser_approval_executor = UnifiedBrowserApprovalExecutor(
+                    approval_store, browser_interaction_provider, write_enabled=True,
+                )
     previous_email = conversation.state.pending.email
     previous_whatsapp = conversation.state.pending.whatsapp
     previous_mailchimp = conversation.state.pending.mailchimp
     previous_jellyfin = conversation.state.pending.jellyfin
+    previous_browser = conversation.state.pending.browser
     approval_transition: dict[str, Any] = {}
-    if any((approval_coordinator, whatsapp_approval_coordinator, mailchimp_approval_coordinator, jellyfin_approval_coordinator)) and _is_positive_confirmation(text):
+    if any((approval_coordinator, whatsapp_approval_coordinator, mailchimp_approval_coordinator, jellyfin_approval_coordinator, browser_approval_coordinator)) and _is_positive_confirmation(text):
         active = [
             item for name in PENDING_DOMAINS
             if (item := getattr(conversation.state.pending, name)) is not None
         ]
-        if len(active) == 1 and active[0].domain in {"email", "whatsapp", "mailchimp", "jellyfin"}:
+        if len(active) == 1 and active[0].domain in {"email", "whatsapp", "mailchimp", "jellyfin", "browser"}:
             pending = active[0]
             coordinator = ({
                 "email": approval_coordinator,
                 "whatsapp": whatsapp_approval_coordinator,
                 "mailchimp": mailchimp_approval_coordinator,
                 "jellyfin": jellyfin_approval_coordinator,
+                "browser": browser_approval_coordinator,
             })[pending.domain]
             if coordinator is not None:
                 approval_transition = coordinator.approve(
@@ -430,6 +450,8 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
         mailchimp_approval_executor=mailchimp_approval_executor,
         jellyfin_identity_provider=jellyfin_identity_provider,
         jellyfin_approval_executor=jellyfin_approval_executor,
+        browser_interaction_provider=browser_interaction_provider,
+        browser_approval_executor=browser_approval_executor,
         home_workflow=home_workflow,
         memory_router=memory,
     )
@@ -695,6 +717,7 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
     current_whatsapp = conversation.state.pending.whatsapp
     current_mailchimp = conversation.state.pending.mailchimp
     current_jellyfin = conversation.state.pending.jellyfin
+    current_browser = conversation.state.pending.browser
     if (
         approval_coordinator is not None
         and result.status == "draft_pending_approval"
@@ -806,6 +829,35 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
         and previous_jellyfin is not None
     ):
         approval_transition = jellyfin_approval_coordinator.cancel(previous_jellyfin)
+    if (
+        browser_approval_coordinator is not None
+        and result.status == "draft_pending_approval"
+        and current_browser is not None
+        and not current_browser.approval_ref
+    ):
+        if previous_browser and previous_browser.approval_ref:
+            browser_approval_coordinator.cancel(previous_browser)
+        approval_transition = browser_approval_coordinator.request(
+            current_browser, requested_by=f"unified:{session_id}"
+        )
+        if approval_transition.get("status") == "pending":
+            current_browser = conversation.attach_approval_request(
+                domain="browser", pending_id=current_browser.pending_id,
+                payload_digest=current_browser.payload_digest,
+                approval_ref=str(approval_transition["request_id"]),
+                created_at=int(approval_transition["created_at"]),
+                expires_at=int(approval_transition["expires_at"]),
+            )
+            result.data.update({
+                "approval_request_id": current_browser.approval_ref,
+                "approval_expires_at": current_browser.expires_at,
+            })
+    elif (
+        browser_approval_coordinator is not None
+        and result.status == "cancelled"
+        and previous_browser is not None
+    ):
+        approval_transition = browser_approval_coordinator.cancel(previous_browser)
     if approval_transition:
         result.data["approval_transition"] = dict(approval_transition)
     session_adapter.save(session_id, conversation)

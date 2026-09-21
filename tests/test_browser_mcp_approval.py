@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
+
+import pytest
 
 from ralfloop_agent.domains.domain_approval import DomainApprovalPolicy
 from ralfloop_agent.domains.domain_approval_store import DomainApprovalStore
@@ -10,9 +13,13 @@ from ralfloop_agent.unified_assistant.browser_mcp_adapter import (
     UnifiedBrowserApprovalCoordinator,
     UnifiedBrowserApprovalExecutor,
     build_browser_interaction_scope,
+    prepare_browser_interaction_payload,
 )
-from ralfloop_agent.unified_assistant.contracts import PolicyClass
+from ralfloop_agent.unified_assistant.contracts import AssistantFeatureFlags, PolicyClass
 from ralfloop_agent.unified_assistant.conversation import ConversationManager
+from ralfloop_agent.unified_assistant.core import UnifiedAssistantCore
+from ralfloop_agent.unified_assistant.planner import UnifiedPlanner
+from ralfloop_agent.unified_assistant.registry import UnifiedRegistryFacade
 from src.mcp_transport import MCPTool
 
 
@@ -103,9 +110,11 @@ def test_upload_requires_allowed_absolute_file_and_exact_sequence(tmp_path):
     upload = tmp_path / "documento.pdf"
     upload.write_bytes(b"pdf")
     calls = []
+    stage = tmp_path / "stage"
     provider = BrowserMCPApprovalProvider(
         session_factory=lambda: FakeSession(calls),
         upload_roots=(tmp_path,),
+        upload_staging_dir=stage,
     )
     result = provider.apply(
         {
@@ -116,10 +125,36 @@ def test_upload_requires_allowed_absolute_file_and_exact_sequence(tmp_path):
         }
     )
     assert result["writes"] == 2
-    assert calls == [
-        ("browser_click", {"target": "e7", "element": "Carica documento"}),
-        ("browser_file_upload", {"paths": [str(upload.resolve())]}),
-    ]
+    assert calls[0] == (
+        "browser_click", {"target": "e7", "element": "Carica documento"}
+    )
+    assert calls[1][0] == "browser_file_upload"
+    staged_path = Path(calls[1][1]["paths"][0])
+    assert staged_path.name == upload.name
+    assert stage in staged_path.parents
+    assert not staged_path.exists()
+    assert list(stage.iterdir()) == []
+    assert result["calls"][1]["arguments"] == {
+        "paths": [str(upload.resolve())], "staged": True,
+    }
+
+
+def test_upload_payload_binds_file_content_hash(tmp_path):
+    upload = tmp_path / "documento.pdf"
+    upload.write_bytes(b"pdf")
+    provider = BrowserMCPApprovalProvider(
+        session_factory=lambda: FakeSession([]),
+        upload_roots=(tmp_path,),
+        upload_staging_dir=tmp_path / "stage",
+    )
+    payload = prepare_browser_interaction_payload(
+        provider,
+        {"logical_action": "upload", "target": "e7", "paths": [str(upload)]},
+    )
+    assert payload["upload_files"][0]["sha256"] == hashlib.sha256(b"pdf").hexdigest()
+    upload.write_bytes(b"changed")
+    with pytest.raises(ValueError, match="browser_upload_file_changed"):
+        provider.apply(payload)
 
 
 class FakeApprovalProvider:
@@ -236,3 +271,59 @@ def test_browser_scope_contains_no_arbitrary_tool_name(tmp_path):
     assert scope["target"] == "e7"
     assert "tool" not in scope
     assert "browser_run_code_unsafe" not in repr(scope)
+
+
+def test_planner_extracts_exact_browser_interaction_arguments():
+    planner = UnifiedPlanner(UnifiedRegistryFacade())
+    click = planner.plan("browser clicca e7")
+    assert click.assignments[0].arguments == {"target": "e7", "logical_action": "click"}
+
+    typed = planner.plan('browser scrivi su e8 testo="Fabio"')
+    assert typed.assignments[0].arguments == {
+        "target": "e8", "logical_action": "type", "text": "Fabio",
+    }
+
+    upload = planner.plan('browser carica e7 file="/tmp/documento.pdf"')
+    assert upload.assignments[0].arguments == {
+        "target": "e7", "logical_action": "upload", "paths": ["/tmp/documento.pdf"],
+    }
+
+
+class FakeBrowserExecutor:
+    def __init__(self):
+        self.calls = []
+
+    def execute(self, pending):
+        self.calls.append(pending)
+        return {"status": "EXECUTED_VERIFIED", "executed": True, "writes": 1}
+
+
+def test_core_stages_then_executes_browser_only_after_bound_approval():
+    calls = []
+    provider = BrowserMCPApprovalProvider(session_factory=lambda: FakeSession(calls))
+    executor = FakeBrowserExecutor()
+    manager = ConversationManager()
+    core = UnifiedAssistantCore(
+        planner=UnifiedPlanner(UnifiedRegistryFacade()),
+        conversation=manager,
+        flags=AssistantFeatureFlags(unified_assistant=True, browser_interact_live=True),
+        browser_interaction_provider=provider,
+        browser_approval_executor=executor,
+    )
+
+    staged = core.handle("browser clicca e7")
+    assert staged.status == "draft_pending_approval"
+    pending = manager.state.pending.browser
+    assert pending is not None
+    assert pending.payload["target"] == "e7"
+    assert executor.calls == []
+    assert core.handle("ok").status == "approval_required"
+
+    manager.bind_approval(
+        domain="browser", pending_id=pending.pending_id,
+        payload_digest=pending.payload_digest, approval_ref="apr_browser",
+    )
+    executed = core.handle("ok")
+    assert executed.status == "EXECUTED_VERIFIED"
+    assert len(executor.calls) == 1
+    assert manager.state.pending.browser is None

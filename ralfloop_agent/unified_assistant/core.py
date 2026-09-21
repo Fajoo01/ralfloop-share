@@ -8,6 +8,11 @@ from typing import Any, Callable, Mapping, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .browser_mcp_adapter import (
+    BROWSER_INTERACT_ACTION,
+    BrowserMCPApprovalProvider,
+    prepare_browser_interaction_payload,
+)
 from .contracts import AssistantFeatureFlags, PolicyClass
 from .conversation import (
     ConversationManager,
@@ -109,6 +114,8 @@ class UnifiedAssistantCore:
         mailchimp_approval_executor: ApprovalBoundExecutor | None = None,
         jellyfin_identity_provider: Any | None = None,
         jellyfin_approval_executor: ApprovalBoundExecutor | None = None,
+        browser_interaction_provider: BrowserMCPApprovalProvider | None = None,
+        browser_approval_executor: ApprovalBoundExecutor | None = None,
         home_workflow: HomeWorkflow | None = None,
         dag_executor: UnifiedDAGExecutor | None = None,
         dag_input_provider: Callable[[str], Mapping[str, Any]] | None = None,
@@ -133,6 +140,8 @@ class UnifiedAssistantCore:
         self.mailchimp_approval_executor = mailchimp_approval_executor
         self.jellyfin_identity_provider = jellyfin_identity_provider
         self.jellyfin_approval_executor = jellyfin_approval_executor
+        self.browser_interaction_provider = browser_interaction_provider
+        self.browser_approval_executor = browser_approval_executor
         self.home_workflow = home_workflow
         self.dag_executor = dag_executor
         self.dag_input_provider = dag_input_provider
@@ -218,6 +227,8 @@ class UnifiedAssistantCore:
                 assignment,
                 plan.model_dump(mode="json"),
             )
+        if assignment.skill == "browser.interact":
+            return self._prepare_browser_interaction(assignment, plan.model_dump(mode="json"))
         if assignment.skill == "jellyfin.apply_identity":
             return self._prepare_jellyfin_identity(assignment, plan.model_dump(mode="json"))
         if assignment.skill in {"mailchimp.campaign.create", "mailchimp.campaign.send"}:
@@ -270,6 +281,47 @@ class UnifiedAssistantCore:
             "planned" if not plan.requires_clarification else "clarification_required",
             "Piano validato." if not plan.requires_clarification else "Serve specificare obiettivo o dominio.",
             plan=plan.model_dump(mode="json"),
+        )
+
+    def _prepare_browser_interaction(self, assignment, plan: dict[str, Any]) -> UnifiedAssistantResult:
+        if not self.flags.browser_interact_live:
+            return self._result(
+                "unavailable",
+                "Azione browser non eseguita: workflow approval-bound non abilitato.",
+                plan=plan, writes=0, tools_executed=False,
+                selected_skill="browser.interact", required_policy="CONFIRM_WRITE",
+            )
+        if self.browser_interaction_provider is None:
+            return self._result(
+                "unavailable", "Provider browser approval-bound non disponibile.",
+                plan=plan, writes=0, tools_executed=False,
+                selected_skill="browser.interact",
+            )
+        try:
+            payload = prepare_browser_interaction_payload(
+                self.browser_interaction_provider, assignment.arguments,
+            )
+        except ValueError as exc:
+            return self._result(
+                "clarification_required", str(exc), plan=plan, writes=0,
+                tools_executed=False, selected_skill="browser.interact",
+            )
+        except Exception:
+            return self._result(
+                "unavailable", "Snapshot browser non disponibile; nessuna approval creata.",
+                plan=plan, writes=0, tools_executed=False,
+                selected_skill="browser.interact",
+            )
+        display = "Browser: " + "; ".join(str(x) for x in payload["approval_summary"]) + ". Confermi?"
+        pending = self.conversation.stage(
+            domain="browser", action=BROWSER_INTERACT_ACTION,
+            policy=PolicyClass.CONFIRM_WRITE, payload=payload, displayed_text=display,
+        )
+        return self._result(
+            "draft_pending_approval", display, plan=plan,
+            pending_id=pending.pending_id, pending_domain="browser",
+            draft_version=pending.version, draft_digest=pending.payload_digest,
+            selected_skill="browser.interact", tools_executed=True, writes=0,
         )
 
     def _prepare_jellyfin_identity(self, assignment, plan: dict[str, Any]) -> UnifiedAssistantResult:
@@ -1341,6 +1393,30 @@ class UnifiedAssistantCore:
                 status,
                 "Identità Jellyfin applicata e verificata." if status == "EXECUTED_VERIFIED"
                 else "Identità Jellyfin non applicata o non verificata.",
+                result=result,
+            )
+        if pending.domain == "browser":
+            if not self.flags.browser_interact_live:
+                return self._result("disabled", "Browser interaction workflow disabled.", writes=0)
+            if not approval_matches(pending) or self.browser_approval_executor is None:
+                return self._result(
+                    "approval_required", "Approvazione browser esplicita e hash-bound richiesta.", writes=0,
+                )
+            result = self.browser_approval_executor.execute(pending)
+            status = str(result.get("status") or "failed")
+            self._audit(
+                domain="browser", intent=pending.action, skill="browser.interact",
+                policy=pending.policy, target=str(pending.payload.get("target") or ""),
+                verification=status, pending=pending,
+                tool="browser.playwright.approval_bound", tool_result=status,
+            )
+            if status in {"EXECUTED_VERIFIED", "already_executed", "DRAFT_CHANGED",
+                          "EXECUTION_UNCERTAIN", "APPROVAL_INVALID"}:
+                self.conversation.clear("browser")
+            return self._result(
+                status,
+                "Azione browser eseguita e verificata con snapshot." if status == "EXECUTED_VERIFIED"
+                else "Azione browser non eseguita o non verificata.",
                 result=result,
             )
         if pending.domain == "home":
