@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import uuid4
 
-from ralfloop_agent.integration.abc_relation_read import ABCRelationReadAdapter
+from ralfloop_agent.integration.abc_relation_read import ABCRelationReadAdapter, render_abc_relation_answer
 from ralfloop_agent.integration.capability_adapter import route_task
 from ralfloop_agent.models.result_envelope import ResultEnvelope
 from ralfloop_agent.integration.verification_judge import run_verification_judge, verification_blocks
@@ -15,7 +15,7 @@ from src.models import Evidence, PatchEvidence
 from src.text_mas_proxy import build_text_mas_trace
 
 
-def _abc_read_evidence(user_goal: str) -> tuple[Evidence, dict]:
+def _abc_read_evidence(user_goal: str) -> tuple[Evidence, dict, str]:
     resolution = ABCRelationReadAdapter().resolve(user_goal)
     evidence = Evidence(
         command="mcp:abc_relation:read_only",
@@ -29,7 +29,7 @@ def _abc_read_evidence(user_goal: str) -> tuple[Evidence, dict]:
         "read_mcp_available": resolution.available,
         "fallback_skills": list(resolution.fallback_skills),
     }
-    return evidence, meta
+    return evidence, meta, render_abc_relation_answer(user_goal, resolution)
 
 
 def run_capability_reasoning_cycle(user_goal: str, context: dict | None = None) -> ResultEnvelope:
@@ -46,9 +46,8 @@ def run_capability_reasoning_cycle(user_goal: str, context: dict | None = None) 
 
     if route.mode == "check_only":
         if "abc_relation" in route.mcp_used:
-            evidence, read_meta = _abc_read_evidence(user_goal)
+            evidence, read_meta, answer = _abc_read_evidence(user_goal)
             meta.update(read_meta)
-            answer = "read_mcp evidence collected" if evidence.exit_code == 0 else "read_mcp unavailable"
         else:
             evidence = executor.run_in_sandbox(["ls", "-la"], cwd=".")
             answer = "check_only evidence collected"

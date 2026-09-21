@@ -1971,7 +1971,7 @@ def run_task(req: TaskRunRequest):
             "approval_required": False,
             "capability_route": route_to_legacy_dict(envelope.route),
             "result_envelope": envelope.model_dump(mode="json"),
-            "final_answer": evidence.stdout if evidence is not None else envelope.answer,
+            "final_answer": envelope.answer,
             "artifacts": [],
             "audit_summary": [
                 f"abc_relation::read_only::{evidence.exit_code if evidence is not None else 'missing_evidence'}"

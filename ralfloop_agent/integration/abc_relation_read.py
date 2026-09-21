@@ -62,6 +62,66 @@ class ABCReadResolution:
         return encoded[: max_chars - 32] + "…[context truncated]"
 
 
+def render_abc_relation_answer(user_goal: str, resolution: ABCReadResolution) -> str:
+    """Render a concise human-facing answer without turning scores into probabilities."""
+    if not resolution.available:
+        return "ABC Relation MCP non disponibile; il percorso canonico read-only non ha prodotto evidenza."
+
+    context = resolution.context
+    analysis = context.get("analysis") if isinstance(context, Mapping) else None
+    if not isinstance(analysis, Mapping):
+        analysis = {}
+    relcalc = analysis.get("relcalc")
+    if not isinstance(relcalc, Mapping):
+        relcalc = analysis
+
+    score = relcalc.get("score")
+    confidence = relcalc.get("confidence")
+    evidence_count = relcalc.get("evidence_count", analysis.get("active_event_count"))
+    action = relcalc.get("next_safe_action")
+
+    lines: list[str] = []
+    if score is not None:
+        line = f"Curva canonica ABC: {score}/100"
+        if evidence_count is not None:
+            line += f" su {evidence_count} eventi"
+        if confidence is not None:
+            line += f"; confidence interna {confidence}"
+        lines.append(line + ".")
+        lines.append(
+            "Lo score è un indicatore tecnico rispetto al neutro 50: non è una percentuale di successo "
+            "e la confidence misura la qualità/coerenza dell'evidenza registrata, non la certezza sulle intenzioni di Arianna."
+        )
+
+    action_labels = {
+        "light_non_pressing_presence": "presenza leggera e non pressante",
+        "do_nothing_active": "non forzare e lasciare maturare i dati",
+        "collect_observable_evidence": "raccogliere solo evidenze osservabili, evitando letture mentali o segnali intrusivi",
+    }
+    if action in action_labels:
+        lines.append(f"Indicazione operativa del calcolatore: {action_labels[action]}.")
+
+    timeline = context.get("timeline") if isinstance(context, Mapping) else None
+    if isinstance(timeline, list) and timeline:
+        lines.append("Ultimi eventi canonici:")
+        for event in timeline[-5:]:
+            if not isinstance(event, Mapping):
+                continue
+            when = str(event.get("occurred_at") or "").split("T", 1)[0]
+            summary = str(event.get("summary") or event.get("event") or "").strip()
+            if summary:
+                lines.append(f"- {when}: {summary}" if when else f"- {summary}")
+
+    references = context.get("references") if isinstance(context, Mapping) else None
+    if isinstance(references, list) and references:
+        frameworks = [str(row.get("framework")) for row in references if isinstance(row, Mapping) and row.get("framework")]
+        if frameworks:
+            lines.append("Riferimenti caricati: " + ", ".join(frameworks) + ".")
+            lines.append("Sono euristiche per interpretazione e comunicazione, non prove di stati mentali o intenzioni nascoste.")
+
+    return "\n".join(lines) if lines else "ABC Relation MCP: evidenza read-only raccolta."
+
+
 class ABCRelationReadAdapter:
     """Resolve ABC context through a strictly read-only MCP surface."""
 
@@ -115,4 +175,5 @@ __all__ = [
     "LEGACY_FALLBACK_SKILLS",
     "READ_ONLY_TOOLS",
     "WRITE_TOOLS",
+    "render_abc_relation_answer",
 ]

@@ -51,7 +51,9 @@ def test_reasoning_cycle_uses_canonical_abc_read_adapter(monkeypatch, tmp_path):
         {"task_id": "abc-runtime-test"},
     )
 
-    assert envelope.answer == "read_mcp evidence collected"
+    assert "Curva canonica ABC: 61/100" in envelope.answer
+    assert "non è una percentuale di successo" in envelope.answer
+    assert "Riferimenti caricati: dialogo_strategico" in envelope.answer
     assert envelope.evidence is not None
     assert envelope.evidence.command == "mcp:abc_relation:read_only"
     assert envelope.evidence.exit_code == 0
@@ -72,7 +74,7 @@ def test_reasoning_cycle_does_not_fake_shell_evidence_when_abc_is_unavailable(mo
         {"task_id": "abc-runtime-down"},
     )
 
-    assert envelope.answer == "read_mcp unavailable"
+    assert "ABC Relation MCP non disponibile" in envelope.answer
     assert envelope.evidence is not None
     assert envelope.evidence.command == "mcp:abc_relation:read_only"
     assert envelope.evidence.exit_code == 1
@@ -103,7 +105,8 @@ def test_openshell_tasks_run_shortcuts_abc_before_legacy_agent(monkeypatch, tmp_
     assert "abc_relation" in payload["capability_route"]["mcp_connectors"]
     assert payload["result_envelope"]["evidence"]["command"] == "mcp:abc_relation:read_only"
     assert payload["result_envelope"]["evidence"]["exit_code"] == 0
-    assert json.loads(payload["final_answer"])["source"] == "abc_relation_mcp_read_only"
+    assert "Curva canonica ABC: 61/100" in payload["final_answer"]
+    assert "non è una percentuale di successo" in payload["final_answer"]
     assert "sandbox_read_file" not in response.text
     assert "ls -la" not in response.text
 
