@@ -182,6 +182,55 @@ class OllamaCpuTeacherFallback:
         return guarded or grammar
 
     @staticmethod
+    def _compact_context(user_prompt: str) -> dict[str, Any]:
+        try:
+            payload = json.loads(user_prompt)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("teacher_cpu_fallback_invalid_context") from exc
+        if not isinstance(payload, dict):
+            raise RuntimeError("teacher_cpu_fallback_invalid_context")
+
+        student = payload.get("student") if isinstance(payload.get("student"), dict) else {}
+        pedagogy = payload.get("pedagogy") if isinstance(payload.get("pedagogy"), dict) else {}
+        compact: dict[str, Any] = {
+            "action": payload.get("action"),
+            "student": {
+                "school_level": student.get("school_level"),
+                "class_year": student.get("class_year"),
+            },
+            "session": payload.get("session"),
+            "pedagogy": {
+                key: pedagogy.get(key)
+                for key in (
+                    "mode", "strategy", "model_path", "access",
+                    "target_sentences", "max_response_chars", "micro_check",
+                    "require_grounding", "allow_final_solution",
+                )
+                if key in pedagogy
+            },
+            "interaction": payload.get("interaction"),
+            "request": payload.get("request"),
+            "deterministic_evidence": payload.get("deterministic_evidence"),
+            "grammar_evidence": payload.get("grammar_evidence"),
+        }
+        history = payload.get("history")
+        if isinstance(history, list) and history:
+            compact["history"] = history[-2:]
+        return {key: value for key, value in compact.items() if value not in (None, {}, [])}
+
+    @staticmethod
+    def _fallback_system_prompt() -> str:
+        return (
+            "Sei Bot-tazzi Teacher, tutor locale. Usa soltanto il JSON fornito. "
+            "deterministic_evidence e grammar_evidence sono vincolanti: non contraddirli e non inventare fatti mancanti. "
+            "Rispetta pedagogy, soprattutto mode, strategy, access, micro_check, max_response_chars e allow_final_solution. "
+            "Se allow_final_solution è false, non rivelare la soluzione finale. "
+            "Per generate_exercise crea un solo esercizio breve senza soluzione; per check_answer usa correct solo quando la valutazione è supportata. "
+            "Segui eventuali vincoli della request su formato, HTML o Markdown. "
+            "Restituisci esclusivamente JSON conforme allo schema richiesto."
+        )
+
+    @staticmethod
     def _parse_content(text: str) -> dict[str, Any]:
         if len(text) > 131072:
             raise RuntimeError("teacher_cpu_fallback_response_too_large")
@@ -202,25 +251,27 @@ class OllamaCpuTeacherFallback:
     def infer(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
         if not self.allowed(user_prompt):
             raise RuntimeError("teacher_cpu_fallback_not_grounded")
-        strict = (
-            system_prompt.rstrip()
-            + "\n\nFALLBACK CPU: usa deterministic_evidence e grammar_evidence come guardrail fattuali. "
-            + "Non contraddirli. Se l'evidenza non basta, esplicita il limite invece di inventare. "
-            + "Restituisci esclusivamente JSON conforme allo schema richiesto."
-        )
+        compact_context = self._compact_context(user_prompt)
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": strict},
-                {"role": "user", "content": user_prompt},
+                {"role": "system", "content": self._fallback_system_prompt()},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        compact_context,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                },
             ],
             "stream": False,
             "format": TEACHER_RESPONSE_SCHEMA,
             "keep_alive": "30s",
             "options": {
                 "num_gpu": 0,
-                "num_ctx": 4096,
-                "num_predict": 512,
+                "num_ctx": 2048,
+                "num_predict": 220,
                 "temperature": 0,
             },
         }

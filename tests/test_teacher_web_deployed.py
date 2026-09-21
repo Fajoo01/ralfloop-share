@@ -38,7 +38,8 @@ def test_installed_service_mobile_activity_material_audio_and_isolation():
         browser.get(base+'/books')
         wait.until(EC.element_to_be_clickable((By.XPATH,"//button[.='Ascolta']"))).click()
         wait.until(EC.text_to_be_present_in_element((By.ID,'main'),'Riproduci'))
-        assert 'Nessun file audio generato dal server' in browser.find_element(By.ID,'main').text
+        assert 'Peppone' in browser.find_element(By.ID,'main').text
+        assert 'lettura browser' in browser.find_element(By.ID,'main').text
         other=requests.Session()
         other.headers.update({'Origin':base,'X-Teacher-Request':'1'})
         assert other.post(base+'/api/login',json={'membership_card_id':'DEMO-PRIMARY','credential':'StudioDemo!2026'},timeout=10).status_code == 200

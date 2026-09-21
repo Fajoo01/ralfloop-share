@@ -80,8 +80,9 @@ Official references checked 2026-09-11:
 
 Routes: `/login`, `/home`, `/study`, `/activity`, `/quiz`, `/simulations`, `/books`,
 `/progress`, `/badges`, `/audio`, `/profile`. Controlled renderers cover all 13
-requested initial game types plus simulation. Matching/definition/grouping share
-accessible selection controls. Memory combines ungraded card exploration and
+requested initial game types plus simulation. The `fractions` pilot exposes every
+renderer so each presentation path is reachable end-to-end; content and presentation
+remain independent. Matching/definition/grouping share accessible selection controls. Memory combines ungraded card exploration and
 scored associations. Timed challenge is an optional personal pace cue; time does
 not affect mastery. A two-minute countdown is optional and non-punitive.
 
@@ -108,6 +109,8 @@ may be absent and are device-dependent. No XP derives from playback.
 /home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/pytest -q tests/test_teacher_web.py tests/test_teacher_mcp.py tests/test_teacher_capabilities.py tests/test_teacher_shared_inference.py tests/test_teacher_systemd.py tests/test_teacher_tcp_bridge.py
 TEACHER_WEB_LIVE=1 /home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/pytest -q tests/test_teacher_web_live.py
 TEACHER_WEB_BROWSER=1 /home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/pytest -q tests/test_teacher_web_browser.py
+# To test an isolated local demo without touching the installed service:
+# TEACHER_WEB_BASE_URL=http://127.0.0.1:19140 TEACHER_WEB_BROWSER=1 .../pytest -q tests/test_teacher_web_browser.py
 ```
 
 Live and browser tests skip by default; live test creates only demo pedagogical

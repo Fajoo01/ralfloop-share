@@ -21,7 +21,10 @@ def test_web_api_real_mcp_exercise_check_and_update(tmp_path):
             result = super().perform(student, topic, name, arguments)
             if name == "teacher.generate_exercise": self.generated_response = result.get("response")
             return result
-    teacher=ControlledExerciseClient(timeout=90)
+    teacher=ControlledExerciseClient(
+        socket_path=os.environ.get("TEACHER_MCP_SOCKET", "/run/ralf-teacher-mcp/mcp.sock"),
+        timeout=90,
+    )
     with TestClient(create_app(state,teacher,origin="http://testserver")) as client:
         client.headers.update({"origin":"http://testserver","x-teacher-request":"1"})
         assert client.post("/api/login",json={"membership_card_id":"E2E-DEMO","credential":"E2EDemo!Only"}).status_code == 200

@@ -135,13 +135,20 @@
       ],
       "difficulty": 2,
       "suggested_activity_types": [
-        "simulation",
-        "matching",
-        "guided_exercise",
-        "free_answer",
         "multiple_choice",
+        "true_false",
+        "free_answer",
+        "matching",
+        "grouping",
+        "ordering",
+        "fill_blank",
         "flashcards",
-        "ordering"
+        "memory",
+        "definition_match",
+        "sequence",
+        "timed_challenge",
+        "guided_exercise",
+        "simulation"
       ],
       "keywords": [
         "frazione",

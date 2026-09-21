@@ -22,7 +22,7 @@ def test_student_mobile_browser_flow_and_renderers():
     driver_path=os.environ.get("TEACHER_CHROMEDRIVER", str(Path.home() / ".cache/selenium/chromedriver/linux64/147.0.7727.117/chromedriver"))
     browser=webdriver.Chrome(service=Service(driver_path),options=options)
     wait=WebDriverWait(browser,15)
-    base="http://127.0.0.1:19139"
+    base=os.environ.get("TEACHER_WEB_BASE_URL", "http://127.0.0.1:19139").rstrip("/")
     screenshots=Path.home() / ".local/state/ralf-teacher-web-demo/evidence"
     screenshots.mkdir(parents=True,exist_ok=True)
     def visit(path):
@@ -72,7 +72,8 @@ def test_student_mobile_browser_flow_and_renderers():
         assert 'Quaderno demo' in browser.find_element(By.ID,'main').text
         click('Ascolta')
         wait.until(EC.text_to_be_present_in_element((By.ID,'main'),'Riproduci'))
-        assert 'Nessun file audio generato dal server' in browser.find_element(By.ID,'main').text
+        assert 'Peppone' in browser.find_element(By.ID,'main').text
+        assert 'lettura browser' in browser.find_element(By.ID,'main').text
         # Explicitly surface a failed API request without exposing response internals.
         visit('/study')
         browser.execute_script("window.fetch=async()=>({ok:false,status:503,json:async()=>({error:'Il tutor non è disponibile. Riprova.'})});")

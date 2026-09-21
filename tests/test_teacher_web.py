@@ -93,7 +93,8 @@ def test_curriculum_all_grades_and_tracks(setup):
     assert len(app.curriculum.data["subjects"]) == 9
     assert sum(map(len, app.curriculum.data["school_levels"].values())) == 13
     assert len(app.curriculum.data["school_tracks"]) == 3
-    assert app.curriculum.require(profiles[0], "fractions")
+    fractions = app.curriculum.require(profiles[0], "fractions")
+    assert set(KINDS) == set(fractions["suggested_activity_types"])
     with pytest.raises(ValueError): app.curriculum.require(profiles[0], "motion")
     assert app.curriculum.map_material(profiles[0], "Numeratore e frazioni") == ["fractions"]
 
