@@ -46,6 +46,10 @@
       "socket": "/run/ralf-teacher-mcp/mcp.sock"
     },
     {
+      "id": "tuya",
+      "socket": "/run/ralf-tuya-mcp/mcp.sock"
+    },
+    {
       "id": "whatsapp",
       "socket": "/run/ralf-whatsapp-mcp/mcp.sock"
     },

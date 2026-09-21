@@ -93,6 +93,16 @@ class HomeAssistantRESTBackend:
         payload["entity_id"] = entity_id
         return self._request("POST", f"/api/services/{domain}/{service}", payload)
 
+    def reload_config_entry(self, entry_id: str) -> Any:
+        value = str(entry_id or "").strip()
+        if not value or len(value) > 128 or not all(ch.isalnum() or ch in "-_" for ch in value):
+            raise HomeAssistantProviderError("home_config_entry_invalid")
+        return self._request(
+            "POST",
+            "/api/services/homeassistant/reload_config_entry",
+            {"entry_id": value},
+        )
+
     def _request(self, method: str, path: str, payload: dict[str, Any] | None) -> Any:
         if self._requester is not None:
             return self._requester(method, path, payload)
