@@ -69,7 +69,7 @@ class MdGoodifyMCPServer:
             "md_goodify_decode_qr_image": "Decode an MD/Goodify QR from the configured Bot-tazzi spool directory.",
             "md_goodify_probe_public_flow": "Follow only allow-listed public HTTPS redirects and describe the Goodify web flow.",
             "md_goodify_prepare_donation": "Prepare a donation routing plan for a named nonprofit; does not submit forms.",
-            "md_goodify_poll_mail": "Process allow-listed MD/Goodify emails, narrowly forward them, and notify Telegram on an already reported win.",
+            "md_goodify_poll_mail": "Process allow-listed MD/Goodify emails, automatically submit a Goodify instant-win invitation exactly once, narrowly forward mail, and notify Telegram only on an explicit win result.",
         }
         return [{"name": name, "description": descriptions[name], "inputSchema": schema} for name, schema in TOOLS.items()]
 

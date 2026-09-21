@@ -4,9 +4,9 @@ from __future__ import annotations
 
 The module deliberately exposes only bounded semantic operations: decode a QR,
 resolve an allow-listed public URL, watch Goodify/MD mail, forward it to one
-configured address, and emit a Telegram notification for an already reported
-win. It never exposes a generic browser executor and never plays an instant-win
-entry.
+configured address, automatically submit an instant-win invitation exactly once,
+and emit a Telegram notification only for an explicit Goodify win result. It
+never exposes a generic browser executor.
 """
 
 from dataclasses import dataclass
@@ -45,6 +45,20 @@ def _safe_https_url(value: str) -> str:
         raise ValueError("md_goodify_url_not_allowlisted")
     if parsed.username or parsed.password or parsed.port not in (None, 443):
         raise ValueError("md_goodify_url_unsafe_authority")
+    return parsed.geturl()
+
+
+def _safe_goodify_tracking_url(value: str) -> str:
+    parsed = urlparse(value.strip())
+    if parsed.scheme.casefold() == "https":
+        return _safe_https_url(value)
+    host = str(parsed.hostname or "").casefold().rstrip(".")
+    if parsed.scheme.casefold() != "http" or not re.fullmatch(r"url\d+\.goodify\.com", host):
+        raise ValueError("md_goodify_tracking_url_not_allowlisted")
+    if parsed.username or parsed.password or parsed.port not in (None, 80):
+        raise ValueError("md_goodify_tracking_url_unsafe_authority")
+    if not parsed.path.startswith("/ls/click"):
+        raise ValueError("md_goodify_tracking_path_not_allowlisted")
     return parsed.geturl()
 
 
@@ -187,6 +201,11 @@ WIN_PATTERNS = (
     re.compile(r"\bhai\s+vinto\b.{0,120}\b(?:premio|voucher|gift\s*card|€|euro)\b", re.I | re.S),
     re.compile(r"\bvincita\s+(?:confermata|assegnata)\b", re.I),
 )
+INVITE_PATTERNS = (
+    re.compile(r"\bscopri\s+(?:subito\s+)?se\s+hai\s+vinto\b", re.I),
+    re.compile(r"\bse\s+hai\s+vinto\b", re.I),
+    re.compile(r"\btenta(?:re)?\s+la\s+fortuna\b", re.I),
+)
 LOSS_PATTERNS = (
     re.compile(r"\bnon\s+hai\s+vinto\b", re.I),
     re.compile(r"\bnessun\s+premio\b", re.I),
@@ -199,6 +218,8 @@ def classify_goodify_outcome(subject: str, body: str) -> dict[str, Any]:
     text = " ".join(f"{subject}\n{body}".split())
     if any(pattern.search(text) for pattern in LOSS_PATTERNS):
         status = "LOSS"
+    elif any(pattern.search(text) for pattern in INVITE_PATTERNS):
+        status = "UNKNOWN"
     elif any(pattern.search(text) for pattern in WIN_PATTERNS):
         status = "WIN"
     else:
@@ -213,6 +234,43 @@ def classify_goodify_outcome(subject: str, body: str) -> dict[str, Any]:
         "amounts_eur": list(dict.fromkeys(amounts))[:5],
         "evidence_sha256": _fingerprint(text),
     }
+
+
+INSTANT_WIN_PATH_RE = re.compile(r"^/donation/instant-win/([A-Za-z0-9_-]{8,160})/?$")
+URL_RE = re.compile(r"https?://[^\s<>\"')]+", re.I)
+
+
+def _looks_like_instant_win_invite(subject: str, body: str) -> bool:
+    text = " ".join(f"{subject}\n{body}".split())
+    return any(pattern.search(text) for pattern in INVITE_PATTERNS)
+
+
+def _resolve_instant_win_donation_id(text: str, *, timeout: float = 10.0) -> str:
+    matches = list(URL_RE.finditer(text or ""))
+    ranked = sorted(matches, key=lambda match: 0 if any(
+        marker in (text[max(0, match.start() - 260):match.start()].casefold())
+        for marker in ("fortuna", "hai vinto", "premio")
+    ) else 1)
+    opener = build_opener(_AllowlistedRedirect())
+    for match in ranked[:12]:
+        try:
+            candidate = _safe_goodify_tracking_url(match.group(0).rstrip(".,);]"))
+            request = Request(candidate, headers={"User-Agent": "Mozilla/5.0", "Accept": "text/html,*/*"})
+            with opener.open(request, timeout=timeout) as response:
+                final_url = _safe_https_url(response.geturl())
+            parsed = urlparse(final_url)
+            path_match = INSTANT_WIN_PATH_RE.fullmatch(parsed.path)
+            if path_match:
+                return path_match.group(1)
+        except (ValueError, OSError):
+            continue
+    raise ValueError("goodify_instant_win_link_not_found")
+
+
+def _play_instant_win(donation_id: str) -> dict[str, Any]:
+    from .md_goodify_transactional import GoodifyGraphQLClient, _instant_result
+
+    return _instant_result(GoodifyGraphQLClient(timeout=20.0).verify_instant_win(donation_id))
 
 
 def _sender_allowed(value: str) -> bool:
@@ -283,6 +341,9 @@ def process_goodify_mailbox(
     socket_path = gmail_socket or os.getenv("RALF_GOOGLE_WORKSPACE_MCP_SOCKET", "/run/ralf-google-workspace-mcp/mcp.sock")
     state = _load_state(state_file)
     processed = set(map(str, state.get("processed_message_ids") or ()))
+    raw_attempts = state.get("instant_win_attempts")
+    attempts: dict[str, Any] = dict(raw_attempts) if isinstance(raw_attempts, Mapping) else {}
+    state["instant_win_attempts"] = attempts
     events: list[dict[str, Any]] = []
     query = "newer_than:30d {from:(goodify.com) from:(mdspa.it)}"
 
@@ -302,6 +363,47 @@ def process_goodify_mailbox(
             if not _sender_allowed(message["sender"]):
                 continue
             outcome = classify_goodify_outcome(message["subject"], message["body"])
+            instant_win: dict[str, Any] = {"status": "NOT_APPLICABLE"}
+            if _looks_like_instant_win_invite(message["subject"], message["body"]):
+                try:
+                    donation_id = _resolve_instant_win_donation_id(message["body"])
+                except ValueError:
+                    instant_win = {"status": "LINK_NOT_FOUND"}
+                else:
+                    previous = attempts.get(donation_id)
+                    if isinstance(previous, Mapping):
+                        instant_win = {"status": str(previous.get("status") or "ALREADY_SEEN"),
+                                       "donation_id": donation_id, "already_attempted": True}
+                    else:
+                        attempts[donation_id] = {
+                            "status": "SUBMITTING", "message_id": message_id,
+                            "updated_at": int(time.time()),
+                        }
+                        state["instant_win_attempts"] = attempts
+                        _save_state(state_file, state)
+                        try:
+                            played = _play_instant_win(donation_id)
+                        except Exception:
+                            attempts[donation_id] = {
+                                "status": "AMBIGUOUS", "message_id": message_id,
+                                "updated_at": int(time.time()),
+                            }
+                            instant_win = {"status": "AMBIGUOUS", "donation_id": donation_id,
+                                           "already_attempted": False}
+                        else:
+                            played_status = str(played.get("status") or "UNKNOWN")
+                            attempts[donation_id] = {
+                                "status": "PLAYED_" + played_status,
+                                "message_id": message_id,
+                                "amount": played.get("amount"),
+                                "updated_at": int(time.time()),
+                            }
+                            instant_win = {"status": "PLAYED_" + played_status,
+                                           "donation_id": donation_id,
+                                           "amount": played.get("amount"),
+                                           "already_attempted": False}
+                        state["instant_win_attempts"] = attempts
+                        _save_state(state_file, state)
             forwarded = False
             forward_status = "not_requested"
             if forward_to:
@@ -332,6 +434,7 @@ def process_goodify_mailbox(
                 "sender": message["sender"],
                 "subject": message["subject"],
                 "outcome": outcome,
+                "instant_win": instant_win,
                 "forwarded": forwarded,
                 "forward_status": forward_status,
                 "telegram_request_id": notification_id,

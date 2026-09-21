@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from ralfloop_agent.unified_assistant.md_goodify import (
+    _safe_goodify_tracking_url,
     classify_goodify_outcome,
     decode_qr_image,
     parse_md_goodify_qr,
@@ -23,6 +24,15 @@ def test_qr_parser_accepts_only_md_goodify_https_hosts():
         parse_md_goodify_qr("https://evilgoodify.com/donate?code=ABC")
     with pytest.raises(ValueError, match="not_allowlisted"):
         parse_md_goodify_qr("http://goodify.com/donate?code=ABC")
+
+
+def test_goodify_tracking_http_is_narrowly_allowlisted():
+    url = "http://url3502.goodify.com/ls/click?upn=abc"
+    assert _safe_goodify_tracking_url(url) == url
+    with pytest.raises(ValueError, match="not_allowlisted"):
+        _safe_goodify_tracking_url("http://me.goodify.com/donation/instant-win/abc12345")
+    with pytest.raises(ValueError, match="path_not_allowlisted"):
+        _safe_goodify_tracking_url("http://url3502.goodify.com/other")
 
 
 def test_qr_image_is_confined_to_spool(tmp_path: Path):
@@ -44,6 +54,12 @@ def test_outcome_classifier_prefers_explicit_loss_over_generic_prize_words():
 
     unknown = classify_goodify_outcome("Tenta la Fortuna", "Hai una nuova possibilità disponibile.")
     assert unknown["status"] == "UNKNOWN"
+
+    invitation = classify_goodify_outcome(
+        "Un pensiero per te 🎁",
+        "Clicca qui per Tentare la Fortuna e scopri subito se hai vinto un premio.",
+    )
+    assert invitation["status"] == "UNKNOWN"
 
 
 def test_mcp_surface_has_no_gambling_or_generic_browser_tool():
@@ -125,6 +141,51 @@ def test_mail_worker_forwards_allowlisted_win_and_queues_telegram(monkeypatch, t
         gmail_socket="/fake.sock",
     )
     assert again["processed_now"] == 0
+
+
+def test_mail_worker_plays_invitation_once_without_false_win_telegram(monkeypatch, tmp_path: Path):
+    import ralfloop_agent.unified_assistant.md_goodify as mod
+    import src.google_workspace as google_workspace
+
+    played = []
+
+    class FakeSession:
+        def __init__(self, *args, **kwargs): pass
+        def initialize(self): return {}
+        def list_tools(self): return ()
+        def call_tool(self, name, arguments): return {"structuredContent": {"ok": True}}
+        def close(self): pass
+
+    class FakeGateway:
+        def __init__(self, session, *, account): pass
+        def discover(self): return ()
+        def invoke(self, operation, **arguments):
+            if operation == "search":
+                return {"messages": [{"messageId": "invite-1"}, {"messageId": "invite-2"}]}
+            message_id = arguments["messageId"]
+            return {"message": {"messageId": message_id, "from": "Goodify <info@goodify.com>",
+                "subject": "Un pensiero per te 🎁", "date": "now",
+                "body": "Clicca qui per Tentare la Fortuna e scopri subito se hai vinto un premio."}}
+
+    monkeypatch.setattr(mod, "UnixMCPTransport", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(mod, "MCPClientSession", FakeSession)
+    monkeypatch.setattr(google_workspace, "GoogleWorkspaceGateway", FakeGateway)
+    monkeypatch.setattr(mod, "_resolve_instant_win_donation_id", lambda _body: "donation-abc123")
+    monkeypatch.setattr(mod, "_play_instant_win", lambda donation_id: played.append(donation_id) or {"status": "LOSS", "amount": None})
+
+    state = tmp_path / "state.json"
+    outbox = tmp_path / "outbox.jsonl"
+    result = mod.process_goodify_mailbox(
+        account="fabio@tiremminnanz.com", forward_to="fabio@tiremminnanz.com",
+        state_path=state, telegram_outbox=outbox, gmail_socket="/fake.sock",
+    )
+
+    assert played == ["donation-abc123"]
+    assert result["wins"] == 0
+    assert all(event["outcome"]["status"] == "UNKNOWN" for event in result["events"])
+    assert result["events"][0]["instant_win"]["status"] == "PLAYED_LOSS"
+    assert result["events"][1]["instant_win"]["already_attempted"] is True
+    assert not outbox.exists()
 
 
 def test_api_response_parser_tool_is_read_only():
