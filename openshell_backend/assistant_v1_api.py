@@ -22,7 +22,11 @@ from ralfloop_agent.integration.execution_provenance import (
     guard_execution_claims,
     metadata_with_provenance,
 )
-from ralfloop_agent.providers.chat import ChatProvider, ChatProviderError
+from ralfloop_agent.providers.chat import (
+    ChatProvider,
+    ChatProviderError,
+    OpenAICompatibleChatProvider,
+)
 from ralfloop_agent.unified_assistant.runtime import (
     run_unified_telegram,
     unified_route_probe,
@@ -80,6 +84,34 @@ def get_unified_route_probe() -> Callable[..., dict[str, Any] | None]:
 
 def get_unified_runner() -> Callable[..., dict[str, Any]]:
     return run_unified_telegram
+
+
+@lru_cache(maxsize=8)
+def _cached_fast_lane_provider(
+    base_url: str,
+    model: str,
+    max_tokens: int,
+) -> ChatProvider:
+    return OpenAICompatibleChatProvider(
+        base_url=base_url,
+        model=model,
+        provider_name="assistant_fast_openai_compat",
+        request_options={"temperature": 0, "max_tokens": max_tokens},
+    )
+
+
+def get_fast_lane_provider() -> ChatProvider | None:
+    base_url = os.getenv("BOTTAZZI_ASSISTANT_FAST_BASE_URL", "").strip().rstrip("/")
+    model = _configured_model("BOTTAZZI_ASSISTANT_FAST_MODEL")
+    if not base_url or not model:
+        return None
+    try:
+        max_tokens = int(os.getenv("BOTTAZZI_ASSISTANT_FAST_MAX_TOKENS", "192"))
+    except ValueError:
+        max_tokens = 192
+    if max_tokens <= 0:
+        max_tokens = 192
+    return _cached_fast_lane_provider(base_url, model, max_tokens)
 
 
 def _session_id(request: AssistantV1Request) -> str:
@@ -175,6 +207,7 @@ def _unified_route(
 def assistant_v1_chat(
     request: AssistantV1Request,
     provider: Annotated[ChatProvider | ChatProviderError, Depends(get_chat_provider)],
+    fast_provider: Annotated[ChatProvider | None, Depends(get_fast_lane_provider)],
     flags: Annotated[AssistantFeatureFlags, Depends(get_assistant_flags)],
     route_probe: Annotated[Callable[..., dict[str, Any] | None], Depends(get_unified_route_probe)],
     unified_runner: Annotated[Callable[..., dict[str, Any]], Depends(get_unified_runner)],
@@ -217,16 +250,19 @@ def assistant_v1_chat(
             approval_required=bool(result.get("approval_required")),
             metadata=metadata,
         )
-    if isinstance(provider, ChatProviderError):
+    model_lane, selected_model, routing_reason = _model_lane(request)
+    active_provider: ChatProvider | ChatProviderError = provider
+    if model_lane == "fast" and request.model is None and fast_provider is not None:
+        active_provider = fast_provider
+    if isinstance(active_provider, ChatProviderError):
         raise HTTPException(
-            status_code=_provider_status(provider),
-            detail=provider.code,
+            status_code=_provider_status(active_provider),
+            detail=active_provider.code,
         )
 
-    model_lane, selected_model, routing_reason = _model_lane(request)
     chat_request = _chat_request(request, session_id=session_id)
     try:
-        result = provider.chat(
+        result = active_provider.chat(
             build_chat_messages(chat_request),
             model=selected_model,
         )
@@ -257,6 +293,10 @@ def assistant_v1_chat(
             "fast_model_configured": bool(
                 _configured_model("BOTTAZZI_ASSISTANT_FAST_MODEL")
             ),
+            "fast_provider_configured": bool(
+                os.getenv("BOTTAZZI_ASSISTANT_FAST_BASE_URL", "").strip()
+            ),
+            "lane_provider": result.provider,
             "general_model_configured": bool(
                 _configured_model("BOTTAZZI_ASSISTANT_GENERAL_MODEL")
                 or _configured_model("BOTTAZZI_ASSISTANT_DEEP_MODEL")

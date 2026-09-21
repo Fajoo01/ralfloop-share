@@ -253,3 +253,35 @@ def test_local_chat_cannot_claim_external_execution() -> None:
 
     assert payload["metadata"]["execution_claim_blocked"] is True
     assert "inviato" not in payload["response"].casefold()
+
+
+def test_fast_lane_can_use_dedicated_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOTTAZZI_ASSISTANT_FAST_MODEL", "qwen2.5-3b")
+    default = FakeProvider("default")
+    fast = FakeProvider("fast")
+    client = _client(default, route_probe=_no_route, unified_runner=_unexpected_unified)
+    client.app.dependency_overrides[assistant_v1_api.get_fast_lane_provider] = lambda: fast
+
+    payload = client.post("/assistant/v1/chat", json={"message": "ciao"}).json()
+
+    assert payload["response"] == "fast"
+    assert payload["metadata"]["model_lane"] == "fast"
+    assert payload["metadata"]["lane_provider"] == "fake_local"
+    assert fast.calls[0][1] == "qwen2.5-3b"
+    assert default.calls == []
+
+
+def test_explicit_model_bypasses_dedicated_fast_provider() -> None:
+    default = FakeProvider("explicit")
+    fast = FakeProvider("fast")
+    client = _client(default, route_probe=_no_route, unified_runner=_unexpected_unified)
+    client.app.dependency_overrides[assistant_v1_api.get_fast_lane_provider] = lambda: fast
+
+    payload = client.post(
+        "/assistant/v1/chat",
+        json={"message": "ciao", "model": "manual-model", "mode": "fast"},
+    ).json()
+
+    assert payload["response"] == "explicit"
+    assert default.calls[0][1] == "manual-model"
+    assert fast.calls == []
