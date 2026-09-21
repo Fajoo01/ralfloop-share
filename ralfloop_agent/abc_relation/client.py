@@ -56,5 +56,14 @@ class RelationMCPClient:
             raise RuntimeError("abc_relation_references_malformed")
         return value["references"]
 
+    def propose(self, text: str, **kwargs: Any) -> Mapping[str, Any]:
+        args = {"text": text, **{key: value for key, value in kwargs.items() if value is not None}}
+        value = self.call("abc_propose_event", args)
+        if not isinstance(value, Mapping) or not isinstance(value.get("events"), list):
+            raise RuntimeError("abc_relation_proposal_malformed")
+        if not isinstance(value.get("proposal_digest"), str):
+            raise RuntimeError("abc_relation_proposal_malformed")
+        return value
+
 
 __all__ = ["DEFAULT_SOCKET", "RelationMCPClient"]

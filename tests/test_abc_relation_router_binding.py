@@ -28,6 +28,15 @@ class _FakeClient:
         self.calls.append("abc_get_reference_library")
         return [{"key": "dialogo_strategico"}]
 
+    def propose(self, text: str, **kwargs):
+        self.calls.append("abc_propose_event")
+        return {
+            "events": [{"kind": "observed_fact", "summary": "abbiamo cenato insieme"}],
+            "proposal_digest": "a" * 64,
+            "review": {"requires_human_review": False},
+            "side_effects": "none",
+        }
+
 
 class _LegacyTimelineClient(_FakeClient):
     def get_state(self):
@@ -124,3 +133,19 @@ def test_read_adapter_falls_back_to_legacy_without_writes():
     assert result.available is False
     assert result.fallback_skills == ("abc_memory", "abc_relcalc")
     assert "socket unavailable" in (result.error or "")
+
+
+def test_explicit_natural_update_routes_to_abc_proposal_without_write():
+    route = CapabilityRouter().route("abc: oggi abbiamo cenato insieme")
+    assert route.mode == "check_only"
+    assert "abc_relation" in route.mcp_used
+    assert route.requires_confirmation is False
+
+    client = _FakeClient()
+    result = ABCRelationReadAdapter(lambda: client).resolve(
+        "abc: oggi abbiamo cenato insieme"
+    )
+    assert result.available is True
+    assert client.calls == ["abc_get_state", "abc_analyze", "abc_propose_event"]
+    assert result.context["proposal"]["side_effects"] == "none"
+    assert result.context["proposal"]["events"][0]["summary"] == "abbiamo cenato insieme"

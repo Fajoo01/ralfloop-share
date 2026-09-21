@@ -7,6 +7,7 @@ from typing import Any, Mapping
 
 from pydantic import ValidationError
 
+from .intake import build_proposal
 from .models import EvidenceKind, Hypothesis, SourceKind, StrategyRule
 from .references import reference_library
 from .service import RelationService
@@ -40,6 +41,13 @@ TOOLS: dict[str, dict[str, Any]] = {
     "abc_list_snapshots": _schema({"limit": {"type": "integer", "minimum": 1, "maximum": 100}}),
     "abc_get_reference_library": _schema({}),
     "abc_policy_status": _schema({}),
+    "abc_propose_event": _schema({
+        "text": TEXT,
+        "occurred_at": {"type": "string", "minLength": 10, "maxLength": 64},
+        "actor": {"type": "string", "maxLength": 120},
+        "source_kind": {"type": "string", "enum": [item.value for item in SourceKind]},
+        "source_ref": {"type": "string", "minLength": 1, "maxLength": 1000},
+    }, ("text",)),
     "abc_record_event": _schema({
         "occurred_at": {"type": "string", "minLength": 10, "maxLength": 64},
         "kind": {"type": "string", "enum": [item.value for item in EvidenceKind]},
@@ -67,7 +75,7 @@ TOOLS: dict[str, dict[str, Any]] = {
 READ_ONLY_TOOLS = {
     "abc_get_state", "abc_get_timeline", "abc_search_events", "abc_analyze",
     "abc_explain_event", "abc_list_snapshots", "abc_get_reference_library",
-    "abc_policy_status",
+    "abc_policy_status", "abc_propose_event",
 }
 LOCAL_WRITE_TOOLS = {"abc_record_event", "abc_create_snapshot"}
 
@@ -138,6 +146,14 @@ class RelationMCPServer:
             }
         if name == "abc_policy_status":
             return self.service.policy_status()
+        if name == "abc_propose_event":
+            return build_proposal(
+                str(args["text"]),
+                occurred_at=str(args["occurred_at"]) if args.get("occurred_at") else None,
+                actor=str(args["actor"]) if args.get("actor") else None,
+                source_kind=str(args.get("source_kind", SourceKind.MANUAL.value)),
+                source_ref=str(args.get("source_ref", "manual:natural_intake")),
+            )
         if name == "abc_record_event":
             occurred = _aware_datetime(str(args["occurred_at"]))
             event = self.service.record_event(
@@ -180,6 +196,7 @@ class RelationMCPServer:
             "abc_list_snapshots": "List recent state/strategy snapshots.",
             "abc_get_reference_library": "List psychology and strategic-dialogue frameworks and their usage limits.",
             "abc_policy_status": "Show privacy, non-surveillance and non-outbound-action policy.",
+            "abc_propose_event": "Convert one natural-language update into a normalized preview plus digest; no write or side effect.",
             "abc_record_event": "Record one normalized evidence atom locally with provenance; never sends anything.",
             "abc_create_snapshot": "Persist one analytical state/strategy snapshot locally; never sends anything.",
         }

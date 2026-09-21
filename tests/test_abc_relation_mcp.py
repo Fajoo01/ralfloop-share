@@ -126,3 +126,35 @@ def test_local_writes_can_be_disabled(tmp_path):
     server = RelationMCPServer(service, allow_local_writes=False)
     names = {row["name"] for row in server.list_tools()}
     assert not (LOCAL_WRITE_TOOLS & names)
+
+
+def test_propose_event_is_read_only_and_digest_bound(tmp_path):
+    server = _server(tmp_path)
+    before = _structured(server.call("abc_get_timeline", {}))["events"]
+    proposal = _structured(server.call("abc_propose_event", {
+        "text": "oggi mi sembra gelosa",
+        "occurred_at": "2026-09-21T21:30:00+02:00",
+        "actor": "Arianna",
+    }))
+    after = _structured(server.call("abc_get_timeline", {}))["events"]
+
+    assert before == after == []
+    assert proposal["side_effects"] == "none"
+    assert len(proposal["proposal_digest"]) == 64
+    assert proposal["events"][0]["kind"] == "inference"
+    assert proposal["events"][0]["summary"] == "mi sembra gelosa"
+    assert proposal["review"]["requires_human_review"] is True
+
+
+def test_propose_event_remains_available_when_local_writes_are_disabled(tmp_path):
+    service = RelationService(RelationStore(tmp_path / "abc.sqlite3"))
+    server = RelationMCPServer(service, allow_local_writes=False)
+    names = {row["name"] for row in server.list_tools()}
+
+    assert "abc_propose_event" in names
+    assert "abc_record_event" not in names
+    proposal = _structured(server.call("abc_propose_event", {
+        "text": "oggi abbiamo cenato insieme",
+        "occurred_at": "2026-09-21T21:30:00+02:00",
+    }))
+    assert proposal["events"][0]["kind"] == "observed_fact"

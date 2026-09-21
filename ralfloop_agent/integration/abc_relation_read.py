@@ -17,6 +17,7 @@ READ_ONLY_TOOLS = frozenset(
         "abc_list_snapshots",
         "abc_get_reference_library",
         "abc_policy_status",
+        "abc_propose_event",
     }
 )
 WRITE_TOOLS = frozenset({"abc_record_event", "abc_create_snapshot"})
@@ -38,6 +39,12 @@ REFERENCE_TRIGGERS = (
     "messaggio",
 )
 TIMELINE_TRIGGERS = ("timeline", "cronologia", "ultimi eventi", "eventi recenti")
+PROPOSAL_TRIGGERS = (
+    "abc:",
+    "aggiorna abc",
+    "proponi evento abc",
+    "registra evento relazionale",
+)
 
 
 @dataclass(frozen=True)
@@ -81,6 +88,19 @@ def render_abc_relation_answer(user_goal: str, resolution: ABCReadResolution) ->
     action = relcalc.get("next_safe_action")
 
     lines: list[str] = []
+    proposal = context.get("proposal") if isinstance(context, Mapping) else None
+    if isinstance(proposal, Mapping):
+        events = proposal.get("events")
+        event = events[0] if isinstance(events, list) and events and isinstance(events[0], Mapping) else {}
+        if event:
+            lines.append(
+                f"Proposta ABC non registrata: [{event.get('kind', 'unknown')}] {event.get('summary', '')}."
+            )
+            lines.append(f"Digest proposta: {proposal.get('proposal_digest', 'n/d')}.")
+            if (proposal.get("review") or {}).get("requires_human_review"):
+                lines.append("La classificazione è interpretativa e richiede revisione umana prima di qualunque commit.")
+            else:
+                lines.append("Nessuna scrittura eseguita: il commit resta separato e richiede conferma del digest.")
     if score is not None:
         line = f"Curva canonica ABC: {score}/100"
         if evidence_count is not None:
@@ -140,6 +160,8 @@ class ABCRelationReadAdapter:
                 "state": state,
                 "analysis": client.analyze(),
             }
+            if any(trigger in goal for trigger in PROPOSAL_TRIGGERS):
+                context["proposal"] = client.propose(user_goal)
             if any(trigger in goal for trigger in TIMELINE_TRIGGERS):
                 timeline = client.timeline(limit=30)
                 if not timeline and isinstance(state, Mapping):
