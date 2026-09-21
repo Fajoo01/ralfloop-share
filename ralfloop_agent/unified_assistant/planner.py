@@ -399,10 +399,11 @@ class UnifiedPlanner:
             return self._single(goal, "bandi", "bandi.eligibility" if tiremm else "bandi.read", PolicyClass.READ)
         if _INFRA_RE.search(goal):
             return self._single(goal, "infrastructure", "infrastructure.inspect", PolicyClass.READ)
-        if _RESEARCH_RE.search(goal):
-            return self._single(goal, "research", "research.deep", PolicyClass.READ)
+        # Prefer a concrete document artifact over generic research cues such as "fonti".
         if _DOCUMENT_RE.search(goal):
             return self._single(goal, "documents", "documents.extract", PolicyClass.READ)
+        if _RESEARCH_RE.search(goal):
+            return self._single(goal, "research", "research.deep", PolicyClass.READ)
         if _CODE_RE.search(goal):
             return self._single(goal, "code", "code.inspect", PolicyClass.READ)
         if _EDITORIAL_RE.search(goal):

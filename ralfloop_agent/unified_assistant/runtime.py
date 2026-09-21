@@ -86,6 +86,19 @@ _EMAIL_READ_SUPPORTED = re.compile(
     re.I,
 )
 
+_ASSISTANT_V1_EXTENDED_SUPPORTED = re.compile(
+    r"\b(?:ricerca|document[oi]|pdf|allegat[oi]|repository|repo|codice|debug|refactor|"
+    r"server|servizi?|spazio\s+disco|tiremm)\b",
+    re.I,
+)
+
+
+def _assistant_v1_extended_request(text: str, context: Mapping[str, Any]) -> bool:
+    return (
+        str(context.get("assistant_surface") or "") == "assistant_v1"
+        and bool(_ASSISTANT_V1_EXTENDED_SUPPORTED.search(text))
+    )
+
 
 def is_unified_telegram_request(text: str, context: Mapping[str, Any]) -> bool:
     flags = AssistantFeatureFlags.from_env()
@@ -140,10 +153,32 @@ def _has_single_approvable_pending(context: Mapping[str, Any]) -> bool:
     )
 
 
-def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any] | None:
-    """Side-effect-free route metadata for Meowgram's existing two-step contract."""
+def unified_route_probe(
+    text: str,
+    context: Mapping[str, Any],
+    *,
+    flags_override: AssistantFeatureFlags | None = None,
+) -> dict[str, Any] | None:
+    """Side-effect-free route metadata for Meowgram and Assistant v1."""
 
-    if not is_unified_telegram_request(text, context):
+    flags = flags_override or AssistantFeatureFlags.from_env()
+    source = str(context.get("source") or "")
+    if not (
+        flags.unified_assistant
+        and (source.startswith("telegram_") or source == "ralf_terminal")
+    ):
+        return None
+    if not is_unified_telegram_request(text, context) and not flags_override:
+        return None
+    if flags_override and not (
+        _SUPPORTED.search(text)
+        or _EMAIL_READ_SUPPORTED.search(text)
+        or _assistant_v1_extended_request(text, context)
+        or _is_pec_runts_request(text)
+        or _is_explicit_runts_approval(text, context)
+        or re.fullmatch(r"\s*(?:otp[\s:-]*)?[0-9]{6}\s*", text, re.I)
+        or (_is_positive_confirmation(text) and _has_single_approvable_pending(context))
+    ):
         return None
     if _is_explicit_runts_approval(text, context):
         practice_id = _RUNTS_EXPLICIT_APPROVAL.fullmatch(text).group("practice")
@@ -269,7 +304,12 @@ def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any]
     }
 
 
-def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any]:
+def run_unified_telegram(
+    text: str,
+    context: Mapping[str, Any],
+    *,
+    flags_override: AssistantFeatureFlags | None = None,
+) -> dict[str, Any]:
     if _is_explicit_runts_approval(text, context):
         return _execute_explicit_runts_approval(
             text,
@@ -307,7 +347,7 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
 
         return result
 
-    flags = AssistantFeatureFlags.from_env()
+    flags = flags_override or AssistantFeatureFlags.from_env()
     session_id = _session_id(context)
     store = SessionStore(os.getenv(
         "RALFLOOP_UNIFIED_SESSION_DIR",

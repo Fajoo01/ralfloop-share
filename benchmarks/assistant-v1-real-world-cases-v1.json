@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "name": "Bot-tazzi Assistant v1 real-world routing benchmark",
+  "safety": "route-only; no tools or external writes are executed",
+  "categories": [
+    "bandi",
+    "email",
+    "troubleshooting_tecnico",
+    "sviluppo",
+    "documenti",
+    "amministrazione_tiremm",
+    "ricerca",
+    "domotica"
+  ],
+  "cases": [
+    {
+      "id": "bandi-eligibility",
+      "category": "bandi",
+      "message": "Controlla se Tiremm può partecipare al bando ACT e verifica l'ammissibilità.",
+      "allow_tools": true,
+      "expected_route": "unified",
+      "expected_domain": "bandi"
+    },
+    {
+      "id": "bandi-discovery",
+      "category": "bandi",
+      "message": "Cerca bandi aperti per il doposcuola Tiremm.",
+      "allow_tools": true,
+      "expected_route": "unified",
+      "expected_domain": "bandi"
+    },
+    {
+      "id": "email-compose",
+      "category": "email",
+      "message": "Scrivi una mail a Sonia con l'aggiornamento del progetto.",
+      "allow_tools": true,
+      "expected_route": "unified",
+      "expected_domain": "email"
+    },
+    {
+      "id": "email-search",
+      "category": "email",
+      "message": "Controlla le email ricevute da Intesa Sanpaolo sul finanziamento.",
+      "allow_tools": true,
+      "expected_route": "unified",
+      "expected_domain": "tiremm",
+      "expected_skill": "email.search"
+    },
+    {
+      "id": "troubleshooting-infrastructure",
+      "category": "troubleshooting_tecnico",
+      "message": "Controlla i servizi del server e lo spazio disco senza modificare nulla.",
+      "allow_tools": true,
+      "expected_route": "unified",
+      "expected_domain": "infrastructure"
+    },
+    {
+      "id": "troubleshooting-code",
+      "category": "troubleshooting_tecnico",
+      "message": "Analizza il repository e fai debug del codice di Assistant v1.",
+      "allow_tools": true,
+      "expected_route": "unified",
+      "expected_domain": "code"
+    },
+    {
+      "id": "development-refactor",
+      "category": "sviluppo",
+      "message": "Fai refactor del codice del router nel repository senza eseguire deploy.",
+      "allow_tools": true,
+      "expected_route": "unified",
+      "expected_domain": "code"
+    },
+    {
+      "id": "development-review",
+      "category": "sviluppo",
+      "message": "Analizza il repository e verifica il codice della provenance guard.",
+      "allow_tools": true,
+      "expected_route": "unified",
+      "expected_domain": "code"
+    },
+    {
+      "id": "documents-summary",
+      "category": "documenti",
+      "message": "Riassumi il documento PDF allegato e indica le fonti usate.",
+      "allow_tools": true,
+      "expected_route": "unified",
+      "expected_domain": "documents"
+    },
+    {
+      "id": "documents-extract",
+      "category": "documenti",
+      "message": "Estrai importi e scadenze dal documento allegato.",
+      "allow_tools": true,
+      "expected_route": "unified",
+      "expected_domain": "documents"
+    },
+    {
+      "id": "admin-aps-definition",
+      "category": "amministrazione_tiremm",
+      "message": "Cos'è una APS in Italia?",
+      "allow_tools": true,
+      "expected_route": "general"
+    },
+    {
+      "id": "admin-runts",
+      "category": "amministrazione_tiremm",
+      "message": "Controlla lo stato RUNTS di Tiremm.",
+      "allow_tools": true,
+      "expected_route": "unified",
+      "expected_domain": "runts"
+    },
+    {
+      "id": "research-deep",
+      "category": "ricerca",
+      "message": "Fai una ricerca approfondita sulle novità del Terzo Settore e cita le fonti.",
+      "allow_tools": true,
+      "expected_route": "unified",
+      "expected_domain": "research"
+    },
+    {
+      "id": "research-web",
+      "category": "ricerca",
+      "message": "Fai una ricerca web sulle alternative self-hosted a un assistente AI.",
+      "allow_tools": true,
+      "expected_route": "unified",
+      "expected_domain": "research"
+    },
+    {
+      "id": "home-read",
+      "category": "domotica",
+      "message": "Qual è lo stato della luce in officina su Home Assistant?",
+      "allow_tools": true,
+      "expected_route": "unified",
+      "expected_domain": "home"
+    },
+    {
+      "id": "home-control",
+      "category": "domotica",
+      "message": "Accendi il neon officina.",
+      "allow_tools": true,
+      "expected_route": "unified",
+      "expected_domain": "home"
+    }
+  ]
+}

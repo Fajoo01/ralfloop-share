@@ -98,6 +98,13 @@ try:
 except Exception as exc:
     audit("chat_router_load_failed", error=repr(exc))
 
+try:
+    from openshell_backend.assistant_v1_api import router as assistant_v1_router
+
+    app.include_router(assistant_v1_router)
+except Exception as exc:
+    audit("assistant_v1_router_load_failed", error=repr(exc))
+
 
 def _read_arci_profile(context_factory=None) -> dict[str, object]:
     """Run fixed semantic ARCI read; never expose transport error details."""

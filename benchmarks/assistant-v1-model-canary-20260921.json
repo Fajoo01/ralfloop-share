@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-21",
+  "host": "sibilla-cumana",
+  "purpose": "Assistant v1 small-first model canary; no production promotion",
+  "runtime": {
+    "canary_ollama": "127.0.0.1:11435",
+    "backend": "vulkan",
+    "gpu": "NVIDIA GeForce RTX 2070",
+    "context_tokens": 2048,
+    "keep_alive": 0,
+    "production_ds4_19194_touched": false,
+    "experimental_ds4_19240_started": false
+  },
+  "direct_model_comparison": [
+    {
+      "model": "qwen2.5:7b",
+      "prompt": "Cos'è una APS in Italia?",
+      "wall_seconds": 8.381,
+      "load_seconds": 5.382,
+      "prompt_eval_seconds": 0.725,
+      "eval_seconds": 2.269,
+      "eval_tokens": 96,
+      "quality": "fail",
+      "finding": "Expanded APS incorrectly as Ateneo Permanente di Specializzazione; exclude from general-knowledge lane."
+    },
+    {
+      "model": "qwen3.5:9b",
+      "prompt": "Cos'è una APS in Italia?",
+      "wall_seconds": 13.252,
+      "load_seconds": 8.804,
+      "prompt_eval_seconds": 1.859,
+      "eval_seconds": 2.586,
+      "eval_tokens": 96,
+      "quality": "partial",
+      "finding": "Correctly expanded APS as Associazione di Promozione Sociale but cited the wrong law in the first direct canary; requires bounded output and verification/retrieval for legal claims."
+    }
+  ],
+  "assistant_v1_end_to_end": [
+    {
+      "lane": "general",
+      "model": "qwen3.5:9b",
+      "prompt": "Cos'è una APS in Italia?",
+      "wall_seconds": 15.03,
+      "load_seconds": 7.767,
+      "prompt_eval_seconds": 0.713,
+      "eval_seconds": 6.508,
+      "eval_tokens": 239,
+      "route": "local_chat",
+      "quality": "partial_pass",
+      "finding": "Correct APS expansion and D.Lgs. 117/2017 citation. Fiscal wording remains too broad to treat the model as a normative source."
+    },
+    {
+      "lane": "fast",
+      "model": "qwen2.5:3b",
+      "prompt": "Rispondi soltanto con: ciao Fabio",
+      "wall_seconds": 4.47,
+      "load_seconds": 3.935,
+      "prompt_eval_seconds": 0.460,
+      "eval_seconds": 0.055,
+      "eval_tokens": 5,
+      "route": "local_chat",
+      "quality": "pass",
+      "finding": "Exact requested output; supports small-first for trivial chat."
+    }
+  ],
+  "regression_discovered": {
+    "issue": "Ollama provider previously had no bounded generation options; Qwen3.5 exceeded 1700 decoded tokens for a short APS question and hit provider inactivity timeout.",
+    "fix": "Runtime-configurable chat_request_options with protected model/messages/stream fields.",
+    "bounded_canary": {
+      "temperature": 0,
+      "num_ctx": 2048,
+      "num_predict": 256,
+      "think": false,
+      "keep_alive": 0
+    }
+  },
+  "routing_benchmark": {
+    "cases": 16,
+    "categories": 8,
+    "passed": 16,
+    "failed": 0,
+    "side_effects": false
+  },
+  "tests": {
+    "passed": 178,
+    "warnings": 2,
+    "warning_type": "FastAPI on_event deprecation"
+  },
+  "promotion": {
+    "allowed": false,
+    "blockers": [
+      "Bot-tazzi Motor Judge endpoints 19194/19195/19196 are not listening; 19194 was not restarted because it is production and explicitly protected.",
+      "Experimental DS4 19240 remains down after OOM; concurrent 19240 host cache plus Qwen loading is unsafe on current memory pressure.",
+      "System Ollama service forces cuda_v11 while installed backends are cuda_v12/cuda_v13/vulkan; main Ollama therefore falls back to CPU.",
+      "Swap remains nearly full after the earlier OOM event.",
+      "Qwen3.5 general knowledge still needs retrieval/verification for legal/fiscal specifics."
+    ]
+  }
+}

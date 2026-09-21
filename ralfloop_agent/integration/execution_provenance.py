@@ -15,7 +15,11 @@ FAST_CHAT_NO_TOOLS_MESSAGE = (
 )
 
 EXECUTION_CLAIM_PATTERNS = (
-    re.compile(r"\b(?:ho|abbiamo)\s+(?:eseguito|lanciato|controllato|scansionato)\b"),
+    re.compile(
+        r"\b(?:ho|abbiamo)\s+(?:eseguito|lanciato|controllato|scansionato|"
+        r"inviato|mandato|spedito|pubblicato|caricato|salvato|creato|eliminato|"
+        r"aperto|chiuso|riavviato|installato|aggiornato)\b"
+    ),
     re.compile(r"\becco\s+(?:i|gli)\s+risultati\b"),
     re.compile(r"\bla\s+scansione\s+(?:mostra|indica|ha\s+mostrato)\b"),
     re.compile(r"\bnon\s+ho\s+(?:modificato|cancellato|spostato|scritto)\b"),
