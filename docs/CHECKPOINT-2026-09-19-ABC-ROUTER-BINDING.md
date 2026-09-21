@@ -358,3 +358,40 @@ Verifica rieseguita sul runtime corrente:
 - `abc_record_event` e `abc_create_snapshot` non hanno call-site nei percorsi normali; compaiono soltanto nella dichiarazione `WRITE_TOOLS` dell'adapter.
 
 Nessuna modifica runtime e nessun restart sono necessari: il binding live resta valido sul release atomico `fd30fd3`; rollback immediato resta `813d772be2574481f953a406f4c76109224d48f7`.
+
+## Canonical event-store bootstrap — 2026-09-21
+
+È stato avviato il passaggio dalle sole note legacy a eventi atomici canonici.
+
+Prima della scrittura è stato creato un backup SQLite consistente fuori dal repository. Sono stati poi registrati tramite il broker MCP live 8 eventi normalizzati user-reported, senza raw chat e con provenance `chatgpt_snapshot`.
+
+Risultato canonico dopo il primo batch:
+
+- active events: `8`;
+- observed facts: `5`;
+- inferences: `0`;
+- score: `69`;
+- confidence: `0.95`;
+- bias flags: `[]`;
+- next safe action: `light_non_pressing_presence`.
+
+Lo snapshot legacy resta disponibile e conserva 12 note storiche; `mostrami gli ultimi eventi` usa ora gli 8 eventi canonici come timeline primaria.
+È stato inoltre aggiunto `tools/abc_relation_record_events.py` per rendere l'ingestione ripetibile senza inserire dati privati nel repository:
+
+- input: JSON già normalizzato;
+- default: dry-run/validazione;
+- scrittura soltanto con `--commit`;
+- timestamp timezone-aware obbligatorio;
+- enum ABC validati;
+- limiti confidence/weight e raw excerpt applicati;
+- nessuna lettura automatica di dump WhatsApp.
+
+Verifica dopo l'aggiunta del tool:
+
+- `py_compile`: OK;
+- suite mirata + regressioni router/runtime/chat/reasoning: `84 passed, 2 warnings in 2.51s`;
+- `git diff --check`: OK;
+- smoke HTTP `/tasks/run` sulla curva: score `69`, confidence `0.95`, evidence `8`;
+- smoke `mostrami gli ultimi eventi`: timeline canonica `8`, legacy timeline nello snapshot `12`.
+
+Nessun restart del backend è richiesto per questo helper offline; il runtime live continua a usare il release già validato `fd30fd3`.
