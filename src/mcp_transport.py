@@ -237,6 +237,22 @@ class MCPClientSession:
             raise MCPError(str(error))
         return result
 
+    def _handle_server_request(self, response: Mapping[str, Any]) -> bool:
+        if "method" not in response or "id" not in response:
+            return False
+        if response.get("jsonrpc") != "2.0":
+            raise MCPProtocolError("malformed_server_request")
+        request_id = response.get("id")
+        method = response.get("method")
+        if method == "ping":
+            self.transport.send({"jsonrpc": "2.0", "id": request_id, "result": {}})
+        else:
+            self.transport.send({
+                "jsonrpc": "2.0", "id": request_id,
+                "error": {"code": -32601, "message": "Method not supported"},
+            })
+        return True
+
     def stream_request(
         self,
         method: str,
@@ -264,6 +280,8 @@ class MCPClientSession:
         deadline = time.monotonic() + self.timeout
         while True:
             response = self.transport.receive(max(0.001, deadline - time.monotonic()))
+            if self._handle_server_request(response):
+                continue
             if "method" in response and "id" not in response:
                 if response.get("method") != notification_method:
                     continue
@@ -299,6 +317,8 @@ class MCPClientSession:
         deadline = time.monotonic() + self.timeout
         while True:
             response = self.transport.receive(max(0.001, deadline - time.monotonic()))
+            if self._handle_server_request(response):
+                continue
             if "method" in response and "id" not in response:
                 continue
             if response.get("jsonrpc") != "2.0" or response.get("id") != request_id:

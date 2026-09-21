@@ -31,6 +31,7 @@ LEAF_READ_SKILLS = frozenset(
         "jellyfin.identify",
         "education.tutor",
         "bandi.research",
+        "browser.inspect",
     }
 )
 
@@ -114,6 +115,7 @@ CAPABILITY_HINTS: dict[str, tuple[str, ...]] = {
     "jellyfin.identify": ("jellyfin", "film non identificati", "film da identificare", "metadata film"),
     "education.tutor": ("insegnante", "tutor", "spiegami", "quiz", "esercizio didattico"),
     "bandi.research": ("bandi aperti", "bandi disponibili", "opportunita finanziamento", "contributi aps", "finanziamenti tiremm", "grant opportunities"),
+    "browser.inspect": ("browser", "playwright", "snapshot browser", "snapshot pagina", "ispeziona pagina web", "leggi pagina web", "schede browser", "tab browser"),
 }
 
 # One shared lexical/phrase hit is noise; domain-bearing queries in this

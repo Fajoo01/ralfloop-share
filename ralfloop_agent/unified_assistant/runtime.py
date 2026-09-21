@@ -32,6 +32,7 @@ from .home import HomeEntityRegistry, HomeWorkflow
 from .home_provider import HomeAssistantProviderError, HomeAssistantRESTBackend
 from .memory import MemoryRouter, tiremm_profile_items
 from .atm_mcp_adapter import ATMMCPReadOnly
+from .browser_mcp_adapter import browser_inspect_adapter
 from .editorial_mcp_adapter import EditorialMCPContext
 from .bandi_mcp_adapter import BandiMCPContext
 from .meteo_mcp_adapter import MeteoMCPReadOnly
@@ -78,7 +79,7 @@ _SUPPORTED = re.compile(
     r"volantin[oi]|flyer|locandin[ae]|manifest[oi]|poster|"
     r"come\s+(?:arrivo|vado|posso\s+andare)|"
     r"mezzi\s+(?:per|verso)|percorso\s+(?:atm|con\s+i\s+mezzi)|home\s+assistant|domotica|stato\s+(?:della\s+)?luce|"
-    r"runts|arci|jellyfin|bandi|bando|grant|finanziament[oi]|contribut[oi]|insegnante|tutor|quiz|esercizio\s+didattico|memoria\s+operativa)\b",
+    r"runts|arci|jellyfin|browser|playwright|snapshot\s+(?:browser|pagina)|schede?\s+browser|bandi|bando|grant|finanziament[oi]|contribut[oi]|insegnante|tutor|quiz|esercizio\s+didattico|memoria\s+operativa)\b",
     re.I,
 )
 
@@ -223,8 +224,12 @@ def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any]
         connectors.append("jellyfin.identity.mcp.read")
     if "education.tutor" in skills:
         connectors.append("teacher.student.mcp")
+    if "browser.inspect" in skills:
+        connectors.append("browser.playwright.read_only")
     if not all_read and any(item.domain == "jellyfin" for item in plan.assignments):
         connectors.append("jellyfin.identity.mcp.write")
+    if not all_read and any(item.domain == "browser" for item in plan.assignments):
+        connectors.append("browser.playwright.approval_bound")
     return {
         "task_mode": task_mode,
         "mode": task_mode,
@@ -677,6 +682,7 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
         "arci.context": arci_context_adapter,
         "jellyfin.identify": jellyfin_identify_adapter,
         "education.tutor": education_tutor_adapter,
+        "browser.inspect": browser_inspect_adapter,
     })
     core.dag_input_provider = lambda _goal: {
         "memory.tiremm": {

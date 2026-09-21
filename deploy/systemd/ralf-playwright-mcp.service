@@ -1,0 +1,22 @@
+[Unit]
+Description=Bot-tazzi shared Playwright MCP HTTP server
+After=network.target
+
+[Service]
+Type=simple
+User=bandi
+Group=ralf-mcp
+Environment=HOME=/home/bandi
+# Playwright MCP 0.0.82: after package install/upgrade run tools/patch_playwright_mcp_blank_page_title.py.
+ExecStart=/home/bandi/.local/share/ralf-playwright-mcp/node_modules/.bin/playwright-mcp --host 127.0.0.1 --port 19321 --cdp-endpoint http://127.0.0.1:9236 --shared-browser-context --no-webmcp --output-dir /tmp/ralf-playwright-mcp
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=false
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/tmp /home/bandi/.cache/ms-playwright
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

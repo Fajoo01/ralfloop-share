@@ -1,17 +1,97 @@
 {
   "schema_version": 1,
   "providers": [
-    {"id":"memory","socket":"/run/ralf-memory-mcp/mcp.sock"},
-    {"id":"bandi","socket":"/run/ralf-bandi-mcp/mcp.sock"},
-    {"id":"google_workspace","socket":"/run/ralf-google-workspace-mcp/mcp.sock"},
-    {"id":"arci","socket":"/run/ralf-arci-mcp/mcp.sock"},
-    {"id":"atm","socket":"/run/ralf-atm-mcp/mcp.sock"},
-    {"id":"mailchimp","socket":"/run/ralf-mailchimp-mcp/mcp.sock"},
-    {"id":"media","socket":"/run/ralf-media-mcp/mcp.sock"},
-    {"id":"meteo","socket":"/run/ralf-meteo-mcp/mcp.sock"},
-    {"id":"jellyfin","socket":"/run/ralf-jellyfin-mcp/mcp.sock"},
-    {"id":"amule","socket":"/run/ralf-amule-mcp/mcp.sock"},
-    {"id":"teacher","socket":"/run/ralf-teacher-mcp/mcp.sock"},
-    {"id":"whatsapp","socket":"/run/ralf-whatsapp-mcp/mcp.sock"}
-  ]
+    {
+      "id": "memory",
+      "socket": "/run/ralf-memory-mcp/mcp.sock"
+    },
+    {
+      "id": "bandi",
+      "socket": "/run/ralf-bandi-mcp/mcp.sock"
+    },
+    {
+      "id": "google_workspace",
+      "socket": "/run/ralf-google-workspace-mcp/mcp.sock"
+    },
+    {
+      "id": "arci",
+      "socket": "/run/ralf-arci-mcp/mcp.sock"
+    },
+    {
+      "id": "atm",
+      "socket": "/run/ralf-atm-mcp/mcp.sock"
+    },
+    {
+      "id": "mailchimp",
+      "socket": "/run/ralf-mailchimp-mcp/mcp.sock"
+    },
+    {
+      "id": "media",
+      "socket": "/run/ralf-media-mcp/mcp.sock"
+    },
+    {
+      "id": "meteo",
+      "socket": "/run/ralf-meteo-mcp/mcp.sock"
+    },
+    {
+      "id": "jellyfin",
+      "socket": "/run/ralf-jellyfin-mcp/mcp.sock"
+    },
+    {
+      "id": "amule",
+      "socket": "/run/ralf-amule-mcp/mcp.sock"
+    },
+    {
+      "id": "teacher",
+      "socket": "/run/ralf-teacher-mcp/mcp.sock"
+    },
+    {
+      "id": "whatsapp",
+      "socket": "/run/ralf-whatsapp-mcp/mcp.sock"
+    },
+    {
+      "id": "browser_playwright",
+      "socket": "/run/ralf-browser-playwright-mcp/mcp.sock"
+    }
+  ],
+  "provider_globs": [
+    "/run/ralf-*-mcp/mcp.sock",
+    "/tmp/ralf-*-mcp/mcp.sock"
+  ],
+  "term_aliases": {
+    "browser": [
+      "browser"
+    ],
+    "naviga": [
+      "navigate"
+    ],
+    "navigare": [
+      "navigate"
+    ],
+    "clicca": [
+      "click"
+    ],
+    "click": [
+      "click"
+    ],
+    "ispeziona": [
+      "snapshot",
+      "find"
+    ],
+    "sito": [
+      "page",
+      "browser"
+    ],
+    "pagina": [
+      "page",
+      "browser"
+    ],
+    "pagine": [
+      "page",
+      "pages"
+    ],
+    "carica": [
+      "upload"
+    ]
+  }
 }

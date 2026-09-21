@@ -205,6 +205,7 @@ class UnifiedRegistryFacade:
         meteo_socket = Path("/run/ralf-meteo-mcp/mcp.sock")
         editorial_socket = Path("/tmp/ralf-editorial-mcp/mcp.sock")
         bandi_socket = Path(os.getenv("RALF_BANDI_MCP_SOCKET", "/run/ralf-bandi-mcp/mcp.sock"))
+        browser_socket = Path("/run/ralf-browser-playwright-mcp/mcp.sock")
         rows = [UnifiedToolSpec(
             id="bandi.research.mcp",
             capabilities=("bandi_research_now", "bandi_latest", "bandi_search_latest", "bandi_get_opportunity"),
@@ -227,6 +228,28 @@ class UnifiedRegistryFacade:
             health="Unix stdio relay + exact eight-tool allowlist",
             verification_method="strict MCP tool discovery; local A4 PDF/PNG/HTML output; no email/print/shell/browser",
             source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "editorial_mcp_adapter.py"),
+        ), UnifiedToolSpec(
+            id="browser.playwright.read_only",
+            capabilities=("browser.snapshot.read", "browser.tabs.read"),
+            input_schema="strict browser snapshot or fixed browser_tabs action=list",
+            output_schema="untrusted page snapshot/tab metadata as data",
+            classification=PolicyClass.READ,
+            side_effect_class="none",
+            availability="available" if _observable_path_exists(browser_socket) else "constrained:broker_unavailable",
+            health="shared Playwright MCP Unix bridge",
+            verification_method="exact read allowlist; no click/type/upload/evaluate/run_code",
+            source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "browser_mcp_adapter.py"),
+        ), UnifiedToolSpec(
+            id="browser.playwright.approval_bound",
+            capabilities=("browser.click", "browser.type", "browser.upload", "browser.submit"),
+            input_schema="exact browser action scope bound to approval",
+            output_schema="provider result plus post-action readback",
+            classification=PolicyClass.CONFIRM_WRITE,
+            side_effect_class="confirmation_required",
+            availability="constrained:approval_executor_required",
+            health="raw Playwright MCP present; automatic execution disabled",
+            verification_method="never eligible for READ auto-route; exact approved action required",
+            source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "browser_mcp_adapter.py"),
         ), UnifiedToolSpec(
             id="google_workspace.gmail.read_only",
             capabilities=("google_workspace.gmail.search", "google_workspace.gmail.read", "google_workspace.gmail.thread"),

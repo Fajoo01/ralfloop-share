@@ -4,7 +4,6 @@ import hashlib
 import re
 
 from .contracts import AssistantPlan, PlanAssignment, PolicyClass
-from .capability_rag_router import LEAF_READ_SKILLS
 from .email_search import is_email_search_request, plan_email_search
 from .registry import UnifiedRegistryFacade
 
@@ -36,6 +35,11 @@ _RESEARCH_RE = re.compile(r"\b(?:ricerca|cerca\s+sul\s+web|fonti|deep\s+research
 _EDITORIAL_RE = re.compile(r"\b(?:volantin[oi]|flyer|locandin[ae]|manifest[oi]|poster)\b", re.I)
 _MEDIA_RE = re.compile(r"\b(?:video|audio|immagine|ffmpeg|sottotitol[oi])\b", re.I)
 _JELLYFIN_RE = re.compile(r"\bjellyfin\b", re.I)
+_BROWSER_RE = re.compile(r"\b(?:browser|playwright|pagina\s+web|schede?\s+browser)\b", re.I)
+_BROWSER_INTERACTION_RE = re.compile(
+    r"\b(?:clicca|click|scrivi|digita|type|compila|fill|carica|upload|"
+    r"invia|submit|seleziona|select|trascina|drag|premi|press)\b", re.I
+)
 _JELLYFIN_MUTATION_RE = re.compile(
     r"\b(?:applica|modifica|aggiorna|refresh|deduplica|elimina|rimuovi|correggi)\b", re.I
 )
@@ -383,9 +387,13 @@ class UnifiedPlanner:
             )
         if _ARCI_RE.search(goal) and _ARCI_MUTATION_RE.search(goal):
             return self._denied("arci_mutation_not_available")
+        if _BROWSER_RE.search(goal) and _BROWSER_INTERACTION_RE.search(goal):
+            return self._single(
+                goal, "browser", "browser.interact", PolicyClass.CONFIRM_WRITE,
+            )
         if self.capability_router is not None:
             proposal = self.capability_router.route(goal)
-            if proposal is not None and proposal.get("skill") in LEAF_READ_SKILLS:
+            if proposal is not None and self.capability_router.index.is_auto_route_skill(str(proposal.get("skill") or "")):
                 skill = str(proposal["skill"])
                 if skill == "email.search":
                     search = plan_email_search(goal)

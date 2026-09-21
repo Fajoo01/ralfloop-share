@@ -108,6 +108,8 @@ class SkillSpec(StrictModel):
     workflow: str = Field(min_length=1, max_length=240)
     verification_method: str = Field(min_length=1, max_length=240)
     status: Literal["ready", "constrained", "experimental"]
+    auto_route: bool = False
+    routing_hints: tuple[str, ...] = Field(default_factory=tuple, max_length=32)
 
 
 class UnifiedToolSpec(StrictModel):
