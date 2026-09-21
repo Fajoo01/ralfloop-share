@@ -335,3 +335,26 @@ Verifica rieseguita sul runtime corrente:
 - nessun call-site di `abc_record_event` / `abc_create_snapshot` nei percorsi normali; compaiono solo nella dichiarazione `WRITE_TOOLS` dell'adapter.
 
 Non è stato necessario modificare o riavviare il runtime: il binding live risulta già valido e resta sul release atomico `fd30fd3`.
+
+
+## Revalidation operativa — 2026-09-21
+
+Il prompt di ripresa indicava ancora `d4d8181`, ma il branch privato conteneva già il binding `/tasks/run` e l'hardening overlay/canary. Non è stata applicata una patch duplicata.
+
+Verifica rieseguita sul runtime corrente:
+
+- branch privato pulito a `878282fe4d1f6e90c307192af8f3e637f355dab4` prima di questa nota;
+- suite ABC + importer + relcalc + router/runtime/chat/reasoning: `94 passed, 2 warnings in 3.02s`;
+- `git diff --check`: OK prima della nota;
+- `ralfloop-backend.service`: `active`;
+- `ralf-abc-relation-mcp-broker.service`: `active`;
+- produzione live: `/home/sibilla-cumana/ralfloop-production/releases/fd30fd3b905a1d543958b56d307c3b4ca535353c`;
+- broker ABC live: `/home/sibilla-cumana/ralf-abc-relation-mcp/releases/d4d81810995eaa35911d642a681fc719efbb5bb8`;
+- canary `ExecStartPre`: presente, ultimo `status=0`;
+- quattro smoke HTTP reali richiesti: tutti `ok=true`, capability `abc_relation`, `approval_required=false`, evidence `mcp:abc_relation:read_only`, `exit_code=0`;
+- verifica aggiuntiva timeline: `12` note legacy, tutte `weak_historical_note`, confidence `0.35`;
+- verifica aggiuntiva reference library: `5` riferimenti;
+- log backend negli smoke: `0` `[LOOP]`, `0` `sandbox_read_file`, `0` `ls -la`;
+- `abc_record_event` e `abc_create_snapshot` non hanno call-site nei percorsi normali; compaiono soltanto nella dichiarazione `WRITE_TOOLS` dell'adapter.
+
+Nessuna modifica runtime e nessun restart sono necessari: il binding live resta valido sul release atomico `fd30fd3`; rollback immediato resta `813d772be2574481f953a406f4c76109224d48f7`.
