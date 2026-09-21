@@ -7,7 +7,8 @@ Type=simple
 User=bandi
 Group=ralf-mcp
 Environment=HOME=/home/bandi
-# Playwright MCP 0.0.82: after package install/upgrade run tools/patch_playwright_mcp_blank_page_title.py.
+# Playwright MCP 0.0.82: after install/upgrade apply both version-guarded patches:
+# tools/patch_playwright_mcp_blank_page_title.py and tools/patch_playwright_mcp_normalized_locator.py.
 ExecStart=/home/bandi/.local/share/ralf-playwright-mcp/node_modules/.bin/playwright-mcp --host 127.0.0.1 --port 19321 --cdp-endpoint http://127.0.0.1:9236 --shared-browser-context --no-webmcp --output-dir /tmp/ralf-playwright-mcp
 Restart=on-failure
 RestartSec=2
