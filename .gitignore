@@ -25,3 +25,5 @@ build/
 /tools/atm_router/atm-router
 
 /tools/teacher_core_mcp/ralf-teacher-core-mcp
+/tools/teacher_grammar_mcp/ralf-teacher-grammar-mcp
+/tools/teacher_model_pool_mcp/ralf-teacher-model-pool-mcp

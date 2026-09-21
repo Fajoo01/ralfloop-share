@@ -1,0 +1,110 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: teacher-gemma3-4b
+  namespace: ralf-teacher
+spec:
+  selector:
+    matchLabels:
+      app: teacher-gemma3-4b
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: teacher-gemma3-4b
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 15
+      nodeSelector:
+        ralf-teacher-gemma: ready
+      containers:
+        - name: gemma
+          image: ubuntu:24.04
+          imagePullPolicy: IfNotPresent
+          command: [/host/ollama]
+          args: [serve]
+          env:
+            - {name: OLLAMA_HOST, value: "0.0.0.0:19106"}
+            - {name: OLLAMA_MODELS, value: /models}
+            - {name: OLLAMA_KEEP_ALIVE, value: "10m"}
+            - {name: OLLAMA_MAX_LOADED_MODELS, value: "1"}
+            - {name: OLLAMA_NUM_PARALLEL, value: "1"}
+            - {name: OLLAMA_CONTEXT_LENGTH, value: "4096"}
+            - {name: OLLAMA_NO_CLOUD, value: "1"}
+            - {name: HOME, value: /tmp/ollama-home}
+            - {name: LD_LIBRARY_PATH, value: /host/ollama-lib}
+          ports:
+            - {name: ollama, containerPort: 19106}
+          startupProbe:
+            httpGet: {path: /api/tags, port: ollama}
+            periodSeconds: 2
+            timeoutSeconds: 1
+            failureThreshold: 45
+          readinessProbe:
+            httpGet: {path: /api/tags, port: ollama}
+            periodSeconds: 5
+            timeoutSeconds: 1
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: {path: /api/tags, port: ollama}
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "2"
+              memory: 3500Mi
+            limits:
+              cpu: "4"
+              memory: 4800Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 997
+            runAsGroup: 988
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          volumeMounts:
+            - {name: ollama-bin, mountPath: /host/ollama, readOnly: true}
+            - {name: ollama-lib, mountPath: /host/ollama-lib, readOnly: true}
+            - {name: models, mountPath: /models, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: ollama-bin
+          hostPath: {path: /usr/local/bin/ollama, type: File}
+        - name: ollama-lib
+          hostPath: {path: /usr/local/lib/ollama, type: Directory}
+        - name: models
+          hostPath: {path: /usr/share/ollama/.ollama/models, type: Directory}
+        - {name: tmp, emptyDir: {sizeLimit: 256Mi}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: teacher-gemma3-4b-headless
+  namespace: ralf-teacher
+spec:
+  clusterIP: None
+  selector:
+    app: teacher-gemma3-4b
+  ports:
+    - name: ollama
+      port: 19106
+      targetPort: ollama
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: teacher-gemma3-4b
+  namespace: ralf-teacher
+spec:
+  selector:
+    app: teacher-gemma3-4b
+  ports:
+    - name: ollama
+      port: 19106
+      targetPort: ollama
