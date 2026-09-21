@@ -1,0 +1,13 @@
+[Unit]
+Description=Ralf ATM guarded self-healing for %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+RuntimeDirectory=ralf-atm-self-heal
+StateDirectory=ralf-atm-self-heal
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralfloop-production/current/scripts/atm_self_heal.py --repair --reason %i
+TimeoutStartSec=10min

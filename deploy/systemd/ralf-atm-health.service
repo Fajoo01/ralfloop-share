@@ -1,0 +1,12 @@
+[Unit]
+Description=Ralf ATM pipeline health check
+After=network-online.target ralfloop-backend.service ralf-atm-mcp-broker.service
+Wants=network-online.target
+OnFailure=ralf-atm-self-heal@%n.service
+
+[Service]
+Type=oneshot
+User=sibilla-cumana
+Group=sibilla-cumana
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralfloop-production/current/scripts/atm_self_heal.py --check
+TimeoutStartSec=30s

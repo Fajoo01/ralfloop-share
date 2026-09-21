@@ -148,6 +148,7 @@ def main() -> int:
         help="usa il GTFS locale senza scaricarlo, ma ne valida comunque la finestra",
     )
     parser.add_argument("--graph", type=Path, default=DEFAULT_GRAPH)
+    parser.add_argument("--router", type=Path, default=None)
     parser.add_argument("--topology", type=Path, default=DEFAULT_TOPOLOGY)
     parser.add_argument("--date", default=date.today().isoformat())
     args = parser.parse_args()
@@ -155,7 +156,10 @@ def main() -> int:
     root = Path(__file__).resolve().parents[1]
     builder = root / "tools/atm_router/build_graph.py"
     topology_builder = root / "scripts/build_atm_direct_topology.py"
-    router = root / "tools/atm_router/atm-router"
+    primary_router = root / "tools/atm_router/atm-router"
+    fallback_default = Path("/var/lib/ralf-atm-self-heal") / f"atm-router-{root.name}"
+    fallback_router = Path(os.getenv("RALFLOOP_ATM_ROUTER_FALLBACK", str(fallback_default)))
+    router = args.router or (primary_router if primary_router.is_file() else fallback_router)
 
     if not builder.is_file():
         raise SystemExit(f"builder non trovato: {builder}")
