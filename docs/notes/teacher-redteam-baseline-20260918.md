@@ -88,7 +88,7 @@ Failure: prompt_or_grounding
 
 ### rt02_forza_velocita · turno 2 · teacher.explain
 Studente: Ma in macchina tengo l'acceleratore quasi fermo e spesso vado a velocità costante, quindi la forza non accelera.
-Tutor: Capisco che tu abbia notato un caso in cui la forza non sembra avere effetto. In fisica, la forza è associata alla variazione della velocità. Quando un veicolo sta andando a velocità costante, la forza che agisce sul veicolo è zero. Questo perché non c'è una variazione nella velocità, quindi non c'è un'accelerazione. Se la forza fosse diversa da zero, il veicolo avrebbe iniziato a cambiare velocità, ma non lo fa. 
+Tutor: Capisco che tu abbia notato un caso in cui la forza non sembra avere effetto. In fisica, la forza è associata alla variazione della velocità. Quando un veicolo sta andando a velocità costante, la forza che agisce sul veicolo è zero. Questo perché non c'è una variazione nella velocità, quindi non c'è un'accelerazione. Se la forza fosse diversa da zero, il veicolo avrebbe iniziato a cambiare velocità, ma non lo fa.
 
 Sei d'accordo che in questo caso la forza non ha effetto perché la velocità non cambia? Puoi pensare a un altro esempio in cui la forza avrebbe effetto?
 Failure: prompt_or_grounding
@@ -140,9 +140,9 @@ Failure: prompt_or_grounding
 
 ### rt05_derivata_zero · turno 3 · teacher.explain
 Studente: Se invece f'=0 in tutto un intervallo, posso concludere che è costante lì?
-Tutor: Se $f'(x) = 0$ in tutto un intervallo, ciò significa che la funzione $f(x)$ non cambia valore nel corso di quel periodo. In altre parole, $f(x)$ non ha derivate nel corrispondente intervallo, che indica che la funzione non è cambiando valore. Quindi, possiamo concludere che $f(x)$ è costante in quel periodo. 
+Tutor: Se $f'(x) = 0$ in tutto un intervallo, ciò significa che la funzione $f(x)$ non cambia valore nel corso di quel periodo. In altre parole, $f(x)$ non ha derivate nel corrispondente intervallo, che indica che la funzione non è cambiando valore. Quindi, possiamo concludere che $f(x)$ è costante in quel periodo.
 
-Vuoi verificare se hai capito questo concetto? 
+Vuoi verificare se hai capito questo concetto?
 
 Sei sicuro che $f(x)$ non cambia valore nel corrispondente intervallo se $f'(x) = 0$?
 Failure: classification_turn, prompt_or_grounding
