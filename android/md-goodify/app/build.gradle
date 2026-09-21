@@ -5,11 +5,13 @@ plugins {
 if (!providers.gradleProperty('GOODIFY_API_BASE_URL').isPresent()) {
     throw new GradleException('GOODIFY_API_BASE_URL must be supplied at build time')
 }
-if (!providers.gradleProperty('GOODIFY_API_TOKEN').isPresent()) {
-    throw new GradleException('GOODIFY_API_TOKEN must be supplied at build time')
+if (!providers.gradleProperty('GOODIFY_API_TOKEN').isPresent() && !providers.gradleProperty('GOODIFY_API_TOKEN_FILE').isPresent()) {
+    throw new GradleException('GOODIFY_API_TOKEN or GOODIFY_API_TOKEN_FILE must be supplied at build time')
 }
 def apiBase = providers.gradleProperty('GOODIFY_API_BASE_URL').get()
-def apiToken = providers.gradleProperty('GOODIFY_API_TOKEN').get()
+def apiToken = providers.gradleProperty('GOODIFY_API_TOKEN').isPresent()
+        ? providers.gradleProperty('GOODIFY_API_TOKEN').get()
+        : file(providers.gradleProperty('GOODIFY_API_TOKEN_FILE').get()).getText('UTF-8').trim()
 
 android {
     namespace 'org.tiremminnanz.mdgoodify'
