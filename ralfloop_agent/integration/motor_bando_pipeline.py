@@ -71,6 +71,7 @@ class BandoChunkOutcome:
         row.update({
             "decision": self.outcome.verdict.decision,
             "risk": self.outcome.verdict.risk,
+            "provider": self.outcome.verdict.provider,
             "gate": self.outcome.gate.proceed_to_next_stage,
             "gate_status": self.outcome.gate.status,
             "runtime_complete": _runtime_complete(self.outcome),
@@ -87,11 +88,16 @@ class BandoPipelineOutcome:
     gate: JudgeGate
 
     def as_dict(self) -> dict[str, Any]:
+        fast_pass_chunks = sum(
+            row.outcome.verdict.provider == "semif_qwen35_fastgate" for row in self.chunks
+        )
         return {
             "schema_version": 1,
             "case_key": self.case_key,
             "case_digest": self.case_digest,
             "chunk_count": len(self.chunks),
+            "semif_fast_pass_chunks": fast_pass_chunks,
+            "motor_escalation_chunks": len(self.chunks) - fast_pass_chunks,
             "total_rendered_tokens": sum(row.chunk.rendered_tokens for row in self.chunks),
             "max_chunk_tokens": max((row.chunk.rendered_tokens for row in self.chunks), default=0),
             "guard_fallbacks": sum(row.chunk.guard_fallbacks for row in self.chunks),
@@ -132,6 +138,9 @@ def _case_with_units(case: JudgeCase, units: Iterable[str], index: int) -> Judge
         case.goal.encode("utf-8")
     ).hexdigest()
     metadata["bando_chunk_index"] = index
+    if not case.side_effect_intent:
+        metadata.setdefault("risk_class", "internal_readonly")
+        metadata.setdefault("semantic_fastpath_eligible", True)
     return case.model_copy(update={
         "case_id": _chunk_case_id(case, index),
         "goal": CHUNK_GOAL,

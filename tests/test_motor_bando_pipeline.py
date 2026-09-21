@@ -86,6 +86,8 @@ def test_build_chunks_respects_budget_and_repeats_rules():
     assert all(chunk.rendered_tokens <= 280 for chunk in chunks)
     assert all(chunk.case.rules == case.rules for chunk in chunks)
     assert all(chunk.case.candidate_actions == case.candidate_actions for chunk in chunks)
+    assert all(chunk.case.metadata["risk_class"] == "internal_readonly" for chunk in chunks)
+    assert all(chunk.case.metadata["semantic_fastpath_eligible"] is True for chunk in chunks)
 
 
 def test_atomic_fact_over_budget_fails_closed():

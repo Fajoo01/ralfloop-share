@@ -23,12 +23,25 @@ from ralfloop_agent.integration.motor_prompt_budget import (
     count_rendered_tokens,
     render_ds41_judge_prompt,
 )
+from ralfloop_agent.integration.motor_semif_fast_gate import (
+    Qwen35SemIfScorer,
+    SemIfFastGateConfig,
+    SemIfMotorCascade,
+)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the fused Bot-tazzi Motor bando pipeline")
     parser.add_argument("case_json", type=Path)
     parser.add_argument("--url", default="http://127.0.0.1:19196")
+    parser.add_argument("--semif-url", default="http://127.0.0.1:19237")
+    parser.add_argument("--semif-timeout", type=float, default=15.0)
+    parser.add_argument("--semif-fast-pass-threshold", type=float, default=0.97)
+    parser.add_argument(
+        "--semif-chunk-experiment",
+        action="store_true",
+        help="Research only: SemIf on arbitrary chunks; hybrid rule preflight is preferred.",
+    )
     parser.add_argument("--max-rendered-tokens", type=int, default=360)
     parser.add_argument("--timeout", type=float, default=240.0)
     parser.add_argument(
@@ -56,10 +69,21 @@ def main() -> int:
             model_path=args.model,
         )
 
-    judge = BotTazziMotorJudge(BotTazziMotorJudgeConfig(
+    motor = BotTazziMotorJudge(BotTazziMotorJudgeConfig(
         base_url=args.url,
         timeout_sec=args.timeout,
     ))
+    if not args.semif_chunk_experiment:
+        judge = motor
+    else:
+        judge = SemIfMotorCascade(
+            scorer=Qwen35SemIfScorer(SemIfFastGateConfig(
+                base_url=args.semif_url,
+                timeout_sec=args.semif_timeout,
+                fast_pass_threshold=args.semif_fast_pass_threshold,
+            )),
+            motor=motor,
+        )
     pipeline = MotorBandoPipeline(
         token_counter=token_counter,
         judge=judge,

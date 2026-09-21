@@ -1,0 +1,47 @@
+{
+  "bando_id": "fondazione_unipolis_act_aspirare_coinvolgere_trasformare_2026",
+  "budget_balance_status": "VIOLATED",
+  "check_count": 21,
+  "content_published": false,
+  "counts": {
+    "SATISFIED": 5,
+    "UNKNOWN": 14,
+    "VIOLATED": 2
+  },
+  "decision": "REJECT",
+  "hard_violation": true,
+  "hard_violations": [
+    {
+      "field": "contribution_min_amount",
+      "hard": true,
+      "reason": "numeric_min_check",
+      "rule_id": "contribution_min_amount",
+      "status": "VIOLATED"
+    }
+  ],
+  "next_stage": "stop",
+  "phase": "deterministic_preflight",
+  "rule_count": 20,
+  "schema_version": 1,
+  "semantic_or_unknown_rule_ids": [
+    "application_deadline",
+    "project_territory",
+    "lead_legal_seat_italy",
+    "partners_must_be_organizations",
+    "one_application_per_organization",
+    "mandatory_documents",
+    "cofinancing_remaining_costs",
+    "free_volunteer_work_not_cofinance",
+    "paid_project_work_as_cofinance_allowed",
+    "pre_project_consulting_costs_limit",
+    "evaluation_criteria",
+    "reporting_obligations",
+    "exclusion_1",
+    "exclusion_2"
+  ],
+  "source_sha256": {
+    "application": "62a151385b56d066ab55e6adb4b147fd3f217f5e92e9a71b201dc2a526c88b41",
+    "budget": "6f402d5921f3eea235aea3dca246038d0b37067faf6fd18733424c35071e67ef",
+    "regulation": "6e4a4fec660e6c840af4f46ae7832c5f58e527b4d7ceaeae1554de3c4caf5556"
+  }
+}
