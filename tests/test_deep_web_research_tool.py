@@ -2462,3 +2462,13 @@ def test_extractive_fallback_deduplicates_contained_claims_and_headings() -> Non
         )
         == 1
     )
+
+
+def test_government_legal_source_is_ranked_primary_without_query_owner_overlap() -> None:
+    source = {
+        "title": "D.Lgs. 3 luglio 2017, n. 117 - Codice del Terzo settore",
+        "url": "https://www.lavoro.gov.it/documenti-e-norme/normative/decreto-legislativo-117-2017.pdf",
+    }
+
+    assert web_research._source_authority_score(source, "Cos'è una APS in Italia?") >= 8.0
+    assert web_research._source_authority_classification(source, "Cos'è una APS in Italia?") == "primary"

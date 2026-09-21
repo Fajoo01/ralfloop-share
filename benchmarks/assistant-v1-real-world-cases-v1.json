@@ -99,7 +99,9 @@
       "category": "amministrazione_tiremm",
       "message": "Cos'è una APS in Italia?",
       "allow_tools": true,
-      "expected_route": "general"
+      "expected_route": "unified",
+      "expected_domain": "research",
+      "expected_skill": "research.deep"
     },
     {
       "id": "admin-runts",

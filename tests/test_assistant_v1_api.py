@@ -285,3 +285,22 @@ def test_explicit_model_bypasses_dedicated_fast_provider() -> None:
     assert payload["response"] == "explicit"
     assert default.calls[0][1] == "manual-model"
     assert fast.calls == []
+
+
+def test_normative_admin_question_enters_grounded_unified_route() -> None:
+    route = assistant_v1_api.unified_route_probe(
+        "Cos'è una APS in Italia?",
+        {
+            "source": "ralf_terminal",
+            "assistant_surface": "assistant_v1",
+            "session_id": "grounded-aps",
+        },
+        flags_override=AssistantFeatureFlags(unified_assistant=True),
+    )
+
+    assert route is not None
+    assert route["intent"] == "research.deep"
+    assert route["skills_used"] == ["research.deep"]
+    assert route["task_mode"] == "tool_backed_read"
+    assert route["mcp_connectors"] == ["model_tool.deep_web_research"]
+    assert route["requires_confirmation"] is False

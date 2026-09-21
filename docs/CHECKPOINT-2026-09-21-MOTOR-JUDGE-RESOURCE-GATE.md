@@ -17,7 +17,7 @@ Branch: `feat/bottazzi-assistant-v1-20260921`
 - Release: `71feaaee8c6056b9a41cf4ee6081ae9e357a3191`.
 - Previous release: `dad17d3acd5253e5288deaee568ee8b9009b6b9a`.
 - Rollback snapshot: `rollbacks/20260921-063743`.
-- Sidecar `19196` is active.
+- Sidecar `19196` passed rollout and is now intentionally stopped/idle; it must not remain resident between Judge calls.
 - Canary prompts: 185 / 245 / 305 / 185 tokens.
 - Canary durations: 64.037 / 43.702 / 74.263 / 59.450 seconds.
 - No kernel OOM occurred during rollout.
@@ -28,3 +28,36 @@ Branch: `feat/bottazzi-assistant-v1-20260921`
 - Assistant v1 fast-provider canary: 2.45 s wall, provider `assistant_fast_openai_compat`.
 - Result stored in `benchmarks/assistant-v1-fast-provider-canary-20260921.json`.
 - General/deep lanes remain unpromoted while resource arbitration with the Motor is being completed.
+
+
+## General lane runtime
+
+- System Ollama backup: `/etc/systemd/system/ollama.service.d/override.conf.pre-vulkan-20260921`.
+- `OLLAMA_LLM_LIBRARY` changed from invalid `cuda_v11` to `vulkan`; `OLLAMA_VULKAN=1` enabled.
+- Qwen 3.5 offloaded 34/34 layers to the RTX 2070 and unloaded after the request (`keep_alive=0`).
+- Cold bounded canary: 16.70 s wall.
+- Quality gate failed: APS expansion was correct but the answer cited `Legge 267/1990` as the primary law.
+- Legal/administrative general answers therefore remain blocked unless grounded by retrieval/deterministic evidence.
+- Result: `benchmarks/assistant-v1-qwen35-vulkan-canary-20260921.json`.
+
+## Grounded normative lane
+
+- APS / ETS / RUNTS informative questions route to `research.deep` through the existing `ModelToolManager` and `deep_web_research_agentcpm_v1` model-tool.
+- Profile `italy_third_sector_normative` requires institutional sources, read-only networking, primary evidence, and at least two opened sources before normal completion/fallback policy.
+- AgentCPM reuses `/home/sibilla-cumana/.cache/huggingface/hub`; no second model copy is downloaded.
+- Final APS canary: PASS, run `5a3a4093d5b647899ea98cbbdcb541d7`, 12.857 s wall.
+- Evidence: Ministero del Lavoro `Codice del Terzo Settore`; citations present; `Decreto legislativo 3 luglio 2017 n.117` present.
+- Safety gates: `network_mode=read_only`, no approval required, no external write.
+- After canary the RTX 2070 returned to 263 MiB used / 7702 MiB free; `19194` and `19196` remained inactive.
+- Extractive fallback wording is still rough; no ungrounded Qwen 3.5 synthesis is used for normative authority.
+
+## Regression classification
+
+- Full monolithic suite: 65 failed, 2834 passed, 26 skipped.
+- Re-running exactly those 65 failures in a clean process on `HEAD` (`33edab3`) gives 28 failed / 37 passed.
+- Re-running the same 65 on the current working tree gives the identical 28 failed / 37 passed set.
+- The additional 37 monolithic failures are PyTorch/Triton order-contamination; they pass in a fresh process.
+- The 28 persistent failures already exist on `HEAD` and cover historical ABC fixtures, stale absolute paths/checksums, companion integrations, and legacy routing expectations.
+- Assistant/model-tool targeted suite: 158/158 passed.
+- Assistant real-world routing benchmark: 16/16 passed.
+- No regression attributable to the grounded Assistant v1 changes was found.

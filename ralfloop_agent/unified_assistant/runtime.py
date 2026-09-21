@@ -38,7 +38,7 @@ from .planner import UnifiedPlanner
 from .capability_rag_router import CapabilityRAGRouter
 from .recipient import GoogleWorkspaceRecipientResolver
 from .registry import DEFAULT_HOME_ENTITIES, UnifiedRegistryFacade
-from .skill_adapters import bandi_eligibility_adapter, bandi_read_adapter
+from .skill_adapters import bandi_eligibility_adapter, bandi_read_adapter, research_deep_adapter
 from .safe_mcp_read_adapters import (
     arci_context_adapter, education_tutor_adapter, jellyfin_identify_adapter,
     bandi_discovery_adapter, knowledge_retrieve_adapter, runts_context_adapter,
@@ -91,12 +91,31 @@ _ASSISTANT_V1_EXTENDED_SUPPORTED = re.compile(
     r"server|servizi?|spazio\s+disco|tiremm)\b",
     re.I,
 )
+_ASSISTANT_V1_GROUNDED_ADMIN_TOPIC = re.compile(
+    r"\b(?:aps|ets|runts|terzo\s+settore|codice\s+del\s+terzo\s+settore|"
+    r"associazion[ei]\s+di\s+promozione\s+sociale|enti?\s+del\s+terzo\s+settore)\b",
+    re.I,
+)
+_ASSISTANT_V1_GROUNDED_ADMIN_QUERY = re.compile(
+    r"\b(?:cos['’]?[eè]|che\s+cos['’]?[eè]|definisci|spiega|normativ[ae]|legge|"
+    r"decreto|d\.?\s*lgs\.?|articol[oi]|requisit[oi]|obbligh[oi]|disciplina|"
+    r"cosa\s+prevede|chi\s+pu[oò]|come\s+funziona)\b",
+    re.I,
+)
 
 
 def _assistant_v1_extended_request(text: str, context: Mapping[str, Any]) -> bool:
     return (
         str(context.get("assistant_surface") or "") == "assistant_v1"
         and bool(_ASSISTANT_V1_EXTENDED_SUPPORTED.search(text))
+    )
+
+
+def _assistant_v1_grounded_admin_request(text: str, context: Mapping[str, Any]) -> bool:
+    return (
+        str(context.get("assistant_surface") or "") == "assistant_v1"
+        and bool(_ASSISTANT_V1_GROUNDED_ADMIN_TOPIC.search(text))
+        and bool(_ASSISTANT_V1_GROUNDED_ADMIN_QUERY.search(text))
     )
 
 
@@ -174,6 +193,7 @@ def unified_route_probe(
         _SUPPORTED.search(text)
         or _EMAIL_READ_SUPPORTED.search(text)
         or _assistant_v1_extended_request(text, context)
+        or _assistant_v1_grounded_admin_request(text, context)
         or _is_pec_runts_request(text)
         or _is_explicit_runts_approval(text, context)
         or re.fullmatch(r"\s*(?:otp[\s:-]*)?[0-9]{6}\s*", text, re.I)
@@ -243,6 +263,7 @@ def unified_route_probe(
         or "jellyfin.identify" in skills
         or "education.tutor" in skills
         or "bandi.discovery" in skills
+        or "research.deep" in skills
     ):
         task_mode = "tool_backed_read"
         interaction_class = "TOOL_BACKED_READ"
@@ -269,6 +290,8 @@ def unified_route_probe(
             connectors.append("teacher.student.mcp")
         if "bandi.discovery" in skills:
             connectors.append("bandi.research.mcp.read")
+        if "research.deep" in skills:
+            connectors.append("model_tool.deep_web_research")
     elif all(item.policy.value == "READ" for item in plan.assignments):
         task_mode = "tool_backed_read"
         interaction_class = "TOOL_BACKED_READ"
@@ -699,6 +722,7 @@ def run_unified_telegram(
         "jellyfin.identify": jellyfin_identify_adapter,
         "education.tutor": education_tutor_adapter,
         "bandi.discovery": bandi_discovery_adapter,
+        "research.deep": research_deep_adapter,
     })
     core.dag_input_provider = lambda _goal: {
         "memory.tiremm": {

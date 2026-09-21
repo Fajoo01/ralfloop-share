@@ -27,6 +27,17 @@ _INFRA_RE = re.compile(r"\b(?:agentcpm|servizi[oa]?|spazio\s+libero|disco|server
 _CODE_RE = re.compile(r"\b(?:codice|repository|repo|bug|debug|test|stacktrace)\b", re.I)
 _DOCUMENT_RE = re.compile(r"\b(?:pdf|document[oi]|allegat[oi]|estrai)\b", re.I)
 _RESEARCH_RE = re.compile(r"\b(?:ricerca|cerca\s+sul\s+web|fonti|deep\s+research)\b", re.I)
+_NORMATIVE_ADMIN_TOPIC_RE = re.compile(
+    r"\b(?:aps|ets|runts|terzo\s+settore|codice\s+del\s+terzo\s+settore|"
+    r"associazion[ei]\s+di\s+promozione\s+sociale|enti?\s+del\s+terzo\s+settore)\b",
+    re.I,
+)
+_NORMATIVE_INFO_RE = re.compile(
+    r"\b(?:cos['’]?[eè]|che\s+cos['’]?[eè]|definisci|spiega|normativ[ae]|legge|"
+    r"decreto|d\.?\s*lgs\.?|articol[oi]|requisit[oi]|obbligh[oi]|disciplina|"
+    r"cosa\s+prevede|chi\s+pu[oò]|come\s+funziona)\b",
+    re.I,
+)
 _EDITORIAL_RE = re.compile(r"\b(?:volantin[oi]|flyer|locandin[ae]|manifest[oi]|poster)\b", re.I)
 _MEDIA_RE = re.compile(r"\b(?:video|audio|immagine|ffmpeg|sottotitol[oi])\b", re.I)
 _JELLYFIN_RE = re.compile(r"\bjellyfin\b", re.I)
@@ -374,6 +385,14 @@ class UnifiedPlanner:
             )
         if _ARCI_RE.search(goal) and _ARCI_MUTATION_RE.search(goal):
             return self._denied("arci_mutation_not_available")
+        if _NORMATIVE_ADMIN_TOPIC_RE.search(goal) and _NORMATIVE_INFO_RE.search(goal):
+            return self._single(
+                goal, "research", "research.deep", PolicyClass.READ,
+                arguments={
+                    "query": goal,
+                    "profile": "italy_third_sector_normative",
+                },
+            )
         if self.capability_router is not None:
             proposal = self.capability_router.route(goal)
             if proposal is not None and proposal.get("skill") in LEAF_READ_SKILLS:
