@@ -96,16 +96,22 @@ class FakeHistory:
 
 def test_stats_sums_md_history_and_derives_unit(monkeypatch):
     rows = [
-        {"Goodify_donatedAmount": "1,00"},
-        {"Goodify_donatedAmount": "1,00"},
-        {"Goodify_donatedAmount": ""},
+        {"Goodify_donatedAmount": "1,00", "month": True},
+        {"Goodify_donatedAmount": "1,00", "month": True},
+        {"Goodify_donatedAmount": "", "month": False},
     ]
     monkeypatch.setattr("scripts.ralf_md_goodify_api_server._completed_tiremm_count", lambda: 2)
+    monkeypatch.setattr("scripts.ralf_md_goodify_api_server._completed_tiremm_count_month", lambda _key: 1)
+    monkeypatch.setattr("scripts.ralf_md_goodify_api_server._row_in_month", lambda row, _year, _month: bool(row.get("month")))
     app = ApiApplication(FakeFlow({}), FakeAuthenticator(), FakeHistory(rows))
     code, result = app.stats()
     assert code == 200
     assert result["md_donations_count"] == 3
     assert result["md_total_eur"] == "3.00"
+    assert result["md_month_count"] == 2
+    assert result["md_month_total_eur"] == "2.00"
     assert result["unit_donation_eur"] == "1.00"
     assert result["tiremm_completed_count"] == 2
     assert result["tiremm_total_eur"] == "2.00"
+    assert result["tiremm_month_count"] == 1
+    assert result["tiremm_month_total_eur"] == "1.00"

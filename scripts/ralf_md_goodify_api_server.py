@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import sqlite3
 import sys
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
@@ -75,6 +76,28 @@ def _completed_tiremm_count(db_path: Path = DEFAULT_STATE_DB) -> int:
         return 0
 
 
+def _completed_tiremm_count_month(month_key: str, db_path: Path = DEFAULT_STATE_DB) -> int:
+    try:
+        with sqlite3.connect(db_path) as db:
+            row = db.execute(
+                "SELECT COUNT(*) FROM qr_flow WHERE phase IN ('COMPLETE','COMPLETE_WIN_UNKNOWN') "
+                "AND strftime('%Y-%m', created_at, 'unixepoch', 'localtime') = ?",
+                (month_key,),
+            ).fetchone()
+        return int(row[0] if row else 0)
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        return 0
+
+
+def _row_in_month(row: Mapping[str, Any], year: int, month: int) -> bool:
+    value = str(row.get("Goodify_date_donation") or "").strip()
+    try:
+        stamp = datetime.strptime(value[:10], "%d/%m/%Y")
+    except ValueError:
+        return False
+    return stamp.year == year and stamp.month == month
+
+
 class ApiApplication:
     def __init__(self, flow: Any | None = None, authenticator: Any | None = None,
                  history_client: Any | None = None) -> None:
@@ -102,15 +125,28 @@ class ApiApplication:
             unique = {amount for amount in amounts if amount > 0}
             unit = next(iter(unique)) if len(unique) == 1 else None
             total = unit * len(rows) if unit is not None else sum(amounts, Decimal("0"))
+            now = datetime.now().astimezone()
+            month_rows = [row for row in rows if isinstance(row, Mapping) and _row_in_month(row, now.year, now.month)]
+            month_amounts = [amount for row in month_rows
+                             if (amount := _eur(row.get("Goodify_donatedAmount"))) is not None]
+            month_total = unit * len(month_rows) if unit is not None else sum(month_amounts, Decimal("0"))
+            month_key = f"{now.year:04d}-{now.month:02d}"
             tiremm_count = _completed_tiremm_count()
+            tiremm_month_count = _completed_tiremm_count_month(month_key)
             tiremm_total = unit * tiremm_count if unit is not None else None
+            tiremm_month_total = unit * tiremm_month_count if unit is not None else None
             return 200, {
                 "ok": True,
                 "md_donations_count": len(rows),
                 "md_total_eur": format(total, ".2f"),
+                "md_month_count": len(month_rows),
+                "md_month_total_eur": format(month_total, ".2f"),
+                "month_key": month_key,
                 "unit_donation_eur": format(unit, ".2f") if unit is not None else None,
                 "tiremm_completed_count": tiremm_count,
                 "tiremm_total_eur": format(tiremm_total, ".2f") if tiremm_total is not None else None,
+                "tiremm_month_count": tiremm_month_count,
+                "tiremm_month_total_eur": format(tiremm_month_total, ".2f") if tiremm_month_total is not None else None,
             }
         except Exception:
             return 502, {"ok": False, "status": "STATS_UNAVAILABLE"}

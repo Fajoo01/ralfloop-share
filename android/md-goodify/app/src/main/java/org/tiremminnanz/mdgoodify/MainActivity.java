@@ -242,14 +242,24 @@ public final class MainActivity extends Activity {
                 if (result.httpCode != 200) return;
                 JSONObject body = result.body;
                 String md = body.optString("md_total_eur", "");
+                String mdMonth = body.optString("md_month_total_eur", "");
                 String tiremm = body.optString("tiremm_total_eur", "");
+                String tiremmMonth = body.optString("tiremm_month_total_eur", "");
+                int mdMonthCount = body.optInt("md_month_count", 0);
                 int count = body.optInt("tiremm_completed_count", 0);
+                int tiremmMonthCount = body.optInt("tiremm_month_count", 0);
                 runOnUiThread(() -> {
                     String mdLine = md.isEmpty() ? "Totale MD — non disponibile" : "Totale MD — € " + euro(md);
+                    String mdMonthLine = mdMonth.isEmpty()
+                            ? "MD questo mese — " + mdMonthCount + " donazioni"
+                            : "MD questo mese — € " + euro(mdMonth) + "  (" + mdMonthCount + ")";
                     String tiremmLine = tiremm.isEmpty()
                             ? "Tiremm via Bot-tazzi — " + count + " donazioni"
                             : "Tiremm via Bot-tazzi — € " + euro(tiremm) + "  (" + count + ")";
-                    statsView.setText(mdLine + "\n" + tiremmLine);
+                    String tiremmMonthLine = tiremmMonth.isEmpty()
+                            ? "Tiremm questo mese — " + tiremmMonthCount + " donazioni"
+                            : "Tiremm questo mese — € " + euro(tiremmMonth) + "  (" + tiremmMonthCount + ")";
+                    statsView.setText(mdLine + "\n" + mdMonthLine + "\n" + tiremmLine + "\n" + tiremmMonthLine);
                 });
             } catch (Exception ignored) {
             }
