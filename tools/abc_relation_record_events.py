@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
@@ -78,6 +79,25 @@ def load_events(path: Path) -> list[dict[str, Any]]:
     return [normalize_event(row) for row in payload]
 
 
+def proposal_digest(events: list[dict[str, Any]]) -> str:
+    canonical = json.dumps(
+        events,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def require_confirmed_digest(events: list[dict[str, Any]], confirmed: str | None) -> str:
+    digest = proposal_digest(events)
+    if not confirmed:
+        raise ValueError("--commit requires --confirm-digest from the matching dry-run")
+    if confirmed != digest:
+        raise ValueError("confirmed digest does not match current normalized proposal")
+    return digest
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Validate or commit normalized ABC Relation events."
@@ -89,11 +109,24 @@ def main() -> int:
         action="store_true",
         help="Write through abc_record_event; without this flag the command is dry-run only.",
     )
+    parser.add_argument(
+        "--confirm-digest",
+        help="Exact proposal_digest emitted by the matching dry-run; required with --commit.",
+    )
     args = parser.parse_args()
     events = load_events(args.input)
+    digest = proposal_digest(events)
 
-    output: dict[str, Any] = {"mode": "commit" if args.commit else "dry_run", "validated": len(events)}
+    output: dict[str, Any] = {
+        "mode": "commit" if args.commit else "dry_run",
+        "validated": len(events),
+        "proposal_digest": digest,
+    }
     if args.commit:
+        try:
+            require_confirmed_digest(events, args.confirm_digest)
+        except ValueError as exc:
+            parser.error(str(exc))
         client = RelationMCPClient(args.socket)
         recorded = [client.call("abc_record_event", event)["event"] for event in events]
         output["recorded_event_ids"] = [row["event_id"] for row in recorded]
