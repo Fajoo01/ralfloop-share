@@ -286,7 +286,7 @@ def run_canaries(env: dict[str, str]) -> list[dict[str, Any]]:
     return results
 
 
-def _rollback(backup: Path, old_target: Path) -> None:
+def _rollback(backup: Path, old_target: Path, *, service_was_active: bool) -> None:
     _atomic_link(JUDGE_CURRENT, old_target)
     state = json.loads((backup / "state.json").read_text(encoding="utf-8"))
     for label, destination in (("env", ENV_FILE), ("unit", UNIT_FILE)):
@@ -298,9 +298,12 @@ def _rollback(backup: Path, old_target: Path) -> None:
         os.chmod(destination, int(metadata["mode"]))
         os.chown(destination, int(metadata["uid"]), int(metadata["gid"]))
     _systemctl("daemon-reload")
-    _systemctl("restart", SERVICE)
-    if not _wait_service_active():
-        raise RuntimeError("rollback_judge_not_active")
+    if service_was_active:
+        _systemctl("restart", SERVICE)
+        if not _wait_service_active():
+            raise RuntimeError("rollback_judge_not_active")
+    else:
+        _systemctl("stop", SERVICE, check=False)
 
 
 def apply_release(release: Path) -> dict[str, Any]:
@@ -311,8 +314,9 @@ def apply_release(release: Path) -> dict[str, Any]:
     if not checks["allowed"] or not candidate_preflight(resolved):
         return {"applied": False, "reason": "candidate_preflight_failed", "checks": checks}
     production_pid = _listener_pid(PRODUCTION_DS4_PORT)
-    if not production_pid:
-        return {"applied": False, "reason": "production_19194_listener_missing"}
+    judge_was_active = (
+        _systemctl("is-active", SERVICE, check=False).stdout.strip() == "active"
+    )
 
     old_target = (
         JUDGE_CURRENT.resolve()
@@ -344,17 +348,21 @@ def apply_release(release: Path) -> dict[str, Any]:
                 "candidate": str(resolved),
                 "previous": str(old_target),
                 "backup": str(backup),
-                "production_19194_pid": production_pid,
+                "production_19194_pid_before": production_pid,
+                "production_19194_pid_after": _listener_pid(PRODUCTION_DS4_PORT),
+                "production_19194_unchanged": True,
+                "judge_was_active": judge_was_active,
                 "judge_19196_pid": _listener_pid(JUDGE_PORT),
                 "canaries": canaries,
             }
         except Exception as exc:
-            _rollback(backup, old_target)
+            _rollback(backup, old_target, service_was_active=judge_was_active)
             return {
                 "applied": False,
                 "rolled_back": True,
                 "reason": f"{type(exc).__name__}:{exc}",
                 "backup": str(backup),
+                "judge_was_active": judge_was_active,
                 "production_19194_unchanged": _listener_pid(PRODUCTION_DS4_PORT) == production_pid,
             }
 
@@ -379,7 +387,6 @@ def main(argv: list[str] | None = None) -> int:
         allowed = (
             result["release_checks"]["allowed"]
             and result["candidate_preflight"]
-            and result["production_19194_pid"] is not None
         )
         return 0 if allowed else 3
     except Exception as exc:

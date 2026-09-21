@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -98,7 +99,11 @@ def test_apply_rolls_back_when_canary_fails(tmp_path, monkeypatch):
     backup.mkdir()
     monkeypatch.setattr(rollout, "_backup_state", lambda target: backup)
     monkeypatch.setattr(rollout, "_install_candidate_config", lambda release: None)
-    monkeypatch.setattr(rollout, "_systemctl", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        rollout,
+        "_systemctl",
+        lambda *args, **kwargs: SimpleNamespace(stdout="inactive\n"),
+    )
     monkeypatch.setattr(rollout, "_wait_service_active", lambda: True)
     monkeypatch.setattr(
         rollout, "run_canaries",
@@ -107,10 +112,11 @@ def test_apply_rolls_back_when_canary_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(rollout, "_candidate_env", lambda release: {})
     rolled_back = {"value": False}
 
-    def fake_rollback(backup_path, old_target):
+    def fake_rollback(backup_path, old_target, *, service_was_active):
         rolled_back["value"] = True
         assert backup_path == backup
         assert old_target == old.resolve()
+        assert service_was_active is False
 
     monkeypatch.setattr(rollout, "_rollback", fake_rollback)
     result = rollout.apply_release(release)
