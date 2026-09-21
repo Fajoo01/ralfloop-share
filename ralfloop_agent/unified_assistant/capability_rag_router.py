@@ -339,6 +339,12 @@ class CapabilityRAGIndex:
             expand_catalog=True,
         )
 
+    def auto_route_skill_ids(self) -> tuple[str, ...]:
+        return tuple(sorted(skill_id for skill_id in LEAF_READ_SKILLS if skill_id in self.registry.skills and self.registry.skills[skill_id].classification is PolicyClass.READ))
+
+    def is_auto_route_skill(self, skill_id: str) -> bool:
+        return skill_id in self.auto_route_skill_ids()
+
     def retrieve(self, query: str, *, limit: int = 6) -> tuple[CapabilityCandidate, ...]:
         """Retrieve only safe leaf READ skills eligible for automatic routing."""
         return self._rank(
