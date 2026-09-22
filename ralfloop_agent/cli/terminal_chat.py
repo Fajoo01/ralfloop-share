@@ -844,21 +844,37 @@ def _run_agent_goal(
         if answer not in {"y", "yes", "s", "si"}:
             print("annullato", file=out)
             return 2
+    endpoint, model_id = _provider_identity(config, session)
     print(
         f"interaction_mode=agent capability={selected_decision.capability}",
         file=err,
     )
     try:
         repo_context = _context_for_session(session)
-        payload = client.post_assistant(
-            build_assistant_agent_payload(
-                goal,
-                session,
-                repo_context,
-                no_history=config.no_history,
-                capability=selected_decision.capability,
+        post_assistant = getattr(client, "post_assistant", None)
+        if callable(post_assistant):
+            payload = post_assistant(
+                build_assistant_agent_payload(
+                    goal,
+                    session,
+                    repo_context,
+                    no_history=config.no_history,
+                    capability=selected_decision.capability,
+                )
             )
-        )
+        else:
+            payload = client.post_task(
+                build_task_payload(
+                    goal,
+                    session,
+                    no_history=config.no_history,
+                    provider=config.provider,
+                    provider_endpoint=endpoint,
+                    model_id=model_id,
+                    interaction_mode="agent",
+                    capability=selected_decision.capability,
+                )
+            )
     except (RepoContextError, OSError) as exc:
         print(sanitize_terminal_text(str(exc)), file=err)
         return 2
