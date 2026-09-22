@@ -11,6 +11,21 @@ from ralfloop_agent.providers.chat import ChatResult
 from ralfloop_agent.unified_assistant.contracts import AssistantFeatureFlags
 
 
+class FakeMotor:
+    class Config:
+        base_url = "http://127.0.0.1:19194"
+        model = "deepseek-v4-flash"
+    config = Config()
+
+    def __init__(self, text: str = "analisi dal Motor") -> None:
+        self.text = text
+        self.calls = []
+
+    def complete(self, messages, *, max_tokens=256, task_id="", mode="reasoner"):
+        self.calls.append((list(messages), max_tokens, task_id, mode))
+        return self.text
+
+
 class FakeProvider:
     name = "fake_local"
     default_model = "fast-local"
@@ -32,6 +47,7 @@ def _client(
     *,
     route_probe,
     unified_runner,
+    motor: FakeMotor | None = None,
 ) -> TestClient:
     app = FastAPI()
     app.include_router(assistant_v1_api.router)
@@ -42,6 +58,7 @@ def _client(
     )
     app.dependency_overrides[assistant_v1_api.get_unified_route_probe] = lambda: route_probe
     app.dependency_overrides[assistant_v1_api.get_unified_runner] = lambda: unified_runner
+    app.dependency_overrides[assistant_v1_api.get_motor_client] = lambda: motor or FakeMotor()
     return TestClient(app)
 
 
@@ -71,7 +88,7 @@ def test_general_chat_uses_local_provider() -> None:
 
 
 def test_general_knowledge_selects_general_model(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("BOTTAZZI_ASSISTANT_GENERAL_MODEL", "qwen3.5:9b")
+    monkeypatch.setenv("BOTTAZZI_ASSISTANT_FAST_MODEL", "qwen2.5:3b")
     provider = FakeProvider("APS = Associazione di Promozione Sociale")
     payload = _client(
         provider,
@@ -83,14 +100,14 @@ def test_general_knowledge_selects_general_model(monkeypatch: pytest.MonkeyPatch
     ).json()
 
     assert payload["route"] == "local_chat"
-    assert payload["model"] == "qwen3.5:9b"
-    assert provider.calls[0][1] == "qwen3.5:9b"
+    assert payload["model"] == "qwen2.5:3b"
+    assert provider.calls[0][1] == "qwen2.5:3b"
     assert payload["metadata"]["model_lane"] == "general"
     assert payload["metadata"]["routing_reason"] == "general_knowledge_or_ambiguity"
 
 
 def test_acronym_alone_uses_general_lane(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("BOTTAZZI_ASSISTANT_GENERAL_MODEL", "qwen3.5:9b")
+    monkeypatch.setenv("BOTTAZZI_ASSISTANT_FAST_MODEL", "qwen2.5:3b")
     provider = FakeProvider()
     payload = _client(
         provider,
@@ -99,7 +116,7 @@ def test_acronym_alone_uses_general_lane(monkeypatch: pytest.MonkeyPatch) -> Non
     ).post("/assistant/v1/chat", json={"message": "APS"}).json()
 
     assert payload["metadata"]["model_lane"] == "general"
-    assert provider.calls[0][1] == "qwen3.5:9b"
+    assert provider.calls[0][1] == "qwen2.5:3b"
 
 
 def test_fast_mode_overrides_general_heuristic(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -178,22 +195,26 @@ def test_protected_unified_action_remains_approval_bound() -> None:
     assert payload["approval_required"] is True
     assert payload["metadata"]["send_calls"] == 0
     assert provider.calls == []
-def test_deep_mode_selects_configured_local_model(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("BOTTAZZI_ASSISTANT_DEEP_MODEL", "qwen35-local")
-    provider = FakeProvider("analisi")
+def test_deep_mode_uses_bottazzi_motor_only() -> None:
+    provider = FakeProvider("must not run")
+    motor = FakeMotor("analisi DeepSeek")
     payload = _client(
         provider,
         route_probe=_no_route,
         unified_runner=_unexpected_unified,
+        motor=motor,
     ).post(
         "/assistant/v1/chat",
         json={"message": "Analizza questa architettura", "mode": "deep"},
     ).json()
 
     assert payload["route"] == "deep_chat"
-    assert payload["model"] == "qwen35-local"
-    assert provider.calls[0][1] == "qwen35-local"
+    assert payload["provider"] == "bottazzi_motor"
+    assert payload["model"] == "deepseek-v4-flash"
+    assert provider.calls == []
+    assert motor.calls[0][3] == "assistant_deep"
     assert payload["metadata"]["reasoning_mode"] == "deep"
+    assert payload["metadata"]["glm_enabled"] is False
 
 
 def test_allow_tools_false_forces_read_only_chat() -> None:

@@ -158,3 +158,81 @@ def test_prompt_view_keeps_micro_evidence_but_drops_full_refs_and_metadata():
     assert long_hash not in text
     assert payload["retrieved_evidence_untrusted"]["title"] == "Bilancio RUNTS 2025"
     assert "runts.context" in " ".join(payload["facts"])
+
+
+def test_managed_motor_wakes_ds4_releases_gpu_and_restores_agentcpm(tmp_path):
+    events = []
+
+    class Lifecycle:
+        def start(self): events.append("ds4_start"); return {"active": True}
+        def touch(self): events.append("ds4_touch"); return {"active": True}
+        def stop(self): events.append("ds4_stop"); return {"active": False}
+
+    class Agent:
+        def status(self): events.append("agent_status"); return {"active": True}
+        def stop(self): events.append("agent_stop"); return {"active": False}
+        def start(self): events.append("agent_start"); return {"active": True}
+
+    class Arbiter:
+        def acquire_fd(self, **_kwargs): events.append("gpu_lock"); return 7
+        def release_fd(self, fd): assert fd == 7; events.append("gpu_unlock")
+
+    class Response(FakeResponse):
+        def close(self): return None
+
+    class ManagedSession(FakeSession):
+        def get(self, url, timeout=None):
+            assert url.endswith("/api/ps")
+            return Response({"models": []})
+        def post(self, url, json=None, timeout=None):
+            if url.endswith("/v1/chat/completions"):
+                events.append("judge_request")
+                return Response({"choices": [{"message": {"content": self.content}}]})
+            return Response({})
+
+    session = ManagedSession('{"decision":"PASS","confidence":0.92,"risk":"LOW","reason":"ok","missing_evidence":[]}')
+    config = BotTazziMotorJudgeConfig(
+        base_url="http://127.0.0.1:19194",
+        model="deepseek-v4-flash",
+        lifecycle_socket="/fake.sock",
+        gpu_handoff=True,
+        gpu_lock_path=str(tmp_path / "gpu.lock"),
+    )
+    judge = BotTazziMotorJudge(
+        config=config,
+        session=session,
+        lifecycle_client=Lifecycle(),
+        agentcpm_client=Agent(),
+        arbiter=Arbiter(),
+    )
+    result = judge.judge(case())
+    assert result.verdict.decision == "PASS"
+    assert events == [
+        "gpu_lock", "agent_status", "agent_stop", "ds4_start",
+        "judge_request", "ds4_touch", "ds4_stop", "agent_start", "gpu_unlock",
+    ]
+
+
+def test_retore_can_naturalize_but_cannot_change_canonical_verdict():
+    class Response(FakeResponse):
+        def close(self): return None
+
+    class RetoreSession:
+        def __init__(self): self.calls = []
+        def post(self, url, json=None, timeout=None):
+            self.calls.append((url, json))
+            if url.endswith(":19194/v1/chat/completions"):
+                return Response({"choices": [{"message": {"content": '{"decision":"PASS","confidence":0.91,"risk":"LOW","reason":"evidence ok","missing_evidence":[]}'}}]})
+            assert url.endswith(":19110/v1/chat/completions")
+            return Response({"choices": [{"message": {"content": "Le verifiche disponibili risultano coerenti con il passaggio successivo."}}]})
+
+    config = BotTazziMotorJudgeConfig(
+        base_url="http://127.0.0.1:19194",
+        model="deepseek-v4-flash",
+        retore_enabled=True,
+    )
+    result = BotTazziMotorJudge(config=config, session=RetoreSession()).judge(case())
+    assert result.verdict.decision == "PASS"
+    assert result.gate.proceed_to_next_stage is True
+    assert result.natural_language.startswith("Esito PASS, rischio LOW, confidenza 91%.")
+    assert "verifiche disponibili" in result.natural_language

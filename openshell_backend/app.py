@@ -85,13 +85,6 @@ except Exception as exc:
     audit("repair_approval_routes_load_failed", error=repr(exc))
 
 try:
-    from ralfloop_agent.glm_review.telegram_api import register_glm_review_routes
-
-    register_glm_review_routes(app)
-except Exception as exc:
-    audit("glm_review_routes_load_failed", error=repr(exc))
-
-try:
     from openshell_backend.chat_api import router as chat_router
 
     app.include_router(chat_router)

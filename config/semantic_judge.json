@@ -34,7 +34,6 @@
     "HIGH": "judge_required_fail_closed"
   },
   "provider_registry": [
-    "glm_colibri",
     "deepseek_v4_flash"
   ]
 }

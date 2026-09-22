@@ -20,6 +20,7 @@ from openshell_backend.chat_api import (
     build_chat_messages,
     get_chat_provider,
 )
+from ralfloop_agent.integration.bottazzi_motor_judge import BotTazziMotorJudge
 from ralfloop_agent.integration.execution_provenance import (
     empty_execution_provenance,
     guard_execution_claims,
@@ -88,6 +89,10 @@ def get_unified_route_probe() -> Callable[..., dict[str, Any] | None]:
 
 def get_unified_runner() -> Callable[..., dict[str, Any]]:
     return run_unified_telegram
+
+@lru_cache(maxsize=1)
+def get_motor_client() -> BotTazziMotorJudge:
+    return BotTazziMotorJudge()
 
 
 _DEFAULT_INFERENCE_CONFIG = (
@@ -173,11 +178,8 @@ def _fast_model(request: AssistantV1Request) -> str | None:
 
 
 def _general_model(request: AssistantV1Request) -> str | None:
-    return (
-        request.model
-        or _configured_model("BOTTAZZI_ASSISTANT_GENERAL_MODEL")
-        or _configured_model("BOTTAZZI_ASSISTANT_DEEP_MODEL")
-    )
+    # General conversational wording stays on the small local lane.
+    return request.model or _fast_lane_settings()[1]
 
 
 def _deep_model(request: AssistantV1Request) -> str | None:
@@ -188,8 +190,6 @@ def _deep_requested(request: AssistantV1Request) -> bool:
     if request.mode == "deep":
         return True
     if request.mode == "fast":
-        return False
-    if not _configured_model("BOTTAZZI_ASSISTANT_DEEP_MODEL"):
         return False
     message = request.message
     hints = len(DEEP_HINT_RE.findall(message))
@@ -256,6 +256,7 @@ def assistant_v1_chat(
     flags: Annotated[AssistantFeatureFlags, Depends(get_assistant_flags)],
     route_probe: Annotated[Callable[..., dict[str, Any] | None], Depends(get_unified_route_probe)],
     unified_runner: Annotated[Callable[..., dict[str, Any]], Depends(get_unified_runner)],
+    motor: Annotated[BotTazziMotorJudge, Depends(get_motor_client)],
 ) -> AssistantV1Response:
     started = time.monotonic()
     session_id = _session_id(request)
@@ -296,6 +297,43 @@ def assistant_v1_chat(
             metadata=metadata,
         )
     model_lane, selected_model, routing_reason = _model_lane(request)
+    if model_lane == "deep":
+        chat_request = _chat_request(request, session_id=session_id)
+        try:
+            response_text = motor.complete(
+                build_chat_messages(chat_request),
+                max_tokens=int(os.getenv("BOTTAZZI_ASSISTANT_MOTOR_MAX_TOKENS", "256")),
+                task_id=session_id,
+                mode="assistant_deep",
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail="bottazzi_motor_unavailable") from exc
+        provenance = empty_execution_provenance(
+            provider="bottazzi_motor",
+            endpoint=motor.config.base_url,
+            model_id=motor.config.model,
+        )
+        response_text, claim_blocked = guard_execution_claims(response_text, provenance)
+        return AssistantV1Response(
+            response=response_text,
+            route="deep_chat",
+            provider="bottazzi_motor",
+            model=motor.config.model,
+            session_id=session_id,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            approval_required=False,
+            metadata=metadata_with_provenance({
+                "assistant_version": 1,
+                "local_only": True,
+                "route_source": "bottazzi_motor",
+                "reasoning_mode": "deep",
+                "model_lane": "deep",
+                "routing_reason": routing_reason,
+                "motor_lifecycle": "on_demand",
+                "glm_enabled": False,
+                "tools_allowed": False,
+            }, provenance, execution_claim_blocked=claim_blocked),
+        )
     active_provider: ChatProvider | ChatProviderError = provider
     if model_lane == "fast" and request.model is None and fast_provider is not None:
         active_provider = fast_provider
@@ -373,13 +411,13 @@ def assistant_v1_status() -> dict[str, Any]:
         "routes": ["unified", "local_chat", "deep_chat"],
         "model_policy": "small_first",
         "fast_model_configured": bool(fast_base_url and fast_model),
-        "general_model_configured": bool(
-            _configured_model("BOTTAZZI_ASSISTANT_GENERAL_MODEL")
-            or _configured_model("BOTTAZZI_ASSISTANT_DEEP_MODEL")
-        ),
-        "deep_model_configured": bool(
-            _configured_model("BOTTAZZI_ASSISTANT_DEEP_MODEL")
-        ),
+        "general_model_configured": bool(_fast_lane_settings()[1]),
+        "deep_model_configured": True,
+        "heavy_provider": "bottazzi_motor",
+        "heavy_model": "deepseek-v4-flash",
+        "heavy_lifecycle": "on_demand",
+        "retore_model": "qwen2.5-3b",
+        "glm_enabled": False,
         "tool_runtime": "unified_assistant",
         "write_policy": "existing_approval_gates",
     }
@@ -393,5 +431,6 @@ __all__ = [
     "get_assistant_flags",
     "get_unified_route_probe",
     "get_unified_runner",
+    "get_motor_client",
     "router",
 ]

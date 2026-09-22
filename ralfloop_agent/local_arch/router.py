@@ -245,7 +245,7 @@ class FunctionGemmaClient:
             "SI": "Crea una immagine o locandina social, senza pubblicarla.",
             "SV": "Crea video social, reel, storyboard o microclip, senza pubblicarlo.",
             "MC": "Compone o transcodifica media con strumenti deterministici.",
-            "LM": "Delega ragionamento strategico, ambiguo, nuovo o multi-step al large model.",
+            "LM": "Delega ragionamento strategico, ambiguo, nuovo o multi-step a Bot-tazzi Motor (DeepSeek DS4).",
             "AP": "Chiede approvazione per pubblicare, inviare, caricare o altro side effect. Non approva.",
             "AU": "Chiede chiarimenti o input mancanti all'utente.",
             "FN": "Conclude un task già completato.",
@@ -443,7 +443,7 @@ class LocalRouter:
         else:
             canonical = {
                 "VR": "visual_rag", "AB": "audiobook_factory", "SI": "social_image",
-                "SV": "social_video", "MC": "media_compose", "LM": "colibri_director",
+                "SV": "social_video", "MC": "media_compose", "LM": "bottazzi_motor",
                 "AP": "external_action", "AU": "ask_user", "FN": "finish", "RJ": "reject",
             }
             target = canonical.get(route.a, target)
@@ -468,7 +468,7 @@ class LocalRouter:
         available = [item for item in candidates if item.availability == "available" and not item.side_effect]
         if available and available[0].compact_id in {"ET", "SM"}:
             return CompactRoute(1, available[0].compact_id, available[0].name, c=0.5, r=reason)
-        return CompactRoute(1, "LM", "colibri_director", c=0.0, r=reason)
+        return CompactRoute(1, "LM", "bottazzi_motor", c=0.0, r=reason)
 
     def _cache_key(self, text: str, candidates: tuple[ToolRecord, ...]) -> str:
         fields = {

@@ -115,10 +115,13 @@ def test_backend_dropin_shares_bounded_judge_environment():
     env = Path("deploy/systemd/bottazzi-motor-judge.env.example").read_text()
     assert "EnvironmentFile=/etc/ralfloop/bottazzi-motor-judge.env" in dropin
     assert "BOTTAZZI_MOTOR_MAX_TOKENS=64" in env
-    assert "BOTTAZZI_MOTOR_JUDGE_TOKENS=64" in env
-    assert "BOTTAZZI_MOTOR_JUDGE_HOST_CACHE_PINNED=0" in env
-    assert "BOTTAZZI_MOTOR_JUDGE_MIN_SWAP_FREE_MB=1024" in env
-    assert "BOTTAZZI_MOTOR_JUDGE_RESOURCE_LOCK_FILE=/run/ralfloop/inference-gpu.lock" in env
+    assert "BOTTAZZI_MOTOR_URL=http://127.0.0.1:19194" in env
+    assert "BOTTAZZI_MOTOR_MODEL=deepseek-v4-flash" in env
+    assert "BOTTAZZI_MOTOR_LIFECYCLE_SOCKET=/run/ralf-bottazzi-ds4-lifecycle/control.sock" in env
+    assert "BOTTAZZI_MOTOR_GPU_HANDOFF=1" in env
+    assert "BOTTAZZI_MOTOR_RETORE_MODEL=qwen2.5-3b" in env
+    assert "19196" not in env
+    assert "GLM" not in env and "glm" not in env
     assert "BOTTAZZI_MOTOR_AUDIT_PATH=/home/sibilla-cumana/" in env
     assert "/home/bandi/" not in env
 

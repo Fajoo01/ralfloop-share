@@ -1,7 +1,6 @@
 from .core import (
     DeepSeekV4FlashJudge,
     LlamaCppSemanticJudge,
-    GlmColibriJudge,
     JudgeAvailabilityError,
     ReviewRisk,
     SemanticDraftJudge,
@@ -24,7 +23,7 @@ from .risk import EmailRiskAssessment, assess_email_risk
 from .shadow import ShadowModeDisabled, run_shadow_email_case
 
 __all__ = [
-    "DeepSeekV4FlashJudge", "LlamaCppSemanticJudge", "GlmColibriJudge", "JudgeAvailabilityError", "ReviewRisk",
+    "DeepSeekV4FlashJudge", "LlamaCppSemanticJudge", "JudgeAvailabilityError", "ReviewRisk",
     "SemanticDraftJudge", "SemanticIssue", "SemanticJudgeConfig", "SemanticReview", "SemanticReviewResult",
     "build_semantic_judge", "classify_email_risk", "parse_semantic_review",
     "CompactCriticContext", "CompactSemanticPatch", "compact_critic_context",
