@@ -68,4 +68,3 @@ def test_browser_mcp_dropin_does_not_shadow_unified_registry() -> None:
     dropin = (root / "deploy/systemd/ralfloop-backend-browser-mcp.conf").read_text(encoding="utf-8")
     assert "config/unified_assistant_domains_v1.json" not in dropin
     assert "src/mcp_transport.py" in dropin
-

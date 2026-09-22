@@ -246,4 +246,3 @@ def test_send_request_routes_to_separate_confirmation_bound_writer():
     assert "Nessuna PEC è stata inviata" in result["message"]
     assert result["writes"] == 0
     assert result["sends"] == 0
-
