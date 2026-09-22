@@ -36,6 +36,7 @@ def _client(
     app = FastAPI()
     app.include_router(assistant_v1_api.router)
     app.dependency_overrides[assistant_v1_api.get_chat_provider] = lambda: provider
+    app.dependency_overrides[assistant_v1_api.get_fast_lane_provider] = lambda: None
     app.dependency_overrides[assistant_v1_api.get_assistant_flags] = lambda: AssistantFeatureFlags(
         unified_assistant=True
     )
@@ -330,3 +331,28 @@ def test_assistant_status_declares_local_branded_surface() -> None:
     assert payload["local_only"] is True
     assert payload["cloud_llm_required"] is False
     assert payload["ui_path"] == "/assistant/v1"
+
+
+def test_fast_lane_reuses_canonical_inference_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path,
+) -> None:
+    config = tmp_path / "inference.json"
+    config.write_text(
+        '{"default_runtime":"openai_compat","runtimes":{"openai_compat":'
+        '{"type":"openai_compat","base_url":"http://127.0.0.1:19110",'
+        '"models":{"chat":"qwen2.5-3b"}}}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BOTTAZZI_ASSISTANT_INFERENCE_CONFIG", str(config))
+    monkeypatch.delenv("BOTTAZZI_ASSISTANT_FAST_BASE_URL", raising=False)
+    monkeypatch.delenv("BOTTAZZI_ASSISTANT_FAST_MODEL", raising=False)
+    assistant_v1_api._inference_runtime_config.cache_clear()
+
+    base_url, model, max_tokens = assistant_v1_api._fast_lane_settings()
+
+    assert base_url == "http://127.0.0.1:19110"
+    assert model == "qwen2.5-3b"
+    assert max_tokens == 192
+    provider = assistant_v1_api.get_fast_lane_provider()
+    assert provider is not None
+    assert provider.default_model == "qwen2.5-3b"

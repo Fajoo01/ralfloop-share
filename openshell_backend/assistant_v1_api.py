@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import json
 import os
 from pathlib import Path
 import re
@@ -89,6 +90,21 @@ def get_unified_runner() -> Callable[..., dict[str, Any]]:
     return run_unified_telegram
 
 
+_DEFAULT_INFERENCE_CONFIG = (
+    Path(__file__).resolve().parents[1]
+    / "config" / "ralf" / "inference_runtime.no_ollama.json"
+)
+
+
+@lru_cache(maxsize=4)
+def _inference_runtime_config(path: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 @lru_cache(maxsize=8)
 def _cached_fast_lane_provider(
     base_url: str,
@@ -103,17 +119,32 @@ def _cached_fast_lane_provider(
     )
 
 
-def get_fast_lane_provider() -> ChatProvider | None:
-    base_url = os.getenv("BOTTAZZI_ASSISTANT_FAST_BASE_URL", "").strip().rstrip("/")
-    model = _configured_model("BOTTAZZI_ASSISTANT_FAST_MODEL")
-    if not base_url or not model:
-        return None
+def _fast_lane_settings() -> tuple[str | None, str | None, int]:
+    config_path = os.getenv(
+        "BOTTAZZI_ASSISTANT_INFERENCE_CONFIG", str(_DEFAULT_INFERENCE_CONFIG)
+    ).strip()
+    payload = _inference_runtime_config(config_path) if config_path else {}
+    runtimes = payload.get("runtimes") if isinstance(payload.get("runtimes"), dict) else {}
+    runtime_name = str(payload.get("default_runtime") or "")
+    runtime = runtimes.get(runtime_name) if isinstance(runtimes, dict) else None
+    if not isinstance(runtime, dict) or runtime.get("type") != "openai_compat":
+        runtime = {}
+    models = runtime.get("models") if isinstance(runtime.get("models"), dict) else {}
+    configured_url = str(runtime.get("base_url") or "").strip().rstrip("/")
+    configured_model = str(models.get("chat") or models.get("default") or "").strip()
+    base_url = os.getenv("BOTTAZZI_ASSISTANT_FAST_BASE_URL", "").strip().rstrip("/") or configured_url
+    model = _configured_model("BOTTAZZI_ASSISTANT_FAST_MODEL") or configured_model or None
     try:
         max_tokens = int(os.getenv("BOTTAZZI_ASSISTANT_FAST_MAX_TOKENS", "192"))
     except ValueError:
         max_tokens = 192
-    if max_tokens <= 0:
-        max_tokens = 192
+    return base_url or None, model, max_tokens if max_tokens > 0 else 192
+
+
+def get_fast_lane_provider() -> ChatProvider | None:
+    base_url, model, max_tokens = _fast_lane_settings()
+    if not base_url or not model:
+        return None
     return _cached_fast_lane_provider(base_url, model, max_tokens)
 
 
@@ -135,7 +166,7 @@ def _configured_model(name: str) -> str | None:
 
 
 def _fast_model(request: AssistantV1Request) -> str | None:
-    return request.model or _configured_model("BOTTAZZI_ASSISTANT_FAST_MODEL")
+    return request.model or _fast_lane_settings()[1]
 
 
 def _general_model(request: AssistantV1Request) -> str | None:
@@ -301,12 +332,8 @@ def assistant_v1_chat(
             "reasoning_mode": model_lane,
             "model_lane": model_lane,
             "routing_reason": routing_reason,
-            "fast_model_configured": bool(
-                _configured_model("BOTTAZZI_ASSISTANT_FAST_MODEL")
-            ),
-            "fast_provider_configured": bool(
-                os.getenv("BOTTAZZI_ASSISTANT_FAST_BASE_URL", "").strip()
-            ),
+            "fast_model_configured": bool(_fast_lane_settings()[1]),
+            "fast_provider_configured": bool(_fast_lane_settings()[0]),
             "lane_provider": result.provider,
             "general_model_configured": bool(
                 _configured_model("BOTTAZZI_ASSISTANT_GENERAL_MODEL")
@@ -332,6 +359,7 @@ def assistant_v1_chat(
     )
 @router.get("/status")
 def assistant_v1_status() -> dict[str, Any]:
+    fast_base_url, fast_model, _ = _fast_lane_settings()
     return {
         "ok": True,
         "assistant_version": 1,
@@ -341,9 +369,7 @@ def assistant_v1_status() -> dict[str, Any]:
         "ui_path": "/assistant/v1",
         "routes": ["unified", "local_chat", "deep_chat"],
         "model_policy": "small_first",
-        "fast_model_configured": bool(
-            _configured_model("BOTTAZZI_ASSISTANT_FAST_MODEL")
-        ),
+        "fast_model_configured": bool(fast_base_url and fast_model),
         "general_model_configured": bool(
             _configured_model("BOTTAZZI_ASSISTANT_GENERAL_MODEL")
             or _configured_model("BOTTAZZI_ASSISTANT_DEEP_MODEL")
