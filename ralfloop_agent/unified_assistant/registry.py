@@ -216,8 +216,26 @@ class UnifiedRegistryFacade:
         meteo_socket = Path("/run/ralf-meteo-mcp/mcp.sock")
         editorial_socket = Path("/tmp/ralf-editorial-mcp/mcp.sock")
         bandi_socket = Path(os.getenv("RALF_BANDI_MCP_SOCKET", "/run/ralf-bandi-mcp/mcp.sock"))
+        pec_socket = Path(os.getenv("RALF_PEC_MCP_SOCKET", "/run/ralf-pec-mcp/mcp.sock"))
         browser_socket = Path("/run/ralf-browser-playwright-mcp/mcp.sock")
         rows = [UnifiedToolSpec(
+            id="pec.read.mcp",
+            capabilities=(
+                "pec_discover_messages",
+                "pec_get_message",
+                "pec_list_attachments",
+                "pec_get_attachment",
+                "pec_search_messages",
+            ),
+            input_schema="strict standalone PEC MCP read-only schemas",
+            output_schema="verified PEC messages, bodies and attachment metadata/content",
+            classification=PolicyClass.READ,
+            side_effect_class="none",
+            availability="available" if _observable_path_exists(pec_socket) else "constrained:broker_unavailable",
+            health="Unix MCP broker + exact five-tool read-only allowlist",
+            verification_method="authenticated PEC read; writes=0; sends=0; source provenance",
+            source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "pec_mcp_adapter.py"),
+        ), UnifiedToolSpec(
             id="bandi.research.mcp",
             capabilities=("bandi_research_now", "bandi_latest", "bandi_search_latest", "bandi_get_opportunity"),
             input_schema="strict Bandi MCP schemas; read-only discovery/review",

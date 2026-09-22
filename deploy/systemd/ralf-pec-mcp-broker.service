@@ -1,0 +1,25 @@
+[Unit]
+Description=Ralf PEC read-only MCP broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bandi
+Group=bandi
+WorkingDirectory=/home/bandi/ralfloop-abc-live-integration-20260920
+UMask=0077
+RuntimeDirectory=ralf-pec-mcp
+RuntimeDirectoryMode=0700
+EnvironmentFile=/etc/ralfloop/pec-mcp.env
+ExecStart=/home/bandi/ralfloop-abc-live-integration-20260920/.venv/bin/python /home/bandi/ralfloop-abc-live-integration-20260920/scripts/ralf_pec_mcp_broker.py --socket /run/ralf-pec-mcp/mcp.sock --command /home/bandi/ralfloop-abc-live-integration-20260920/scripts/ralf_pec_mcp_server.py --idle-timeout 120 --max-clients 2
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

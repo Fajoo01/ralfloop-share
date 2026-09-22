@@ -29,6 +29,8 @@ def test_capability_rag_routes_current_leaf_reads():
         "cerca i messaggi WhatsApp di Marco": "whatsapp.read",
         "leggi le campagne Mailchimp": "mailchimp.read",
         "quanto paghiamo sul portale Fastweb?": "fastweb.portal.read",
+        "leggi la PEC del Difensore regionale": "pec.read",
+        "posta certificata sulla TARI": "pec.read",
         "qual è lo stato della luce in Home Assistant?": "home.read",
         "quali bandi aperti abbiamo?": "bandi.research",
     }
@@ -106,6 +108,18 @@ def test_generic_queries_do_not_select_a_leaf_capability():
 
 def test_foreign_query_is_none():
     assert CapabilityRAGIndex(UnifiedRegistryFacade()).retrieve("barzelletta sui pinguini") == ()
+
+
+def test_pec_rag_precedes_generic_home_verbs_and_gmail_post_word():
+    router = CapabilityRAGRouter(UnifiedRegistryFacade())
+    for query in (
+        "Invia la PEC al Difensore regionale e porta a termine la pratica TARI",
+        "controlla la posta certificata del Difensore regionale",
+    ):
+        result = router.route(query)
+        assert result is not None, query
+        assert result["skill"] == "pec.read", (query, result)
+        assert result["domain"] == "pec", (query, result)
 
 
 def test_capability_discovery_sees_full_mcp_catalog_without_authorizing_it():

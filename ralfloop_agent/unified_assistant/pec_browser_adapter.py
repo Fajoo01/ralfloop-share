@@ -90,9 +90,15 @@ class PecAuthenticatedCdpTransport:
         matches = [row for row in rows if row.get("type") == "page" and urlparse(str(row.get("url") or "")).hostname == self.HOST and urlparse(str(row.get("url") or "")).path.startswith(self.PAGE_PREFIX)]
         if not matches:
             raise PecBrowserError("pec_auth_required")
-        if len(matches) != 1:
-            raise PecBrowserError("pec_authenticated_page_unresolved")
-        return matches[0]
+        # Multiple authenticated Aruba tabs are legitimate. Reuse one
+        # deterministically: canonical INBOX first, then stable target id.
+        def rank(row: dict[str, Any]) -> tuple[int, str, str]:
+            parsed_row = urlparse(str(row.get("url") or ""))
+            path = parsed_row.path.rstrip("/")
+            inbox_rank = 0 if path == "/new/messages/INBOX" else 1
+            return (inbox_rank, str(row.get("id") or ""), str(row.get("url") or ""))
+
+        return min(matches, key=rank)
 
     def _call(self, identity: int, method: str, params: dict[str, Any]) -> dict[str, Any]:
         assert self._client is not None

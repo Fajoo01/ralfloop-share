@@ -24,6 +24,7 @@ LEAF_READ_SKILLS = frozenset(
         "whatsapp.read",
         "mailchimp.read",
         "fastweb.portal.read",
+        "pec.read",
         "home.read",
         "knowledge.retrieve",
         "runts.context",
@@ -100,6 +101,18 @@ CAPABILITY_HINTS: dict[str, tuple[str, ...]] = {
         "canone fastweb",
         "fattura fastweb",
         "offerta fastweb",
+    ),
+    "pec.read": (
+        "pec",
+        "posta certificata",
+        "posta elettronica certificata",
+        "webmail pec",
+        "casella pec",
+        "leggi pec",
+        "cerca pec",
+        "messaggio pec",
+        "difensore regionale",
+        "difensore civico",
     ),
     "home.read": (
         "home assistant",
@@ -301,8 +314,14 @@ class CapabilityRAGIndex:
             if skill_id == "atm.route" and "portami" in normalized:
                 score += 8.0
             # An explicit communication channel outranks a named organization/domain.
-            # Example: "cerca la mail di ARCI" is Gmail evidence about ARCI, not ARCI portal data.
-            if query_terms & {"mail", "email", "gmail", "posta"} and skill_id != "email.search":
+            # Certified mail is its own channel: "posta certificata" must never
+            # be demoted to ordinary Gmail merely because it contains "posta".
+            pec_channel = "pec" in query_terms or "posta certificata" in normalized or "posta elettronica certificata" in normalized
+            if pec_channel and skill_id == "pec.read":
+                score += 12.0
+            elif pec_channel:
+                score -= 12.0
+            elif query_terms & {"mail", "email", "gmail", "posta"} and skill_id != "email.search":
                 score -= 12.0
             if query_terms & {"whatsapp", "wapp"} and skill_id != "whatsapp.read":
                 score -= 12.0

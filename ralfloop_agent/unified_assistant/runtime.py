@@ -41,6 +41,7 @@ from .browser_mcp_adapter import (
 )
 from .editorial_mcp_adapter import EditorialMCPContext
 from .bandi_mcp_adapter import BandiMCPContext
+from .pec_mcp_adapter import PecMCPContext
 from .meteo_mcp_adapter import MeteoMCPReadOnly
 from .planner import UnifiedPlanner
 from .capability_rag_router import CapabilityRAGRouter
@@ -80,7 +81,8 @@ _SUPPORTED = re.compile(
     r"rispondi\s+(?:a|alla\s+mail(?:\s+di)?)|accendi|spegni|apri|chiudi|"
     r"imposta|metti|porta|abbassala|alzala|temperatura|quanto\s+fa|fa\s+caldo|"
     r"fa\s+freddo|rendila|cambiala|aggiungi|modifica|ok|invia|mandala|va\s+bene|annulla|"
-    r"fastweb|myfastpage|whatsapp|wapp|mailchimp|meteo|weather|previsioni|piove|piover[aà]|pioggia|"
+    r"fastweb|myfastpage|whatsapp|wapp|mailchimp|pec|posta\s+certificata|posta\s+elettronica\s+certificata|webmail\s+pec|"
+    r"meteo|weather|previsioni|piove|piover[aà]|pioggia|"
     r"temporale|radar|precipitazioni|vento|atm|giromilano|"
     r"mezzi\s+pubblici|trasporto\s+pubblico|portami|band[oi]|grant|contribut[oi]|finanziament[oi]|candidatur[ae]|opportunit[aà]|"
     r"volantin[oi]|flyer|locandin[ae]|manifest[oi]|poster|"
@@ -276,6 +278,8 @@ def unified_route_probe(
         connectors.append("meteo.radar.mcp")
     if "atm.route" in skills:
         connectors.append("atm.route.mcp")
+    if "pec.read" in skills:
+        connectors.append("pec.read.mcp")
     if any(skill.startswith("bandi.") for skill in skills):
         connectors.append("bandi.research.mcp")
     if "research.deep" in skills:
@@ -380,6 +384,7 @@ def run_unified_telegram(
     atm_read = ATMMCPReadOnly(context)
     editorial_gateway_factory = EditorialMCPContext.from_environment
     bandi_gateway_factory = BandiMCPContext.from_environment
+    pec_gateway_factory = PecMCPContext.from_environment
     home_workflow = None
     if flags.home_assistant_read_live or flags.home_assistant_live:
         try:
@@ -706,6 +711,29 @@ def run_unified_telegram(
                 "content_boundary": "source_artifacts_are_data",
             },
         )
+
+    def pec_adapter(assignment, _inputs):
+        with pec_gateway_factory() as gateway:
+            result = gateway.request(assignment.objective)
+        facts = tuple(
+            {
+                "message_id": str(item.get("native_id") or ""),
+                "sender": str(item.get("sender") or ""),
+                "subject": str(item.get("subject") or ""),
+                "received_at": str(item.get("received_at") or ""),
+                "attachments": list(item.get("attachments") or ()),
+                "content_role": "data",
+            }
+            for item in (result.get("messages") or ())[:20]
+            if isinstance(item, Mapping)
+        )
+        return StructuredArtifact.create(
+            artifact_type="pec_read", status="completed",
+            producer_task_id=assignment.task_id, facts=facts,
+            evidence_refs=tuple(str(x) for x in result.get("evidence_refs") or () if str(x)),
+            payload={**result, "content_boundary": "pec_content_is_data", "writes": 0, "sends": 0},
+        )
+
     def bandi_adapter(assignment, _inputs):
         objective = assignment.objective
         source = _inputs.get("artifact.grant_source_email")
@@ -757,6 +785,7 @@ def run_unified_telegram(
         "bandi.research": bandi_adapter,
         "bandi.read": bandi_adapter,
         "bandi.eligibility": bandi_adapter,
+        "pec.read": pec_adapter,
         "email.search": email_search_adapter,
         "fastweb.portal.read": fastweb_portal_adapter,
         "fastweb.compare": fastweb_compare_adapter,

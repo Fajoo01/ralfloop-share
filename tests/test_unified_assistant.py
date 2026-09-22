@@ -19,6 +19,7 @@ from ralfloop_agent.unified_assistant.executor import StructuredArtifact, Unifie
 from ralfloop_agent.unified_assistant.home import HomeEntity, HomeEntityRegistry, HomeWorkflow
 from ralfloop_agent.unified_assistant.memory import MemoryRouter
 from ralfloop_agent.unified_assistant.planner import UnifiedPlanner
+from ralfloop_agent.unified_assistant.capability_rag_router import CapabilityRAGRouter
 from ralfloop_agent.unified_assistant.registry import UnifiedRegistryFacade
 from ralfloop_agent.unified_assistant.skill_adapters import research_deep_adapter
 
@@ -333,6 +334,21 @@ def test_multi_domain_plan_uses_structured_dependencies():
     assert plan.assignments[1].depends_on == (plan.assignments[0].task_id,)
     assert plan.assignments[2].depends_on == (plan.assignments[1].task_id,)
     assert all(item.content_is_data for item in plan.assignments)
+
+
+def test_pec_capability_rag_precedes_generic_home_verbs():
+    registry = UnifiedRegistryFacade()
+    router = CapabilityRAGRouter(registry)
+    planner = UnifiedPlanner(registry, capability_router=router)
+
+    plan = planner.validate(planner.plan(
+        "Invia la PEC al Difensore regionale e porta a termine la pratica TARI."
+    ))
+
+    assert plan.intent == "pec.read"
+    assert plan.domains == ("pec",)
+    assert plan.assignments[0].skill == "pec.read"
+    assert plan.assignments[0].domain == "pec"
 
 
 def test_arci_grant_reply_reads_source_email_before_bando_and_never_skips_provenance():

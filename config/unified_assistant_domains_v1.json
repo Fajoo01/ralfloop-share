@@ -537,6 +537,37 @@
       ]
     },
     {
+      "id": "pec",
+      "aliases": [
+        "pec",
+        "posta certificata",
+        "posta elettronica certificata",
+        "webmail pec"
+      ],
+      "description": "Standalone Tiremm PEC mailbox evidence through the dedicated read-only MCP; independent from RUNTS.",
+      "supported_skills": [
+        "pec.read"
+      ],
+      "allowed_memory_namespaces": [
+        "tiremm"
+      ],
+      "context_builder": "ralfloop_agent.unified_assistant.pec_mcp_adapter.PecMCPContext",
+      "policy": "strict authenticated reads only; sends/writes require a separate protected capability",
+      "validators": [
+        "strict five-tool MCP allowlist",
+        "source provenance",
+        "writes=0",
+        "sends=0"
+      ],
+      "specialist_capabilities": [],
+      "status": "ready",
+      "source_refs": [
+        "ralfloop_agent/unified_assistant/pec_mcp_adapter.py",
+        "scripts/ralf_pec_mcp_server.py",
+        "deploy/systemd/ralf-pec-mcp-broker.service"
+      ]
+    },
+    {
       "id": "runts",
       "aliases": [
         "registro unico terzo settore",
@@ -1177,6 +1208,27 @@
       "classification": "READ",
       "workflow": "ralfloop_agent.unified_assistant.planner.UnifiedPlanner",
       "verification_method": "explicit user answer",
+      "status": "ready"
+    },
+    {
+      "id": "pec.read",
+      "domains": [
+        "pec",
+        "tiremm"
+      ],
+      "required_arguments": [
+        "objective"
+      ],
+      "required_capabilities": [
+        "pec_discover_messages",
+        "pec_get_message",
+        "pec_list_attachments",
+        "pec_get_attachment",
+        "pec_search_messages"
+      ],
+      "classification": "READ",
+      "workflow": "ralfloop_agent.unified_assistant.pec_mcp_adapter.PecMCPContext.request",
+      "verification_method": "strict standalone PEC MCP + authenticated mailbox evidence + writes=0 + sends=0",
       "status": "ready"
     },
     {

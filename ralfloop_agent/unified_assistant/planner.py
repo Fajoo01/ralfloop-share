@@ -15,9 +15,14 @@ _EMAIL_RE = re.compile(
     r"rispond(?:i|ere)\s+a\s+[\wÀ-ÿ][\wÀ-ÿ'. -]{0,80})\b",
     re.I,
 )
+_PEC_RE = re.compile(
+    r"\b(?:pec|posta\s+certificata|posta\s+elettronica\s+certificata|webmail\s+pec|casella\s+pec)\b"
+    r"|\btiremminnanz@pec\.it\b",
+    re.I,
+)
 _HOME_RE = re.compile(
-    r"\b(?:accendi|spegni|apri|chiudi|imposta|metti|porta|abbassala|alzala|"
-    r"temperatura|quanto\s+fa|fa\s+caldo|fa\s+freddo)\b",
+    r"\b(?:home\s+assistant|domotica|luc[ei]|lampad[ae]|neon|termostat[oi]|clima|climatizzatore|"
+    r"tapparell[ae]|serrand[ae]|cancello|pres[ae]|switch|temperatura|fa\s+caldo|fa\s+freddo|abbassala|alzala)\b",
     re.I,
 )
 _GRANT_RE = re.compile(r"\b(?:band[oi]|grant|contribut[oi]|finanziament[oi]|candidatur[ae]|opportunit[aà])\b", re.I)
@@ -427,9 +432,6 @@ class UnifiedPlanner:
                 "atm.route",
                 PolicyClass.READ,
             )
-        if _HOME_RE.search(goal):
-            skill = "home.read" if re.search(r"\b(?:temperatura|fa\s+caldo|fa\s+freddo|stato|quanto)\b", goal, re.I) and not re.search(r"\b(?:accendi|spegni|apri|chiudi|imposta|metti|porta)\b", goal, re.I) else "home.control"
-            return self._single(goal, "home", skill, PolicyClass.READ if skill == "home.read" else PolicyClass.AUTO_WRITE)
         if _JELLYFIN_RE.search(goal) and _JELLYFIN_MUTATION_RE.search(goal):
             return self._single(
                 goal, "jellyfin", "jellyfin.apply_identity", PolicyClass.PROTECTED,
@@ -469,6 +471,14 @@ class UnifiedPlanner:
                     )
                 domain = str(proposal.get("domain") or "general_assistant")
                 return self._single(goal, domain, skill, PolicyClass.READ)
+        # Deterministic fallbacks for runtimes where capability retrieval is
+        # unavailable or returns no strong candidate. PEC remains independent
+        # from RUNTS, and Home requires actual device/domain vocabulary.
+        if _PEC_RE.search(goal):
+            return self._single(goal, "pec", "pec.read", PolicyClass.READ)
+        if _HOME_RE.search(goal):
+            skill = "home.read" if re.search(r"\b(?:temperatura|fa\s+caldo|fa\s+freddo|stato|quanto)\b", goal, re.I) and not re.search(r"\b(?:accendi|spegni|apri|chiudi|imposta|metti|porta)\b", goal, re.I) else "home.control"
+            return self._single(goal, "home", skill, PolicyClass.READ if skill == "home.read" else PolicyClass.AUTO_WRITE)
         if _RELATIONAL_RE.search(goal):
             return self._single(goal, "personal_relational", "personal_relational.analyze", PolicyClass.READ)
         if grant:
