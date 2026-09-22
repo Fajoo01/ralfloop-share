@@ -35,6 +35,11 @@ from ralfloop_agent.unified_assistant.runtime import (
     run_unified_telegram,
     unified_route_probe,
 )
+from ralfloop_agent.unified_assistant.task_queue import (
+    BotTazziTaskQueue,
+    TaskCategory,
+    TaskState,
+)
 router = APIRouter(prefix="/assistant/v1", tags=["assistant-v1"])
 ASSISTANT_UI_PATH = Path(__file__).with_name("bottazzi_ui.html")
 
@@ -74,6 +79,31 @@ class AssistantV1Response(BaseModel):
     duration_ms: int
     approval_required: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AssistantTaskCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=300)
+    description: str = Field(default="", max_length=6000)
+    category_hint: TaskCategory | None = None
+    deadline_epoch: int | None = Field(default=None, ge=0)
+    depends_on: list[str] = Field(default_factory=list, max_length=32)
+
+
+class AssistantTaskPinRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    rank: int = Field(ge=1)
+
+
+class AssistantTaskStateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    state: TaskState
+    blocked_reason: str | None = Field(default=None, max_length=1000)
+
+
 from ralfloop_agent.unified_assistant.contracts import AssistantFeatureFlags
 
 
@@ -93,6 +123,11 @@ def get_unified_runner() -> Callable[..., dict[str, Any]]:
 @lru_cache(maxsize=1)
 def get_motor_client() -> BotTazziMotorJudge:
     return BotTazziMotorJudge()
+
+
+@lru_cache(maxsize=1)
+def get_task_queue() -> BotTazziTaskQueue:
+    return BotTazziTaskQueue.from_env()
 
 
 _DEFAULT_INFERENCE_CONFIG = (
@@ -398,6 +433,89 @@ def assistant_v1_chat(
         approval_required=False,
         metadata=metadata,
     )
+
+
+@router.get("/tasks")
+def assistant_v1_tasks(
+    queue: Annotated[BotTazziTaskQueue, Depends(get_task_queue)],
+) -> dict[str, Any]:
+    return queue.snapshot()
+
+
+@router.post("/tasks")
+def assistant_v1_task_create(
+    request: AssistantTaskCreateRequest,
+    queue: Annotated[BotTazziTaskQueue, Depends(get_task_queue)],
+) -> dict[str, Any]:
+    try:
+        task = queue.create_task(
+            request.title,
+            description=request.description,
+            category_hint=request.category_hint,
+            deadline_epoch=request.deadline_epoch,
+            depends_on=tuple(request.depends_on),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "task": task.model_dump(mode="json")}
+
+
+@router.get("/tasks/next")
+def assistant_v1_task_next(
+    queue: Annotated[BotTazziTaskQueue, Depends(get_task_queue)],
+) -> dict[str, Any]:
+    entry = queue.next_runnable()
+    if entry is None:
+        return {"task": None, "runnable": False}
+    return entry.model_dump(mode="json")
+
+
+@router.post("/tasks/{task_id}/pin")
+def assistant_v1_task_pin(
+    task_id: str,
+    request: AssistantTaskPinRequest,
+    queue: Annotated[BotTazziTaskQueue, Depends(get_task_queue)],
+) -> dict[str, Any]:
+    try:
+        queue.pin(task_id, request.rank)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="task_not_found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return queue.snapshot()
+
+
+@router.post("/tasks/{task_id}/unpin")
+def assistant_v1_task_unpin(
+    task_id: str,
+    queue: Annotated[BotTazziTaskQueue, Depends(get_task_queue)],
+) -> dict[str, Any]:
+    try:
+        task = queue.unpin(task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="task_not_found") from exc
+    return {"ok": True, "task": task.model_dump(mode="json")}
+
+
+@router.post("/tasks/{task_id}/state")
+def assistant_v1_task_state(
+    task_id: str,
+    request: AssistantTaskStateRequest,
+    queue: Annotated[BotTazziTaskQueue, Depends(get_task_queue)],
+) -> dict[str, Any]:
+    try:
+        task = queue.set_state(
+            task_id,
+            request.state,
+            blocked_reason=request.blocked_reason,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="task_not_found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "task": task.model_dump(mode="json")}
+
+
 @router.get("/status")
 def assistant_v1_status() -> dict[str, Any]:
     fast_base_url, fast_model, _ = _fast_lane_settings()
@@ -408,8 +526,11 @@ def assistant_v1_status() -> dict[str, Any]:
         "local_only": True,
         "cloud_llm_required": False,
         "ui_path": "/assistant/v1",
-        "routes": ["unified", "local_chat", "deep_chat"],
+        "routes": ["unified", "local_chat", "deep_chat", "task_queue"],
         "model_policy": "small_first",
+        "task_queue_classifier": "JED",
+        "task_queue_priority_domains": ["money", "love", "family"],
+        "task_queue_human_override": "pinned_slot_authoritative",
         "fast_model_configured": bool(fast_base_url and fast_model),
         "general_model_configured": bool(_fast_lane_settings()[1]),
         "deep_model_configured": True,
