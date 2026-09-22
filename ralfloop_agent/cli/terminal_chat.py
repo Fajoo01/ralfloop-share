@@ -36,6 +36,7 @@ EXPERIMENTAL_PROVIDERS = set(CHAT_PROVIDERS) - {"ollama", "llama_cpp"}
 
 CHAT_ENDPOINT = "/chat"
 CHAT_STREAM_ENDPOINT = "/chat/stream"
+ASSISTANT_ENDPOINT = "/assistant/v1/chat"
 TASK_ENDPOINT = "/tasks/run"
 STREAM_FALLBACK_STATUSES = {404, 405, 501}
 
@@ -228,6 +229,9 @@ class RalfHTTPClient:
 
     def post_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._request_json("POST", CHAT_ENDPOINT, payload, timeout=(self.connect_timeout, self.inactivity_timeout))
+
+    def post_assistant(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._request_json("POST", ASSISTANT_ENDPOINT, payload, timeout=(self.connect_timeout, self.agent_timeout))
 
     def post_chat_stream(self, payload: dict[str, Any]) -> Iterator[dict[str, Any]]:
         self.last_endpoint = CHAT_STREAM_ENDPOINT
@@ -504,6 +508,41 @@ def build_task_payload(
     return {
         "user_goal": message,
         "extra_context": {"source": "ralf_terminal", "terminal_client": terminal},
+    }
+
+
+def build_assistant_agent_payload(
+    message: str,
+    session: ChatSession,
+    repo_context: dict[str, Any] | None,
+    *,
+    no_history: bool = False,
+    capability: str | None = None,
+) -> dict[str, Any]:
+    terminal: dict[str, Any] = {
+        "source": "ralf_terminal",
+        "approval_gate": "telegram_required_for_protected_actions",
+        "auto_execute_protected_actions": False,
+        "cwd": session.cwd,
+        "session_id": session.session_id,
+        "interaction_mode": "agent",
+    }
+    if capability:
+        terminal["capability"] = capability
+    context: dict[str, Any] = {
+        "source": "ralf_terminal",
+        "terminal_client": terminal,
+    }
+    if session.context_enabled and repo_context is not None:
+        context["repo_context"] = repo_context
+    return {
+        "message": message,
+        "history": [] if no_history else session.messages(),
+        "session_id": session.session_id or None,
+        "mode": "auto",
+        "allow_tools": True,
+        "model": session.model,
+        "context": context,
     }
 
 
@@ -805,24 +844,24 @@ def _run_agent_goal(
         if answer not in {"y", "yes", "s", "si"}:
             print("annullato", file=out)
             return 2
-    endpoint, model_id = _provider_identity(config, session)
     print(
         f"interaction_mode=agent capability={selected_decision.capability}",
         file=err,
     )
     try:
-        payload = client.post_task(
-            build_task_payload(
+        repo_context = _context_for_session(session)
+        payload = client.post_assistant(
+            build_assistant_agent_payload(
                 goal,
                 session,
+                repo_context,
                 no_history=config.no_history,
-                provider=config.provider,
-                provider_endpoint=endpoint,
-                model_id=model_id,
-                interaction_mode="agent",
                 capability=selected_decision.capability,
             )
         )
+    except (RepoContextError, OSError) as exc:
+        print(sanitize_terminal_text(str(exc)), file=err)
+        return 2
     except KeyboardInterrupt:
         print("\ngenerazione agente interrotta", file=out)
         return 130
@@ -831,15 +870,6 @@ def _run_agent_goal(
         return 1
     payload.setdefault("interaction_mode", "agent")
     payload.setdefault("capability", selected_decision.capability)
-    envelope = payload.get("result_envelope")
-    if isinstance(envelope, dict):
-        meta = envelope.setdefault("meta", {})
-        if isinstance(meta, dict):
-            meta.setdefault("interaction_mode", "agent")
-            meta.setdefault("capability", selected_decision.capability)
-            meta.setdefault("provider", config.provider)
-            meta.setdefault("endpoint", endpoint)
-            meta.setdefault("model_id", model_id)
     rc = emit_response(payload, raw=config.raw, json_output=config.json_output, out=out)
     if rc == 0:
         answer = sanitize_terminal_text(extract_text_response(payload))
@@ -932,7 +962,7 @@ def _run_agent_repl(
     print(sanitize_terminal_text(f"cwd: {session.cwd}"), file=out)
     print(sanitize_terminal_text(f"session: {session.session_id}"), file=out)
     print(sanitize_terminal_text(f"provider: {config.provider}"), file=out)
-    print("mode: every message uses /tasks/run", file=out)
+    print("mode: every message uses /assistant/v1/chat (Unified Assistant v1)", file=out)
     print(AGENT_WARNING, file=out)
     while True:
         try:
@@ -1742,7 +1772,8 @@ def _endpoint_text(config: ChatConfig) -> str:
         {
             "chat_stream": f"{config.base_url}{CHAT_STREAM_ENDPOINT}",
             "chat_fallback": f"{config.base_url}{CHAT_ENDPOINT}",
-            "agent_explicit": f"{config.base_url}{TASK_ENDPOINT}",
+            "agent_explicit": f"{config.base_url}{ASSISTANT_ENDPOINT}",
+            "agent_legacy_tasks_run": f"{config.base_url}{TASK_ENDPOINT}",
             "normal_chat_uses_tasks_run": True,
             "routing": "deterministic_natural_dispatch",
         },
@@ -1757,13 +1788,15 @@ def _status_text(client: RalfHTTPClient) -> str:
         "backend": client.base_url,
         "chat": f"{client.base_url}{CHAT_ENDPOINT}",
         "chat_stream": f"{client.base_url}{CHAT_STREAM_ENDPOINT}",
-        "agent": f"{client.base_url}{TASK_ENDPOINT}",
+        "agent": f"{client.base_url}{ASSISTANT_ENDPOINT}",
+        "agent_legacy_tasks_run": f"{client.base_url}{TASK_ENDPOINT}",
     }
     try:
         paths = client.get_json("/openapi.json").get("paths", {})
         status["chat_available"] = CHAT_ENDPOINT in paths
         status["chat_stream_available"] = CHAT_STREAM_ENDPOINT in paths
-        status["agent_available"] = TASK_ENDPOINT in paths
+        status["agent_available"] = ASSISTANT_ENDPOINT in paths
+        status["agent_legacy_tasks_run_available"] = TASK_ENDPOINT in paths
     except RalfTerminalError as exc:
         status["openapi"] = str(exc)
     try:
