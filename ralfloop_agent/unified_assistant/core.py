@@ -252,18 +252,35 @@ class UnifiedAssistantCore:
             execution = self.dag_executor.execute(plan, inputs=inputs)
             artifact = execution.artifacts[-1] if execution.artifacts else None
             payload = artifact.payload if artifact is not None else {}
-            message = str(payload.get("message") or (
-                "Operazione completata." if execution.status == "completed" else "Operazione bloccata."
-            ))
-            status = (
-                str(artifact.status) if artifact is not None and artifact.status in {
-                    "completed", "clarification_required", "unavailable", "draft"
-                } else ("completed" if execution.status == "completed" else "blocked")
-            )
-            tool_executed = (
-                execution.status == "completed"
-                and status not in {"clarification_required", "unavailable", "blocked"}
-            )
+            artifact_status = str(artifact.status) if artifact is not None else ""
+            if assignment.skill == "pec.prepare_send" and artifact_status == "draft_fields_required":
+                missing = ", ".join(str(item) for item in payload.get("missing") or ())
+                message = (
+                    "Writer PEC disponibile e verificato. Mancano i campi della bozza: "
+                    f"{missing or 'destinatario, oggetto e testo'}. Nessuna PEC è stata inviata."
+                )
+                status = "clarification_required"
+                tool_executed = execution.status == "completed"
+            elif assignment.skill == "pec.prepare_send" and artifact_status == "approval_required":
+                message = (
+                    "Bozza PEC validata e vincolata al suo hash. Serve approvazione esplicita "
+                    "prima dell'invio. Nessuna PEC è stata inviata."
+                )
+                status = "approval_required"
+                tool_executed = execution.status == "completed"
+            else:
+                message = str(payload.get("message") or (
+                    "Operazione completata." if execution.status == "completed" else "Operazione bloccata."
+                ))
+                status = (
+                    artifact_status if artifact is not None and artifact_status in {
+                        "completed", "clarification_required", "unavailable", "draft", "approval_required"
+                    } else ("completed" if execution.status == "completed" else "blocked")
+                )
+                tool_executed = (
+                    execution.status == "completed"
+                    and status not in {"clarification_required", "unavailable", "blocked"}
+                )
             return self._result(
                 status, message, plan=plan.model_dump(mode="json"),
                 execution=execution.model_dump(mode="json"),

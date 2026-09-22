@@ -641,6 +641,72 @@ def test_generic_dag_clarification_does_not_claim_tool_execution(monkeypatch, tm
     assert result.data["tools_executed"] is False
 
 
+def test_pec_prepare_dag_surfaces_missing_fields_instead_of_completed(monkeypatch, tmp_path):
+    socket = tmp_path / "pec-write.sock"
+    socket.touch()
+    monkeypatch.setenv("RALF_PEC_WRITE_MCP_SOCKET", str(socket))
+    core, _, _, _ = build_core()
+
+    def needs_fields(assignment, _inputs):
+        return StructuredArtifact.create(
+            artifact_type="pec_write_request",
+            status="draft_fields_required",
+            producer_task_id=assignment.task_id,
+            payload={
+                "ok": True,
+                "status": "draft_fields_required",
+                "missing": ["recipient", "subject", "body"],
+                "writes": 0,
+                "sends": 0,
+            },
+        )
+
+    core.dag_executor = UnifiedDAGExecutor(
+        core.planner.registry,
+        {"pec.prepare_send": needs_fields},
+    )
+    result = core.handle("Invia la PEC al Difensore regionale e porta a termine la pratica TARI")
+
+    assert result.status == "clarification_required"
+    assert "Mancano i campi della bozza" in result.message
+    assert "Nessuna PEC è stata inviata" in result.message
+    assert result.data["tools_executed"] is True
+
+
+def test_pec_prepare_dag_surfaces_hash_bound_approval(monkeypatch, tmp_path):
+    socket = tmp_path / "pec-write.sock"
+    socket.touch()
+    monkeypatch.setenv("RALF_PEC_WRITE_MCP_SOCKET", str(socket))
+    core, _, _, _ = build_core()
+
+    def approval_needed(assignment, _inputs):
+        return StructuredArtifact.create(
+            artifact_type="pec_write_request",
+            status="approval_required",
+            producer_task_id=assignment.task_id,
+            payload={
+                "ok": True,
+                "status": "approval_required",
+                "approval_request_id": "apr_TEST",
+                "writes": 0,
+                "sends": 0,
+            },
+        )
+
+    core.dag_executor = UnifiedDAGExecutor(
+        core.planner.registry,
+        {"pec.prepare_send": approval_needed},
+    )
+    result = core.handle(
+        "Invia la PEC a difensore@example.test oggetto: Pratica TARI testo: Allego la documentazione"
+    )
+
+    assert result.status == "approval_required"
+    assert "Serve approvazione esplicita" in result.message
+    assert "Nessuna PEC è stata inviata" in result.message
+    assert result.data["tools_executed"] is True
+
+
 def test_unhandled_protected_skill_fails_closed_without_executor():
     core, _, _, _ = build_core()
     result = core.handle("applica identità film Jellyfin")
