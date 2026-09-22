@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 
 from ralfloop_agent.unified_assistant import runtime
 from ralfloop_agent.unified_assistant.browser_mcp_adapter import BrowserMCPApprovalProvider
@@ -60,3 +61,11 @@ def test_runtime_browser_approval_executes_once(monkeypatch, tmp_path):
     )
     assert replay["metadata"]["status"] == "no_pending_action"
     assert provider.apply_calls == 1
+
+
+def test_browser_mcp_dropin_does_not_shadow_unified_registry() -> None:
+    root = Path(__file__).resolve().parents[1]
+    dropin = (root / "deploy/systemd/ralfloop-backend-browser-mcp.conf").read_text(encoding="utf-8")
+    assert "config/unified_assistant_domains_v1.json" not in dropin
+    assert "src/mcp_transport.py" in dropin
+
