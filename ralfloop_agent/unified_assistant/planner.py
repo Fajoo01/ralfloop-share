@@ -4,7 +4,6 @@ import hashlib
 import re
 
 from .contracts import AssistantPlan, PlanAssignment, PolicyClass
-from .capability_rag_router import LEAF_READ_SKILLS
 from .email_search import is_email_search_request, plan_email_search
 from .registry import UnifiedRegistryFacade
 
@@ -47,6 +46,23 @@ _NORMATIVE_INFO_RE = re.compile(
 _EDITORIAL_RE = re.compile(r"\b(?:volantin[oi]|flyer|locandin[ae]|manifest[oi]|poster)\b", re.I)
 _MEDIA_RE = re.compile(r"\b(?:video|audio|immagine|ffmpeg|sottotitol[oi])\b", re.I)
 _JELLYFIN_RE = re.compile(r"\bjellyfin\b", re.I)
+_BROWSER_RE = re.compile(r"\b(?:browser|playwright|pagina\s+web|schede?\s+browser)\b", re.I)
+_BROWSER_INTERACTION_RE = re.compile(
+    r"\b(?:clicca|click|scrivi|digita|type|compila|fill|carica|upload|"
+    r"invia|submit|seleziona|select|trascina|drag|premi|press)\b", re.I
+)
+_BROWSER_TARGET_RE = re.compile(r"\b(?P<value>e[0-9]+)\b", re.I)
+_BROWSER_TYPE_RE = re.compile(r"\b(?:scrivi|digita|type|compila|fill)\b", re.I)
+_BROWSER_UPLOAD_RE = re.compile(r"\b(?:carica|upload)\b", re.I)
+_BROWSER_SUBMIT_RE = re.compile(r"\b(?:submit|invia|premi\s+invio)\b", re.I)
+_BROWSER_TEXT_RE = re.compile(
+    r"\b(?:testo|text)\s*[:=]\s*(?:\"(?P<dq>[^\"]*)\"|'(?P<sq>[^']*)'|(?P<raw>\S.*))",
+    re.I,
+)
+_BROWSER_FILE_RE = re.compile(
+    r"\b(?:file|path)\s*[:=]\s*(?:\"(?P<dq>[^\"]+)\"|'(?P<sq>[^']+)'|(?P<raw>\S+))",
+    re.I,
+)
 _JELLYFIN_MUTATION_RE = re.compile(
     r"\b(?:applica|modifica|aggiorna|refresh|deduplica|elimina|rimuovi|correggi)\b", re.I
 )
@@ -65,6 +81,33 @@ def _jellyfin_apply_args(goal: str) -> dict[str, object]:
     year = _JELLYFIN_YEAR_RE.search(goal)
     if year:
         args["year"] = int(year.group("value"))
+    return args
+
+
+def _browser_interact_args(goal: str) -> dict[str, object]:
+    args: dict[str, object] = {}
+    target = _BROWSER_TARGET_RE.search(goal)
+    if target:
+        args["target"] = target.group("value").casefold()
+    if _BROWSER_UPLOAD_RE.search(goal):
+        args["logical_action"] = "upload"
+        paths = []
+        for match in _BROWSER_FILE_RE.finditer(goal):
+            value = match.group("dq") or match.group("sq") or match.group("raw") or ""
+            if value:
+                paths.append(value.strip())
+        if paths:
+            args["paths"] = paths
+    elif _BROWSER_TYPE_RE.search(goal):
+        args["logical_action"] = "type"
+        text = _BROWSER_TEXT_RE.search(goal)
+        if text:
+            value = text.group("dq") or text.group("sq") or text.group("raw") or ""
+            args["text"] = value.strip()
+    elif _BROWSER_SUBMIT_RE.search(goal):
+        args["logical_action"] = "submit"
+    else:
+        args["logical_action"] = "click"
     return args
 
 _ARCI_RE = re.compile(r"\barci\b", re.I)
@@ -394,6 +437,11 @@ class UnifiedPlanner:
             )
         if _ARCI_RE.search(goal) and _ARCI_MUTATION_RE.search(goal):
             return self._denied("arci_mutation_not_available")
+        if _BROWSER_RE.search(goal) and _BROWSER_INTERACTION_RE.search(goal):
+            return self._single(
+                goal, "browser", "browser.interact", PolicyClass.CONFIRM_WRITE,
+                arguments=_browser_interact_args(goal),
+            )
         if _NORMATIVE_ADMIN_TOPIC_RE.search(goal) and _NORMATIVE_INFO_RE.search(goal):
             return self._single(
                 goal, "research", "research.deep", PolicyClass.READ,
@@ -404,7 +452,7 @@ class UnifiedPlanner:
             )
         if self.capability_router is not None:
             proposal = self.capability_router.route(goal)
-            if proposal is not None and proposal.get("skill") in LEAF_READ_SKILLS:
+            if proposal is not None and self.capability_router.index.is_auto_route_skill(str(proposal.get("skill") or "")):
                 skill = str(proposal["skill"])
                 if skill == "email.search":
                     search = plan_email_search(goal)

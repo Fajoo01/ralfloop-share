@@ -86,3 +86,57 @@ def test_search_latest_matches_exact_regione_reference(tmp_path: Path) -> None:
         "bandi_search_latest", {"query": "RLJ12026054688", "limit": 5}
     )["structuredContent"]
     assert result["items"][0]["title"] == "Terzo settore Triennio 2026-2028"
+
+
+def test_bandi_adapter_cercami_triggers_fresh_research_and_filters_irrelevant() -> None:
+    from ralfloop_agent.unified_assistant.bandi_mcp_adapter import BandiMCPContext
+
+    class FakeBandi(BandiMCPContext):
+        def __init__(self) -> None:
+            self.calls = []
+
+        def call(self, name, arguments):
+            self.calls.append((name, dict(arguments)))
+            if name == "bandi_research_now":
+                return {
+                    "ok": True,
+                    "status": "completed",
+                    "items": [
+                        {"call_key": "good0001", "title": "ETS", "score": 87, "tiremm_compatibility": "compatible"},
+                        {"call_key": "maybe001", "title": "Da verificare", "score": 79, "tiremm_compatibility": "conditional_missing_primary_documents"},
+                        {"call_key": "nutria01", "title": "Nutria", "score": 63, "tiremm_compatibility": "needs_review"},
+                        {"call_key": "proloco1", "title": "Pro Loco", "score": 20, "tiremm_compatibility": "ineligible"},
+                    ],
+                    "writes": 0,
+                    "sends": 0,
+                }
+            raise AssertionError(name)
+
+    ctx = FakeBandi()
+    result = ctx.request("Cercami bandi adatti a Tiremm")
+    assert ctx.calls[0][0] == "bandi_research_now"
+    assert result["operation"] == "fresh_research"
+    assert [row["title"] for row in result["items"]] == ["ETS", "Da verificare"]
+    assert result["raw_item_count"] == 4
+    assert result["excluded_irrelevant_count"] == 2
+
+
+def test_bandi_adapter_specific_ineligible_reference_is_not_hidden() -> None:
+    from ralfloop_agent.unified_assistant.bandi_mcp_adapter import BandiMCPContext
+
+    class FakeBandi(BandiMCPContext):
+        def __init__(self) -> None:
+            self.calls = []
+
+        def call(self, name, arguments):
+            self.calls.append((name, dict(arguments)))
+            if name == "bandi_search_latest":
+                return {"ok": True, "status": "completed", "items": [{
+                    "call_key": "proloco1", "title": "Pro Loco", "score": 20,
+                    "tiremm_compatibility": "ineligible", "primary_url": "https://example.invalid/RLJ12026099999",
+                }], "writes": 0, "sends": 0}
+            return {"ok": True, "status": "completed", "opportunity": {"title": "Pro Loco"}, "writes": 0, "sends": 0}
+
+    result = FakeBandi().request("Valuta RLJ12026099999 per Tiremm")
+    assert result["operation"] == "reference_lookup"
+    assert result["items"][0]["tiremm_compatibility"] == "ineligible"

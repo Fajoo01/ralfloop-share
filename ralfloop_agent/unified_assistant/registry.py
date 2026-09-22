@@ -189,7 +189,18 @@ class UnifiedRegistryFacade:
     def _runtime_adapters(self) -> list[UnifiedToolSpec]:
         entities = json.loads(self.home_entities_path.read_text(encoding="utf-8"))
         entity_count = len(entities.get("entities") or [])
-        home_status = "available" if entity_count else "constrained:no_registered_entities"
+        home_provider = os.getenv("RALFLOOP_HOME_PROVIDER", "home_assistant").strip().casefold()
+        home_status = (
+            "constrained:provider_replaced_by_tuya_mcp"
+            if home_provider == "tuya_mcp"
+            else "available" if entity_count else "constrained:no_registered_entities"
+        )
+        tuya_socket = Path(os.getenv("RALF_TUYA_MCP_SOCKET", "/run/ralf-tuya-mcp/mcp.sock"))
+        tuya_status = (
+            "available" if home_provider == "tuya_mcp" and _observable_path_exists(tuya_socket)
+            else "constrained:broker_unavailable" if home_provider == "tuya_mcp"
+            else "constrained:not_selected"
+        )
         gmail_socket = Path("/run/ralf-google-workspace-mcp/mcp.sock")
         whatsapp_scopes = json.loads(self.whatsapp_scopes_path.read_text(encoding="utf-8"))
         whatsapp_work_profile = (
@@ -205,6 +216,7 @@ class UnifiedRegistryFacade:
         meteo_socket = Path("/run/ralf-meteo-mcp/mcp.sock")
         editorial_socket = Path("/tmp/ralf-editorial-mcp/mcp.sock")
         bandi_socket = Path(os.getenv("RALF_BANDI_MCP_SOCKET", "/run/ralf-bandi-mcp/mcp.sock"))
+        browser_socket = Path("/run/ralf-browser-playwright-mcp/mcp.sock")
         rows = [UnifiedToolSpec(
             id="bandi.research.mcp",
             capabilities=("bandi_research_now", "bandi_latest", "bandi_search_latest", "bandi_get_opportunity"),
@@ -227,6 +239,28 @@ class UnifiedRegistryFacade:
             health="Unix stdio relay + exact eight-tool allowlist",
             verification_method="strict MCP tool discovery; local A4 PDF/PNG/HTML output; no email/print/shell/browser",
             source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "editorial_mcp_adapter.py"),
+        ), UnifiedToolSpec(
+            id="browser.playwright.read_only",
+            capabilities=("browser.snapshot.read", "browser.tabs.read"),
+            input_schema="strict browser snapshot or fixed browser_tabs action=list",
+            output_schema="untrusted page snapshot/tab metadata as data",
+            classification=PolicyClass.READ,
+            side_effect_class="none",
+            availability="available" if _observable_path_exists(browser_socket) else "constrained:broker_unavailable",
+            health="shared Playwright MCP Unix bridge",
+            verification_method="exact read allowlist; no click/type/upload/evaluate/run_code",
+            source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "browser_mcp_adapter.py"),
+        ), UnifiedToolSpec(
+            id="browser.playwright.approval_bound",
+            capabilities=("browser.click", "browser.type", "browser.upload", "browser.submit"),
+            input_schema="exact browser action scope bound to approval",
+            output_schema="provider result plus post-action readback",
+            classification=PolicyClass.CONFIRM_WRITE,
+            side_effect_class="confirmation_required",
+            availability="constrained:approval_executor_required",
+            health="raw Playwright MCP present; automatic execution disabled",
+            verification_method="never eligible for READ auto-route; exact approved action required",
+            source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "browser_mcp_adapter.py"),
         ), UnifiedToolSpec(
             id="google_workspace.gmail.read_only",
             capabilities=("google_workspace.gmail.search", "google_workspace.gmail.read", "google_workspace.gmail.thread"),
@@ -372,6 +406,17 @@ class UnifiedRegistryFacade:
                 PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "mailchimp_campaign.py"
             ),
         ), UnifiedToolSpec(
+            id="tuya.home.mcp",
+            capabilities=("home.state.read", "home.service.call"),
+            input_schema="strict Tuya MCP schemas over Home Assistant-owned Tuya entities",
+            output_schema="Tuya device/entity inventory, state, and verified service readback",
+            classification=PolicyClass.PROTECTED,
+            side_effect_class="mixed_read_and_policy_gated_write",
+            availability=tuya_status,
+            health="Unix MCP broker + Tuya ownership verification + Home Assistant readback",
+            verification_method="Tuya registry ownership; service allowlist; read before/write/read after",
+            source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "tuya_mcp.py"),
+        ), UnifiedToolSpec(
             id="home_assistant.adapter",
             capabilities=("home.state.read", "home.service.call"),
             input_schema="HomeCommand",
@@ -401,38 +446,6 @@ class UnifiedRegistryFacade:
                 health="Unix MCP broker + SQLite query_only source",
                 verification_method="read-only MCP allowlist + source refs/content hashes",
                 source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "memory_mcp.py"),
-            ),
-            UnifiedToolSpec(
-                id="bandi.research.mcp.read",
-                capabilities=(
-                    "bandi.latest.read", "bandi.search.read",
-                    "bandi.opportunity.read",
-                ),
-                input_schema="strict semantic Bandi MCP persisted-report reads",
-                output_schema="source-backed grant opportunities with call keys and provenance",
-                classification=PolicyClass.READ, side_effect_class="none",
-                availability=(
-                    "available" if _observable_path_exists(Path("/tmp/ralf-bandi-mcp/mcp.sock"))
-                    else "constrained:broker_unavailable"
-                ),
-                health="Unix MCP broker + persisted Bandi report",
-                verification_method="tools/list allowlist + persisted report/source URL evidence; zero mutation",
-                source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "bandi_live_mcp.py"),
-            ),
-            UnifiedToolSpec(
-                id="bandi.research.mcp.refresh",
-                capabilities=("bandi.research.refresh",),
-                input_schema="bounded research focus + result limit",
-                output_schema="persisted refreshed report with source provenance",
-                classification=PolicyClass.AUTO_WRITE,
-                side_effect_class="local_state_write_and_network_read",
-                availability=(
-                    "available" if _observable_path_exists(Path("/tmp/ralf-bandi-mcp/mcp.sock"))
-                    else "constrained:broker_unavailable"
-                ),
-                health="Unix MCP broker + bounded official-source-first research",
-                verification_method="fresh report persistence + source URLs + run status; not eligible for READ auto-route",
-                source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "bandi_live_mcp.py"),
             ),
             UnifiedToolSpec(
                 id="arci.read_only.mcp",

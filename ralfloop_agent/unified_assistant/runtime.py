@@ -30,8 +30,15 @@ from .executor import StructuredArtifact, UnifiedDAGExecutor
 from .fastweb_portal import FastwebPortalReadOnly
 from .home import HomeEntityRegistry, HomeWorkflow
 from .home_provider import HomeAssistantProviderError, HomeAssistantRESTBackend
+from .tuya_mcp_adapter import TuyaMCPHomeBackend, TuyaMCPProviderError
 from .memory import MemoryRouter, tiremm_profile_items
 from .atm_mcp_adapter import ATMMCPReadOnly
+from .browser_mcp_adapter import (
+    BrowserMCPApprovalProvider,
+    UnifiedBrowserApprovalCoordinator,
+    UnifiedBrowserApprovalExecutor,
+    browser_inspect_adapter,
+)
 from .editorial_mcp_adapter import EditorialMCPContext
 from .bandi_mcp_adapter import BandiMCPContext
 from .meteo_mcp_adapter import MeteoMCPReadOnly
@@ -79,7 +86,7 @@ _SUPPORTED = re.compile(
     r"volantin[oi]|flyer|locandin[ae]|manifest[oi]|poster|"
     r"come\s+(?:arrivo|vado|posso\s+andare)|"
     r"mezzi\s+(?:per|verso)|percorso\s+(?:atm|con\s+i\s+mezzi)|home\s+assistant|domotica|stato\s+(?:della\s+)?luce|"
-    r"runts|arci|jellyfin|bandi|bando|grant|finanziament[oi]|contribut[oi]|insegnante|tutor|quiz|esercizio\s+didattico|memoria\s+operativa)\b",
+    r"runts|arci|jellyfin|browser|playwright|snapshot\s+(?:browser|pagina)|schede?\s+browser|bandi|bando|grant|finanziament[oi]|contribut[oi]|insegnante|tutor|quiz|esercizio\s+didattico|memoria\s+operativa)\b",
     re.I,
 )
 
@@ -254,66 +261,42 @@ def unified_route_probe(
     plan = planner.validate(planner.plan(text))
     skills = [item.skill for item in plan.assignments]
     all_read = all(item.policy.value == "READ" for item in plan.assignments)
-    if all_read and (
-        "email.search" in skills
-        or "fastweb.portal.read" in skills
-        or "whatsapp.read" in skills
-        or "mailchimp.read" in skills
-        or "meteo.read" in skills
-        or "atm.route" in skills
-        or "knowledge.retrieve" in skills
-        or "runts.context" in skills
-        or "arci.context" in skills
-        or "jellyfin.identify" in skills
-        or "education.tutor" in skills
-        or any(skill.startswith("bandi.") for skill in skills)
-        or "research.deep" in skills
-    ):
-        task_mode = "tool_backed_read"
-        interaction_class = "TOOL_BACKED_READ"
-        connectors = []
-        if "email.search" in skills:
-            connectors.append("google_workspace.gmail")
-        if "fastweb.portal.read" in skills:
-            connectors.append("fastweb.portal.read_only")
-        if "whatsapp.read" in skills:
-            connectors.append("whatsapp.web.mcp")
-        if "mailchimp.read" in skills:
-            connectors.append("mailchimp.marketing")
-        if "meteo.read" in skills:
-            connectors.append("meteo.radar.mcp")
-        if "atm.route" in skills:
-            connectors.append("atm.route.mcp")
-        if "knowledge.retrieve" in skills or "runts.context" in skills:
-            connectors.append("memory.operational.mcp")
-        if "arci.context" in skills:
-            connectors.append("arci.read_only.mcp")
-        if "jellyfin.identify" in skills:
-            connectors.append("jellyfin.identity.mcp.read")
-        if "education.tutor" in skills:
-            connectors.append("teacher.student.mcp")
-        if any(skill.startswith("bandi.") for skill in skills):
-            connectors.append("bandi.research.mcp")
-        if "research.deep" in skills:
-            connectors.append("model_tool.deep_web_research")
-    elif all(item.policy.value == "READ" for item in plan.assignments):
-        task_mode = "tool_backed_read"
-        interaction_class = "TOOL_BACKED_READ"
-        connectors = []
-    else:
-        task_mode = "external_action"
-        interaction_class = "EXTERNAL_ACTION"
-        connectors = []
-        if any(item.domain == "email" for item in plan.assignments):
-            connectors.append("google_workspace.gmail")
-        if any(item.domain == "whatsapp" for item in plan.assignments):
-            connectors.append("whatsapp.web.mcp")
-        if any(item.domain == "mailchimp" for item in plan.assignments):
-            connectors.append("mailchimp.marketing")
-        if any(skill.startswith("bandi.") for skill in skills):
-            connectors.append("bandi.research.mcp")
-        if any(item.domain == "jellyfin" for item in plan.assignments):
-            connectors.append("jellyfin.identity.mcp.write")
+    task_mode = "tool_backed_read" if all_read else "external_action"
+    interaction_class = "TOOL_BACKED_READ" if all_read else "EXTERNAL_ACTION"
+    connectors = []
+    if "email.search" in skills or (not all_read and any(item.domain == "email" for item in plan.assignments)):
+        connectors.append("google_workspace.gmail")
+    if "fastweb.portal.read" in skills:
+        connectors.append("fastweb.portal.read_only")
+    if "whatsapp.read" in skills or (not all_read and any(item.domain == "whatsapp" for item in plan.assignments)):
+        connectors.append("whatsapp.web.mcp")
+    if "mailchimp.read" in skills or (not all_read and any(item.domain == "mailchimp" for item in plan.assignments)):
+        connectors.append("mailchimp.marketing")
+    if "meteo.read" in skills:
+        connectors.append("meteo.radar.mcp")
+    if "atm.route" in skills:
+        connectors.append("atm.route.mcp")
+    if any(skill.startswith("bandi.") for skill in skills):
+        connectors.append("bandi.research.mcp")
+    if "research.deep" in skills:
+        connectors.append("model_tool.deep_web_research")
+    if any(skill in {"knowledge.retrieve", "runts.context"} for skill in skills):
+        connectors.append("memory.operational.mcp")
+    if "arci.context" in skills:
+        connectors.append("arci.read_only.mcp")
+    if "jellyfin.identify" in skills:
+        connectors.append("jellyfin.identity.mcp.read")
+    if "education.tutor" in skills:
+        connectors.append("teacher.student.mcp")
+    if "browser.inspect" in skills:
+        connectors.append("browser.playwright.read_only")
+    if any(skill in {"home.read", "home.control"} for skill in skills):
+        home_provider = os.getenv("RALFLOOP_HOME_PROVIDER", "home_assistant").strip().casefold()
+        connectors.append("tuya.home.mcp" if home_provider == "tuya_mcp" else "home_assistant.adapter")
+    if not all_read and any(item.domain == "jellyfin" for item in plan.assignments):
+        connectors.append("jellyfin.identity.mcp.write")
+    if not all_read and any(item.domain == "browser" for item in plan.assignments):
+        connectors.append("browser.playwright.approval_bound")
     return {
         "task_mode": task_mode,
         "mode": task_mode,
@@ -400,11 +383,10 @@ def run_unified_telegram(
     home_workflow = None
     if flags.home_assistant_read_live or flags.home_assistant_live:
         try:
-            home_workflow = HomeWorkflow(
-                HomeEntityRegistry.load(DEFAULT_HOME_ENTITIES),
-                HomeAssistantRESTBackend.from_environment(),
-            )
-        except (OSError, ValueError, HomeAssistantProviderError):
+            provider = os.getenv("RALFLOOP_HOME_PROVIDER", "home_assistant").strip().casefold()
+            backend = TuyaMCPHomeBackend.from_environment() if provider == "tuya_mcp" else HomeAssistantRESTBackend.from_environment()
+            home_workflow = HomeWorkflow(HomeEntityRegistry.load(DEFAULT_HOME_ENTITIES), backend)
+        except (OSError, ValueError, HomeAssistantProviderError, TuyaMCPProviderError):
             home_workflow = None
     approval_coordinator = None
     approval_executor = None
@@ -414,12 +396,18 @@ def run_unified_telegram(
     mailchimp_approval_executor = None
     jellyfin_approval_coordinator = None
     jellyfin_approval_executor = None
+    browser_approval_coordinator = None
+    browser_approval_executor = None
+    browser_interaction_provider = (
+        BrowserMCPApprovalProvider() if flags.browser_interact_live else None
+    )
     jellyfin_identity_provider = (
         JellyfinIdentityMCPProvider() if flags.jellyfin_identity_write_live else None
     )
     if (
         flags.email_assistant_live or flags.whatsapp_assistant_live
         or flags.mailchimp_campaign_live or flags.jellyfin_identity_write_live
+        or flags.browser_interact_live
     ):
         policy = DomainApprovalPolicy.from_env()
         if policy.enabled:
@@ -454,23 +442,32 @@ def run_unified_telegram(
                 jellyfin_approval_executor = UnifiedJellyfinApprovalExecutor(
                     approval_store, jellyfin_identity_provider, write_enabled=True,
                 )
+            if flags.browser_interact_live and browser_interaction_provider is not None:
+                browser_approval_coordinator = UnifiedBrowserApprovalCoordinator(
+                    approval_store, policy=policy,
+                )
+                browser_approval_executor = UnifiedBrowserApprovalExecutor(
+                    approval_store, browser_interaction_provider, write_enabled=True,
+                )
     previous_email = conversation.state.pending.email
     previous_whatsapp = conversation.state.pending.whatsapp
     previous_mailchimp = conversation.state.pending.mailchimp
     previous_jellyfin = conversation.state.pending.jellyfin
+    previous_browser = conversation.state.pending.browser
     approval_transition: dict[str, Any] = {}
-    if any((approval_coordinator, whatsapp_approval_coordinator, mailchimp_approval_coordinator, jellyfin_approval_coordinator)) and _is_positive_confirmation(text):
+    if any((approval_coordinator, whatsapp_approval_coordinator, mailchimp_approval_coordinator, jellyfin_approval_coordinator, browser_approval_coordinator)) and _is_positive_confirmation(text):
         active = [
             item for name in PENDING_DOMAINS
             if (item := getattr(conversation.state.pending, name)) is not None
         ]
-        if len(active) == 1 and active[0].domain in {"email", "whatsapp", "mailchimp", "jellyfin"}:
+        if len(active) == 1 and active[0].domain in {"email", "whatsapp", "mailchimp", "jellyfin", "browser"}:
             pending = active[0]
             coordinator = ({
                 "email": approval_coordinator,
                 "whatsapp": whatsapp_approval_coordinator,
                 "mailchimp": mailchimp_approval_coordinator,
                 "jellyfin": jellyfin_approval_coordinator,
+                "browser": browser_approval_coordinator,
             })[pending.domain]
             if coordinator is not None:
                 approval_transition = coordinator.approve(
@@ -519,6 +516,8 @@ def run_unified_telegram(
         mailchimp_approval_executor=mailchimp_approval_executor,
         jellyfin_identity_provider=jellyfin_identity_provider,
         jellyfin_approval_executor=jellyfin_approval_executor,
+        browser_interaction_provider=browser_interaction_provider,
+        browser_approval_executor=browser_approval_executor,
         home_workflow=home_workflow,
         memory_router=memory,
     )
@@ -773,6 +772,7 @@ def run_unified_telegram(
         "education.tutor": education_tutor_adapter,
         "bandi.discovery": bandi_discovery_adapter,
         "research.deep": research_deep_adapter,
+        "browser.inspect": browser_inspect_adapter,
     })
     core.dag_input_provider = lambda _goal: {
         "memory.tiremm": {
@@ -780,11 +780,18 @@ def run_unified_telegram(
             "content_boundary": "memory_is_data",
         }
     }
-    result = otp_result or core.handle(text)
+    if otp_result is not None:
+        result = otp_result
+    elif browser_interaction_provider is not None:
+        with browser_interaction_provider.request_scope():
+            result = core.handle(text)
+    else:
+        result = core.handle(text)
     current_email = conversation.state.pending.email
     current_whatsapp = conversation.state.pending.whatsapp
     current_mailchimp = conversation.state.pending.mailchimp
     current_jellyfin = conversation.state.pending.jellyfin
+    current_browser = conversation.state.pending.browser
     if (
         approval_coordinator is not None
         and result.status == "draft_pending_approval"
@@ -896,6 +903,35 @@ def run_unified_telegram(
         and previous_jellyfin is not None
     ):
         approval_transition = jellyfin_approval_coordinator.cancel(previous_jellyfin)
+    if (
+        browser_approval_coordinator is not None
+        and result.status == "draft_pending_approval"
+        and current_browser is not None
+        and not current_browser.approval_ref
+    ):
+        if previous_browser and previous_browser.approval_ref:
+            browser_approval_coordinator.cancel(previous_browser)
+        approval_transition = browser_approval_coordinator.request(
+            current_browser, requested_by=f"unified:{session_id}"
+        )
+        if approval_transition.get("status") == "pending":
+            current_browser = conversation.attach_approval_request(
+                domain="browser", pending_id=current_browser.pending_id,
+                payload_digest=current_browser.payload_digest,
+                approval_ref=str(approval_transition["request_id"]),
+                created_at=int(approval_transition["created_at"]),
+                expires_at=int(approval_transition["expires_at"]),
+            )
+            result.data.update({
+                "approval_request_id": current_browser.approval_ref,
+                "approval_expires_at": current_browser.expires_at,
+            })
+    elif (
+        browser_approval_coordinator is not None
+        and result.status == "cancelled"
+        and previous_browser is not None
+    ):
+        approval_transition = browser_approval_coordinator.cancel(previous_browser)
     if approval_transition:
         result.data["approval_transition"] = dict(approval_transition)
     session_adapter.save(session_id, conversation)

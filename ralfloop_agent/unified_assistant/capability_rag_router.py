@@ -30,7 +30,8 @@ LEAF_READ_SKILLS = frozenset(
         "arci.context",
         "jellyfin.identify",
         "education.tutor",
-        "bandi.discovery",
+        "bandi.research",
+        "browser.inspect",
     }
 )
 
@@ -113,7 +114,8 @@ CAPABILITY_HINTS: dict[str, tuple[str, ...]] = {
     "arci.context": ("arci", "tessera arci", "circolo arci", "profilo arci"),
     "jellyfin.identify": ("jellyfin", "film non identificati", "film da identificare", "metadata film"),
     "education.tutor": ("insegnante", "tutor", "spiegami", "quiz", "esercizio didattico"),
-    "bandi.discovery": ("bandi aperti", "bandi disponibili", "opportunita finanziamento", "contributi aps", "finanziamenti tiremm", "grant opportunities"),
+    "bandi.research": ("bandi aperti", "bandi disponibili", "opportunita finanziamento", "contributi aps", "finanziamenti tiremm", "grant opportunities"),
+    "browser.inspect": ("browser", "playwright", "snapshot browser", "snapshot pagina", "ispeziona pagina web", "leggi pagina web", "schede browser", "tab browser"),
 }
 
 # One shared lexical/phrase hit is noise; domain-bearing queries in this
@@ -336,6 +338,12 @@ class CapabilityRAGIndex:
             query, skill_ids=skill_ids, limit=limit, min_score=2.0,
             expand_catalog=True,
         )
+
+    def auto_route_skill_ids(self) -> tuple[str, ...]:
+        return tuple(sorted(skill_id for skill_id in LEAF_READ_SKILLS if skill_id in self.registry.skills and self.registry.skills[skill_id].classification is PolicyClass.READ))
+
+    def is_auto_route_skill(self, skill_id: str) -> bool:
+        return skill_id in self.auto_route_skill_ids()
 
     def retrieve(self, query: str, *, limit: int = 6) -> tuple[CapabilityCandidate, ...]:
         """Retrieve only safe leaf READ skills eligible for automatic routing."""

@@ -13,7 +13,10 @@ from ralfloop_agent.cli.session_store import SessionStore
 from .contracts import PolicyClass
 
 
-PENDING_DOMAINS = ("email", "whatsapp", "mailchimp", "jellyfin", "runts", "home", "infrastructure", "bandi", "clarification")
+PENDING_DOMAINS = (
+    "email", "whatsapp", "mailchimp", "jellyfin", "browser", "runts",
+    "home", "infrastructure", "bandi", "clarification",
+)
 CONFIRM_WORDS = frozenset({
     "ok", "invia", "manda", "mandala", "sì invia", "si invia", "va bene",
     "confermo", "approvo", "procedi",
@@ -21,11 +24,17 @@ CONFIRM_WORDS = frozenset({
 CANCEL_WORDS = frozenset({"annulla", "cancella", "no"})
 
 
+PendingDomain = Literal[
+    "email", "whatsapp", "mailchimp", "jellyfin", "browser", "runts",
+    "home", "infrastructure", "bandi", "clarification",
+]
+
+
 class PendingAction(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     pending_id: str = Field(pattern=r"^pending_[a-f0-9]{16}$")
-    domain: Literal["email", "whatsapp", "mailchimp", "jellyfin", "runts", "home", "infrastructure", "bandi", "clarification"]
+    domain: PendingDomain
     action: str = Field(min_length=1, max_length=96)
     policy: PolicyClass
     payload: dict[str, Any]
@@ -45,6 +54,7 @@ class PendingByDomain(BaseModel):
     whatsapp: PendingAction | None = None
     mailchimp: PendingAction | None = None
     jellyfin: PendingAction | None = None
+    browser: PendingAction | None = None
     runts: PendingAction | None = None
     home: PendingAction | None = None
     infrastructure: PendingAction | None = None
@@ -64,7 +74,9 @@ class ConversationState(BaseModel):
 class ConfirmationResolution(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    status: Literal["not_confirmation", "no_pending", "ambiguous", "resolved", "cancelled", "expired"]
+    status: Literal[
+        "not_confirmation", "no_pending", "ambiguous", "resolved", "cancelled", "expired"
+    ]
     pending: PendingAction | None = None
     domains: tuple[str, ...] = ()
 
@@ -73,7 +85,9 @@ class ConversationManager:
     def __init__(self, state: ConversationState | None = None) -> None:
         self.state = state or ConversationState()
 
-    def remember(self, *, intent: str, domain: str, entities: tuple[str, ...] = ()) -> ConversationState:
+    def remember(
+        self, *, intent: str, domain: str, entities: tuple[str, ...] = ()
+    ) -> ConversationState:
         last_entities = dict(self.state.last_entities)
         last_entities[domain] = tuple(entities[:8])
         self.state = self.state.model_copy(update={
@@ -165,12 +179,18 @@ class ConversationManager:
             payload["validation_state"] = validation_state
         now = int(time.time())
         pending = PendingAction(
-            pending_id="pending_" + uuid4().hex[:16], domain="whatsapp",
-            action=current.action, policy=current.policy, payload=payload,
-            payload_digest=_digest(payload), displayed_digest=_text_digest(displayed_text),
-            version=current.version + 1, created_at=now,
+            pending_id="pending_" + uuid4().hex[:16],
+            domain="whatsapp",
+            action=current.action,
+            policy=current.policy,
+            payload=payload,
+            payload_digest=_digest(payload),
+            displayed_digest=_text_digest(displayed_text),
+            version=current.version + 1,
+            created_at=now,
             expires_at=now + max(60, current.expires_at - current.created_at),
-            approval_ref=None, approved_digest=None,
+            approval_ref=None,
+            approved_digest=None,
         )
         self._set_pending("whatsapp", pending)
         return pending
@@ -219,7 +239,9 @@ class ConversationManager:
         self._set_pending(domain, attached)
         return attached
 
-    def resolve_confirmation(self, text: str, *, domain_hint: str | None = None) -> ConfirmationResolution:
+    def resolve_confirmation(
+        self, text: str, *, domain_hint: str | None = None
+    ) -> ConfirmationResolution:
         folded = " ".join(text.casefold().split()).strip(" .!?")
         if folded not in CONFIRM_WORDS | CANCEL_WORDS:
             return ConfirmationResolution(status="not_confirmation")
@@ -288,7 +310,9 @@ def approval_matches(pending: PendingAction) -> bool:
 
 
 def _digest(payload: dict[str, Any]) -> str:
-    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    raw = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()
     return hashlib.sha256(raw).hexdigest()
 
 
