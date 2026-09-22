@@ -133,6 +133,31 @@ def test_release_builder_compiles_teacher_core_mcp(tmp_path):
     assert out == ''
 
 
+def test_release_builder_compiles_teacher_model_pool_mcp(tmp_path):
+    project = Path(__file__).resolve().parents[1]
+    root = tmp_path / "release-root"
+    (root / "tools").mkdir(parents=True)
+    (root / "third_party").mkdir(parents=True)
+    shutil.copytree(
+        project / "tools" / "teacher_model_pool_mcp",
+        root / "tools" / "teacher_model_pool_mcp",
+        ignore=shutil.ignore_patterns("ralf-teacher-model-pool-mcp", "__pycache__"),
+    )
+    shutil.copytree(project / "third_party" / "jsmn", root / "third_party" / "jsmn")
+    builder = load_builder()
+    builder._build_teacher_model_pool_mcp(root)
+    binary = root / "bin" / "ralf-teacher-model-pool-mcp"
+    assert binary.is_file()
+    assert binary.stat().st_mode & 0o111
+    config = tmp_path / "pool.conf"
+    config.write_text("sibilla 127.0.0.1 19106 1\n", encoding="utf-8")
+    out = subprocess.check_output(
+        [str(binary), "--config", str(config), "--stdio"],
+        input='', text=True, stderr=subprocess.STDOUT,
+    )
+    assert out == ''
+
+
 def test_builder_drops_stale_archived_quality_gate(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

@@ -46,6 +46,7 @@ def build_release(
         _build_atm_router(temporary)
         _build_teacher_grammar_mcp(temporary)
         _build_teacher_core_mcp(temporary)
+        _build_teacher_model_pool_mcp(temporary)
         metadata = {
             "schema_version": 1,
             "commit": commit_sha,
@@ -202,6 +203,25 @@ def _build_teacher_core_mcp(root: Path) -> None:
     if not built.is_file():
         raise RuntimeError("teacher_core_mcp_binary_missing_after_build")
     destination = root / "bin" / "ralf-teacher-core-mcp"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(built, destination)
+    destination.chmod(0o555)
+
+
+def _build_teacher_model_pool_mcp(root: Path) -> None:
+    source = root / "tools" / "teacher_model_pool_mcp"
+    c_source = source / "main.c"
+    makefile = source / "Makefile"
+    jsmn = root / "third_party" / "jsmn" / "jsmn.h"
+    if not c_source.is_file() or not jsmn.is_file():
+        return
+    if not makefile.is_file():
+        raise RuntimeError("teacher_model_pool_mcp_makefile_missing")
+    subprocess.run(["make", "-C", str(source), "ralf-teacher-model-pool-mcp"], check=True, shell=False)
+    built = source / "ralf-teacher-model-pool-mcp"
+    if not built.is_file():
+        raise RuntimeError("teacher_model_pool_mcp_binary_missing_after_build")
+    destination = root / "bin" / "ralf-teacher-model-pool-mcp"
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(built, destination)
     destination.chmod(0o555)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import os
 from pathlib import Path
 import socket
@@ -11,6 +12,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from .service import ScheduledQwenModel, TEACHER_RESPONSE_SCHEMA
+from src.mcp_transport import MCPClientSession, StdioMCPTransport
 
 
 DEFAULT_SOCKET = Path(
@@ -248,11 +250,11 @@ class OllamaCpuTeacherFallback:
             result["correct"] = value["correct"]
         return result
 
-    def infer(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
+    def _request_payload(self, user_prompt: str) -> dict[str, Any]:
         if not self.allowed(user_prompt):
             raise RuntimeError("teacher_cpu_fallback_not_grounded")
         compact_context = self._compact_context(user_prompt)
-        payload = {
+        return {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": self._fallback_system_prompt()},
@@ -275,8 +277,17 @@ class OllamaCpuTeacherFallback:
                 "temperature": 0,
             },
         }
+
+    def _infer_endpoint(
+        self,
+        endpoint: str,
+        user_prompt: str,
+        *,
+        inference_path: str = "ollama_cpu",
+    ) -> dict[str, Any]:
+        payload = self._request_payload(user_prompt)
         request = Request(
-            self.base_url + "/api/chat",
+            endpoint.rstrip("/") + "/api/chat",
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
@@ -292,7 +303,12 @@ class OllamaCpuTeacherFallback:
         content = envelope.get("message", {}).get("content") if isinstance(envelope, dict) else None
         if not isinstance(content, str):
             raise RuntimeError("teacher_cpu_fallback_invalid_envelope")
-        return self._parse_content(content)
+        result = self._parse_content(content)
+        result["_inference_path"] = inference_path
+        return result
+
+    def infer(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
+        return self._infer_endpoint(self.base_url, user_prompt)
 
     def stream(self, system_prompt: str, user_prompt: str) -> Iterator[dict[str, Any]]:
         result = self.infer(system_prompt, user_prompt)
@@ -301,6 +317,137 @@ class OllamaCpuTeacherFallback:
 
     def close(self) -> None:
         return None
+
+
+class PooledOllamaCpuTeacherFallback(OllamaCpuTeacherFallback):
+    """Optional bounded Gemma pool with local Ollama as fail-safe fallback."""
+
+    def __init__(
+        self,
+        *,
+        config_path: str | Path | None = None,
+        binary_path: str | Path | None = None,
+        pool_session_factory: Callable[[], Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        raw_config = str(
+            config_path
+            or os.getenv("RALF_TEACHER_MODEL_POOL_CONFIG", "")
+        ).strip()
+        if not raw_config:
+            raise RuntimeError("teacher_model_pool_config_missing")
+        self.config_path = Path(raw_config)
+        self.binary_path = Path(
+            binary_path
+            or os.getenv(
+                "RALF_TEACHER_MODEL_POOL_BINARY",
+                "/home/sibilla-cumana/ralfloop-production/current/bin/ralf-teacher-model-pool-mcp",
+            )
+        )
+        self._pool_session_factory = pool_session_factory
+        self._pool: Any | None = None
+
+    @staticmethod
+    def _validate_endpoint(endpoint: str) -> str:
+        parsed = urlparse(endpoint)
+        if (
+            parsed.scheme != "http"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in ("", "/")
+            or parsed.query
+            or parsed.fragment
+            or parsed.port is None
+        ):
+            raise RuntimeError("teacher_model_pool_endpoint_denied")
+        host = parsed.hostname
+        if host != "localhost":
+            try:
+                ipaddress.ip_address(host)
+            except ValueError as exc:
+                raise RuntimeError("teacher_model_pool_endpoint_denied") from exc
+        return endpoint.rstrip("/")
+
+    def _pool_session(self) -> Any:
+        if self._pool is not None:
+            return self._pool
+        if self._pool_session_factory is not None:
+            self._pool = self._pool_session_factory()
+            return self._pool
+        if not self.config_path.is_file() or not self.binary_path.is_file():
+            raise RuntimeError("teacher_model_pool_unavailable")
+        self._pool = MCPClientSession(
+            StdioMCPTransport([
+                str(self.binary_path),
+                "--config",
+                str(self.config_path),
+                "--stdio",
+            ]),
+            timeout=min(10.0, self.timeout),
+            client_name="teacher-inference-pool",
+        )
+        return self._pool
+
+    @staticmethod
+    def _pool_payload(raw: dict[str, Any]) -> dict[str, Any]:
+        value = raw.get("structuredContent")
+        if not isinstance(value, dict) or value.get("ok") is not True:
+            raise RuntimeError("teacher_model_pool_invalid_response")
+        return value
+
+    def _reset_pool(self) -> None:
+        pool, self._pool = self._pool, None
+        if pool is not None:
+            closer = getattr(pool, "close", None)
+            if callable(closer):
+                closer()
+
+    def infer(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
+        if not self.allowed(user_prompt):
+            raise RuntimeError("teacher_cpu_fallback_not_grounded")
+        pool = None
+        lease = None
+        started = time.monotonic()
+        try:
+            pool = self._pool_session()
+            acquired = self._pool_payload(
+                pool.call_tool("pool.acquire", {"model": "gemma3:4b"})
+            )
+            lease = acquired.get("lease")
+            node = acquired.get("node")
+            endpoint = self._validate_endpoint(str(acquired.get("endpoint") or ""))
+            if (
+                not isinstance(lease, str)
+                or not lease
+                or not isinstance(node, str)
+                or not node
+            ):
+                raise RuntimeError("teacher_model_pool_invalid_lease")
+            return self._infer_endpoint(
+                endpoint,
+                user_prompt,
+                inference_path=f"ollama_cpu_pool:{node}",
+            )
+        except Exception:
+            return super().infer(system_prompt, user_prompt)
+        finally:
+            if pool is not None and isinstance(lease, str) and lease:
+                latency_ms = max(0.0, (time.monotonic() - started) * 1000.0)
+                try:
+                    self._pool_payload(
+                        pool.call_tool(
+                            "pool.release",
+                            {"lease": lease, "latency_ms": latency_ms},
+                        )
+                    )
+                except Exception:
+                    self._reset_pool()
+
+    def close(self) -> None:
+        self._reset_pool()
+        super().close()
 
 
 class SharedTeacherInferenceEngine:
@@ -315,7 +462,11 @@ class SharedTeacherInferenceEngine:
     ) -> None:
         self.backend_factory = backend_factory
         if fallback_factory is None and os.getenv("RALF_TEACHER_CPU_FALLBACK", "0") == "1":
-            fallback_factory = OllamaCpuTeacherFallback
+            fallback_factory = (
+                PooledOllamaCpuTeacherFallback
+                if os.getenv("RALF_TEACHER_MODEL_POOL_CONFIG", "").strip()
+                else OllamaCpuTeacherFallback
+            )
         self._fallback = fallback_factory() if fallback_factory is not None else None
         self._backend: Any | None = None
         self._last_activity = 0.0
@@ -437,4 +588,5 @@ __all__ = [
     "SharedTeacherInferenceEngine",
     "TeacherInferenceClient",
     "OllamaCpuTeacherFallback",
+    "PooledOllamaCpuTeacherFallback",
 ]

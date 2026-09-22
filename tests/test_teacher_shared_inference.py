@@ -14,6 +14,7 @@ import pytest
 import ralfloop_agent.teacher.inference as inference_module
 from ralfloop_agent.teacher.inference import (
     OllamaCpuTeacherFallback,
+    PooledOllamaCpuTeacherFallback,
     SharedTeacherInferenceEngine,
     TeacherInferenceClient,
 )
@@ -173,6 +174,107 @@ def test_ollama_cpu_fallback_rejects_external_endpoint_and_ungrounded_prompt():
         OllamaCpuTeacherFallback(base_url="http://example.com:11434")
     fallback = OllamaCpuTeacherFallback(timeout=30)
     assert fallback.allowed(json.dumps({"pedagogy": {"model_path": "fast"}})) is False
+
+
+class FakePoolSession:
+    def __init__(self, *, fail_acquire=False):
+        self.fail_acquire = fail_acquire
+        self.calls = []
+        self.closed = False
+
+    def call_tool(self, name, arguments):
+        self.calls.append((name, dict(arguments)))
+        if name == "pool.acquire":
+            if self.fail_acquire:
+                raise RuntimeError("pool_busy")
+            return {"structuredContent": {
+                "ok": True,
+                "node": "temistocle",
+                "endpoint": "http://10.44.1.20:19106",
+                "lease": "lease-1",
+            }}
+        if name == "pool.release":
+            return {"structuredContent": {"ok": True}}
+        raise AssertionError(name)
+
+    def close(self):
+        self.closed = True
+
+
+def test_pooled_ollama_fallback_uses_bounded_lease_and_releases(monkeypatch, tmp_path):
+    captured = {}
+    pool = FakePoolSession()
+
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def read(self, limit=-1):
+            return json.dumps({"message": {"content": json.dumps({"response": "Dal pool"})}}).encode()
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["payload"] = json.loads(request.data)
+        return Response()
+
+    monkeypatch.setattr(inference_module, "urlopen", fake_urlopen)
+    config = tmp_path / "pool.conf"
+    config.write_text("temistocle 10.44.1.20 19106 1\n", encoding="utf-8")
+    fallback = PooledOllamaCpuTeacherFallback(
+        config_path=config,
+        pool_session_factory=lambda: pool,
+        timeout=30,
+    )
+    result = fallback.infer("system", _guarded_prompt())
+    assert result["response"] == "Dal pool"
+    assert result["_inference_path"] == "ollama_cpu_pool:temistocle"
+    assert captured["url"] == "http://10.44.1.20:19106/api/chat"
+    assert captured["payload"]["model"] == "gemma3:4b"
+    assert pool.calls[0] == ("pool.acquire", {"model": "gemma3:4b"})
+    assert pool.calls[-1][0] == "pool.release"
+    assert pool.calls[-1][1]["lease"] == "lease-1"
+    assert pool.calls[-1][1]["latency_ms"] >= 0
+    fallback.close()
+    assert pool.closed is True
+
+
+def test_pooled_ollama_fallback_uses_local_gemma_when_pool_unavailable(monkeypatch, tmp_path):
+    captured = {}
+    pool = FakePoolSession(fail_acquire=True)
+
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def read(self, limit=-1):
+            return json.dumps({"message": {"content": json.dumps({"response": "Locale"})}}).encode()
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        return Response()
+
+    monkeypatch.setattr(inference_module, "urlopen", fake_urlopen)
+    config = tmp_path / "pool.conf"
+    config.write_text("temistocle 10.44.1.20 19106 1\n", encoding="utf-8")
+    fallback = PooledOllamaCpuTeacherFallback(
+        config_path=config,
+        pool_session_factory=lambda: pool,
+        timeout=30,
+    )
+    result = fallback.infer("system", _guarded_prompt())
+    assert result["response"] == "Locale"
+    assert result["_inference_path"] == "ollama_cpu"
+    assert captured["url"] == "http://127.0.0.1:11434/api/chat"
+    assert pool.calls == [("pool.acquire", {"model": "gemma3:4b"})]
+
+
+def test_shared_engine_selects_pool_only_with_explicit_config(monkeypatch, tmp_path):
+    config = tmp_path / "pool.conf"
+    config.write_text("sibilla 127.0.0.1 19106 1\n", encoding="utf-8")
+    monkeypatch.setenv("RALF_TEACHER_CPU_FALLBACK", "1")
+    monkeypatch.setenv("RALF_TEACHER_MODEL_POOL_CONFIG", str(config))
+    engine = SharedTeacherInferenceEngine(backend_factory=FakeSharedBackend)
+    assert isinstance(engine._fallback, PooledOllamaCpuTeacherFallback)
+    engine.close()
+
 
 def test_inference_client_session_methods_do_not_control_gpu(tmp_path):
     client = TeacherInferenceClient(

@@ -40,5 +40,30 @@ Do not label a node that is already short on host RAM.
 `tools/teacher_model_pool_mcp` is the internal C MCP. It uses bounded leases
 rather than blind round-robin. An endpoint at capacity is not selected, dead
 TCP endpoints are skipped, and observed latency is kept as an EMA tie-breaker.
-The Teacher should acquire a lease, call the selected Ollama endpoint, and
-release the lease in a `finally` path.
+The production release builder installs it as
+`bin/ralf-teacher-model-pool-mcp`.
+
+The Teacher inference daemon keeps the pool opt-in. Without
+`RALF_TEACHER_MODEL_POOL_CONFIG` it behaves exactly as before and uses the
+loopback `gemma3:4b` fallback. When that variable points to a pool config, the
+fallback acquires a lease, sends the same compact/schema-bound Gemma request to
+the selected endpoint, records latency on `pool.release`, and always releases
+the lease in a `finally` path. Pool saturation, an unhealthy endpoint, a bad
+lease, or a failed pooled inference falls back to the existing loopback Ollama
+instead of making the student request less reliable.
+
+The pool remains internal and does not add tools to the 13-tool student MCP
+surface. A configured worker endpoint must be a plain HTTP IP/localhost
+endpoint returned by the trusted pool MCP; arbitrary hostnames, credentials,
+paths, query strings and fragments are rejected.
+
+## Canary activation
+
+Do not set `RALF_TEACHER_MODEL_POOL_CONFIG` in the production unit merely
+because the code is installed. First label only the verified canary nodes,
+apply the DaemonSet, build a temporary config from the resulting pod IPs, and
+measure acquire/inference/release latency. The current production inference
+unit permits network access only to localhost, so a remote pool also requires a
+separate reviewed systemd network-policy change before production activation.
+Until that policy and the canary are green, the production daemon must stay on
+the local `gemma3:4b` fallback.
