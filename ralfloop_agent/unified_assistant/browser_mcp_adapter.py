@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -150,6 +151,9 @@ class BrowserMCPApprovalProvider:
         )
         self._session_factory = session_factory
         self.timeout = timeout
+        self._request_scope_depth = 0
+        self._request_session_cm = None
+        self._request_transaction = None
         self.upload_roots = tuple(
             Path(item).expanduser().resolve()
             for item in (upload_roots if upload_roots is not None else self._upload_roots_from_env())
@@ -184,6 +188,36 @@ class BrowserMCPApprovalProvider:
     def _tool_names(client: Any) -> set[str]:
         return {item.name for item in client.list_tools()}
 
+    @contextmanager
+    def _fresh_transaction(self):
+        with self._session() as client:
+            yield client, self._tool_names(client)
+
+    @contextmanager
+    def request_scope(self):
+        self._request_scope_depth += 1
+        try:
+            yield self
+        finally:
+            self._request_scope_depth -= 1
+            if self._request_scope_depth == 0 and self._request_session_cm is not None:
+                cm = self._request_session_cm
+                self._request_session_cm = None
+                self._request_transaction = None
+                cm.__exit__(None, None, None)
+
+    @contextmanager
+    def _borrow_transaction(self):
+        if self._request_scope_depth > 0:
+            if self._request_transaction is None:
+                cm = self._fresh_transaction()
+                self._request_session_cm = cm
+                self._request_transaction = cm.__enter__()
+            yield self._request_transaction
+            return
+        with self._fresh_transaction() as transaction:
+            yield transaction
+
     @staticmethod
     def _checked_call(client: Any, tool: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
         if tool not in READ_TOOLS | WRITE_TOOLS:
@@ -194,18 +228,20 @@ class BrowserMCPApprovalProvider:
         return dict(result)
 
     def snapshot(self) -> dict[str, Any]:
-        with self._session() as client:
-            names = self._tool_names(client)
-            if "browser_snapshot" not in names:
-                raise MCPProtocolError("browser_snapshot_not_discovered")
-            result = self._checked_call(client, "browser_snapshot", {})
+        with self._borrow_transaction() as transaction:
+            return self._snapshot_in_transaction(transaction)
+
+    def _snapshot_in_transaction(
+        self, transaction: tuple[Any, set[str]],
+    ) -> dict[str, Any]:
+        client, names = transaction
+        if "browser_snapshot" not in names:
+            raise MCPProtocolError("browser_snapshot_not_discovered")
+        result = self._checked_call(client, "browser_snapshot", {})
         text = _text_result(result)
         if not text:
             raise MCPProtocolError("browser_snapshot_empty")
-        return {
-            "text": text,
-            "sha256": _snapshot_hash(text),
-        }
+        return {"text": text, "sha256": _snapshot_hash(text)}
 
     def _validated_upload_paths(self, values: Sequence[Any]) -> list[str]:
         if not self.upload_roots:
@@ -288,48 +324,52 @@ class BrowserMCPApprovalProvider:
         return normalized
 
     def apply(self, scope: Mapping[str, Any]) -> dict[str, Any]:
+        with self._borrow_transaction() as transaction:
+            return self._apply_in_transaction(scope, transaction)
+
+    def _apply_in_transaction(
+        self, scope: Mapping[str, Any], transaction: tuple[Any, set[str]],
+    ) -> dict[str, Any]:
         payload = self.normalize_payload(scope)
         action = str(payload["logical_action"])
         target = str(payload["target"])
         element = str(payload.get("element") or "")
         calls: list[dict[str, Any]] = []
+        client, names = transaction
+        required = {"browser_click"} if action in {"click", "submit", "upload"} else {"browser_type"}
+        if action == "upload":
+            required.add("browser_file_upload")
+        if not required.issubset(names):
+            raise MCPProtocolError("browser_write_tool_not_discovered")
 
-        with self._session() as client:
-            names = self._tool_names(client)
-            required = {"browser_click"} if action in {"click", "submit", "upload"} else {"browser_type"}
-            if action == "upload":
-                required.add("browser_file_upload")
-            if not required.issubset(names):
-                raise MCPProtocolError("browser_write_tool_not_discovered")
-
-            if action in {"click", "submit"}:
-                arguments = {"target": target, **({"element": element} if element else {})}
-                result = self._checked_call(client, "browser_click", arguments)
-                calls.append({"tool": "browser_click", "arguments": arguments, "result": _text_result(result)})
-            elif action == "type":
-                arguments = {
-                    "target": target,
-                    "text": str(payload["text"]),
-                    "submit": False,
-                    **({"element": element} if element else {}),
-                }
-                result = self._checked_call(client, "browser_type", arguments)
-                calls.append({"tool": "browser_type", "arguments": arguments, "result": _text_result(result)})
-            else:
-                staged_paths, stage_dir = self._stage_upload_paths(payload["paths"])
-                try:
-                    click_args = {"target": target, **({"element": element} if element else {})}
-                    click_result = self._checked_call(client, "browser_click", click_args)
-                    calls.append({"tool": "browser_click", "arguments": click_args, "result": _text_result(click_result)})
-                    upload_args = {"paths": staged_paths}
-                    upload_result = self._checked_call(client, "browser_file_upload", upload_args)
-                    calls.append({
-                        "tool": "browser_file_upload",
-                        "arguments": {"paths": list(payload["paths"]), "staged": True},
-                        "result": _text_result(upload_result),
-                    })
-                finally:
-                    shutil.rmtree(stage_dir, ignore_errors=True)
+        if action in {"click", "submit"}:
+            arguments = {"target": target, **({"element": element} if element else {})}
+            result = self._checked_call(client, "browser_click", arguments)
+            calls.append({"tool": "browser_click", "arguments": arguments, "result": _text_result(result)})
+        elif action == "type":
+            arguments = {
+                "target": target,
+                "text": str(payload["text"]),
+                "submit": False,
+                **({"element": element} if element else {}),
+            }
+            result = self._checked_call(client, "browser_type", arguments)
+            calls.append({"tool": "browser_type", "arguments": arguments, "result": _text_result(result)})
+        else:
+            staged_paths, stage_dir = self._stage_upload_paths(payload["paths"])
+            try:
+                click_args = {"target": target, **({"element": element} if element else {})}
+                click_result = self._checked_call(client, "browser_click", click_args)
+                calls.append({"tool": "browser_click", "arguments": click_args, "result": _text_result(click_result)})
+                upload_args = {"paths": staged_paths}
+                upload_result = self._checked_call(client, "browser_file_upload", upload_args)
+                calls.append({
+                    "tool": "browser_file_upload",
+                    "arguments": {"paths": list(payload["paths"]), "staged": True},
+                    "result": _text_result(upload_result),
+                })
+            finally:
+                shutil.rmtree(stage_dir, ignore_errors=True)
         return {
             "ok": True,
             "logical_action": action,

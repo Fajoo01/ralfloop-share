@@ -42,3 +42,16 @@ Il secondo costo e' specifico dei click Playwright: anche su sessione persistent
 Target successivo: session pooling/resident client nel backend e una singola sessione MCP per la transazione approval `pre-snapshot -> action -> post-snapshot`, mantenendo hash binding e fail-closed. Potenziale teorico: eliminare circa 1-1.5 s dal percorso execute e portare il preview vicino al costo snapshot+routing una volta che il pool e' caldo.
 
 Dati grezzi aggregati: `benchmarks/browser-mcp/2026-09-22-live.json`.
+
+## Session reuse A/B
+
+Approval-bound execution now reuses one lazily opened MCP session for the whole request scope: pre-snapshot -> action -> post-snapshot. Non-browser unified requests do not open a browser session.
+
+- approval+execute p50: 2763.58 -> 1471.02 ms (-46.8%)
+- approval+execute p95: 3300.08 -> 1587.15 ms (-51.9%)
+- action apply p50: 1250.36 -> 601.97 ms (-51.9%)
+- post-readback snapshot p50: 660.69 -> 56.21 ms (-91.5%)
+- routing remains ~25-27 ms p50
+- preview stays ~760 ms because it already needs only one fresh session
+
+Safety invariants are unchanged: exact approval binding, pre-snapshot hash check, no automatic retry after a write attempt, post-action snapshot, upload hash/staging, and no routing to browser_run_code_unsafe.

@@ -715,7 +715,13 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
             "content_boundary": "memory_is_data",
         }
     }
-    result = otp_result or core.handle(text)
+    if otp_result is not None:
+        result = otp_result
+    elif browser_interaction_provider is not None:
+        with browser_interaction_provider.request_scope():
+            result = core.handle(text)
+    else:
+        result = core.handle(text)
     current_email = conversation.state.pending.email
     current_whatsapp = conversation.state.pending.whatsapp
     current_mailchimp = conversation.state.pending.mailchimp

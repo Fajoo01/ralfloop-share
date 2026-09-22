@@ -327,3 +327,32 @@ def test_core_stages_then_executes_browser_only_after_bound_approval():
     assert executed.status == "EXECUTED_VERIFIED"
     assert len(executor.calls) == 1
     assert manager.state.pending.browser is None
+
+
+def test_request_scope_reuses_one_mcp_session_for_verified_action_cycle():
+    calls = []
+    created = []
+
+    def factory():
+        created.append(object())
+        return FakeSession(calls)
+
+    provider = BrowserMCPApprovalProvider(session_factory=factory)
+    with provider.request_scope():
+        provider.snapshot()
+        provider.apply({"logical_action": "click", "target": "e7"})
+        provider.snapshot()
+
+    assert len(created) == 1
+    assert [tool for tool, _args in calls] == [
+        "browser_snapshot", "browser_click", "browser_snapshot",
+    ]
+
+
+def test_request_scope_is_lazy_when_browser_provider_is_unused():
+    def factory():
+        raise AssertionError("browser session opened without browser work")
+
+    provider = BrowserMCPApprovalProvider(session_factory=factory)
+    with provider.request_scope():
+        pass
