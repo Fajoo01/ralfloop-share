@@ -15,9 +15,19 @@ _EMAIL_RE = re.compile(
     r"rispond(?:i|ere)\s+a\s+[\wÀ-ÿ][\wÀ-ÿ'. -]{0,80})\b",
     re.I,
 )
+_PEC_RE = re.compile(
+    r"\b(?:pec|posta\s+certificata|posta\s+elettronica\s+certificata|webmail\s+pec|casella\s+pec)\b"
+    r"|\btiremminnanz@pec\.it\b",
+    re.I,
+)
+_PEC_WRITE_RE = re.compile(r"\b(?:invia|manda|spedisci|rispondi|inoltra)\b", re.I)
+_PEC_ADDRESS_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}\b", re.I)
+_PEC_SUBJECT_RE = re.compile(r"\boggetto\s*:\s*(?P<value>[^|]+?)(?=\s+testo\s*:|\s+allegat[oi]\s*:|$)", re.I)
+_PEC_BODY_RE = re.compile(r"\btesto\s*:\s*(?P<value>.+?)(?=\s+allegat[oi]\s*:|$)", re.I)
+_PEC_ATTACHMENTS_RE = re.compile(r"\ballegat[oi]\s*:\s*(?P<value>.+)$", re.I)
 _HOME_RE = re.compile(
-    r"\b(?:accendi|spegni|apri|chiudi|imposta|metti|porta|abbassala|alzala|"
-    r"temperatura|quanto\s+fa|fa\s+caldo|fa\s+freddo)\b",
+    r"\b(?:home\s+assistant|domotica|luc[ei]|lampad[ae]|neon|termostat[oi]|clima|climatizzatore|"
+    r"tapparell[ae]|serrand[ae]|cancello|pres[ae]|switch|temperatura|fa\s+caldo|fa\s+freddo|abbassala|alzala)\b",
     re.I,
 )
 _GRANT_RE = re.compile(r"\b(?:band[oi]|grant|contribut[oi]|finanziament[oi]|candidatur[ae]|opportunit[aà])\b", re.I)
@@ -32,8 +42,106 @@ _INFRA_RE = re.compile(r"\b(?:agentcpm|servizi[oa]?|spazio\s+libero|disco|server
 _CODE_RE = re.compile(r"\b(?:codice|repository|repo|bug|debug|test|stacktrace)\b", re.I)
 _DOCUMENT_RE = re.compile(r"\b(?:pdf|document[oi]|allegat[oi]|estrai)\b", re.I)
 _RESEARCH_RE = re.compile(r"\b(?:ricerca|cerca\s+sul\s+web|fonti|deep\s+research)\b", re.I)
+_NORMATIVE_ADMIN_TOPIC_RE = re.compile(
+    r"\b(?:aps|ets|runts|terzo\s+settore|codice\s+del\s+terzo\s+settore|"
+    r"associazion[ei]\s+di\s+promozione\s+sociale|enti?\s+del\s+terzo\s+settore)\b",
+    re.I,
+)
+_NORMATIVE_INFO_RE = re.compile(
+    r"\b(?:cos['’]?[eè]|che\s+cos['’]?[eè]|definisci|spiega|normativ[ae]|legge|"
+    r"decreto|d\.?\s*lgs\.?|articol[oi]|requisit[oi]|obbligh[oi]|disciplina|"
+    r"cosa\s+prevede|chi\s+pu[oò]|come\s+funziona)\b",
+    re.I,
+)
 _EDITORIAL_RE = re.compile(r"\b(?:volantin[oi]|flyer|locandin[ae]|manifest[oi]|poster)\b", re.I)
 _MEDIA_RE = re.compile(r"\b(?:video|audio|immagine|ffmpeg|sottotitol[oi])\b", re.I)
+_JELLYFIN_RE = re.compile(r"\bjellyfin\b", re.I)
+_BROWSER_RE = re.compile(r"\b(?:browser|playwright|pagina\s+web|schede?\s+browser)\b", re.I)
+_BROWSER_INTERACTION_RE = re.compile(
+    r"\b(?:clicca|click|scrivi|digita|type|compila|fill|carica|upload|"
+    r"invia|submit|seleziona|select|trascina|drag|premi|press)\b", re.I
+)
+_BROWSER_TARGET_RE = re.compile(r"\b(?P<value>e[0-9]+)\b", re.I)
+_BROWSER_TYPE_RE = re.compile(r"\b(?:scrivi|digita|type|compila|fill)\b", re.I)
+_BROWSER_UPLOAD_RE = re.compile(r"\b(?:carica|upload)\b", re.I)
+_BROWSER_SUBMIT_RE = re.compile(r"\b(?:submit|invia|premi\s+invio)\b", re.I)
+_BROWSER_TEXT_RE = re.compile(
+    r"\b(?:testo|text)\s*[:=]\s*(?:\"(?P<dq>[^\"]*)\"|'(?P<sq>[^']*)'|(?P<raw>\S.*))",
+    re.I,
+)
+_BROWSER_FILE_RE = re.compile(
+    r"\b(?:file|path)\s*[:=]\s*(?:\"(?P<dq>[^\"]+)\"|'(?P<sq>[^']+)'|(?P<raw>\S+))",
+    re.I,
+)
+_JELLYFIN_MUTATION_RE = re.compile(
+    r"\b(?:applica|modifica|aggiorna|refresh|deduplica|elimina|rimuovi|correggi)\b", re.I
+)
+_JELLYFIN_ITEM_ID_RE = re.compile(r"\b(?:item[_ -]?id|jellyfin[_ -]?id)\s*[:=]\s*(?P<value>[a-f0-9]{32,64})\b", re.I)
+_JELLYFIN_PROVIDER_RE = re.compile(r"\bprovider\s*[:=]\s*(?P<value>tmdb|imdb)\b", re.I)
+_JELLYFIN_PROVIDER_ID_RE = re.compile(r"\bprovider[_ -]?id\s*[:=]\s*(?P<value>[A-Za-z0-9_-]{1,64})\b", re.I)
+_JELLYFIN_YEAR_RE = re.compile(r"\byear\s*[:=]\s*(?P<value>18\d{2}|19\d{2}|20\d{2})\b", re.I)
+
+
+def _jellyfin_apply_args(goal: str) -> dict[str, object]:
+    args: dict[str, object] = {}
+    for key, pattern in (("item_id", _JELLYFIN_ITEM_ID_RE), ("provider", _JELLYFIN_PROVIDER_RE), ("provider_id", _JELLYFIN_PROVIDER_ID_RE)):
+        match = pattern.search(goal)
+        if match:
+            args[key] = match.group("value")
+    year = _JELLYFIN_YEAR_RE.search(goal)
+    if year:
+        args["year"] = int(year.group("value"))
+    return args
+
+
+def _pec_write_args(goal: str) -> dict[str, object]:
+    args: dict[str, object] = {}
+    addresses = [m.group(0) for m in _PEC_ADDRESS_RE.finditer(goal)]
+    external = [item for item in addresses if item.casefold() != "tiremminnanz@pec.it"]
+    if external:
+        args["recipient"] = external[0]
+    subject = _PEC_SUBJECT_RE.search(goal)
+    if subject:
+        args["subject"] = " ".join(subject.group("value").split())
+    body = _PEC_BODY_RE.search(goal)
+    if body:
+        args["body"] = body.group("value").strip()
+    attachments = _PEC_ATTACHMENTS_RE.search(goal)
+    if attachments:
+        args["attachment_paths"] = [item.strip().strip('"\'') for item in attachments.group("value").split(",") if item.strip()]
+    return args
+
+
+def _browser_interact_args(goal: str) -> dict[str, object]:
+    args: dict[str, object] = {}
+    target = _BROWSER_TARGET_RE.search(goal)
+    if target:
+        args["target"] = target.group("value").casefold()
+    if _BROWSER_UPLOAD_RE.search(goal):
+        args["logical_action"] = "upload"
+        paths = []
+        for match in _BROWSER_FILE_RE.finditer(goal):
+            value = match.group("dq") or match.group("sq") or match.group("raw") or ""
+            if value:
+                paths.append(value.strip())
+        if paths:
+            args["paths"] = paths
+    elif _BROWSER_TYPE_RE.search(goal):
+        args["logical_action"] = "type"
+        text = _BROWSER_TEXT_RE.search(goal)
+        if text:
+            value = text.group("dq") or text.group("sq") or text.group("raw") or ""
+            args["text"] = value.strip()
+    elif _BROWSER_SUBMIT_RE.search(goal):
+        args["logical_action"] = "submit"
+    else:
+        args["logical_action"] = "click"
+    return args
+
+_ARCI_RE = re.compile(r"\barci\b", re.I)
+_ARCI_MUTATION_RE = re.compile(
+    r"\b(?:modifica|aggiorna|elimina|rimuovi|aggiungi|iscrivi|crea|invia)\b", re.I
+)
 _ATM_RE = re.compile(
     r"\b(?:atm|giromilano|mezzi\s+pubblici|trasporto\s+pubblico)\b"
     r"|\bcome\s+(?:arrivo|vado|posso\s+andare)\b"
@@ -347,16 +455,35 @@ class UnifiedPlanner:
                 "atm.route",
                 PolicyClass.READ,
             )
-        if _HOME_RE.search(goal):
-            skill = "home.read" if re.search(r"\b(?:temperatura|fa\s+caldo|fa\s+freddo|stato|quanto)\b", goal, re.I) and not re.search(r"\b(?:accendi|spegni|apri|chiudi|imposta|metti|porta)\b", goal, re.I) else "home.control"
-            return self._single(goal, "home", skill, PolicyClass.READ if skill == "home.read" else PolicyClass.AUTO_WRITE)
+        if _JELLYFIN_RE.search(goal) and _JELLYFIN_MUTATION_RE.search(goal):
+            return self._single(
+                goal, "jellyfin", "jellyfin.apply_identity", PolicyClass.PROTECTED,
+                arguments=_jellyfin_apply_args(goal),
+            )
+        if _ARCI_RE.search(goal) and _ARCI_MUTATION_RE.search(goal):
+            return self._denied("arci_mutation_not_available")
+        if _BROWSER_RE.search(goal) and _BROWSER_INTERACTION_RE.search(goal):
+            return self._single(
+                goal, "browser", "browser.interact", PolicyClass.CONFIRM_WRITE,
+                arguments=_browser_interact_args(goal),
+            )
+        if _NORMATIVE_ADMIN_TOPIC_RE.search(goal) and _NORMATIVE_INFO_RE.search(goal):
+            return self._single(
+                goal, "research", "research.deep", PolicyClass.READ,
+                arguments={
+                    "query": goal,
+                    "profile": "italy_third_sector_normative",
+                },
+            )
+        if _PEC_RE.search(goal) and _PEC_WRITE_RE.search(goal) and "runts" not in goal.casefold():
+            return self._single(
+                goal, "pec", "pec.prepare_send", PolicyClass.CONFIRM_WRITE,
+                arguments=_pec_write_args(goal),
+            )
         if self.capability_router is not None:
             proposal = self.capability_router.route(goal)
-            if proposal is not None and proposal.get("skill") in {
-                "atm.route", "meteo.read", "email.search", "whatsapp.read",
-                "mailchimp.read", "fastweb.portal.read", "home.read",
-            }:
-                skill = proposal["skill"]
+            if proposal is not None and self.capability_router.index.is_auto_route_skill(str(proposal.get("skill") or "")):
+                skill = str(proposal["skill"])
                 if skill == "email.search":
                     search = plan_email_search(goal)
                     if search is None:
@@ -370,8 +497,16 @@ class UnifiedPlanner:
                             arguments={"organization": search.organization, "concept": search.concept, "queries": list(search.queries)},
                         ),),
                     )
-                domain = "home" if skill == "home.read" else "general_assistant"
+                domain = str(proposal.get("domain") or "general_assistant")
                 return self._single(goal, domain, skill, PolicyClass.READ)
+        # Deterministic fallbacks for runtimes where capability retrieval is
+        # unavailable or returns no strong candidate. PEC remains independent
+        # from RUNTS, and Home requires actual device/domain vocabulary.
+        if _PEC_RE.search(goal):
+            return self._single(goal, "pec", "pec.read", PolicyClass.READ)
+        if _HOME_RE.search(goal):
+            skill = "home.read" if re.search(r"\b(?:temperatura|fa\s+caldo|fa\s+freddo|stato|quanto)\b", goal, re.I) and not re.search(r"\b(?:accendi|spegni|apri|chiudi|imposta|metti|porta)\b", goal, re.I) else "home.control"
+            return self._single(goal, "home", skill, PolicyClass.READ if skill == "home.read" else PolicyClass.AUTO_WRITE)
         if _RELATIONAL_RE.search(goal):
             return self._single(goal, "personal_relational", "personal_relational.analyze", PolicyClass.READ)
         if grant:
@@ -385,10 +520,11 @@ class UnifiedPlanner:
             return self._single(goal, "bandi", skill, PolicyClass.READ)
         if _INFRA_RE.search(goal):
             return self._single(goal, "infrastructure", "infrastructure.inspect", PolicyClass.READ)
-        if _RESEARCH_RE.search(goal):
-            return self._single(goal, "research", "research.deep", PolicyClass.READ)
+        # Prefer a concrete document artifact over generic research cues such as "fonti".
         if _DOCUMENT_RE.search(goal):
             return self._single(goal, "documents", "documents.extract", PolicyClass.READ)
+        if _RESEARCH_RE.search(goal):
+            return self._single(goal, "research", "research.deep", PolicyClass.READ)
         if _CODE_RE.search(goal):
             return self._single(goal, "code", "code.inspect", PolicyClass.READ)
         if _EDITORIAL_RE.search(goal):
@@ -481,13 +617,16 @@ class UnifiedPlanner:
             domains=("tiremm", "whatsapp"), assignments=(email, whatsapp, reply),
         )
 
-    def _single(self, goal: str, domain: str, skill: str, policy: PolicyClass) -> AssistantPlan:
+    def _single(
+        self, goal: str, domain: str, skill: str, policy: PolicyClass,
+        *, arguments: dict | None = None,
+    ) -> AssistantPlan:
         return AssistantPlan(
             intent=skill,
             domains=(domain,),
             assignments=(self._assignment(
                 domain=domain, skill=skill, objective=goal, input_refs=("user.goal",),
-                output_ref=f"artifact.{domain}", policy=policy,
+                output_ref=f"artifact.{domain}", policy=policy, arguments=arguments,
             ),),
         )
 

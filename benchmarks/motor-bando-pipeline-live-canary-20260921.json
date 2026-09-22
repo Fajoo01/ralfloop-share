@@ -1,0 +1,52 @@
+{
+  "case_digest": "6ca1d6f207a5dd70f1acfe7eae86e3ab54b07d831996c089543eba5e43eb9c78",
+  "case_key": "b7e706663b4a",
+  "chunk_count": 2,
+  "chunks": [
+    {
+      "case_key": "77a41e790d97",
+      "decision": "PASS",
+      "gate": false,
+      "gate_status": "missing_evidence",
+      "guard_fallbacks": 0,
+      "index": 0,
+      "rendered_tokens": 359,
+      "risk": "LOW",
+      "runtime_complete": true,
+      "safe_facts": 7,
+      "source_units": 7
+    },
+    {
+      "case_key": "d5cf3a69e41b",
+      "decision": "PASS",
+      "gate": false,
+      "gate_status": "low_confidence",
+      "guard_fallbacks": 0,
+      "index": 1,
+      "rendered_tokens": 244,
+      "risk": "LOW",
+      "runtime_complete": true,
+      "safe_facts": 1,
+      "source_units": 1
+    }
+  ],
+  "gate": {
+    "execution_authorized": false,
+    "proceed_to_next_stage": false,
+    "requires_human_confirmation": false,
+    "requires_human_review": true,
+    "status": "bando_chunk_review_required"
+  },
+  "guard_fallbacks": 0,
+  "max_chunk_tokens": 359,
+  "runtime_complete": true,
+  "schema_version": 1,
+  "total_rendered_tokens": 603,
+  "verdict": {
+    "confidence": 0.6,
+    "decision": "UNCERTAIN",
+    "missing_evidence_count": 8,
+    "provider": "bottazzi_motor_bando_pipeline",
+    "risk": "LOW"
+  }
+}

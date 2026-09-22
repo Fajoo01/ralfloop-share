@@ -1,0 +1,33 @@
+[Unit]
+Description=Ralf PEC approval-bound write MCP broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sibilla-cumana
+Group=ralf-mcp
+WorkingDirectory=/home/sibilla-cumana/ralfloop-production/current
+UMask=0007
+RuntimeDirectory=ralf-pec-write-mcp
+RuntimeDirectoryMode=0770
+EnvironmentFile=/etc/ralfloop/pec-mcp.env
+EnvironmentFile=/etc/ralfloop/telegram-approval.env
+LoadCredential=pec-password:/home/bandi/.local/share/bottazzi/secrets/pec-imap-password
+Environment=BOTTAZZI_PEC_SMTP_HOST=smtps.pec.aruba.it
+Environment=BOTTAZZI_PEC_SMTP_PORT=465
+Environment=BOTTAZZI_PEC_SMTP_PASSWORD_FILE=%d/pec-password
+Environment=BOTTAZZI_PEC_WRITE_ATTACHMENT_ROOTS=/var/lib/ralfloop/pec-outbox
+ExecStartPre=/usr/bin/install -d -o sibilla-cumana -g ralf-mcp -m 0770 /var/lib/ralfloop/pec-outbox
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_pec_write_mcp_broker.py --socket /run/ralf-pec-write-mcp/mcp.sock --allow-group ralf-mcp --command /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_pec_write_mcp_server.py --idle-timeout 120 --max-clients 1
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/ralfloop /var/log/ralfloop
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

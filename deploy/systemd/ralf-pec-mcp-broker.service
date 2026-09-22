@@ -1,0 +1,25 @@
+[Unit]
+Description=Ralf PEC read-only MCP broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bandi
+Group=ralf-mcp
+WorkingDirectory=/home/sibilla-cumana/ralfloop-production/current
+UMask=0007
+RuntimeDirectory=ralf-pec-mcp
+RuntimeDirectoryMode=0770
+EnvironmentFile=/etc/ralfloop/pec-mcp.env
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_pec_mcp_broker.py --socket /run/ralf-pec-mcp/mcp.sock --allow-group ralf-mcp --command /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_pec_mcp_server.py --idle-timeout 120 --max-clients 2
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

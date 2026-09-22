@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -112,8 +113,18 @@ class ModelToolRegistry:
         cls,
         path: str | Path = DEFAULT_REGISTRY,
         *,
-        cache_root: str | Path = DEFAULT_HF_CACHE,
+        cache_root: str | Path | None = None,
     ) -> "ModelToolRegistry":
+        if cache_root is None:
+            configured = (
+                os.getenv("RALF_MODEL_TOOL_HF_CACHE", "").strip()
+                or os.getenv("HF_HUB_CACHE", "").strip()
+            )
+            if configured:
+                cache_root = Path(configured).expanduser()
+            else:
+                hf_home = os.getenv("HF_HOME", "").strip()
+                cache_root = Path(hf_home).expanduser() / "hub" if hf_home else DEFAULT_HF_CACHE
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
         if payload.get("schema_version") != "1.0" or not isinstance(payload.get("tools"), list):
             raise ValueError("invalid_model_tool_registry")

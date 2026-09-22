@@ -1,16 +1,19 @@
 [Unit]
-Description=Ralfloop WhatsApp work-profile MCP broker (candidate; not enabled)
+Description=Ralfloop WhatsApp work-profile MCP broker
 After=network.target
 
 [Service]
 Type=simple
 User=sibilla-cumana
-Group=sibilla-cumana
-UMask=0077
+Group=ralf-mcp
+UMask=0007
 RuntimeDirectory=ralf-whatsapp-mcp
-RuntimeDirectoryMode=0700
+RuntimeDirectoryMode=2770
+WorkingDirectory=/home/sibilla-cumana/ralfloop-production/current
 EnvironmentFile=-/etc/ralfloop/whatsapp-mcp.env
-ExecStart=/usr/bin/python3 /opt/ralfloop/scripts/ralf_whatsapp_mcp_broker.py --socket /run/ralf-whatsapp-mcp/mcp.sock --allow-uid 1000 --command /opt/ralfloop/scripts/ralf_whatsapp_mcp_server.py
+Environment=RALF_MCP_IDLE_TIMEOUT=20
+Environment=RALF_MCP_MAX_CLIENTS=2
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_arci_mcp_broker.py --socket /run/ralf-whatsapp-mcp/mcp.sock --allow-group ralf-mcp --command /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_whatsapp_mcp_server.py
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true
@@ -18,6 +21,8 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
 
 [Install]
 WantedBy=multi-user.target

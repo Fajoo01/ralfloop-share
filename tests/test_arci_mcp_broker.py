@@ -40,7 +40,7 @@ def test_arci_broker_relays_strict_server_tool_list(tmp_path):
             "required": [],
             "additionalProperties": False,
         }
-        assert socket_path.stat().st_mode & 0o777 == 0o600
+        assert socket_path.stat().st_mode & 0o777 == 0o660
     finally:
         broker.terminate()
         broker.wait(timeout=3)

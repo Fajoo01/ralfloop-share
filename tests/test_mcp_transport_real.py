@@ -132,3 +132,28 @@ def test_stream_request_yields_matching_notifications_then_result():
     assert events[0] == {"type": "notification", "event": {"type": "delta", "text": "Ciao"}}
     assert events[1]["type"] == "result"
     assert events[1]["result"]["structuredContent"]["ok"] is True
+
+
+def test_server_ping_request_is_answered_while_waiting_for_result():
+    transport = FakeTransport([
+        {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-03-26", "capabilities": {}, "serverInfo": {"name": "test", "version": "1"}}},
+        {"jsonrpc": "2.0", "id": 0, "method": "ping"},
+        {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"},
+        {"jsonrpc": "2.0", "id": 2, "result": {"tools": []}},
+    ])
+    session = MCPClientSession(transport)
+    session.initialize()
+    assert session.list_tools() == ()
+    assert {"jsonrpc": "2.0", "id": 0, "result": {}} in transport.sent
+
+
+def test_unknown_server_request_gets_method_not_found():
+    transport = FakeTransport([
+        {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-03-26", "capabilities": {}, "serverInfo": {"name": "test", "version": "1"}}},
+        {"jsonrpc": "2.0", "id": 99, "method": "roots/list", "params": {}},
+        {"jsonrpc": "2.0", "id": 2, "result": {"tools": []}},
+    ])
+    session = MCPClientSession(transport)
+    session.initialize()
+    assert session.list_tools() == ()
+    assert any(msg.get("id") == 99 and msg.get("error", {}).get("code") == -32601 for msg in transport.sent)

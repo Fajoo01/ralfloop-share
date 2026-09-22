@@ -1,0 +1,24 @@
+[Unit]
+Description=Bot-tazzi Playwright MCP Unix bridge
+After=ralf-playwright-mcp.service
+Wants=ralf-playwright-mcp.service
+
+[Service]
+Type=simple
+User=bandi
+Group=ralf-mcp
+UMask=0007
+RuntimeDirectory=ralf-browser-playwright-mcp
+RuntimeDirectoryMode=2770
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralf-memory-rag/current/scripts/ralf_arci_mcp_broker.py --socket /run/ralf-browser-playwright-mcp/mcp.sock --allow-group ralf-mcp --command /home/bandi/.local/share/ralf-playwright-mcp/ralf_playwright_mcp_server.py --idle-timeout 300 --max-clients 4
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=false
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/run/ralf-browser-playwright-mcp
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

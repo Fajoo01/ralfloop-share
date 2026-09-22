@@ -85,18 +85,18 @@ except Exception as exc:
     audit("repair_approval_routes_load_failed", error=repr(exc))
 
 try:
-    from ralfloop_agent.glm_review.telegram_api import register_glm_review_routes
-
-    register_glm_review_routes(app)
-except Exception as exc:
-    audit("glm_review_routes_load_failed", error=repr(exc))
-
-try:
     from openshell_backend.chat_api import router as chat_router
 
     app.include_router(chat_router)
 except Exception as exc:
     audit("chat_router_load_failed", error=repr(exc))
+
+try:
+    from openshell_backend.assistant_v1_api import router as assistant_v1_router
+
+    app.include_router(assistant_v1_router)
+except Exception as exc:
+    audit("assistant_v1_router_load_failed", error=repr(exc))
 
 
 def _read_arci_profile(context_factory=None) -> dict[str, object]:
@@ -1986,6 +1986,8 @@ def run_task(req: TaskRunRequest):
     ):
         return _run_task_impl(req)
     if classified.mode == "external_action" and is_local_maintenance_intent(req.user_goal):
+        return _run_task_impl(req)
+    if classified.mode == "external_action" and classified.requires_confirmation:
         return _run_task_impl(req)
 
     from ralfloop_agent.providers.agent_gpu_handoff import AgentGpuCoordinator, AgentGpuHandoffError

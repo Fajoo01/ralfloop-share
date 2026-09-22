@@ -22,19 +22,37 @@ from .email_send import UnifiedEmailApprovalCoordinator, UnifiedGmailApprovalExe
 from .mailchimp_campaign import (
     UnifiedMailchimpApprovalCoordinator, UnifiedMailchimpApprovalExecutor,
 )
+from .jellyfin_identity_write import (
+    JellyfinIdentityMCPProvider, UnifiedJellyfinApprovalCoordinator,
+    UnifiedJellyfinApprovalExecutor,
+)
 from .executor import StructuredArtifact, UnifiedDAGExecutor
 from .fastweb_portal import FastwebPortalReadOnly
 from .home import HomeEntityRegistry, HomeWorkflow
 from .home_provider import HomeAssistantProviderError, HomeAssistantRESTBackend
+from .tuya_mcp_adapter import TuyaMCPHomeBackend, TuyaMCPProviderError
 from .memory import MemoryRouter, tiremm_profile_items
 from .atm_mcp_adapter import ATMMCPReadOnly
+from .browser_mcp_adapter import (
+    BrowserMCPApprovalProvider,
+    UnifiedBrowserApprovalCoordinator,
+    UnifiedBrowserApprovalExecutor,
+    browser_inspect_adapter,
+)
 from .editorial_mcp_adapter import EditorialMCPContext
 from .bandi_mcp_adapter import BandiMCPContext
+from .pec_mcp_adapter import PecMCPContext
+from .pec_write_mcp_adapter import PecWriteMCPContext
 from .meteo_mcp_adapter import MeteoMCPReadOnly
 from .planner import UnifiedPlanner
 from .capability_rag_router import CapabilityRAGRouter
 from .recipient import GoogleWorkspaceRecipientResolver
 from .registry import DEFAULT_HOME_ENTITIES, UnifiedRegistryFacade
+from .skill_adapters import bandi_eligibility_adapter, bandi_read_adapter, research_deep_adapter
+from .safe_mcp_read_adapters import (
+    arci_context_adapter, education_tutor_adapter, jellyfin_identify_adapter,
+    bandi_discovery_adapter, knowledge_retrieve_adapter, runts_context_adapter,
+)
 from .whatsapp_compose import EmailBackedWhatsAppDraftPipeline, UnifiedWhatsAppComposeService
 from .whatsapp_mcp_adapter import WhatsAppMCPReadOnly
 from .whatsapp_send import (
@@ -64,12 +82,14 @@ _SUPPORTED = re.compile(
     r"rispondi\s+(?:a|alla\s+mail(?:\s+di)?)|accendi|spegni|apri|chiudi|"
     r"imposta|metti|porta|abbassala|alzala|temperatura|quanto\s+fa|fa\s+caldo|"
     r"fa\s+freddo|rendila|cambiala|aggiungi|modifica|ok|invia|mandala|va\s+bene|annulla|"
-    r"fastweb|myfastpage|whatsapp|wapp|mailchimp|meteo|weather|previsioni|piove|piover[aà]|pioggia|"
+    r"fastweb|myfastpage|whatsapp|wapp|mailchimp|pec|posta\s+certificata|posta\s+elettronica\s+certificata|webmail\s+pec|"
+    r"meteo|weather|previsioni|piove|piover[aà]|pioggia|"
     r"temporale|radar|precipitazioni|vento|atm|giromilano|"
     r"mezzi\s+pubblici|trasporto\s+pubblico|portami|band[oi]|grant|contribut[oi]|finanziament[oi]|candidatur[ae]|opportunit[aà]|"
     r"volantin[oi]|flyer|locandin[ae]|manifest[oi]|poster|"
     r"come\s+(?:arrivo|vado|posso\s+andare)|"
-    r"mezzi\s+(?:per|verso)|percorso\s+(?:atm|con\s+i\s+mezzi)|home\s+assistant|domotica|stato\s+(?:della\s+)?luce)\b",
+    r"mezzi\s+(?:per|verso)|percorso\s+(?:atm|con\s+i\s+mezzi)|home\s+assistant|domotica|stato\s+(?:della\s+)?luce|"
+    r"runts|arci|jellyfin|browser|playwright|snapshot\s+(?:browser|pagina)|schede?\s+browser|bandi|bando|grant|finanziament[oi]|contribut[oi]|insegnante|tutor|quiz|esercizio\s+didattico|memoria\s+operativa)\b",
     re.I,
 )
 
@@ -78,6 +98,38 @@ _EMAIL_READ_SUPPORTED = re.compile(
     r"\b(?:mail|email|posta|bozz[ae]|scritto|comunicat[oaie]|comunicazioni|avvisat[oaie]|messaggi?|thread)\b",
     re.I,
 )
+
+_ASSISTANT_V1_EXTENDED_SUPPORTED = re.compile(
+    r"\b(?:ricerca|document[oi]|pdf|allegat[oi]|repository|repo|codice|debug|refactor|"
+    r"server|servizi?|spazio\s+disco|tiremm)\b",
+    re.I,
+)
+_ASSISTANT_V1_GROUNDED_ADMIN_TOPIC = re.compile(
+    r"\b(?:aps|ets|runts|terzo\s+settore|codice\s+del\s+terzo\s+settore|"
+    r"associazion[ei]\s+di\s+promozione\s+sociale|enti?\s+del\s+terzo\s+settore)\b",
+    re.I,
+)
+_ASSISTANT_V1_GROUNDED_ADMIN_QUERY = re.compile(
+    r"\b(?:cos['’]?[eè]|che\s+cos['’]?[eè]|definisci|spiega|normativ[ae]|legge|"
+    r"decreto|d\.?\s*lgs\.?|articol[oi]|requisit[oi]|obbligh[oi]|disciplina|"
+    r"cosa\s+prevede|chi\s+pu[oò]|come\s+funziona)\b",
+    re.I,
+)
+
+
+def _assistant_v1_extended_request(text: str, context: Mapping[str, Any]) -> bool:
+    return (
+        str(context.get("assistant_surface") or "") == "assistant_v1"
+        and bool(_ASSISTANT_V1_EXTENDED_SUPPORTED.search(text))
+    )
+
+
+def _assistant_v1_grounded_admin_request(text: str, context: Mapping[str, Any]) -> bool:
+    return (
+        str(context.get("assistant_surface") or "") == "assistant_v1"
+        and bool(_ASSISTANT_V1_GROUNDED_ADMIN_TOPIC.search(text))
+        and bool(_ASSISTANT_V1_GROUNDED_ADMIN_QUERY.search(text))
+    )
 
 
 def is_unified_telegram_request(text: str, context: Mapping[str, Any]) -> bool:
@@ -126,17 +178,40 @@ def _has_single_approvable_pending(context: Mapping[str, Any]) -> bool:
     ]
     return (
         len(active) == 1
-        and active[0].domain in {"email", "whatsapp", "mailchimp"}
+        and active[0].domain in {"email", "whatsapp", "mailchimp", "jellyfin"}
         and active[0].policy.value in {"CONFIRM_WRITE", "PROTECTED"}
         and bool(active[0].approval_ref)
         and payload_matches(active[0])
     )
 
 
-def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any] | None:
-    """Side-effect-free route metadata for Meowgram's existing two-step contract."""
+def unified_route_probe(
+    text: str,
+    context: Mapping[str, Any],
+    *,
+    flags_override: AssistantFeatureFlags | None = None,
+) -> dict[str, Any] | None:
+    """Side-effect-free route metadata for Meowgram and Assistant v1."""
 
-    if not is_unified_telegram_request(text, context):
+    flags = flags_override or AssistantFeatureFlags.from_env()
+    source = str(context.get("source") or "")
+    if not (
+        flags.unified_assistant
+        and (source.startswith("telegram_") or source == "ralf_terminal")
+    ):
+        return None
+    if not is_unified_telegram_request(text, context) and not flags_override:
+        return None
+    if flags_override and not (
+        _SUPPORTED.search(text)
+        or _EMAIL_READ_SUPPORTED.search(text)
+        or _assistant_v1_extended_request(text, context)
+        or _assistant_v1_grounded_admin_request(text, context)
+        or _is_pec_runts_request(text)
+        or _is_explicit_runts_approval(text, context)
+        or re.fullmatch(r"\s*(?:otp[\s:-]*)?[0-9]{6}\s*", text, re.I)
+        or (_is_positive_confirmation(text) and _has_single_approvable_pending(context))
+    ):
         return None
     if _is_explicit_runts_approval(text, context):
         practice_id = _RUNTS_EXPLICIT_APPROVAL.fullmatch(text).group("practice")
@@ -189,12 +264,8 @@ def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any]
     plan = planner.validate(planner.plan(text))
     skills = [item.skill for item in plan.assignments]
     all_read = all(item.policy.value == "READ" for item in plan.assignments)
-    if all_read:
-        task_mode = "tool_backed_read"
-        interaction_class = "TOOL_BACKED_READ"
-    else:
-        task_mode = "external_action"
-        interaction_class = "EXTERNAL_ACTION"
+    task_mode = "tool_backed_read" if all_read else "external_action"
+    interaction_class = "TOOL_BACKED_READ" if all_read else "EXTERNAL_ACTION"
     connectors = []
     if "email.search" in skills or (not all_read and any(item.domain == "email" for item in plan.assignments)):
         connectors.append("google_workspace.gmail")
@@ -208,8 +279,31 @@ def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any]
         connectors.append("meteo.radar.mcp")
     if "atm.route" in skills:
         connectors.append("atm.route.mcp")
+    if "pec.read" in skills:
+        connectors.append("pec.read.mcp")
+    if "pec.prepare_send" in skills or "pec.send_approved" in skills:
+        connectors.append("pec.write.mcp")
     if any(skill.startswith("bandi.") for skill in skills):
         connectors.append("bandi.research.mcp")
+    if "research.deep" in skills:
+        connectors.append("model_tool.deep_web_research")
+    if any(skill in {"knowledge.retrieve", "runts.context"} for skill in skills):
+        connectors.append("memory.operational.mcp")
+    if "arci.context" in skills:
+        connectors.append("arci.read_only.mcp")
+    if "jellyfin.identify" in skills:
+        connectors.append("jellyfin.identity.mcp.read")
+    if "education.tutor" in skills:
+        connectors.append("teacher.student.mcp")
+    if "browser.inspect" in skills:
+        connectors.append("browser.playwright.read_only")
+    if any(skill in {"home.read", "home.control"} for skill in skills):
+        home_provider = os.getenv("RALFLOOP_HOME_PROVIDER", "home_assistant").strip().casefold()
+        connectors.append("tuya.home.mcp" if home_provider == "tuya_mcp" else "home_assistant.adapter")
+    if not all_read and any(item.domain == "jellyfin" for item in plan.assignments):
+        connectors.append("jellyfin.identity.mcp.write")
+    if not all_read and any(item.domain == "browser" for item in plan.assignments):
+        connectors.append("browser.playwright.approval_bound")
     return {
         "task_mode": task_mode,
         "mode": task_mode,
@@ -229,7 +323,12 @@ def unified_route_probe(text: str, context: Mapping[str, Any]) -> dict[str, Any]
     }
 
 
-def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any]:
+def run_unified_telegram(
+    text: str,
+    context: Mapping[str, Any],
+    *,
+    flags_override: AssistantFeatureFlags | None = None,
+) -> dict[str, Any]:
     if _is_explicit_runts_approval(text, context):
         return _execute_explicit_runts_approval(
             text,
@@ -267,7 +366,7 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
 
         return result
 
-    flags = AssistantFeatureFlags.from_env()
+    flags = flags_override or AssistantFeatureFlags.from_env()
     session_id = _session_id(context)
     store = SessionStore(os.getenv(
         "RALFLOOP_UNIFIED_SESSION_DIR",
@@ -288,14 +387,15 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
     atm_read = ATMMCPReadOnly(context)
     editorial_gateway_factory = EditorialMCPContext.from_environment
     bandi_gateway_factory = BandiMCPContext.from_environment
+    pec_gateway_factory = PecMCPContext.from_environment
+    pec_write_gateway_factory = PecWriteMCPContext.from_environment
     home_workflow = None
     if flags.home_assistant_read_live or flags.home_assistant_live:
         try:
-            home_workflow = HomeWorkflow(
-                HomeEntityRegistry.load(DEFAULT_HOME_ENTITIES),
-                HomeAssistantRESTBackend.from_environment(),
-            )
-        except (OSError, ValueError, HomeAssistantProviderError):
+            provider = os.getenv("RALFLOOP_HOME_PROVIDER", "home_assistant").strip().casefold()
+            backend = TuyaMCPHomeBackend.from_environment() if provider == "tuya_mcp" else HomeAssistantRESTBackend.from_environment()
+            home_workflow = HomeWorkflow(HomeEntityRegistry.load(DEFAULT_HOME_ENTITIES), backend)
+        except (OSError, ValueError, HomeAssistantProviderError, TuyaMCPProviderError):
             home_workflow = None
     approval_coordinator = None
     approval_executor = None
@@ -303,7 +403,21 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
     whatsapp_approval_executor = None
     mailchimp_approval_coordinator = None
     mailchimp_approval_executor = None
-    if flags.email_assistant_live or flags.whatsapp_assistant_live or flags.mailchimp_campaign_live:
+    jellyfin_approval_coordinator = None
+    jellyfin_approval_executor = None
+    browser_approval_coordinator = None
+    browser_approval_executor = None
+    browser_interaction_provider = (
+        BrowserMCPApprovalProvider() if flags.browser_interact_live else None
+    )
+    jellyfin_identity_provider = (
+        JellyfinIdentityMCPProvider() if flags.jellyfin_identity_write_live else None
+    )
+    if (
+        flags.email_assistant_live or flags.whatsapp_assistant_live
+        or flags.mailchimp_campaign_live or flags.jellyfin_identity_write_live
+        or flags.browser_interact_live
+    ):
         policy = DomainApprovalPolicy.from_env()
         if policy.enabled:
             approval_store = DomainApprovalStore(policy=policy)
@@ -330,21 +444,39 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
                 mailchimp_approval_executor = UnifiedMailchimpApprovalExecutor(
                     lambda: MailchimpApprovedMCPWorkflow(),
                 )
+            if flags.jellyfin_identity_write_live and jellyfin_identity_provider is not None:
+                jellyfin_approval_coordinator = UnifiedJellyfinApprovalCoordinator(
+                    approval_store, policy=policy,
+                )
+                jellyfin_approval_executor = UnifiedJellyfinApprovalExecutor(
+                    approval_store, jellyfin_identity_provider, write_enabled=True,
+                )
+            if flags.browser_interact_live and browser_interaction_provider is not None:
+                browser_approval_coordinator = UnifiedBrowserApprovalCoordinator(
+                    approval_store, policy=policy,
+                )
+                browser_approval_executor = UnifiedBrowserApprovalExecutor(
+                    approval_store, browser_interaction_provider, write_enabled=True,
+                )
     previous_email = conversation.state.pending.email
     previous_whatsapp = conversation.state.pending.whatsapp
     previous_mailchimp = conversation.state.pending.mailchimp
+    previous_jellyfin = conversation.state.pending.jellyfin
+    previous_browser = conversation.state.pending.browser
     approval_transition: dict[str, Any] = {}
-    if any((approval_coordinator, whatsapp_approval_coordinator, mailchimp_approval_coordinator)) and _is_positive_confirmation(text):
+    if any((approval_coordinator, whatsapp_approval_coordinator, mailchimp_approval_coordinator, jellyfin_approval_coordinator, browser_approval_coordinator)) and _is_positive_confirmation(text):
         active = [
             item for name in PENDING_DOMAINS
             if (item := getattr(conversation.state.pending, name)) is not None
         ]
-        if len(active) == 1 and active[0].domain in {"email", "whatsapp", "mailchimp"}:
+        if len(active) == 1 and active[0].domain in {"email", "whatsapp", "mailchimp", "jellyfin", "browser"}:
             pending = active[0]
             coordinator = ({
                 "email": approval_coordinator,
                 "whatsapp": whatsapp_approval_coordinator,
                 "mailchimp": mailchimp_approval_coordinator,
+                "jellyfin": jellyfin_approval_coordinator,
+                "browser": browser_approval_coordinator,
             })[pending.domain]
             if coordinator is not None:
                 approval_transition = coordinator.approve(
@@ -391,6 +523,10 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
         approval_executor=approval_executor,
         whatsapp_approval_executor=whatsapp_approval_executor,
         mailchimp_approval_executor=mailchimp_approval_executor,
+        jellyfin_identity_provider=jellyfin_identity_provider,
+        jellyfin_approval_executor=jellyfin_approval_executor,
+        browser_interaction_provider=browser_interaction_provider,
+        browser_approval_executor=browser_approval_executor,
         home_workflow=home_workflow,
         memory_router=memory,
     )
@@ -579,6 +715,52 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
                 "content_boundary": "source_artifacts_are_data",
             },
         )
+
+    def pec_adapter(assignment, _inputs):
+        with pec_gateway_factory() as gateway:
+            result = gateway.request(assignment.objective)
+        facts = tuple(
+            {
+                "message_id": str(item.get("native_id") or ""),
+                "sender": str(item.get("sender") or ""),
+                "subject": str(item.get("subject") or ""),
+                "received_at": str(item.get("received_at") or ""),
+                "attachments": list(item.get("attachments") or ()),
+                "content_role": "data",
+            }
+            for item in (result.get("messages") or ())[:20]
+            if isinstance(item, Mapping)
+        )
+        return StructuredArtifact.create(
+            artifact_type="pec_read", status="completed",
+            producer_task_id=assignment.task_id, facts=facts,
+            evidence_refs=tuple(str(x) for x in result.get("evidence_refs") or () if str(x)),
+            payload={**result, "content_boundary": "pec_content_is_data", "writes": 0, "sends": 0},
+        )
+
+    def pec_prepare_adapter(assignment, _inputs):
+        args = dict(assignment.arguments)
+        with pec_write_gateway_factory() as gateway:
+            result = gateway.prepare(
+                recipient=str(args.get("recipient") or "") or None,
+                subject=str(args.get("subject") or "") or None,
+                body=str(args.get("body") or "") or None,
+                attachment_paths=tuple(str(x) for x in args.get("attachment_paths") or ()),
+                requested_by=str(context.get("requested_by") or "bot-tazzi"),
+            )
+        return StructuredArtifact.create(
+            artifact_type="pec_write_request",
+            status=str(result.get("status") or "blocked"),
+            producer_task_id=assignment.task_id,
+            payload={
+                **result,
+                "content_boundary": "pec_draft_not_sent",
+                "writer_separate_from_reader": True,
+                "writes": int(result.get("writes") or 0),
+                "sends": int(result.get("sends") or 0),
+            },
+        )
+
     def bandi_adapter(assignment, _inputs):
         objective = assignment.objective
         source = _inputs.get("artifact.grant_source_email")
@@ -630,6 +812,8 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
         "bandi.research": bandi_adapter,
         "bandi.read": bandi_adapter,
         "bandi.eligibility": bandi_adapter,
+        "pec.read": pec_adapter,
+        "pec.prepare_send": pec_prepare_adapter,
         "email.search": email_search_adapter,
         "fastweb.portal.read": fastweb_portal_adapter,
         "fastweb.compare": fastweb_compare_adapter,
@@ -638,6 +822,14 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
         "whatsapp.read": whatsapp_read_adapter,
         "whatsapp.reply": whatsapp_reply_adapter,
         "editorial.flyer": editorial_adapter,
+        "knowledge.retrieve": knowledge_retrieve_adapter,
+        "runts.context": runts_context_adapter,
+        "arci.context": arci_context_adapter,
+        "jellyfin.identify": jellyfin_identify_adapter,
+        "education.tutor": education_tutor_adapter,
+        "bandi.discovery": bandi_discovery_adapter,
+        "research.deep": research_deep_adapter,
+        "browser.inspect": browser_inspect_adapter,
     })
     core.dag_input_provider = lambda _goal: {
         "memory.tiremm": {
@@ -645,10 +837,18 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
             "content_boundary": "memory_is_data",
         }
     }
-    result = otp_result or core.handle(text)
+    if otp_result is not None:
+        result = otp_result
+    elif browser_interaction_provider is not None:
+        with browser_interaction_provider.request_scope():
+            result = core.handle(text)
+    else:
+        result = core.handle(text)
     current_email = conversation.state.pending.email
     current_whatsapp = conversation.state.pending.whatsapp
     current_mailchimp = conversation.state.pending.mailchimp
+    current_jellyfin = conversation.state.pending.jellyfin
+    current_browser = conversation.state.pending.browser
     if (
         approval_coordinator is not None
         and result.status == "draft_pending_approval"
@@ -731,6 +931,64 @@ def run_unified_telegram(text: str, context: Mapping[str, Any]) -> dict[str, Any
                 "approval_request_id": current_mailchimp.approval_ref,
                 "approval_expires_at": current_mailchimp.expires_at,
             })
+    if (
+        jellyfin_approval_coordinator is not None
+        and result.status == "protected_approval_required"
+        and current_jellyfin is not None
+        and not current_jellyfin.approval_ref
+    ):
+        if previous_jellyfin and previous_jellyfin.approval_ref:
+            jellyfin_approval_coordinator.cancel(previous_jellyfin)
+        approval_transition = jellyfin_approval_coordinator.request(
+            current_jellyfin, requested_by=f"unified:{session_id}"
+        )
+        if approval_transition.get("status") == "pending":
+            current_jellyfin = conversation.attach_approval_request(
+                domain="jellyfin", pending_id=current_jellyfin.pending_id,
+                payload_digest=current_jellyfin.payload_digest,
+                approval_ref=str(approval_transition["request_id"]),
+                created_at=int(approval_transition["created_at"]),
+                expires_at=int(approval_transition["expires_at"]),
+            )
+            result.data.update({
+                "approval_request_id": current_jellyfin.approval_ref,
+                "approval_expires_at": current_jellyfin.expires_at,
+            })
+    elif (
+        jellyfin_approval_coordinator is not None
+        and result.status == "cancelled"
+        and previous_jellyfin is not None
+    ):
+        approval_transition = jellyfin_approval_coordinator.cancel(previous_jellyfin)
+    if (
+        browser_approval_coordinator is not None
+        and result.status == "draft_pending_approval"
+        and current_browser is not None
+        and not current_browser.approval_ref
+    ):
+        if previous_browser and previous_browser.approval_ref:
+            browser_approval_coordinator.cancel(previous_browser)
+        approval_transition = browser_approval_coordinator.request(
+            current_browser, requested_by=f"unified:{session_id}"
+        )
+        if approval_transition.get("status") == "pending":
+            current_browser = conversation.attach_approval_request(
+                domain="browser", pending_id=current_browser.pending_id,
+                payload_digest=current_browser.payload_digest,
+                approval_ref=str(approval_transition["request_id"]),
+                created_at=int(approval_transition["created_at"]),
+                expires_at=int(approval_transition["expires_at"]),
+            )
+            result.data.update({
+                "approval_request_id": current_browser.approval_ref,
+                "approval_expires_at": current_browser.expires_at,
+            })
+    elif (
+        browser_approval_coordinator is not None
+        and result.status == "cancelled"
+        and previous_browser is not None
+    ):
+        approval_transition = browser_approval_coordinator.cancel(previous_browser)
     if approval_transition:
         result.data["approval_transition"] = dict(approval_transition)
     session_adapter.save(session_id, conversation)
@@ -1498,9 +1756,10 @@ def _is_positive_confirmation(text: str) -> bool:
 
 
 def _is_pec_runts_request(text: str) -> bool:
-    from .pec_runts_telegram import is_pec_runts_telegram
+    from .pec_runts_telegram import PecInboxDecision, decision_for_telegram
 
-    return is_pec_runts_telegram(text)
+    decision = decision_for_telegram(text)
+    return decision is not None and not isinstance(decision, PecInboxDecision)
 
 
 __all__ = ["is_unified_telegram_request", "run_unified_telegram", "unified_route_probe"]

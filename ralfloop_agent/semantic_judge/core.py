@@ -6,15 +6,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import tempfile
 import time
 from typing import Annotated, Any, Callable, Literal, Mapping, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 import requests
 
-from ralfloop_agent.glm_review.adapter import ColibriGlmAdapter
-from ralfloop_agent.glm_review.models import AdapterStatus, ContextPacket
 from ralfloop_agent.providers.gpu_engine_scheduler import GpuEngineTransitionError, TransactionalGpuScheduler
 from ralfloop_agent.providers.llama_cpp_server import (
     LlamaCppServerConfig,
@@ -247,40 +244,6 @@ def semantic_prompt(context_packet: Mapping[str, Any], draft: str) -> str:
     ))
 
 
-class GlmColibriJudge:
-    provider = "colibri_glm"
-    model = "glm-5.2-colibri"
-
-    def __init__(self, *, timeout_sec: float = 30, artifact_root: str | Path | None = None,
-                 adapter: ColibriGlmAdapter | None = None) -> None:
-        self.timeout_sec = float(timeout_sec)
-        self.artifact_root = Path(artifact_root) if artifact_root else None
-        self.adapter = adapter or ColibriGlmAdapter(timeout_seconds=max(1, int(timeout_sec)), ngen=96, outer_grace_seconds=0)
-
-    def review(self, context_packet: Mapping[str, Any], draft: str) -> SemanticReviewResult:
-        prompt = semantic_prompt(context_packet, draft)
-        directory = self._artifact_dir()
-        packet = ContextPacket(task_id="semantic-email-review", task_type="other", goal="semantic review only")
-        started = time.monotonic()
-        envelope = self.adapter.review(packet, directory, prompt_override=prompt, result_parser=parse_semantic_review)
-        latency_ms = max(0, int((time.monotonic() - started) * 1000))
-        if envelope.status is AdapterStatus.TIMEOUT:
-            raise TimeoutError("semantic_judge_timeout")
-        if not envelope.ok:
-            raise JudgeAvailabilityError(f"semantic_judge_{envelope.status}:{envelope.error or 'unavailable'}")
-        review = SemanticReview.model_validate(envelope.result)
-        return SemanticReviewResult(
-            review, self.provider, self.model, latency_ms,
-            input_tokens=_rough_tokens(prompt), output_tokens=_rough_tokens(json.dumps(envelope.result, ensure_ascii=False)),
-        )
-
-    def _artifact_dir(self) -> Path:
-        if self.artifact_root:
-            self.artifact_root.mkdir(parents=True, exist_ok=True)
-            return Path(tempfile.mkdtemp(prefix="semantic-", dir=self.artifact_root))
-        return Path(tempfile.mkdtemp(prefix="ralf-semantic-judge-"))
-
-
 class DeepSeekV4FlashJudge:
     provider = "deepseek_v4_flash"
     model = "deepseek-v4-flash"
@@ -431,8 +394,6 @@ class LlamaCppSemanticJudge:
 
 
 def build_semantic_judge(config: SemanticJudgeConfig) -> SemanticDraftJudge:
-    if config.semantic_judge_provider == "glm_colibri":
-        return GlmColibriJudge(timeout_sec=config.semantic_judge_timeout_sec)
     if config.semantic_judge_provider == "deepseek_v4_flash":
         return DeepSeekV4FlashJudge(config=config)
     if config.semantic_judge_provider == "llama_cpp":

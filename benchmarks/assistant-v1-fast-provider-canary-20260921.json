@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-21",
+  "assistant_route": "local_chat",
+  "model_lane": "fast",
+  "provider": "assistant_fast_openai_compat",
+  "base_url": "http://127.0.0.1:19110",
+  "model": "qwen2.5-3b",
+  "prompt": "ciao",
+  "response": "Ciao! Come posso aiutarti oggi?",
+  "duration_ms": 2423,
+  "wall_seconds": 2.45,
+  "prompt_tokens": 89,
+  "generated_tokens": 12,
+  "cache_hit_tokens": 5,
+  "prompt_tokens_per_second": 56.4863,
+  "decode_tokens_per_second": 14.0842,
+  "tools_executed": false,
+  "execution_claim_blocked": false,
+  "motor_19196_active_during_canary": true,
+  "notes": "CPU-only resident fast provider; no Ollama model load or GPU contention."
+}

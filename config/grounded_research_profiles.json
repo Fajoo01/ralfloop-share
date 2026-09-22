@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "italy_third_sector_normative": {
+      "domains": [
+        "lavoro.gov.it",
+        "normattiva.it",
+        "gazzettaufficiale.it",
+        "def.finanze.it"
+      ],
+      "seed_urls": [
+        "https://www.lavoro.gov.it/temi-e-priorita/terzo-settore-e-responsabilita-sociale-imprese/focus-on/riforma-terzo-settore/pagine/codice-del-terzo-settore",
+        "https://www.lavoro.gov.it/temi-e-priorita/terzo-settore-e-responsabilita-sociale-imprese/focus-on/associazionismo-sociale/pagine/default"
+      ],
+      "require_primary": true,
+      "min_opened_sources": 2,
+      "max_steps": 12,
+      "max_sources": 12
+    }
+  }
+}

@@ -100,8 +100,10 @@ def test_generic_latest_pec_phrases_route_to_mcp_read(
     assert route is not None
     assert route["task_mode"] == "tool_backed_read"
     assert route["interaction_class"] == "TOOL_BACKED_READ"
-    assert route["intent"] == "pec.inbox.read"
-    assert route["mcp_used"] == ["pec_runts.mcp"]
+    assert route["intent"] == "pec.read"
+    assert route["domains"] == ["pec"]
+    assert route["skills_used"] == ["pec.read"]
+    assert route["mcp_used"] == ["pec.read.mcp"]
     assert route["write_policy"] == "no_write"
     assert route["requires_confirmation"] is False
 

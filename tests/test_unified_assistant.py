@@ -19,7 +19,9 @@ from ralfloop_agent.unified_assistant.executor import StructuredArtifact, Unifie
 from ralfloop_agent.unified_assistant.home import HomeEntity, HomeEntityRegistry, HomeWorkflow
 from ralfloop_agent.unified_assistant.memory import MemoryRouter
 from ralfloop_agent.unified_assistant.planner import UnifiedPlanner
+from ralfloop_agent.unified_assistant.capability_rag_router import CapabilityRAGRouter
 from ralfloop_agent.unified_assistant.registry import UnifiedRegistryFacade
+from ralfloop_agent.unified_assistant.skill_adapters import research_deep_adapter
 
 
 class FakeRecipientResolver:
@@ -334,6 +336,22 @@ def test_multi_domain_plan_uses_structured_dependencies():
     assert all(item.content_is_data for item in plan.assignments)
 
 
+def test_pec_capability_rag_precedes_generic_home_verbs():
+    registry = UnifiedRegistryFacade()
+    router = CapabilityRAGRouter(registry)
+    planner = UnifiedPlanner(registry, capability_router=router)
+
+    plan = planner.validate(planner.plan(
+        "Invia la PEC al Difensore regionale e porta a termine la pratica TARI."
+    ))
+
+    assert plan.intent == "pec.prepare_send"
+    assert plan.domains == ("pec",)
+    assert plan.assignments[0].skill == "pec.prepare_send"
+    assert plan.assignments[0].domain == "pec"
+    assert plan.assignments[0].policy is PolicyClass.CONFIRM_WRITE
+
+
 def test_arci_grant_reply_reads_source_email_before_bando_and_never_skips_provenance():
     planner = UnifiedPlanner(UnifiedRegistryFacade())
 
@@ -373,7 +391,10 @@ def test_gmail_whatsapp_reply_plan_passes_only_structured_artifacts():
     assert all(item.content_is_data for item in plan.assignments)
 
 
-def test_multi_domain_executor_reaches_email_pending_without_send():
+def test_multi_domain_executor_reaches_email_pending_without_send(monkeypatch, tmp_path):
+    socket = tmp_path / "bandi.sock"
+    socket.touch()
+    monkeypatch.setenv("RALF_BANDI_MCP_SOCKET", str(socket))
     core, manager, pipeline, approvals = build_core()
     seen = []
 
@@ -594,3 +615,159 @@ def test_email_working_memory_never_contains_personal_relational():
     assert "Private relationship history" not in dumped
     excluded = {item.item_id: item.reason for item in working.memory_trace.excluded_items}
     assert excluded["mem.personal"] == "namespace_not_allowed_for_domain"
+
+
+def test_generic_dag_clarification_does_not_claim_tool_execution(monkeypatch, tmp_path):
+    socket = tmp_path / "bandi.sock"
+    socket.touch()
+    monkeypatch.setenv("RALF_BANDI_MCP_SOCKET", str(socket))
+    core, _, _, _ = build_core()
+
+    def needs_context(assignment, _inputs):
+        return StructuredArtifact.create(
+            artifact_type="grant_context",
+            status="clarification_required",
+            producer_task_id=assignment.task_id,
+            payload={"message": "Serve altro contesto."},
+        )
+
+    core.dag_executor = UnifiedDAGExecutor(
+        core.planner.registry,
+        {"bandi.read": needs_context},
+    )
+    result = core.handle("Controlla questo bando")
+
+    assert result.status == "clarification_required"
+    assert result.data["tools_executed"] is False
+
+
+def test_pec_prepare_dag_surfaces_missing_fields_instead_of_completed(monkeypatch, tmp_path):
+    socket = tmp_path / "pec-write.sock"
+    socket.touch()
+    monkeypatch.setenv("RALF_PEC_WRITE_MCP_SOCKET", str(socket))
+    core, _, _, _ = build_core()
+
+    def needs_fields(assignment, _inputs):
+        return StructuredArtifact.create(
+            artifact_type="pec_write_request",
+            status="draft_fields_required",
+            producer_task_id=assignment.task_id,
+            payload={
+                "ok": True,
+                "status": "draft_fields_required",
+                "missing": ["recipient", "subject", "body"],
+                "writes": 0,
+                "sends": 0,
+            },
+        )
+
+    core.dag_executor = UnifiedDAGExecutor(
+        core.planner.registry,
+        {"pec.prepare_send": needs_fields},
+    )
+    result = core.handle("Invia la PEC al Difensore regionale e porta a termine la pratica TARI")
+
+    assert result.status == "clarification_required"
+    assert "Mancano i campi della bozza" in result.message
+    assert "Nessuna PEC è stata inviata" in result.message
+    assert result.data["tools_executed"] is True
+
+
+def test_pec_prepare_dag_surfaces_hash_bound_approval(monkeypatch, tmp_path):
+    socket = tmp_path / "pec-write.sock"
+    socket.touch()
+    monkeypatch.setenv("RALF_PEC_WRITE_MCP_SOCKET", str(socket))
+    core, _, _, _ = build_core()
+
+    def approval_needed(assignment, _inputs):
+        return StructuredArtifact.create(
+            artifact_type="pec_write_request",
+            status="approval_required",
+            producer_task_id=assignment.task_id,
+            payload={
+                "ok": True,
+                "status": "approval_required",
+                "approval_request_id": "apr_TEST",
+                "writes": 0,
+                "sends": 0,
+            },
+        )
+
+    core.dag_executor = UnifiedDAGExecutor(
+        core.planner.registry,
+        {"pec.prepare_send": approval_needed},
+    )
+    result = core.handle(
+        "Invia la PEC a difensore@example.test oggetto: Pratica TARI testo: Allego la documentazione"
+    )
+
+    assert result.status == "approval_required"
+    assert "Serve approvazione esplicita" in result.message
+    assert "Nessuna PEC è stata inviata" in result.message
+    assert result.data["tools_executed"] is True
+
+
+def test_unhandled_protected_skill_fails_closed_without_executor():
+    core, _, _, _ = build_core()
+    result = core.handle("applica identità film Jellyfin")
+    assert result.status == "unavailable"
+    assert result.data["tools_executed"] is False
+    assert result.data["selected_skill"] == "jellyfin.apply_identity"
+    assert result.data["required_policy"] == "PROTECTED"
+
+
+def test_normative_admin_question_routes_to_grounded_research():
+    planner = UnifiedPlanner(UnifiedRegistryFacade())
+    plan = planner.validate(planner.plan("Cos'è una APS in Italia?"))
+
+    assert plan.intent == "research.deep"
+    assert plan.domains == ("research",)
+    assert plan.assignments[0].skill == "research.deep"
+    assert plan.assignments[0].policy is PolicyClass.READ
+    assert plan.assignments[0].arguments["query"] == "Cos'è una APS in Italia?"
+    assert plan.assignments[0].arguments["profile"] == "italy_third_sector_normative"
+
+
+def test_research_deep_adapter_requires_cited_read_only_evidence():
+    planner = UnifiedPlanner(UnifiedRegistryFacade())
+    assignment = planner.plan("Cos'è una APS in Italia?").assignments[0]
+
+    class FakeEnvelope:
+        ok = True
+        error_type = None
+        warnings = []
+        tool_id = "deep_web_research_agentcpm_v1"
+        duration_ms = 123
+        output = {
+            "answer": "Le APS sono disciplinate dal D.Lgs. 117/2017 [S1].",
+            "claims": [{"text": "Disciplina CTS", "citation_ids": ["S1"]}],
+            "citations": [{
+                "source_id": "S1",
+                "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.legislativo:2017-07-03;117",
+                "title": "D.Lgs. 117/2017",
+            }],
+            "sources": [], "partial": False, "errors": [],
+            "run_id": "run-1", "trace_path": "/tmp/trace.jsonl",
+            "network_mode": "read_only",
+        }
+
+    class FakeManager:
+        def __init__(self):
+            self.calls = []
+
+        def invoke(self, tool_id, payload):
+            self.calls.append((tool_id, payload))
+            return FakeEnvelope()
+
+    manager = FakeManager()
+    artifact = research_deep_adapter(assignment, {"user.goal": assignment.objective}, manager=manager)
+
+    assert artifact.status == "completed"
+    assert "D.Lgs. 117/2017" in artifact.payload["message"]
+    assert artifact.evidence_refs[0].startswith("https://www.normattiva.it/")
+    assert manager.calls[0][0] == "deep_web_research_agentcpm_v1"
+    assert manager.calls[0][1]["query"] == "Cos'è una APS in Italia?"
+    assert manager.calls[0][1]["domains"] == [
+        "lavoro.gov.it", "normattiva.it", "gazzettaufficiale.it", "def.finanze.it"
+    ]
+    assert manager.calls[0][1]["seed_urls"]

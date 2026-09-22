@@ -108,6 +108,8 @@ class SkillSpec(StrictModel):
     workflow: str = Field(min_length=1, max_length=240)
     verification_method: str = Field(min_length=1, max_length=240)
     status: Literal["ready", "constrained", "experimental"]
+    auto_route: bool = False
+    routing_hints: tuple[str, ...] = Field(default_factory=tuple, max_length=32)
 
 
 class UnifiedToolSpec(StrictModel):
@@ -151,6 +153,8 @@ class AssistantFeatureFlags(StrictModel):
     email_assistant_live: bool = False
     whatsapp_assistant_live: bool = False
     mailchimp_campaign_live: bool = False
+    jellyfin_identity_write_live: bool = False
+    browser_interact_live: bool = False
     home_assistant_read_live: bool = False
     home_assistant_live: bool = False
     semantic_judge_enabled: bool = False
@@ -165,6 +169,8 @@ class AssistantFeatureFlags(StrictModel):
             email_assistant_live=_env_bool("RALFLOOP_EMAIL_ASSISTANT_LIVE"),
             whatsapp_assistant_live=_env_bool("RALFLOOP_WHATSAPP_ASSISTANT_LIVE"),
             mailchimp_campaign_live=_env_bool("RALFLOOP_MAILCHIMP_CAMPAIGN_LIVE"),
+            jellyfin_identity_write_live=_env_bool("RALFLOOP_JELLYFIN_IDENTITY_WRITE_LIVE"),
+            browser_interact_live=_env_bool("RALFLOOP_BROWSER_INTERACT_LIVE"),
             home_assistant_read_live=_env_bool("RALFLOOP_HOME_ASSISTANT_READ_LIVE"),
             home_assistant_live=_env_bool("RALFLOOP_HOME_ASSISTANT_LIVE"),
             semantic_judge_enabled=_env_bool("RALFLOOP_SEMANTIC_JUDGE_ENABLED"),

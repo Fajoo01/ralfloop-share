@@ -9,24 +9,15 @@ from pathlib import Path
 import selectors
 import signal
 import socket
-import struct
 import subprocess
 import sys
 import threading
 import time
 
+from ralf_mcp_peer_auth import assign_socket_group, peer_allowed
+
 
 MAX_LINE = 8 * 1024 * 1024
-
-
-def _peer_uid(conn: socket.socket) -> int:
-    raw = conn.getsockopt(
-        socket.SOL_SOCKET,
-        socket.SO_PEERCRED,
-        struct.calcsize("3i"),
-    )
-    _pid, uid, _gid = struct.unpack("3i", raw)
-    return uid
 
 
 def _relay(conn: socket.socket, command: str, idle_timeout: float) -> None:
@@ -84,14 +75,15 @@ def _relay(conn: socket.socket, command: str, idle_timeout: float) -> None:
 def _serve_connection(
     conn: socket.socket,
     *,
-    allow_uid: int,
+    allow_group: str,
+    allow_uid: int | None,
     command: str,
     idle_timeout: float,
     limiter: threading.BoundedSemaphore,
 ) -> None:
     try:
         with conn:
-            if _peer_uid(conn) != allow_uid:
+            if not peer_allowed(conn, allow_group, allow_uid):
                 return
             _relay(conn, command, idle_timeout)
     finally:
@@ -101,7 +93,8 @@ def _serve_connection(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--socket", required=True)
-    parser.add_argument("--allow-uid", type=int, default=os.getuid())
+    parser.add_argument("--allow-group", default="ralf-mcp")
+    parser.add_argument("--allow-uid", type=int, default=None)
     parser.add_argument("--command", required=True)
     parser.add_argument(
         "--idle-timeout",
@@ -115,12 +108,12 @@ def main() -> int:
     )
     args = parser.parse_args()
     path = Path(args.socket)
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path.parent.mkdir(mode=0o2770, parents=True, exist_ok=True)
     try:
         path.unlink(missing_ok=True)
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         server.bind(str(path))
-        os.chmod(path, 0o600)
+        assign_socket_group(path, args.allow_group)
         max_clients = max(1, int(args.max_clients))
         server.listen(max(4, max_clients * 2))
         limiter = threading.BoundedSemaphore(max_clients)
@@ -132,6 +125,7 @@ def main() -> int:
                 target=_serve_connection,
                 kwargs={
                     "conn": conn,
+                    "allow_group": args.allow_group,
                     "allow_uid": args.allow_uid,
                     "command": args.command,
                     "idle_timeout": max(1.0, args.idle_timeout),

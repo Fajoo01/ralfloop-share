@@ -8,6 +8,11 @@ from typing import Any, Callable, Mapping, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .browser_mcp_adapter import (
+    BROWSER_INTERACT_ACTION,
+    BrowserMCPApprovalProvider,
+    prepare_browser_interaction_payload,
+)
 from .contracts import AssistantFeatureFlags, PolicyClass
 from .conversation import (
     ConversationManager,
@@ -20,6 +25,9 @@ from .email_search import EmailSearchResult
 from .executor import UnifiedDAGExecutor
 from .fastweb_portal import FastwebPortalResult
 from .home import HomeIntentParser, HomePreparedAction, HomeWorkflow
+from .jellyfin_identity_write import (
+    JELLYFIN_APPLY_ACTION, prepare_jellyfin_identity_payload,
+)
 from .memory import MemoryRouter
 from .planner import UnifiedPlanner
 from .whatsapp_web import WhatsAppReadResult
@@ -104,6 +112,10 @@ class UnifiedAssistantCore:
         approval_executor: ApprovalBoundExecutor | None = None,
         whatsapp_approval_executor: ApprovalBoundExecutor | None = None,
         mailchimp_approval_executor: ApprovalBoundExecutor | None = None,
+        jellyfin_identity_provider: Any | None = None,
+        jellyfin_approval_executor: ApprovalBoundExecutor | None = None,
+        browser_interaction_provider: BrowserMCPApprovalProvider | None = None,
+        browser_approval_executor: ApprovalBoundExecutor | None = None,
         home_workflow: HomeWorkflow | None = None,
         dag_executor: UnifiedDAGExecutor | None = None,
         dag_input_provider: Callable[[str], Mapping[str, Any]] | None = None,
@@ -126,6 +138,10 @@ class UnifiedAssistantCore:
         self.approval_executor = approval_executor
         self.whatsapp_approval_executor = whatsapp_approval_executor
         self.mailchimp_approval_executor = mailchimp_approval_executor
+        self.jellyfin_identity_provider = jellyfin_identity_provider
+        self.jellyfin_approval_executor = jellyfin_approval_executor
+        self.browser_interaction_provider = browser_interaction_provider
+        self.browser_approval_executor = browser_approval_executor
         self.home_workflow = home_workflow
         self.dag_executor = dag_executor
         self.dag_input_provider = dag_input_provider
@@ -211,6 +227,10 @@ class UnifiedAssistantCore:
                 assignment,
                 plan.model_dump(mode="json"),
             )
+        if assignment.skill == "browser.interact":
+            return self._prepare_browser_interaction(assignment, plan.model_dump(mode="json"))
+        if assignment.skill == "jellyfin.apply_identity":
+            return self._prepare_jellyfin_identity(assignment, plan.model_dump(mode="json"))
         if assignment.skill in {"mailchimp.campaign.create", "mailchimp.campaign.send"}:
             return self._prepare_mailchimp_campaign(assignment, plan.model_dump(mode="json"))
         if assignment.skill == "mailchimp.member.subscribe":
@@ -232,23 +252,135 @@ class UnifiedAssistantCore:
             execution = self.dag_executor.execute(plan, inputs=inputs)
             artifact = execution.artifacts[-1] if execution.artifacts else None
             payload = artifact.payload if artifact is not None else {}
-            message = str(payload.get("message") or (
-                "Operazione completata." if execution.status == "completed" else "Operazione bloccata."
-            ))
-            status = (
-                str(artifact.status) if artifact is not None and artifact.status in {
-                    "completed", "clarification_required", "unavailable", "draft"
-                } else ("completed" if execution.status == "completed" else "blocked")
-            )
+            artifact_status = str(artifact.status) if artifact is not None else ""
+            if assignment.skill == "pec.prepare_send" and artifact_status == "draft_fields_required":
+                missing = ", ".join(str(item) for item in payload.get("missing") or ())
+                message = (
+                    "Writer PEC disponibile e verificato. Mancano i campi della bozza: "
+                    f"{missing or 'destinatario, oggetto e testo'}. Nessuna PEC è stata inviata."
+                )
+                status = "clarification_required"
+                tool_executed = execution.status == "completed"
+            elif assignment.skill == "pec.prepare_send" and artifact_status == "approval_required":
+                message = (
+                    "Bozza PEC validata e vincolata al suo hash. Serve approvazione esplicita "
+                    "prima dell'invio. Nessuna PEC è stata inviata."
+                )
+                status = "approval_required"
+                tool_executed = execution.status == "completed"
+            else:
+                message = str(payload.get("message") or (
+                    "Operazione completata." if execution.status == "completed" else "Operazione bloccata."
+                ))
+                status = (
+                    artifact_status if artifact is not None and artifact_status in {
+                        "completed", "clarification_required", "unavailable", "draft", "approval_required"
+                    } else ("completed" if execution.status == "completed" else "blocked")
+                )
+                tool_executed = (
+                    execution.status == "completed"
+                    and status not in {"clarification_required", "unavailable", "blocked"}
+                )
             return self._result(
                 status, message, plan=plan.model_dump(mode="json"),
                 execution=execution.model_dump(mode="json"),
-                tools_executed=True, selected_skill=assignment.skill,
+                tools_executed=tool_executed, selected_skill=assignment.skill,
+            )
+        if assignment.policy is not PolicyClass.READ:
+            return self._result(
+                "unavailable",
+                "Azione non eseguita: manca un executor approval-bound per questa capability.",
+                plan=plan.model_dump(mode="json"),
+                tools_executed=False, selected_skill=assignment.skill,
+                required_policy=assignment.policy.value,
             )
         return self._result(
             "planned" if not plan.requires_clarification else "clarification_required",
             "Piano validato." if not plan.requires_clarification else "Serve specificare obiettivo o dominio.",
             plan=plan.model_dump(mode="json"),
+        )
+
+    def _prepare_browser_interaction(self, assignment, plan: dict[str, Any]) -> UnifiedAssistantResult:
+        if not self.flags.browser_interact_live:
+            return self._result(
+                "unavailable",
+                "Azione browser non eseguita: workflow approval-bound non abilitato.",
+                plan=plan, writes=0, tools_executed=False,
+                selected_skill="browser.interact", required_policy="CONFIRM_WRITE",
+            )
+        if self.browser_interaction_provider is None:
+            return self._result(
+                "unavailable", "Provider browser approval-bound non disponibile.",
+                plan=plan, writes=0, tools_executed=False,
+                selected_skill="browser.interact",
+            )
+        try:
+            payload = prepare_browser_interaction_payload(
+                self.browser_interaction_provider, assignment.arguments,
+            )
+        except ValueError as exc:
+            return self._result(
+                "clarification_required", str(exc), plan=plan, writes=0,
+                tools_executed=False, selected_skill="browser.interact",
+            )
+        except Exception:
+            return self._result(
+                "unavailable", "Snapshot browser non disponibile; nessuna approval creata.",
+                plan=plan, writes=0, tools_executed=False,
+                selected_skill="browser.interact",
+            )
+        display = "Browser: " + "; ".join(str(x) for x in payload["approval_summary"]) + ". Confermi?"
+        pending = self.conversation.stage(
+            domain="browser", action=BROWSER_INTERACT_ACTION,
+            policy=PolicyClass.CONFIRM_WRITE, payload=payload, displayed_text=display,
+        )
+        return self._result(
+            "draft_pending_approval", display, plan=plan,
+            pending_id=pending.pending_id, pending_domain="browser",
+            draft_version=pending.version, draft_digest=pending.payload_digest,
+            selected_skill="browser.interact", tools_executed=True, writes=0,
+        )
+
+    def _prepare_jellyfin_identity(self, assignment, plan: dict[str, Any]) -> UnifiedAssistantResult:
+        if not self.flags.jellyfin_identity_write_live:
+            return self._result(
+                "unavailable",
+                "Azione non eseguita: workflow Jellyfin approval-bound non abilitato.",
+                plan=plan, writes=0, tools_executed=False,
+                selected_skill="jellyfin.apply_identity", required_policy="PROTECTED",
+            )
+        required = {"item_id", "provider", "provider_id"}
+        if not required.issubset(assignment.arguments) or self.jellyfin_identity_provider is None:
+            return self._result(
+                "clarification_required",
+                "Serve una proposta Jellyfin esatta con item_id, provider e provider_id verificati; nessuna approval creata.",
+                plan=plan, writes=0, tools_executed=False,
+            )
+        try:
+            payload = prepare_jellyfin_identity_payload(
+                self.jellyfin_identity_provider, assignment.arguments,
+            )
+        except ValueError as exc:
+            return self._result(
+                "clarification_required", str(exc), plan=plan, writes=0, tools_executed=True,
+            )
+        except Exception:
+            return self._result(
+                "unavailable", "Jellyfin non disponibile; nessuna approval creata.",
+                plan=plan, writes=0, tools_executed=False,
+            )
+        display = (
+            f"Jellyfin: applicare a {payload['name'] or payload['item_id']} "
+            f"l'identità {payload['provider']}={payload['provider_id']}?"
+        )
+        pending = self.conversation.stage(
+            domain="jellyfin", action=JELLYFIN_APPLY_ACTION, policy=PolicyClass.PROTECTED,
+            payload=payload, displayed_text=display,
+        )
+        return self._result(
+            "protected_approval_required", display, plan=plan,
+            pending_id=pending.pending_id, pending_domain="jellyfin",
+            selected_skill="jellyfin.apply_identity", tools_executed=True, writes=0,
         )
 
     def _prepare_mailchimp_campaign(self, assignment, plan: dict[str, Any]) -> UnifiedAssistantResult:
@@ -1256,6 +1388,54 @@ class UnifiedAssistantCore:
                 self.conversation.clear("mailchimp")
             return self._result(status, "Workflow Mailchimp completato." if status == "executed"
                                 else "Workflow Mailchimp non eseguito o non verificato.", result=result)
+        if pending.domain == "jellyfin":
+            if not self.flags.jellyfin_identity_write_live:
+                return self._result("disabled", "Jellyfin identity write workflow disabled.", writes=0)
+            if not approval_matches(pending) or self.jellyfin_approval_executor is None:
+                return self._result(
+                    "approval_required", "Approvazione Jellyfin esplicita e hash-bound richiesta.", writes=0,
+                )
+            result = self.jellyfin_approval_executor.execute(pending)
+            status = str(result.get("status") or "failed")
+            self._audit(
+                domain="jellyfin", intent=pending.action, skill="jellyfin.apply_identity",
+                policy=pending.policy, target=str(pending.payload.get("item_id") or ""),
+                verification=status, pending=pending,
+                tool="jellyfin.identity.mcp.write", tool_result=status,
+            )
+            if status in {"EXECUTED_VERIFIED", "already_executed", "DRAFT_CHANGED",
+                          "EXECUTION_UNCERTAIN", "APPROVAL_INVALID"}:
+                self.conversation.clear("jellyfin")
+            return self._result(
+                status,
+                "Identità Jellyfin applicata e verificata." if status == "EXECUTED_VERIFIED"
+                else "Identità Jellyfin non applicata o non verificata.",
+                result=result,
+            )
+        if pending.domain == "browser":
+            if not self.flags.browser_interact_live:
+                return self._result("disabled", "Browser interaction workflow disabled.", writes=0)
+            if not approval_matches(pending) or self.browser_approval_executor is None:
+                return self._result(
+                    "approval_required", "Approvazione browser esplicita e hash-bound richiesta.", writes=0,
+                )
+            result = self.browser_approval_executor.execute(pending)
+            status = str(result.get("status") or "failed")
+            self._audit(
+                domain="browser", intent=pending.action, skill="browser.interact",
+                policy=pending.policy, target=str(pending.payload.get("target") or ""),
+                verification=status, pending=pending,
+                tool="browser.playwright.approval_bound", tool_result=status,
+            )
+            if status in {"EXECUTED_VERIFIED", "already_executed", "DRAFT_CHANGED",
+                          "EXECUTION_UNCERTAIN", "APPROVAL_INVALID"}:
+                self.conversation.clear("browser")
+            return self._result(
+                status,
+                "Azione browser eseguita e verificata con snapshot." if status == "EXECUTED_VERIFIED"
+                else "Azione browser non eseguita o non verificata.",
+                result=result,
+            )
         if pending.domain == "home":
             prepared = self._home_prepared.get(pending.pending_id)
             if prepared is None and self.home_workflow is not None:

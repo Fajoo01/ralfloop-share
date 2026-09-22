@@ -101,6 +101,7 @@ def test_26_unavailable_router_fallback(registry):
         def health(self): return False
     result = LocalRouter(registry, Client()).classify("decisione strategica non ovvia")
     assert result.route.a == "LM"
+    assert result.route.t == "bottazzi_motor"
     assert result.error == "router_unavailable"
 
 

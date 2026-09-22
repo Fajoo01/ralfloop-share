@@ -43,6 +43,12 @@ def domain_packet():
     return packet
 
 
+def test_glm_provider_is_not_available_in_bottazzi_runtime():
+    from ralfloop_agent.semantic_judge.core import build_semantic_judge
+    with pytest.raises(JudgeAvailabilityError, match="unknown_provider"):
+        build_semantic_judge(SemanticJudgeConfig(semantic_judge_provider="glm_colibri"))
+
+
 def test_valid_json_accepted_and_schema_is_strict():
     assert parse_semantic_review(json.dumps(VALID)).verdict == "pass"
     with pytest.raises(ValueError, match="malformed_json"):

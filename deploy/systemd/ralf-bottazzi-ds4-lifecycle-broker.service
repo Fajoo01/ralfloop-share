@@ -1,0 +1,30 @@
+[Unit]
+Description=Bot-tazzi DS4 fixed-unit lifecycle broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=ralf-gpu
+RuntimeDirectory=ralf-bottazzi-ds4-lifecycle
+RuntimeDirectoryMode=0750
+ExecStart=/usr/local/libexec/ralf-bottazzi-ds4-lifecycle-broker --socket /run/ralf-bottazzi-ds4-lifecycle/control.sock
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

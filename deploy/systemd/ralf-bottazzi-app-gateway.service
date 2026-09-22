@@ -1,0 +1,26 @@
+[Unit]
+Description=Bot-tazzi private app gateway
+After=network-online.target ralfloop-backend.service
+Wants=network-online.target
+Requires=ralfloop-backend.service
+
+[Service]
+Type=simple
+User=sibilla-cumana
+Group=sibilla-cumana
+WorkingDirectory=/home/sibilla-cumana/ralfloop-production/current
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/home/sibilla-cumana/ralfloop-production/current
+EnvironmentFile=/etc/ralfloop/bottazzi-app-gateway.env
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_bottazzi_app_gateway.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/run
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

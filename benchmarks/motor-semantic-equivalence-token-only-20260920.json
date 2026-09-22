@@ -1,0 +1,156 @@
+{
+  "benchmark": {
+    "case_text_in_report": false,
+    "content_published": false,
+    "judge_url": "http://127.0.0.1:19196",
+    "local_sanitized_pairs": 2,
+    "mode": "token_only",
+    "order": "alternating_raw_first_safe_first",
+    "promotion_action": "none",
+    "synthetic_pairs": 14,
+    "tokenizer": "exact_ds4_rendered_prompt"
+  },
+  "observations": [
+    {
+      "case_key": "84df1cca4030",
+      "compressed": true,
+      "guard_fallbacks": 0,
+      "raw_tokens": 210,
+      "safe_tokens": 207,
+      "token_ratio": 0.9857
+    },
+    {
+      "case_key": "df77ccc3abdd",
+      "compressed": true,
+      "guard_fallbacks": 0,
+      "raw_tokens": 212,
+      "safe_tokens": 210,
+      "token_ratio": 0.9906
+    },
+    {
+      "case_key": "80384eee03a6",
+      "compressed": true,
+      "guard_fallbacks": 0,
+      "raw_tokens": 219,
+      "safe_tokens": 217,
+      "token_ratio": 0.9909
+    },
+    {
+      "case_key": "7e1f02d78146",
+      "compressed": true,
+      "guard_fallbacks": 0,
+      "raw_tokens": 209,
+      "safe_tokens": 207,
+      "token_ratio": 0.9904
+    },
+    {
+      "case_key": "9b6769cd9bb7",
+      "compressed": true,
+      "guard_fallbacks": 0,
+      "raw_tokens": 212,
+      "safe_tokens": 212,
+      "token_ratio": 1.0
+    },
+    {
+      "case_key": "d166b04efef7",
+      "compressed": true,
+      "guard_fallbacks": 0,
+      "raw_tokens": 214,
+      "safe_tokens": 214,
+      "token_ratio": 1.0
+    },
+    {
+      "case_key": "a3ed8b24ca1c",
+      "compressed": true,
+      "guard_fallbacks": 0,
+      "raw_tokens": 212,
+      "safe_tokens": 210,
+      "token_ratio": 0.9906
+    },
+    {
+      "case_key": "1f96f38321a4",
+      "compressed": true,
+      "guard_fallbacks": 0,
+      "raw_tokens": 214,
+      "safe_tokens": 212,
+      "token_ratio": 0.9907
+    },
+    {
+      "case_key": "e215913db04a",
+      "compressed": true,
+      "guard_fallbacks": 0,
+      "raw_tokens": 214,
+      "safe_tokens": 212,
+      "token_ratio": 0.9907
+    },
+    {
+      "case_key": "b699ef51ca55",
+      "compressed": true,
+      "guard_fallbacks": 0,
+      "raw_tokens": 206,
+      "safe_tokens": 206,
+      "token_ratio": 1.0
+    },
+    {
+      "case_key": "e971e942a775",
+      "compressed": true,
+      "guard_fallbacks": 0,
+      "raw_tokens": 227,
+      "safe_tokens": 225,
+      "token_ratio": 0.9912
+    },
+    {
+      "case_key": "8db3f8e2c1b2",
+      "compressed": true,
+      "guard_fallbacks": 0,
+      "raw_tokens": 228,
+      "safe_tokens": 226,
+      "token_ratio": 0.9912
+    },
+    {
+      "case_key": "cb196977516d",
+      "compressed": true,
+      "guard_fallbacks": 0,
+      "raw_tokens": 209,
+      "safe_tokens": 210,
+      "token_ratio": 1.0048
+    },
+    {
+      "case_key": "2cee88bb7578",
+      "compressed": true,
+      "guard_fallbacks": 0,
+      "raw_tokens": 211,
+      "safe_tokens": 209,
+      "token_ratio": 0.9905
+    },
+    {
+      "case_key": "c55c97173370",
+      "compressed": true,
+      "guard_fallbacks": 0,
+      "raw_tokens": 366,
+      "safe_tokens": 333,
+      "token_ratio": 0.9098
+    },
+    {
+      "case_key": "e9d10118d67a",
+      "compressed": true,
+      "guard_fallbacks": 0,
+      "raw_tokens": 356,
+      "safe_tokens": 330,
+      "token_ratio": 0.927
+    }
+  ],
+  "schema_version": 1,
+  "summary": {
+    "blockers": [
+      "live_semantics_not_measured"
+    ],
+    "guard_fallbacks": 0,
+    "pairs": 16,
+    "promotion_allowed": false,
+    "raw_tokens": 3719,
+    "safe_tokens": 3640,
+    "semantic_equivalence_measured": false,
+    "token_ratio": 0.9788
+  }
+}

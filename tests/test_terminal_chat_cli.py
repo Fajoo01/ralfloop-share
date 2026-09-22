@@ -57,10 +57,14 @@ class FakeClient:
         self.calls.append(("task", payload))
         return self.task_response
 
+    def post_assistant(self, payload):
+        self.calls.append(("assistant", payload))
+        return self.task_response
+
     def get_json(self, path):
         self.calls.append(("get", path))
         if path == "/openapi.json":
-            return {"paths": {"/chat": {}, "/chat/stream": {}, "/tasks/run": {}}}
+            return {"paths": {"/chat": {}, "/chat/stream": {}, "/assistant/v1/chat": {}, "/tasks/run": {}}}
         if path == "/domain-approvals/health":
             return {"enabled": True, "auto_execute": False, "hmac_key_file": "/secret"}
         return {}
@@ -118,15 +122,17 @@ def test_ask_naturally_escalates_read_only_request_to_task(tmp_path, monkeypatch
     )
 
     assert rc == 0
-    assert [kind for kind, _ in client.calls] == ["task"]
+    assert [kind for kind, _ in client.calls] == ["assistant"]
     payload = client.calls[0][1]
-    assert payload["extra_context"]["source"] == "ralf_terminal"
-    terminal = payload["extra_context"]["terminal_client"]
+    assert payload["allow_tools"] is True
+    assert payload["context"]["source"] == "ralf_terminal"
+    assert isinstance(payload["context"]["repo_context"], dict)
+    terminal = payload["context"]["terminal_client"]
     assert terminal["interaction_mode"] == "agent"
     assert terminal["session_id"]
     assert terminal["capability"] == "read_only_system_inspection"
-    assert terminal["provider"] == "llama_cpp"
-    assert terminal["provider_endpoint"] == "http://127.0.0.1:19091"
+    assert terminal["auto_execute_protected_actions"] is False
+    assert "provider_endpoint" not in terminal
     assert "interaction_mode=agent" in err.getvalue()
 
 
@@ -145,7 +151,7 @@ def test_interactive_plain_read_only_message_uses_task_not_chat(tmp_path, monkey
     )
 
     assert rc == 0
-    assert [kind for kind, _ in client.calls] == ["task"]
+    assert [kind for kind, _ in client.calls] == ["assistant"]
 
 
 def test_mixed_natural_request_uses_protected_task_without_autoapproval(tmp_path, monkeypatch):
@@ -166,9 +172,11 @@ def test_mixed_natural_request_uses_protected_task_without_autoapproval(tmp_path
     )
 
     assert rc == 0
+    assert [kind for kind, _ in client.calls] == ["assistant"]
     payload = client.calls[0][1]
-    assert payload["extra_context"]["terminal_client"]["capability"] == "protected_external_action"
-    assert "human_confirmed" not in payload["extra_context"]
+    assert payload["context"]["terminal_client"]["capability"] == "protected_external_action"
+    assert payload["context"]["terminal_client"]["auto_execute_protected_actions"] is False
+    assert "human_confirmed" not in payload["context"]
 
 
 def test_stream_output_strips_terminal_escape_and_control_sequences(tmp_path, monkeypatch):
@@ -366,10 +374,11 @@ def test_explicit_agent_requires_confirmation_and_does_not_auto_approve(tmp_path
         err=io.StringIO(),
     )
     assert rc == 0
-    assert [kind for kind, _ in client.calls] == ["task"]
+    assert [kind for kind, _ in client.calls] == ["assistant"]
     task_payload = client.calls[0][1]
-    assert "human_confirmed" not in task_payload.get("extra_context", {})
-    assert task_payload["extra_context"]["terminal_client"]["auto_execute_protected_actions"] is False
+    assert task_payload["allow_tools"] is True
+    assert "human_confirmed" not in task_payload.get("context", {})
+    assert task_payload["context"]["terminal_client"]["auto_execute_protected_actions"] is False
 
 
 def test_agent_yes_is_only_workflow_confirmation(tmp_path, monkeypatch):
@@ -380,7 +389,7 @@ def test_agent_yes_is_only_workflow_confirmation(tmp_path, monkeypatch):
     rc = cli.run_agent(_args("agent", "--yes", "goal"), client=client, out=out, err=io.StringIO())
 
     assert rc == 0
-    assert [kind for kind, _ in client.calls] == ["task"]
+    assert [kind for kind, _ in client.calls] == ["assistant"]
     assert "APPROVAZIONE RICHIESTA" in out.getvalue()
     assert "Telegram" in out.getvalue()
 
@@ -484,8 +493,8 @@ def test_interactive_ctrl_c_interrupts_agent_not_session(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     class InterruptingAgentClient(FakeClient):
-        def post_task(self, payload):
-            self.calls.append(("task", payload))
+        def post_assistant(self, payload):
+            self.calls.append(("assistant", payload))
             raise KeyboardInterrupt
 
     inputs = iter(["/agent goal", "y", "/exit"])
@@ -571,14 +580,15 @@ def test_agent_without_message_starts_persistent_agentic_repl(tmp_path, monkeypa
     )
 
     assert rc == 0
-    assert [kind for kind, _ in client.calls] == ["task"]
+    assert [kind for kind, _ in client.calls] == ["assistant"]
     payload = client.calls[0][1]
-    terminal = payload["extra_context"]["terminal_client"]
-    assert terminal["provider"] == "llama_cpp"
+    terminal = payload["context"]["terminal_client"]
+    assert payload["allow_tools"] is True
     assert terminal["auto_execute_protected_actions"] is False
-    assert "human_confirmed" not in payload["extra_context"]
+    assert "provider" not in terminal
+    assert "human_confirmed" not in payload["context"]
     assert "Ralf Agent" in out.getvalue()
-    assert "mode: every message uses /tasks/run" in out.getvalue()
+    assert "mode: every message uses /assistant/v1/chat (Unified Assistant v1)" in out.getvalue()
     assert "agent-ok" in out.getvalue()
     assert "controlla lo spazio" in out.getvalue()
     assert store.latest()["history"] == [
@@ -602,12 +612,13 @@ def test_agentic_repl_sends_every_plain_message_to_task_with_history(tmp_path, m
     )
 
     assert rc == 0
-    assert [kind for kind, _ in client.calls] == ["task", "task"]
+    assert [kind for kind, _ in client.calls] == ["assistant", "assistant"]
     second = client.calls[1][1]
-    assert second["extra_context"]["terminal_client"]["conversation_history"] == [
-        {"user": "primo", "ralf": "agent-ok"}
+    assert second["history"] == [
+        {"role": "user", "content": "primo"},
+        {"role": "assistant", "content": "agent-ok"},
     ]
-    assert "human_confirmed" not in second["extra_context"]
+    assert "human_confirmed" not in second["context"]
 
 
 def test_status_is_read_only_and_reports_fast_path(tmp_path, monkeypatch):

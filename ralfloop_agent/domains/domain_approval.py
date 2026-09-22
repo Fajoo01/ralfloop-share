@@ -18,8 +18,14 @@ ALLOWED_ACTIONS = {
     "local_maintenance_apply", "repair_apply",
     "mailchimp_campaign_create", "mailchimp_campaign_send", "mailchimp_member_subscribe",
     "runts_practice_reply",
+    "jellyfin_apply_identity",
+    "browser_interact",
+    "pec_send",
 }
-FINAL_STATUSES = {"rejected", "expired", "stale", "consumed", "cancelled", "execution_failed", "executed"}
+FINAL_STATUSES = {
+    "rejected", "expired", "stale", "consumed", "cancelled",
+    "execution_failed", "executed",
+}
 
 
 @dataclass
@@ -43,13 +49,24 @@ class DomainApprovalPolicy:
             auto_execute=os.getenv("RALFLOOP_TELEGRAM_APPROVAL_AUTO_EXECUTE", "0") == "1",
             ttl_sec=_env_int("RALFLOOP_TELEGRAM_APPROVAL_TTL_SEC", 3600),
             max_pending=_env_int("RALFLOOP_TELEGRAM_APPROVAL_MAX_PENDING", 20),
-            allowed_user_ids=_parse_ids(os.getenv("RALFLOOP_TELEGRAM_APPROVAL_ALLOWED_USER_IDS", "")),
-            allowed_chat_ids=_parse_ids(os.getenv("RALFLOOP_TELEGRAM_APPROVAL_ALLOWED_CHAT_IDS", "")),
-            require_private_chat=os.getenv("RALFLOOP_TELEGRAM_APPROVAL_REQUIRE_PRIVATE_CHAT", "1") == "1",
+            allowed_user_ids=_parse_ids(
+                os.getenv("RALFLOOP_TELEGRAM_APPROVAL_ALLOWED_USER_IDS", "")
+            ),
+            allowed_chat_ids=_parse_ids(
+                os.getenv("RALFLOOP_TELEGRAM_APPROVAL_ALLOWED_CHAT_IDS", "")
+            ),
+            require_private_chat=os.getenv(
+                "RALFLOOP_TELEGRAM_APPROVAL_REQUIRE_PRIVATE_CHAT", "1"
+            ) == "1",
             db_path=os.getenv("RALFLOOP_TELEGRAM_APPROVAL_DB", ""),
-            audit_log=os.getenv("RALFLOOP_TELEGRAM_APPROVAL_AUDIT_LOG", "logs/domain_approval_audit.jsonl"),
+            audit_log=os.getenv(
+                "RALFLOOP_TELEGRAM_APPROVAL_AUDIT_LOG",
+                "logs/domain_approval_audit.jsonl",
+            ),
             hmac_key_file=os.getenv("RALFLOOP_TELEGRAM_APPROVAL_HMAC_KEY_FILE", ""),
-            api_url=os.getenv("RALFLOOP_TELEGRAM_APPROVAL_API_URL", "http://127.0.0.1:19090"),
+            api_url=os.getenv(
+                "RALFLOOP_TELEGRAM_APPROVAL_API_URL", "http://127.0.0.1:19090"
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -224,7 +241,9 @@ def hash_path(path: Path) -> str:
     return h.hexdigest()
 
 
-def effective_approval_status(request: dict[str, Any], *, now: int | None = None) -> str:
+def effective_approval_status(
+    request: dict[str, Any], *, now: int | None = None
+) -> str:
     current = now_ts() if now is None else int(now)
     if request.get("consumed_at") is not None:
         return "consumed"
@@ -237,7 +256,9 @@ def effective_approval_status(request: dict[str, Any], *, now: int | None = None
     return str(request.get("status") or "")
 
 
-def approval_status_response(request: dict[str, Any], *, now: int | None = None) -> dict[str, Any]:
+def approval_status_response(
+    request: dict[str, Any], *, now: int | None = None
+) -> dict[str, Any]:
     effective = effective_approval_status(request, now=now)
     stored = str(request.get("status") or "")
     return {
@@ -272,6 +293,7 @@ def render_telegram_request(request: DomainApprovalRequest) -> str:
         "local_maintenance_apply": "Manutenzione locale protetta",
         "repair_apply": "Applicazione patch locale verificata",
         "eyf_browser_apply": "Modifica portale EYF/Support4Youth",
+        "browser_interact": "Interazione browser Playwright",
     }.get(request.action, request.action)
     lines = [
         "RALFLOOP — APPROVAZIONE RICHIESTA",
@@ -299,13 +321,25 @@ def render_telegram_request(request: DomainApprovalRequest) -> str:
             [
                 "",
                 "Canary:",
-                str(canary.get("exact_input") or canary.get("canary_query") or "")[:500],
+                str(
+                    canary.get("exact_input")
+                    or canary.get("canary_query")
+                    or ""
+                )[:500],
                 "",
                 "Regola attesa:",
-                str(canary.get("expected_rule_id") or canary.get("expected_rule_ids") or ""),
+                str(
+                    canary.get("expected_rule_id")
+                    or canary.get("expected_rule_ids")
+                    or ""
+                ),
                 "",
                 "Risposta attesa:",
-                str(canary.get("expected_deterministic_answer") or canary.get("expected_answer") or ""),
+                str(
+                    canary.get("expected_deterministic_answer")
+                    or canary.get("expected_answer")
+                    or ""
+                ),
                 "",
                 f"Giuria: {'sì' if canary.get('jury_expected') else 'no'}",
                 f"RecursiveMAS: {'sì' if canary.get('recursive_mas_expected') else 'no'}",
@@ -334,6 +368,17 @@ def render_telegram_request(request: DomainApprovalRequest) -> str:
                     "- accettazione trattamento dati",
                 ]
             )
+    if request.action == "browser_interact":
+        summary = request.scope.get("approval_summary") or []
+        if isinstance(summary, list) and summary:
+            lines.extend(["", "Operazione browser esatta:"])
+            lines.extend(f"- {str(item)[:500]}" for item in summary[:12])
+        lines.extend(
+            [
+                "",
+                "L'approvazione vale solo per target/ref, payload e snapshot pre-azione indicati dal digest.",
+            ]
+        )
     if request.action == "runts_practice_reply":
         practice_id = str(request.scope.get("practice_id") or "").strip()
         lines.extend(
@@ -368,7 +413,13 @@ def now_ts() -> int:
 
 
 def _canonical_json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
 
 
 def _parse_ids(raw: str) -> set[int]:
