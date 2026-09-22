@@ -356,3 +356,35 @@ def test_request_scope_is_lazy_when_browser_provider_is_unused():
     provider = BrowserMCPApprovalProvider(session_factory=factory)
     with provider.request_scope():
         pass
+
+
+def test_resident_pool_reuses_client_and_invalidates_on_failure():
+    from ralfloop_agent.unified_assistant.browser_mcp_adapter import _BrowserMCPSessionPool
+
+    state = {"created": 0, "closed": 0}
+
+    class PoolSession(FakeSession):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            state["closed"] += 1
+
+    def factory():
+        state["created"] += 1
+        return PoolSession([])
+
+    pool = _BrowserMCPSessionPool(factory)
+    with pool.transaction() as first:
+        assert "browser_snapshot" in first[1]
+    with pool.transaction() as second:
+        assert first[0] is second[0]
+    assert state == {"created": 1, "closed": 0}
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with pool.transaction():
+            raise RuntimeError("boom")
+    assert state == {"created": 1, "closed": 1}
+    with pool.transaction():
+        pass
+    assert state["created"] == 2

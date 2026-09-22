@@ -55,3 +55,16 @@ Approval-bound execution now reuses one lazily opened MCP session for the whole 
 - preview stays ~760 ms because it already needs only one fresh session
 
 Safety invariants are unchanged: exact approval binding, pre-snapshot hash check, no automatic retry after a write attempt, post-action snapshot, upload hash/staging, and no routing to browser_run_code_unsafe.
+
+## Resident pool A/B
+
+A process-local serialized MCP client pool was tested behind `RALFLOOP_BROWSER_SESSION_POOL=1`. The pool keeps one initialized client across Browser requests, caches the discovered tool names, and invalidates the client on any exception. It never retries a write.
+
+- preview p50: 732.94 -> 125.03 ms (-82.9%)
+- approval+execute p50: 1440.30 -> 847.71 ms (-41.1%)
+- approval+execute p95: 1563.23 -> 941.79 ms (-39.8%)
+- pre-execute snapshot p50: ~673 -> 60.78 ms (-91.0%)
+- post-readback snapshot p50 remains ~55 ms
+- routing remains ~28 ms p50
+
+Combined versus the original baseline, approval+execute p50 improves from 2763.58 ms to 847.71 ms (-69.3%).

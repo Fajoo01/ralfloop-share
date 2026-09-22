@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
+import threading
 from typing import Any, Callable, Mapping, Sequence
 
 from ralfloop_agent.domains.domain_approval import (
@@ -35,6 +36,67 @@ INTERACTION_WORDS = re.compile(
     r"invia|submit|seleziona|select|trascina|drag|premi|press)\b",
     re.I,
 )
+
+
+class _BrowserMCPSessionPool:
+    """Single resident MCP client, serialized and invalidated on any failure."""
+
+    def __init__(self, session_factory: Callable[[], Any]) -> None:
+        self._session_factory = session_factory
+        self._lock = threading.RLock()
+        self._client = None
+        self._names: set[str] | None = None
+
+    def _close_locked(self) -> None:
+        client, self._client, self._names = self._client, None, None
+        if client is not None:
+            try:
+                client.__exit__(None, None, None)
+            except Exception:
+                pass
+
+    @contextmanager
+    def transaction(self):
+        with self._lock:
+            if self._client is None:
+                client = self._session_factory()
+                try:
+                    client.__enter__()
+                    names = {item.name for item in client.list_tools()}
+                except Exception:
+                    try:
+                        client.__exit__(None, None, None)
+                    except Exception:
+                        pass
+                    raise
+                self._client = client
+                self._names = names
+            try:
+                yield self._client, set(self._names or ())
+            except Exception:
+                self._close_locked()
+                raise
+
+
+_SHARED_POOL_LOCK = threading.Lock()
+_SHARED_POOLS: dict[tuple[str, float], _BrowserMCPSessionPool] = {}
+
+
+def _resident_pool_enabled() -> bool:
+    return os.getenv("RALFLOOP_BROWSER_SESSION_POOL", "0") == "1"
+
+
+def _get_shared_browser_pool(socket_path: str, timeout: float) -> _BrowserMCPSessionPool:
+    key = (socket_path, float(timeout))
+    with _SHARED_POOL_LOCK:
+        pool = _SHARED_POOLS.get(key)
+        if pool is None:
+            pool = _BrowserMCPSessionPool(lambda: MCPClientSession(
+                UnixMCPTransport(socket_path, connect_timeout=0.8),
+                timeout=timeout, client_name="unified-browser-resident",
+            ))
+            _SHARED_POOLS[key] = pool
+        return pool
 
 
 def _text_result(result: Mapping[str, Any], *, limit: int = 12000) -> str:
@@ -106,6 +168,15 @@ class BrowserMCPReadOnly:
             client_name="unified-browser-read",
         )
 
+    @contextmanager
+    def _transaction(self):
+        if self._session_factory is None and _resident_pool_enabled():
+            with _get_shared_browser_pool(self.socket_path, 8.0).transaction() as transaction:
+                yield transaction
+            return
+        with self._session() as client:
+            yield client, {item.name for item in client.list_tools()}
+
     def inspect(self, objective: str) -> dict[str, Any]:
         if INTERACTION_WORDS.search(objective):
             raise ValueError("browser_interaction_not_read_only")
@@ -116,8 +187,8 @@ class BrowserMCPReadOnly:
         )
         tool = "browser_tabs" if operation == "tabs" else "browser_snapshot"
         arguments = {"action": "list"} if tool == "browser_tabs" else {}
-        with self._session() as client:
-            names = {item.name for item in client.list_tools()}
+        with self._transaction() as transaction:
+            client, names = transaction
             if tool not in names:
                 raise RuntimeError("browser_read_tool_not_discovered")
             result = client.call_tool(tool, arguments)
@@ -190,6 +261,10 @@ class BrowserMCPApprovalProvider:
 
     @contextmanager
     def _fresh_transaction(self):
+        if self._session_factory is None and _resident_pool_enabled():
+            with _get_shared_browser_pool(self.socket_path, self.timeout).transaction() as transaction:
+                yield transaction
+            return
         with self._session() as client:
             yield client, self._tool_names(client)
 
