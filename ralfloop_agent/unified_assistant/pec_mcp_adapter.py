@@ -8,6 +8,8 @@ from typing import Any, Mapping
 
 from src.mcp_transport import MCPClientSession, MCPProtocolError, UnixMCPTransport
 
+_WRITE_REQUEST_RE = re.compile(r"\b(?:invia|manda|spedisci|rispondi|inoltra)\b", re.I)
+
 PEC_TOOLS = frozenset({
     "pec_discover_messages",
     "pec_get_message",
@@ -88,9 +90,29 @@ class PecMCPContext:
             operation = "recent"
 
         messages = list(payload.get("messages") or ())
+        if query and messages and isinstance(messages[0], Mapping):
+            message_id = str(messages[0].get("native_id") or "")
+            if message_id:
+                exact = self.call("pec_get_message", {"message_id": message_id})
+                exact_message = exact.get("message")
+                if isinstance(exact_message, Mapping):
+                    messages[0] = dict(exact_message)
+                    payload["messages"] = messages
+                    operation = "search_and_read"
+
+        write_requested = bool(_WRITE_REQUEST_RE.search(objective))
         payload["operation"] = operation
         payload["query"] = query
+        payload["write_requested"] = write_requested
+        payload["writer_available"] = False
+        payload["approval_required_for_write"] = write_requested
         payload["message"] = _message(messages, query)
+        if write_requested:
+            payload["message"] += (
+                "\n\nInvio non eseguito: la capability PEC attuale è sola lettura. "
+                "Per inviare servirà una capability writer separata, protetta da approval esplicita. "
+                "Nessuna PEC è stata inviata."
+            )
         payload["evidence_refs"] = [
             str(item.get("source", {}).get("locator") or item.get("native_id") or "")
             for item in messages[:12]
@@ -105,6 +127,31 @@ def _message(messages: list[Any], query: str | None) -> str:
     rows = [item for item in messages if isinstance(item, Mapping)]
     if not rows:
         return f"Nessuna PEC trovata per {query}." if query else "Nessuna PEC recente trovata."
+    if query:
+        item = rows[0]
+        sender = str(item.get("sender") or "mittente sconosciuto")
+        subject = str(item.get("subject") or "senza oggetto")
+        received = str(item.get("received_at") or "")
+        body = " ".join(str(item.get("body") or "").split())
+        if len(body) > 2400:
+            body = body[:2400].rstrip() + "…"
+        attachments = [
+            str(x.get("filename") or x.get("attachment_id") or "allegato")
+            for x in item.get("attachments") or ()
+            if isinstance(x, Mapping)
+        ]
+        lines = [
+            f"PEC trovata per {query}:",
+            f"Mittente: {sender}",
+            f"Oggetto: {subject}",
+            f"Data/ora: {received or 'non disponibile'}",
+            f"Contenuto: {body or 'corpo non disponibile'}",
+            "Allegati: " + (", ".join(attachments) if attachments else "nessuno"),
+        ]
+        if len(rows) > 1:
+            lines.append(f"Altre PEC corrispondenti: {len(rows) - 1}.")
+        return "\n".join(lines)
+
     lines = [f"PEC trovate: {len(rows)}."]
     for item in rows[:5]:
         sender = str(item.get("sender") or "mittente sconosciuto")

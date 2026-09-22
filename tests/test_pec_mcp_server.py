@@ -88,3 +88,16 @@ def test_mcp_initialize_and_inventory():
     assert {row["name"] for row in tools["result"]["tools"]} == {
         "pec_discover_messages", "pec_get_message", "pec_list_attachments", "pec_get_attachment", "pec_search_messages"
     }
+
+
+def test_systemd_broker_uses_release_and_shared_peer_auth_group():
+    from pathlib import Path
+
+    unit = Path("deploy/systemd/ralf-pec-mcp-broker.service").read_text(encoding="utf-8")
+    assert "WorkingDirectory=/home/sibilla-cumana/ralfloop-production/current" in unit
+    assert "Group=ralf-mcp" in unit
+    assert "UMask=0007" in unit
+    assert "RuntimeDirectoryMode=0770" in unit
+    assert "/home/sibilla-cumana/ralfloop-production/current/scripts/ralf_pec_mcp_broker.py" in unit
+    assert "--allow-group ralf-mcp" in unit
+    assert "/home/sibilla-cumana/ralfloop-production/current/scripts/ralf_pec_mcp_server.py" in unit

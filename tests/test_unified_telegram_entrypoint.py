@@ -182,8 +182,9 @@ def test_generic_pec_route_only_exposes_inbox_read_metadata(monkeypatch):
     route = result["capability_route"]
     assert result["stop_reason"] == "route_only"
     assert route["task_mode"] == "tool_backed_read"
-    assert route["intent"] == "pec.inbox.read"
-    assert route["skills_used"] == ["pec_discover_messages"]
-    assert route["mcp_used"] == ["pec_runts.mcp"]
+    assert route["intent"] == "pec.read"
+    assert route["domains"] == ["pec"]
+    assert route["skills_used"] == ["pec.read"]
+    assert route["mcp_used"] == ["pec.read.mcp"]
     assert route["write_policy"] == "no_write"
     assert route["requires_confirmation"] is False

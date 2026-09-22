@@ -6,6 +6,9 @@ from ralfloop_agent.unified_assistant.capability_rag_router import (
     CapabilityRAGRouter,
 )
 from ralfloop_agent.unified_assistant.registry import UnifiedRegistryFacade
+from ralfloop_agent.unified_assistant.contracts import AssistantFeatureFlags
+from ralfloop_agent.unified_assistant.pec_mcp_adapter import PecMCPContext
+from ralfloop_agent.unified_assistant.runtime import _is_pec_runts_request, unified_route_probe
 
 
 def _first(query: str) -> str:
@@ -145,4 +148,99 @@ def test_capability_discovery_can_describe_protected_mcp_but_route_cannot_select
     assert protected.policy.value == "PROTECTED"
     assert any("jellyfin.identity.mcp.write" in provider for provider in protected.providers)
     assert all(row.skill_id != "jellyfin.apply_identity" for row in index.retrieve("applica identità film Jellyfin"))
+
+
+class FakeStandalonePecContext(PecMCPContext):
+    def __init__(self):
+        self.calls = []
+
+    def call(self, name, arguments):
+        self.calls.append((name, dict(arguments)))
+        if name == "pec_search_messages":
+            return {
+                "ok": True,
+                "messages": [{
+                    "native_id": "imap.42",
+                    "sender": "difensore.regionale@pec.consiglio.regione.lombardia.it",
+                    "subject": "FAGIOLI FABIO - RICHIESTA DI ADEMPIMENTI PRELIMINARI",
+                    "received_at": "2026-09-01T10:00:00Z",
+                    "body": "anteprima",
+                    "attachments": [],
+                    "source": {"locator": "imaps://example/INBOX?uid=42"},
+                }],
+                "writes": 0,
+                "sends": 0,
+            }
+        if name == "pec_get_message":
+            return {
+                "ok": True,
+                "message": {
+                    "native_id": "imap.42",
+                    "sender": "difensore.regionale@pec.consiglio.regione.lombardia.it",
+                    "subject": "FAGIOLI FABIO - RICHIESTA DI ADEMPIMENTI PRELIMINARI",
+                    "received_at": "2026-09-01T10:00:00Z",
+                    "body": "Trasmettere la documentazione TARI richiesta.",
+                    "attachments": [{"attachment_id": "a1", "filename": "richiesta.pdf"}],
+                    "source": {"locator": "imaps://example/INBOX?uid=42"},
+                },
+                "writes": 0,
+                "sends": 0,
+            }
+        raise AssertionError(name)
+
+
+def _assistant_flags():
+    return AssistantFeatureFlags(unified_assistant=True)
+
+
+def test_generic_pec_uses_standalone_capability_not_legacy_runts_vertical():
+    text = "Leggi la PEC del Difensore regionale sulla TARI"
+    assert _is_pec_runts_request(text) is False
+    route = unified_route_probe(
+        text,
+        {"source": "ralf_terminal"},
+        flags_override=_assistant_flags(),
+    )
+    assert route is not None
+    assert route["intent"] == "pec.read"
+    assert route["domains"] == ["pec"]
+    assert route["skills_used"] == ["pec.read"]
+    assert route["mcp_used"] == ["pec.read.mcp"]
+    assert route["write_policy"] == "no_write"
+
+
+def test_specific_pec_search_reads_exact_message_and_never_writes():
+    ctx = FakeStandalonePecContext()
+    result = ctx.request("Leggi la PEC del Difensore regionale sulla TARI")
+    assert ctx.calls == [
+        ("pec_search_messages", {"query": "difensore", "limit": 100}),
+        ("pec_get_message", {"message_id": "imap.42"}),
+    ]
+    assert result["operation"] == "search_and_read"
+    assert "Trasmettere la documentazione TARI richiesta" in result["message"]
+    assert result["writes"] == 0
+    assert result["sends"] == 0
+
+
+def test_send_request_reads_case_but_explains_writer_is_not_available():
+    text = "Invia la PEC al Difensore regionale e porta a termine la pratica TARI"
+    assert _is_pec_runts_request(text) is False
+    route = unified_route_probe(
+        text,
+        {"source": "ralf_terminal"},
+        flags_override=_assistant_flags(),
+    )
+    assert route is not None
+    assert route["intent"] == "pec.read"
+    assert route["domains"] == ["pec"]
+    assert "home" not in route["domains"]
+
+    result = FakeStandalonePecContext().request(text)
+    assert result["write_requested"] is True
+    assert result["writer_available"] is False
+    assert result["approval_required_for_write"] is True
+    assert "capability PEC attuale è sola lettura" in result["message"]
+    assert "Nessuna PEC è stata inviata" in result["message"]
+    assert result["writes"] == 0
+    assert result["sends"] == 0
 

@@ -1728,9 +1728,10 @@ def _is_positive_confirmation(text: str) -> bool:
 
 
 def _is_pec_runts_request(text: str) -> bool:
-    from .pec_runts_telegram import is_pec_runts_telegram
+    from .pec_runts_telegram import PecInboxDecision, decision_for_telegram
 
-    return is_pec_runts_telegram(text)
+    decision = decision_for_telegram(text)
+    return decision is not None and not isinstance(decision, PecInboxDecision)
 
 
 __all__ = ["is_unified_telegram_request", "run_unified_telegram", "unified_route_probe"]
