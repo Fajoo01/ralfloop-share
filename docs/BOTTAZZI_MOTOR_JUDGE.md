@@ -59,8 +59,10 @@ Deployment assets:
 
 Copy the env example to `/etc/ralfloop/bottazzi-motor-judge.env` and review the binary,
 model and expert-pack paths before enabling the unit. The launcher rejects production ports,
-checks all three artifacts, binds loopback only, and uses the validated `128` prefill / `768 MiB`
-staging profile by default.
+checks all three artifacts, binds loopback only, and uses the `128` prefill / `768 MiB`
+staging profile by default. Dense read-ahead is disabled for the Judge profile because splitting
+the arena into two 384 MiB banks cannot hold the observed layer-14 demand set; it can be
+explicitly re-enabled only with `BOTTAZZI_MOTOR_JUDGE_DENSE_READAHEAD=1`.
 
 The service uses `Restart=on-failure`, a dedicated DS4 lock file, and waits for the judge listener
 to become reachable before systemd marks startup complete. Ralfloop itself remains fail-closed if

@@ -1,0 +1,59 @@
+{
+  "case_text_in_report": false,
+  "chunk_count": 29,
+  "content_published": false,
+  "guard_fallbacks": 0,
+  "max_chunk_tokens": 359,
+  "samples": [
+    {
+      "case_key": "8d9aabf1d747",
+      "confidence": 0.7,
+      "decision": "UNCERTAIN",
+      "facts": 6,
+      "gate": false,
+      "gate_status": "judge_uncertain",
+      "guard_fallbacks": 0,
+      "index": 0,
+      "missing_evidence_count": 3,
+      "risk": "MEDIUM",
+      "runtime_complete": true,
+      "tokens": 359
+    },
+    {
+      "case_key": "76580f724729",
+      "confidence": 0.0,
+      "decision": "UNCERTAIN",
+      "facts": 2,
+      "gate": false,
+      "gate_status": "judge_uncertain",
+      "guard_fallbacks": 0,
+      "index": 14,
+      "missing_evidence_count": 1,
+      "risk": "HIGH",
+      "runtime_complete": false,
+      "tokens": 316
+    },
+    {
+      "case_key": "38a6af75dae6",
+      "confidence": 0.7,
+      "decision": "REQUEST_REVIEW",
+      "facts": 7,
+      "gate": false,
+      "gate_status": "missing_evidence",
+      "guard_fallbacks": 0,
+      "index": 28,
+      "missing_evidence_count": 3,
+      "risk": "MEDIUM",
+      "runtime_complete": true,
+      "tokens": 314
+    }
+  ],
+  "schema_version": 1,
+  "selected_indices": [
+    0,
+    14,
+    28
+  ],
+  "source_sha256": "674cede6978d4a69e1ad390dff3b87b12ad1d27bc3f3a76de5678eb6dafb92f2",
+  "total_rendered_tokens": 9733
+}

@@ -1,0 +1,21 @@
+--- a/ds4.c
++++ b/ds4.c
+@@ -41271,7 +41271,17 @@
+                         (off == first ? t_map - t0 : 0) * 1000, (t_engram - t_ready) * 1000,
+                         (t_encoded - t_engram) * 1000, (t_done - t_encoded) * 1000,
+                         (now_sec() - t_done) * 1000);
+-            if (!ok) fprintf(stderr, "ds4: V4.1 layer-major prefill failed at layer %u\n", il);
++            if (!ok) {
++                fprintf(stderr, "ds4: V4.1 layer-major prefill failed at layer %u\n", il);
++                /* CUDA command batching reports inactive, so the normal
++                 * end_commands fence is skipped on this backend. A staging
++                 * failure can therefore leave the fixed low-VRAM arena
++                 * logically occupied and poison all following requests.
++                 * Synchronize only on failure: a successful fence safely
++                 * resets the staging epoch without changing the hot path. */
++                if (g->streaming && !ds4_gpu_synchronize())
++                    fprintf(stderr, "ds4: V4.1 prefill recovery fence failed\n");
++            }
+             if (ok && progress) {
+                 const uint32_t after = (total_count * il + off + count) / DS4_N_LAYER;
+                 progress(progress_ud, "prefill_display", (int)(initial_start + after), total);

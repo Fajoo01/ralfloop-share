@@ -447,13 +447,19 @@ _PRIMARY_AUTHORITY_TERMS = {
     "primary",
 }
 _PRIMARY_DOCUMENT_TERMS = {
+    "codice",
+    "decreto",
     "documentation",
     "docs",
+    "legge",
+    "legislativo",
     "manual",
     "methodology",
+    "normativa",
     "paper",
     "publication",
     "reference",
+    "regolamento",
     "report",
     "repository",
     "research",
@@ -780,6 +786,12 @@ def _source_authority_score(
 
     title = str(source.get("title") or "")
     parsed = urlparse(str(source.get("url") or ""))
+    hostname = (parsed.hostname or "").casefold().rstrip(".")
+    government_host = bool(
+        hostname.endswith(".gov")
+        or re.search(r"(?:^|\.)gov\.[a-z]{2,3}$", hostname)
+        or re.search(r"(?:^|\.)gouv\.[a-z]{2,3}$", hostname)
+    )
     host_terms = set(
         re.findall(
             r"[a-zà-ÿ0-9][a-zà-ÿ0-9_-]{2,}",
@@ -807,6 +819,8 @@ def _source_authority_score(
     host_role_hits = host_terms & _PRIMARY_HOST_ROLE_TERMS
 
     score = 0.0
+    if government_host:
+        score += 8.0
     if owner_overlap:
         score += 4.0
     if authority_hits:
@@ -1074,7 +1088,7 @@ def _numeric_claim_supported(
     normalized = claim_match.group(0).rstrip("%").replace(",", ".")
     number_regex = re.escape(normalized).replace(r"\.", r"[.,]")
     evidence_pattern = re.compile(
-        rf"(?<![\d.,]){number_regex}%?(?![\d.,])",
+        rf"(?<!\d)(?<!\d[.,]){number_regex}%?(?!\d|[.,]\d)",
         re.IGNORECASE,
     )
     evidence_matches = list(evidence_pattern.finditer(raw_evidence))
@@ -1266,6 +1280,7 @@ _FALLBACK_BOILERPLATE_PATTERNS = (
     re.compile(r"\b(?:all rights reserved|copyright|terms (?:and conditions|of use))\b", re.I),
     re.compile(r"\b(?:(?:log|sign)\s+in|register|subscribe|enable javascript)\b", re.I),
     re.compile(r"\b(?:main|primary|site)\s+navigation\b", re.I),
+    re.compile(r"\b(?:skip to (?:the )?(?:main )?content|go to footer|salta al contenuto principale|vai al footer)\b", re.I),
     re.compile(
         r"\b(?:does not constitute|for informational purposes only|"
         r"no warranty|not intended as|non costituisce|nessuna garanzia|"
@@ -1422,7 +1437,8 @@ def _extractive_fallback_finish(
     )
     for source_id in ordered_source_ids:
         source = sources.get(source_id, {})
-        body = re.sub(r"\s+", " ", opened[source_id]).strip()
+        raw_body = opened[source_id].strip()
+        body = re.sub(r"\s+", " ", raw_body).strip()
         if not body:
             continue
         title_terms = set(_search_terms(str(source.get("title") or "")))
@@ -1439,10 +1455,17 @@ def _extractive_fallback_finish(
             if len(snippet_terms & body_terms) >= required_body_overlap:
                 segments.append((snippet, 80))
         segments.extend(
-            (sentence, 0)
+            (re.sub(r"\s+", " ", part).strip(), 24)
+            for line in raw_body.splitlines()
+            for part in re.split(r"\s*[•·¶§]\s*", line)
+            if part.strip()
+            and not re.search(r"(?<=[.!?])\s+[A-ZÀ-Ý]", part.strip())
+        )
+        segments.extend(
+            (re.sub(r"\s+", " ", sentence).strip(), 0)
             for sentence in re.split(
-                r"(?<=[.!?])\s+|\s*[•·¶§]\s*",
-                body,
+                r"(?<=[.!?])\s+|[\r\n]+|\s*[•·¶§]\s*",
+                raw_body,
             )
         )
         for sentence, source_bonus in segments:
@@ -1467,6 +1490,10 @@ def _extractive_fallback_finish(
             terms = set(_search_terms(sentence))
             overlap = len(terms & query_terms)
             title_overlap = len(terms & title_terms)
+            if sentence[:1].isdigit() and overlap == 0:
+                continue
+            if re.search(r"\b(?:n|art|artt|comma|commi)\.\s*$", sentence, re.I):
+                continue
             if source_bonus > 0:
                 if overlap == 0 and query_title_overlap < 2:
                     continue
@@ -1539,7 +1566,16 @@ def _extractive_fallback_finish(
         claims.append({"text": claim_text, "citation_ids": [source_id]})
         covered_so_far.update(covered_aspects)
 
-    answer = " ".join(row["text"] for row in claims)
+    rendered_claims = []
+    for row in claims:
+        text = str(row["text"]).strip().rstrip(" ;")
+        if text[:1].islower():
+            text = text[:1].upper() + text[1:]
+        if text and text[-1] not in ".!?":
+            text += "."
+        source_ids = ", ".join(str(item) for item in row.get("citation_ids", ()))
+        rendered_claims.append(f"- {text}" + (f" [{source_ids}]" if source_ids else ""))
+    answer = "\n".join(rendered_claims)
     return answer, claims
 
 
@@ -1895,7 +1931,14 @@ def run_deep_web_research(
     intent = _intent_profile(query)
     aspects = _query_aspects(query)
     query_folded = query.casefold()
-    deep_request = any(marker in query_folded for marker in ("ricerca approfondita", "analisi approfondita", "deep research", "in-depth", "panoramica", "overview", "confronta", "comparison"))
+    require_primary = bool(payload.get("require_primary"))
+    deep_request = require_primary or any(
+        marker in query_folded
+        for marker in (
+            "ricerca approfondita", "analisi approfondita", "deep research",
+            "in-depth", "panoramica", "overview", "confronta", "comparison",
+        )
+    )
     log_only = any(
         marker in query_folded
         for marker in (
@@ -1910,6 +1953,9 @@ def run_deep_web_research(
     ) and not any(marker in query_folded for marker in ("web", "internet", "online"))
     max_steps = max(1, min(int(payload.get("max_steps") or 30), 30))
     max_sources = max(1, min(int(payload.get("max_sources") or 20), 30))
+    min_opened_sources = max(
+        1, min(int(payload.get("min_opened_sources") or 3), 5)
+    )
     domains = tuple(str(item).casefold().strip().rstrip(".") for item in payload.get("domains", []) if str(item).strip())
     seed_urls = [str(item) for item in payload.get("seed_urls", [])]
     run_id = uuid4().hex
@@ -2111,7 +2157,7 @@ def run_deep_web_research(
                         ),
                     )
                 )
-                required_opened = min(3, len(available_ids))
+                required_opened = min(min_opened_sources, len(available_ids))
                 required_primary = (
                     1 if deep_request else min(1, len(primary_ids))
                 )
@@ -2175,7 +2221,7 @@ def run_deep_web_research(
                 source_id for source_id in primary_ids if source_id in opened
             )
             missing_aspects = current_missing_aspects()
-            required_opened = min(3, len(web_ids))
+            required_opened = min(min_opened_sources, len(web_ids))
             required_primary = 1
             if (
                 len(opened_ids) >= required_opened
@@ -2277,7 +2323,7 @@ def run_deep_web_research(
         fallback_triggered_early = False
         fallback_step_count: int | None = None
         for model_turn in range(1, max_steps + 1):
-            if deep_request and len(opened) >= 3:
+            if deep_request and len(opened) >= min_opened_sources:
                 ready_answer, ready_claims = _extractive_fallback_finish(
                     query,
                     sources,

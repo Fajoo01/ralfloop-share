@@ -4,6 +4,7 @@ import hashlib
 import re
 
 from .contracts import AssistantPlan, PlanAssignment, PolicyClass
+from .capability_rag_router import LEAF_READ_SKILLS
 from .email_search import is_email_search_request, plan_email_search
 from .registry import UnifiedRegistryFacade
 
@@ -32,8 +33,44 @@ _INFRA_RE = re.compile(r"\b(?:agentcpm|servizi[oa]?|spazio\s+libero|disco|server
 _CODE_RE = re.compile(r"\b(?:codice|repository|repo|bug|debug|test|stacktrace)\b", re.I)
 _DOCUMENT_RE = re.compile(r"\b(?:pdf|document[oi]|allegat[oi]|estrai)\b", re.I)
 _RESEARCH_RE = re.compile(r"\b(?:ricerca|cerca\s+sul\s+web|fonti|deep\s+research)\b", re.I)
+_NORMATIVE_ADMIN_TOPIC_RE = re.compile(
+    r"\b(?:aps|ets|runts|terzo\s+settore|codice\s+del\s+terzo\s+settore|"
+    r"associazion[ei]\s+di\s+promozione\s+sociale|enti?\s+del\s+terzo\s+settore)\b",
+    re.I,
+)
+_NORMATIVE_INFO_RE = re.compile(
+    r"\b(?:cos['’]?[eè]|che\s+cos['’]?[eè]|definisci|spiega|normativ[ae]|legge|"
+    r"decreto|d\.?\s*lgs\.?|articol[oi]|requisit[oi]|obbligh[oi]|disciplina|"
+    r"cosa\s+prevede|chi\s+pu[oò]|come\s+funziona)\b",
+    re.I,
+)
 _EDITORIAL_RE = re.compile(r"\b(?:volantin[oi]|flyer|locandin[ae]|manifest[oi]|poster)\b", re.I)
 _MEDIA_RE = re.compile(r"\b(?:video|audio|immagine|ffmpeg|sottotitol[oi])\b", re.I)
+_JELLYFIN_RE = re.compile(r"\bjellyfin\b", re.I)
+_JELLYFIN_MUTATION_RE = re.compile(
+    r"\b(?:applica|modifica|aggiorna|refresh|deduplica|elimina|rimuovi|correggi)\b", re.I
+)
+_JELLYFIN_ITEM_ID_RE = re.compile(r"\b(?:item[_ -]?id|jellyfin[_ -]?id)\s*[:=]\s*(?P<value>[a-f0-9]{32,64})\b", re.I)
+_JELLYFIN_PROVIDER_RE = re.compile(r"\bprovider\s*[:=]\s*(?P<value>tmdb|imdb)\b", re.I)
+_JELLYFIN_PROVIDER_ID_RE = re.compile(r"\bprovider[_ -]?id\s*[:=]\s*(?P<value>[A-Za-z0-9_-]{1,64})\b", re.I)
+_JELLYFIN_YEAR_RE = re.compile(r"\byear\s*[:=]\s*(?P<value>18\d{2}|19\d{2}|20\d{2})\b", re.I)
+
+
+def _jellyfin_apply_args(goal: str) -> dict[str, object]:
+    args: dict[str, object] = {}
+    for key, pattern in (("item_id", _JELLYFIN_ITEM_ID_RE), ("provider", _JELLYFIN_PROVIDER_RE), ("provider_id", _JELLYFIN_PROVIDER_ID_RE)):
+        match = pattern.search(goal)
+        if match:
+            args[key] = match.group("value")
+    year = _JELLYFIN_YEAR_RE.search(goal)
+    if year:
+        args["year"] = int(year.group("value"))
+    return args
+
+_ARCI_RE = re.compile(r"\barci\b", re.I)
+_ARCI_MUTATION_RE = re.compile(
+    r"\b(?:modifica|aggiorna|elimina|rimuovi|aggiungi|iscrivi|crea|invia)\b", re.I
+)
 _ATM_RE = re.compile(
     r"\b(?:atm|giromilano|mezzi\s+pubblici|trasporto\s+pubblico)\b"
     r"|\bcome\s+(?:arrivo|vado|posso\s+andare)\b"
@@ -350,13 +387,25 @@ class UnifiedPlanner:
         if _HOME_RE.search(goal):
             skill = "home.read" if re.search(r"\b(?:temperatura|fa\s+caldo|fa\s+freddo|stato|quanto)\b", goal, re.I) and not re.search(r"\b(?:accendi|spegni|apri|chiudi|imposta|metti|porta)\b", goal, re.I) else "home.control"
             return self._single(goal, "home", skill, PolicyClass.READ if skill == "home.read" else PolicyClass.AUTO_WRITE)
+        if _JELLYFIN_RE.search(goal) and _JELLYFIN_MUTATION_RE.search(goal):
+            return self._single(
+                goal, "jellyfin", "jellyfin.apply_identity", PolicyClass.PROTECTED,
+                arguments=_jellyfin_apply_args(goal),
+            )
+        if _ARCI_RE.search(goal) and _ARCI_MUTATION_RE.search(goal):
+            return self._denied("arci_mutation_not_available")
+        if _NORMATIVE_ADMIN_TOPIC_RE.search(goal) and _NORMATIVE_INFO_RE.search(goal):
+            return self._single(
+                goal, "research", "research.deep", PolicyClass.READ,
+                arguments={
+                    "query": goal,
+                    "profile": "italy_third_sector_normative",
+                },
+            )
         if self.capability_router is not None:
             proposal = self.capability_router.route(goal)
-            if proposal is not None and proposal.get("skill") in {
-                "atm.route", "meteo.read", "email.search", "whatsapp.read",
-                "mailchimp.read", "fastweb.portal.read", "home.read",
-            }:
-                skill = proposal["skill"]
+            if proposal is not None and proposal.get("skill") in LEAF_READ_SKILLS:
+                skill = str(proposal["skill"])
                 if skill == "email.search":
                     search = plan_email_search(goal)
                     if search is None:
@@ -370,7 +419,7 @@ class UnifiedPlanner:
                             arguments={"organization": search.organization, "concept": search.concept, "queries": list(search.queries)},
                         ),),
                     )
-                domain = "home" if skill == "home.read" else "general_assistant"
+                domain = str(proposal.get("domain") or "general_assistant")
                 return self._single(goal, domain, skill, PolicyClass.READ)
         if _RELATIONAL_RE.search(goal):
             return self._single(goal, "personal_relational", "personal_relational.analyze", PolicyClass.READ)
@@ -385,10 +434,11 @@ class UnifiedPlanner:
             return self._single(goal, "bandi", skill, PolicyClass.READ)
         if _INFRA_RE.search(goal):
             return self._single(goal, "infrastructure", "infrastructure.inspect", PolicyClass.READ)
-        if _RESEARCH_RE.search(goal):
-            return self._single(goal, "research", "research.deep", PolicyClass.READ)
+        # Prefer a concrete document artifact over generic research cues such as "fonti".
         if _DOCUMENT_RE.search(goal):
             return self._single(goal, "documents", "documents.extract", PolicyClass.READ)
+        if _RESEARCH_RE.search(goal):
+            return self._single(goal, "research", "research.deep", PolicyClass.READ)
         if _CODE_RE.search(goal):
             return self._single(goal, "code", "code.inspect", PolicyClass.READ)
         if _EDITORIAL_RE.search(goal):
@@ -481,13 +531,16 @@ class UnifiedPlanner:
             domains=("tiremm", "whatsapp"), assignments=(email, whatsapp, reply),
         )
 
-    def _single(self, goal: str, domain: str, skill: str, policy: PolicyClass) -> AssistantPlan:
+    def _single(
+        self, goal: str, domain: str, skill: str, policy: PolicyClass,
+        *, arguments: dict | None = None,
+    ) -> AssistantPlan:
         return AssistantPlan(
             intent=skill,
             domains=(domain,),
             assignments=(self._assignment(
                 domain=domain, skill=skill, objective=goal, input_refs=("user.goal",),
-                output_ref=f"artifact.{domain}", policy=policy,
+                output_ref=f"artifact.{domain}", policy=policy, arguments=arguments,
             ),),
         )
 

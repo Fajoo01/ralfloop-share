@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-21",
+  "model": "qwen3.5:9b",
+  "provider": "ollama",
+  "backend": "vulkan",
+  "gpu": "NVIDIA GeForce RTX 2070",
+  "gpu_layers": "34/34",
+  "prompt": "Cos è una APS in Italia? Rispondi in massimo 4 frasi e cita la norma principale.",
+  "wall_seconds": 16.70,
+  "load_seconds": 11.138,
+  "prompt_tokens": 34,
+  "generated_tokens": 96,
+  "keep_alive": 0,
+  "runtime_result": "PASS",
+  "quality_result": "FAIL",
+  "correct_acronym": true,
+  "wrong_primary_law_claim": "Legge 267/1990",
+  "expected_primary_framework": "D.Lgs. 117/2017, Codice del Terzo Settore",
+  "promotion_decision": "BLOCK_GENERAL_LEGAL_UNGROUNDED",
+  "notes": "GPU runtime fixed; legal and administrative answers require retrieval or deterministic grounding."
+}

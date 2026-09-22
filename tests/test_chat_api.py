@@ -496,6 +496,40 @@ def test_ollama_non_streaming_uses_native_chat_endpoint() -> None:
     assert response.closed is True
 
 
+def test_ollama_request_options_are_configurable_but_reserved_fields_are_protected() -> None:
+    response = FakeResponse(
+        json_data={
+            "model": "configured-model",
+            "message": {"role": "assistant", "content": "bounded"},
+            "done": True,
+        }
+    )
+    session = FakeSession(response)
+    provider = OllamaChatProvider(
+        base_url="http://ollama.local",
+        model="configured-model",
+        session=session,
+        request_options={
+            "options": {"temperature": 0, "num_predict": 128},
+            "think": False,
+            "keep_alive": 0,
+            "model": "forbidden-override",
+            "messages": [{"role": "system", "content": "forbidden"}],
+            "stream": True,
+        },
+    )
+
+    provider.chat([{"role": "user", "content": "hi"}])
+
+    body = session.calls[0][1]["json"]
+    assert body["model"] == "configured-model"
+    assert body["messages"] == [{"role": "user", "content": "hi"}]
+    assert body["stream"] is False
+    assert body["options"] == {"temperature": 0, "num_predict": 128}
+    assert body["think"] is False
+    assert body["keep_alive"] == 0
+
+
 def test_ollama_http_error_closes_response() -> None:
     response = FakeResponse(status_code=500)
     provider = OllamaChatProvider(base_url="http://ollama", model="m", session=FakeSession(response))
@@ -609,6 +643,37 @@ def test_provider_factory_uses_existing_runtime_config_and_planner_fallback(tmp_
     assert isinstance(provider, OllamaChatProvider)
     assert provider.base_url == "http://configured-ollama"
     assert provider.default_model == "configured-planner"
+
+
+def test_provider_factory_loads_chat_request_options(tmp_path: Path) -> None:
+    config_path = tmp_path / "inference_runtime.json"
+    config_path.write_text(
+        json.dumps({
+            "default_runtime": "ollama",
+            "runtimes": {
+                "ollama": {
+                    "type": "ollama",
+                    "base_url": "http://configured-ollama",
+                    "models": {"chat": "configured-chat"},
+                    "chat_request_options": {
+                        "options": {"temperature": 0, "num_predict": 192},
+                        "think": False,
+                        "keep_alive": 0,
+                    },
+                }
+            },
+        }),
+        encoding="utf-8",
+    )
+
+    provider = build_chat_provider(config_path=config_path, session=FakeSession())
+
+    assert isinstance(provider, OllamaChatProvider)
+    assert provider.request_options == {
+        "options": {"temperature": 0, "num_predict": 192},
+        "think": False,
+        "keep_alive": 0,
+    }
 
 
 def test_provider_factory_selects_llama_cpp_from_env(monkeypatch: pytest.MonkeyPatch) -> None:

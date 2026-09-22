@@ -1,0 +1,294 @@
+{
+  "benchmark": "Bot-tazzi Assistant v1 real-world routing benchmark",
+  "cases": 16,
+  "categories": [
+    "amministrazione_tiremm",
+    "bandi",
+    "documenti",
+    "domotica",
+    "email",
+    "ricerca",
+    "sviluppo",
+    "troubleshooting_tecnico"
+  ],
+  "failed": 0,
+  "pass_rate": 1.0,
+  "passed": 16,
+  "results": [
+    {
+      "category": "bandi",
+      "expected_domain": "bandi",
+      "expected_route": "unified",
+      "expected_skill": null,
+      "id": "bandi-eligibility",
+      "model_lane": null,
+      "observed_domains": [
+        "bandi"
+      ],
+      "observed_route": "unified",
+      "observed_skills": [
+        "bandi.eligibility"
+      ],
+      "pass": true,
+      "routing_reason": null
+    },
+    {
+      "category": "bandi",
+      "expected_domain": "bandi",
+      "expected_route": "unified",
+      "expected_skill": null,
+      "id": "bandi-discovery",
+      "model_lane": null,
+      "observed_domains": [
+        "bandi"
+      ],
+      "observed_route": "unified",
+      "observed_skills": [
+        "bandi.discovery"
+      ],
+      "pass": true,
+      "routing_reason": null
+    },
+    {
+      "category": "email",
+      "expected_domain": "email",
+      "expected_route": "unified",
+      "expected_skill": null,
+      "id": "email-compose",
+      "model_lane": null,
+      "observed_domains": [
+        "email"
+      ],
+      "observed_route": "unified",
+      "observed_skills": [
+        "email.compose"
+      ],
+      "pass": true,
+      "routing_reason": null
+    },
+    {
+      "category": "email",
+      "expected_domain": "tiremm",
+      "expected_route": "unified",
+      "expected_skill": "email.search",
+      "id": "email-search",
+      "model_lane": null,
+      "observed_domains": [
+        "tiremm"
+      ],
+      "observed_route": "unified",
+      "observed_skills": [
+        "email.search"
+      ],
+      "pass": true,
+      "routing_reason": null
+    },
+    {
+      "category": "troubleshooting_tecnico",
+      "expected_domain": "infrastructure",
+      "expected_route": "unified",
+      "expected_skill": null,
+      "id": "troubleshooting-infrastructure",
+      "model_lane": null,
+      "observed_domains": [
+        "infrastructure"
+      ],
+      "observed_route": "unified",
+      "observed_skills": [
+        "infrastructure.inspect"
+      ],
+      "pass": true,
+      "routing_reason": null
+    },
+    {
+      "category": "troubleshooting_tecnico",
+      "expected_domain": "code",
+      "expected_route": "unified",
+      "expected_skill": null,
+      "id": "troubleshooting-code",
+      "model_lane": null,
+      "observed_domains": [
+        "code"
+      ],
+      "observed_route": "unified",
+      "observed_skills": [
+        "code.inspect"
+      ],
+      "pass": true,
+      "routing_reason": null
+    },
+    {
+      "category": "sviluppo",
+      "expected_domain": "code",
+      "expected_route": "unified",
+      "expected_skill": null,
+      "id": "development-refactor",
+      "model_lane": null,
+      "observed_domains": [
+        "code"
+      ],
+      "observed_route": "unified",
+      "observed_skills": [
+        "code.inspect"
+      ],
+      "pass": true,
+      "routing_reason": null
+    },
+    {
+      "category": "sviluppo",
+      "expected_domain": "code",
+      "expected_route": "unified",
+      "expected_skill": null,
+      "id": "development-review",
+      "model_lane": null,
+      "observed_domains": [
+        "code"
+      ],
+      "observed_route": "unified",
+      "observed_skills": [
+        "code.inspect"
+      ],
+      "pass": true,
+      "routing_reason": null
+    },
+    {
+      "category": "documenti",
+      "expected_domain": "documents",
+      "expected_route": "unified",
+      "expected_skill": null,
+      "id": "documents-summary",
+      "model_lane": null,
+      "observed_domains": [
+        "documents"
+      ],
+      "observed_route": "unified",
+      "observed_skills": [
+        "documents.extract"
+      ],
+      "pass": true,
+      "routing_reason": null
+    },
+    {
+      "category": "documenti",
+      "expected_domain": "documents",
+      "expected_route": "unified",
+      "expected_skill": null,
+      "id": "documents-extract",
+      "model_lane": null,
+      "observed_domains": [
+        "documents"
+      ],
+      "observed_route": "unified",
+      "observed_skills": [
+        "documents.extract"
+      ],
+      "pass": true,
+      "routing_reason": null
+    },
+    {
+      "category": "amministrazione_tiremm",
+      "expected_domain": "research",
+      "expected_route": "unified",
+      "expected_skill": "research.deep",
+      "id": "admin-aps-definition",
+      "model_lane": null,
+      "observed_domains": [
+        "research"
+      ],
+      "observed_route": "unified",
+      "observed_skills": [
+        "research.deep"
+      ],
+      "pass": true,
+      "routing_reason": null
+    },
+    {
+      "category": "amministrazione_tiremm",
+      "expected_domain": "runts",
+      "expected_route": "unified",
+      "expected_skill": null,
+      "id": "admin-runts",
+      "model_lane": null,
+      "observed_domains": [
+        "runts"
+      ],
+      "observed_route": "unified",
+      "observed_skills": [
+        "runts.context"
+      ],
+      "pass": true,
+      "routing_reason": null
+    },
+    {
+      "category": "ricerca",
+      "expected_domain": "research",
+      "expected_route": "unified",
+      "expected_skill": null,
+      "id": "research-deep",
+      "model_lane": null,
+      "observed_domains": [
+        "research"
+      ],
+      "observed_route": "unified",
+      "observed_skills": [
+        "research.deep"
+      ],
+      "pass": true,
+      "routing_reason": null
+    },
+    {
+      "category": "ricerca",
+      "expected_domain": "research",
+      "expected_route": "unified",
+      "expected_skill": null,
+      "id": "research-web",
+      "model_lane": null,
+      "observed_domains": [
+        "research"
+      ],
+      "observed_route": "unified",
+      "observed_skills": [
+        "research.deep"
+      ],
+      "pass": true,
+      "routing_reason": null
+    },
+    {
+      "category": "domotica",
+      "expected_domain": "home",
+      "expected_route": "unified",
+      "expected_skill": null,
+      "id": "home-read",
+      "model_lane": null,
+      "observed_domains": [
+        "home"
+      ],
+      "observed_route": "unified",
+      "observed_skills": [
+        "home.read"
+      ],
+      "pass": true,
+      "routing_reason": null
+    },
+    {
+      "category": "domotica",
+      "expected_domain": "home",
+      "expected_route": "unified",
+      "expected_skill": null,
+      "id": "home-control",
+      "model_lane": null,
+      "observed_domains": [
+        "home"
+      ],
+      "observed_route": "unified",
+      "observed_skills": [
+        "home.control"
+      ],
+      "pass": true,
+      "routing_reason": null
+    }
+  ],
+  "safety": "route-only; no Unified runner, MCP call, or external write executed",
+  "schema_version": 1,
+  "source": "/home/bandi/ralfloop-motor-semantic-equivalence-20260920/benchmarks/assistant-v1-real-world-cases-v1.json"
+}

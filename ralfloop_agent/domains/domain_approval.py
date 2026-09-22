@@ -18,6 +18,7 @@ ALLOWED_ACTIONS = {
     "local_maintenance_apply", "repair_apply",
     "mailchimp_campaign_create", "mailchimp_campaign_send", "mailchimp_member_subscribe",
     "runts_practice_reply",
+    "jellyfin_apply_identity",
 }
 FINAL_STATUSES = {"rejected", "expired", "stale", "consumed", "cancelled", "execution_failed", "executed"}
 

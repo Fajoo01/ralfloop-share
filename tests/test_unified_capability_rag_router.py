@@ -30,6 +30,7 @@ def test_capability_rag_routes_current_leaf_reads():
         "leggi le campagne Mailchimp": "mailchimp.read",
         "quanto paghiamo sul portale Fastweb?": "fastweb.portal.read",
         "qual è lo stato della luce in Home Assistant?": "home.read",
+        "quali bandi aperti abbiamo?": "bandi.discovery",
     }
 
     for query, expected in cases.items():
@@ -82,7 +83,7 @@ def test_functiongemma_reranks_retrieved_logical_capabilities_only():
         client=FakeFunctionGemma(),
     )
 
-    result = router.route("cerca messaggi posta")
+    result = router.route("messaggi posta")
 
     assert result is not None
     assert result["skill"] == "email.search"
@@ -105,3 +106,37 @@ def test_generic_queries_do_not_select_a_leaf_capability():
 
 def test_foreign_query_is_none():
     assert CapabilityRAGIndex(UnifiedRegistryFacade()).retrieve("barzelletta sui pinguini") == ()
+
+
+def test_capability_discovery_sees_full_mcp_catalog_without_authorizing_it():
+    index = CapabilityRAGIndex(UnifiedRegistryFacade())
+    cases = {
+        "soci ARCI e tessere": "arci.context",
+        "pratica RUNTS Lombardia": "runts.context",
+        "insegnante quiz esercizi": "education.tutor",
+        "identifica film Jellyfin": "jellyfin.identify",
+        "memory documents search": "knowledge.retrieve",
+        "bandi disponibili per APS": "bandi.discovery",
+    }
+    for query, expected in cases.items():
+        rows = index.discover(query)
+        assert rows, query
+        assert rows[0].skill_id == expected, (query, rows)
+
+
+def test_capability_discovery_can_describe_protected_mcp_but_route_cannot_select_it():
+    index = CapabilityRAGIndex(UnifiedRegistryFacade())
+    discovered = index.discover("applica identità film Jellyfin")
+    protected = next(row for row in discovered if row.skill_id == "jellyfin.apply_identity")
+    assert protected.policy.value == "PROTECTED"
+    assert any("jellyfin.identity.mcp.write" in provider for provider in protected.providers)
+    assert all(row.skill_id != "jellyfin.apply_identity" for row in index.retrieve("applica identità film Jellyfin"))
+
+
+def test_bandi_refresh_is_discoverable_but_never_auto_routed():
+    index = CapabilityRAGIndex(UnifiedRegistryFacade())
+    discovered = index.discover("aggiorna ricerca bandi adesso")
+    refresh = next(row for row in discovered if row.skill_id == "bandi.refresh")
+    assert refresh.policy.value == "AUTO_WRITE"
+    assert any("bandi.research.mcp.refresh" in provider for provider in refresh.providers)
+    assert all(row.skill_id != "bandi.refresh" for row in index.retrieve("aggiorna ricerca bandi adesso"))

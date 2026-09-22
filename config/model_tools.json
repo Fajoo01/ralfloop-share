@@ -236,6 +236,8 @@
           "query": {"type": "string"},
           "domains": {"type": "array", "items": {"type": "string"}},
           "seed_urls": {"type": "array", "items": {"type": "string"}},
+          "require_primary": {"type": "boolean"},
+          "min_opened_sources": {"type": "integer"},
           "max_steps": {"type": "integer"},
           "max_sources": {"type": "integer"}
         }
