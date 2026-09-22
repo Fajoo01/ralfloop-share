@@ -1994,6 +1994,8 @@ def run_task(req: TaskRunRequest):
         return _run_task_impl(req)
     if classified.mode == "external_action" and is_local_maintenance_intent(req.user_goal):
         return _run_task_impl(req)
+    if classified.mode == "external_action" and classified.requires_confirmation:
+        return _run_task_impl(req)
 
     from ralfloop_agent.providers.agent_gpu_handoff import AgentGpuCoordinator, AgentGpuHandoffError
 
