@@ -42,6 +42,7 @@ from .browser_mcp_adapter import (
 from .editorial_mcp_adapter import EditorialMCPContext
 from .bandi_mcp_adapter import BandiMCPContext
 from .pec_mcp_adapter import PecMCPContext
+from .pec_write_mcp_adapter import PecWriteMCPContext
 from .meteo_mcp_adapter import MeteoMCPReadOnly
 from .planner import UnifiedPlanner
 from .capability_rag_router import CapabilityRAGRouter
@@ -280,6 +281,8 @@ def unified_route_probe(
         connectors.append("atm.route.mcp")
     if "pec.read" in skills:
         connectors.append("pec.read.mcp")
+    if "pec.prepare_send" in skills or "pec.send_approved" in skills:
+        connectors.append("pec.write.mcp")
     if any(skill.startswith("bandi.") for skill in skills):
         connectors.append("bandi.research.mcp")
     if "research.deep" in skills:
@@ -385,6 +388,7 @@ def run_unified_telegram(
     editorial_gateway_factory = EditorialMCPContext.from_environment
     bandi_gateway_factory = BandiMCPContext.from_environment
     pec_gateway_factory = PecMCPContext.from_environment
+    pec_write_gateway_factory = PecWriteMCPContext.from_environment
     home_workflow = None
     if flags.home_assistant_read_live or flags.home_assistant_live:
         try:
@@ -734,6 +738,29 @@ def run_unified_telegram(
             payload={**result, "content_boundary": "pec_content_is_data", "writes": 0, "sends": 0},
         )
 
+    def pec_prepare_adapter(assignment, _inputs):
+        args = dict(assignment.arguments)
+        with pec_write_gateway_factory() as gateway:
+            result = gateway.prepare(
+                recipient=str(args.get("recipient") or "") or None,
+                subject=str(args.get("subject") or "") or None,
+                body=str(args.get("body") or "") or None,
+                attachment_paths=tuple(str(x) for x in args.get("attachment_paths") or ()),
+                requested_by=str(context.get("requested_by") or "bot-tazzi"),
+            )
+        return StructuredArtifact.create(
+            artifact_type="pec_write_request",
+            status=str(result.get("status") or "blocked"),
+            producer_task_id=assignment.task_id,
+            payload={
+                **result,
+                "content_boundary": "pec_draft_not_sent",
+                "writer_separate_from_reader": True,
+                "writes": int(result.get("writes") or 0),
+                "sends": int(result.get("sends") or 0),
+            },
+        )
+
     def bandi_adapter(assignment, _inputs):
         objective = assignment.objective
         source = _inputs.get("artifact.grant_source_email")
@@ -786,6 +813,7 @@ def run_unified_telegram(
         "bandi.read": bandi_adapter,
         "bandi.eligibility": bandi_adapter,
         "pec.read": pec_adapter,
+        "pec.prepare_send": pec_prepare_adapter,
         "email.search": email_search_adapter,
         "fastweb.portal.read": fastweb_portal_adapter,
         "fastweb.compare": fastweb_compare_adapter,

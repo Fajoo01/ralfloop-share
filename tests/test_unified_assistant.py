@@ -345,10 +345,11 @@ def test_pec_capability_rag_precedes_generic_home_verbs():
         "Invia la PEC al Difensore regionale e porta a termine la pratica TARI."
     ))
 
-    assert plan.intent == "pec.read"
+    assert plan.intent == "pec.prepare_send"
     assert plan.domains == ("pec",)
-    assert plan.assignments[0].skill == "pec.read"
+    assert plan.assignments[0].skill == "pec.prepare_send"
     assert plan.assignments[0].domain == "pec"
+    assert plan.assignments[0].policy is PolicyClass.CONFIRM_WRITE
 
 
 def test_arci_grant_reply_reads_source_email_before_bando_and_never_skips_provenance():

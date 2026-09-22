@@ -1232,6 +1232,41 @@
       "status": "ready"
     },
     {
+      "id": "pec.prepare_send",
+      "domains": [
+        "pec",
+        "tiremm"
+      ],
+      "required_arguments": [
+        "objective"
+      ],
+      "required_capabilities": [
+        "pec_writer_preflight",
+        "pec_prepare_send"
+      ],
+      "classification": "CONFIRM_WRITE",
+      "workflow": "ralfloop_agent.unified_assistant.pec_write_mcp_adapter.PecWriteMCPContext.prepare",
+      "verification_method": "SMTP preflight + exact draft hash + approval request; sends=0 until separately approved",
+      "status": "ready"
+    },
+    {
+      "id": "pec.send_approved",
+      "domains": [
+        "pec",
+        "tiremm"
+      ],
+      "required_arguments": [
+        "approval_request_id"
+      ],
+      "required_capabilities": [
+        "pec_send_approved"
+      ],
+      "classification": "PROTECTED",
+      "workflow": "MCP:/run/ralf-pec-write-mcp/mcp.sock",
+      "verification_method": "hash-bound stored approval + one-shot execution claim; receipt verification delegated to PEC reader",
+      "status": "ready"
+    },
+    {
       "id": "runts.context",
       "domains": [
         "runts",

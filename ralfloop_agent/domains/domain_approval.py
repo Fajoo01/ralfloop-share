@@ -20,6 +20,7 @@ ALLOWED_ACTIONS = {
     "runts_practice_reply",
     "jellyfin_apply_identity",
     "browser_interact",
+    "pec_send",
 }
 FINAL_STATUSES = {
     "rejected", "expired", "stale", "consumed", "cancelled",

@@ -222,7 +222,7 @@ def test_specific_pec_search_reads_exact_message_and_never_writes():
     assert result["sends"] == 0
 
 
-def test_send_request_reads_case_but_explains_writer_is_not_available():
+def test_send_request_routes_to_separate_confirmation_bound_writer():
     text = "Invia la PEC al Difensore regionale e porta a termine la pratica TARI"
     assert _is_pec_runts_request(text) is False
     route = unified_route_probe(
@@ -231,15 +231,18 @@ def test_send_request_reads_case_but_explains_writer_is_not_available():
         flags_override=_assistant_flags(),
     )
     assert route is not None
-    assert route["intent"] == "pec.read"
+    assert route["intent"] == "pec.prepare_send"
     assert route["domains"] == ["pec"]
+    assert route["write_policy"] == "policy_gated"
+    assert route["requires_confirmation"] is True
+    assert "pec.write.mcp" in route["mcp_connectors"]
     assert "home" not in route["domains"]
 
+    # The reader remains independently read-only even when handed a write-like sentence.
     result = FakeStandalonePecContext().request(text)
     assert result["write_requested"] is True
     assert result["writer_available"] is False
     assert result["approval_required_for_write"] is True
-    assert "capability PEC attuale è sola lettura" in result["message"]
     assert "Nessuna PEC è stata inviata" in result["message"]
     assert result["writes"] == 0
     assert result["sends"] == 0

@@ -217,6 +217,7 @@ class UnifiedRegistryFacade:
         editorial_socket = Path("/tmp/ralf-editorial-mcp/mcp.sock")
         bandi_socket = Path(os.getenv("RALF_BANDI_MCP_SOCKET", "/run/ralf-bandi-mcp/mcp.sock"))
         pec_socket = Path(os.getenv("RALF_PEC_MCP_SOCKET", "/run/ralf-pec-mcp/mcp.sock"))
+        pec_write_socket = Path(os.getenv("RALF_PEC_WRITE_MCP_SOCKET", "/run/ralf-pec-write-mcp/mcp.sock"))
         browser_socket = Path("/run/ralf-browser-playwright-mcp/mcp.sock")
         rows = [UnifiedToolSpec(
             id="pec.read.mcp",
@@ -235,6 +236,17 @@ class UnifiedRegistryFacade:
             health="Unix MCP broker + exact five-tool read-only allowlist",
             verification_method="authenticated PEC read; writes=0; sends=0; source provenance",
             source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "pec_mcp_adapter.py"),
+        ), UnifiedToolSpec(
+            id="pec.write.mcp",
+            capabilities=("pec_writer_preflight", "pec_prepare_send", "pec_send_approved"),
+            input_schema="strict PEC draft + approval request id; attachment allowlist",
+            output_schema="approval-bound draft/send result; delivery receipts verified separately by reader",
+            classification=PolicyClass.PROTECTED,
+            side_effect_class="approval_bound_external_send",
+            availability="available" if _observable_path_exists(pec_write_socket) else "constrained:broker_unavailable",
+            health="separate Unix MCP broker; SMTP TLS/auth preflight; exact three-tool allowlist",
+            verification_method="hash-bound DomainApprovalStore + one-shot CAS + no retry on uncertain outcome",
+            source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "pec_write_mcp_adapter.py"),
         ), UnifiedToolSpec(
             id="bandi.research.mcp",
             capabilities=("bandi_research_now", "bandi_latest", "bandi_search_latest", "bandi_get_opportunity"),

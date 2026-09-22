@@ -20,6 +20,11 @@ _PEC_RE = re.compile(
     r"|\btiremminnanz@pec\.it\b",
     re.I,
 )
+_PEC_WRITE_RE = re.compile(r"\b(?:invia|manda|spedisci|rispondi|inoltra)\b", re.I)
+_PEC_ADDRESS_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}\b", re.I)
+_PEC_SUBJECT_RE = re.compile(r"\boggetto\s*:\s*(?P<value>[^|]+?)(?=\s+testo\s*:|\s+allegat[oi]\s*:|$)", re.I)
+_PEC_BODY_RE = re.compile(r"\btesto\s*:\s*(?P<value>.+?)(?=\s+allegat[oi]\s*:|$)", re.I)
+_PEC_ATTACHMENTS_RE = re.compile(r"\ballegat[oi]\s*:\s*(?P<value>.+)$", re.I)
 _HOME_RE = re.compile(
     r"\b(?:home\s+assistant|domotica|luc[ei]|lampad[ae]|neon|termostat[oi]|clima|climatizzatore|"
     r"tapparell[ae]|serrand[ae]|cancello|pres[ae]|switch|temperatura|fa\s+caldo|fa\s+freddo|abbassala|alzala)\b",
@@ -86,6 +91,24 @@ def _jellyfin_apply_args(goal: str) -> dict[str, object]:
     year = _JELLYFIN_YEAR_RE.search(goal)
     if year:
         args["year"] = int(year.group("value"))
+    return args
+
+
+def _pec_write_args(goal: str) -> dict[str, object]:
+    args: dict[str, object] = {}
+    addresses = [m.group(0) for m in _PEC_ADDRESS_RE.finditer(goal)]
+    external = [item for item in addresses if item.casefold() != "tiremminnanz@pec.it"]
+    if external:
+        args["recipient"] = external[0]
+    subject = _PEC_SUBJECT_RE.search(goal)
+    if subject:
+        args["subject"] = " ".join(subject.group("value").split())
+    body = _PEC_BODY_RE.search(goal)
+    if body:
+        args["body"] = body.group("value").strip()
+    attachments = _PEC_ATTACHMENTS_RE.search(goal)
+    if attachments:
+        args["attachment_paths"] = [item.strip().strip('"\'') for item in attachments.group("value").split(",") if item.strip()]
     return args
 
 
@@ -451,6 +474,11 @@ class UnifiedPlanner:
                     "query": goal,
                     "profile": "italy_third_sector_normative",
                 },
+            )
+        if _PEC_RE.search(goal) and _PEC_WRITE_RE.search(goal) and "runts" not in goal.casefold():
+            return self._single(
+                goal, "pec", "pec.prepare_send", PolicyClass.CONFIRM_WRITE,
+                arguments=_pec_write_args(goal),
             )
         if self.capability_router is not None:
             proposal = self.capability_router.route(goal)
