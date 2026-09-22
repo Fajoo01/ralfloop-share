@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
@@ -1697,6 +1697,33 @@ def _server_command(binary: Path, model: Path, port: int) -> list[str]:
     ]
 
 
+def resident_agentcpm_endpoint() -> str | None:
+    try:
+        from ralfloop_agent.providers.agentcpm_lifecycle import (
+            AgentCpmLifecycleClient,
+            AgentCpmLifecycleError,
+        )
+
+        state = AgentCpmLifecycleClient(timeout=2.0).status()
+    except (AgentCpmLifecycleError, OSError, ValueError):
+        return None
+    if not (
+        state.get("active")
+        and state.get("port_19093")
+        and state.get("model") == "AgentCPM-Explore"
+    ):
+        return None
+    endpoint = "http://127.0.0.1:19093"
+    try:
+        request = Request(endpoint + "/health", method="GET")
+        with build_opener().open(request, timeout=2.0) as response:
+            if response.status != 200:
+                return None
+    except Exception:
+        return None
+    return endpoint
+
+
 @contextmanager
 def managed_llama_server(snapshot: Path, run_dir: Path) -> Iterator[_ServerHandle]:
     files = sorted(snapshot.glob("*Q4_K_M.gguf"))
@@ -2082,7 +2109,15 @@ def run_deep_web_research(
         if action_provider is not None:
             yield lambda rows, finish_only=False: action_provider(rows)
             return
-        with managed_llama_server(snapshot, run_dir) as server:
+        resident_endpoint = resident_agentcpm_endpoint()
+        server_context = (
+            nullcontext(None)
+            if resident_endpoint is not None
+            else managed_llama_server(snapshot, run_dir)
+        )
+        with server_context as server:
+            endpoint = resident_endpoint or server.endpoint
+
             def decide_with_server(rows: list[dict[str, Any]], finish_only: bool = False) -> str:
                 available_ids = tuple(
                     source_id
@@ -2186,7 +2221,7 @@ def run_deep_web_research(
                     and len(opened_ids) >= required_opened
                 )
                 return _chat(
-                    server.endpoint,
+                    endpoint,
                     rows,
                     finish_only=finish_only or ready_to_finish,
                     log_only=log_only and not finish_only,

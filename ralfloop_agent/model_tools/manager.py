@@ -53,6 +53,25 @@ def _input_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _resident_agentcpm_ready(spec: ModelToolSpec) -> bool:
+    if spec.backend != "agentcpm_llama_cpp" or spec.device != "cuda":
+        return False
+    try:
+        from ralfloop_agent.providers.agentcpm_lifecycle import (
+            AgentCpmLifecycleClient,
+            AgentCpmLifecycleError,
+        )
+
+        state = AgentCpmLifecycleClient(timeout=2.0).status()
+    except (AgentCpmLifecycleError, OSError, ValueError):
+        return False
+    return bool(
+        state.get("active")
+        and state.get("port_19093")
+        and state.get("model") == "AgentCPM-Explore"
+    )
+
+
 def _resource_probe(spec: ModelToolSpec) -> ResourceDecision:
     try:
         import psutil
@@ -65,6 +84,12 @@ def _resource_probe(spec: ModelToolSpec) -> ResourceDecision:
     if spec.device == "cuda":
         if os.getenv("RALF_MODEL_TOOLS_ALLOW_CUDA", "0") != "1":
             return ResourceDecision(ok=False, reason="cuda_opt_in_required", ram_available_mb=ram_available)
+        if _resident_agentcpm_ready(spec):
+            return ResourceDecision(
+                ok=True,
+                reason="resident_agentcpm_reuse",
+                ram_available_mb=ram_available,
+            )
         try:
             import torch
 
@@ -176,6 +201,8 @@ def _document_input_policy(spec: ModelToolSpec, payload: dict[str, Any]) -> str 
 def _gpu_session(spec: ModelToolSpec, tool_id: str) -> AbstractContextManager[dict[str, Any]]:
     if spec.device != "cuda" or spec.backend != "agentcpm_llama_cpp":
         return nullcontext({"enabled": False})
+    if _resident_agentcpm_ready(spec):
+        return nullcontext({"enabled": False, "resident_agentcpm": True})
     from ralfloop_agent.providers.agent_gpu_handoff import AgentGpuCoordinator
 
     return AgentGpuCoordinator().agent_session(models=(), task_id=f"model-tool-{tool_id}"[:64])

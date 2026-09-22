@@ -157,6 +157,9 @@ def _runtime_context(request: AssistantV1Request, session_id: str) -> dict[str, 
     context["source"] = "ralf_terminal"
     context["session_id"] = session_id
     context["assistant_surface"] = "assistant_v1"
+    terminal_client = dict(context.get("terminal_client") or {})
+    terminal_client.setdefault("session_id", session_id)
+    context["terminal_client"] = terminal_client
     return context
 
 

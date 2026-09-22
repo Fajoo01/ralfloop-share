@@ -9,6 +9,7 @@ import sys
 import pytest
 from pydantic import ValidationError
 
+import ralfloop_agent.model_tools.manager as model_tool_manager
 from ralfloop_agent.model_tools import (
     ModelToolManager,
     ModelToolRegistry,
@@ -251,6 +252,27 @@ def test_agentcpm_gpu_handoff_precedes_resource_probe_and_runner(tmp_path: Path)
     assert [row[0] for row in events] == ["handoff_enter", "resource_probe", "runner", "handoff_exit"]
     assert result.provenance["gpu_handoff"] is True
     assert result.provenance["storage_mode"] == "mmap_ssd"
+
+
+def test_resident_agentcpm_reuse_skips_duplicate_handoff_and_vram_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _spec(
+        tmp_path,
+        capability="deep_web_research",
+        backend="agentcpm_llama_cpp",
+        device="cuda",
+        max_vram_mb=6000,
+    )
+    monkeypatch.setenv("RALF_MODEL_TOOLS_ALLOW_CUDA", "1")
+    monkeypatch.setattr(model_tool_manager, "_resident_agentcpm_ready", lambda selected: True)
+
+    decision = model_tool_manager._resource_probe(spec)
+    assert decision.ok is True
+    assert decision.reason == "resident_agentcpm_reuse"
+
+    with model_tool_manager._gpu_session(spec, spec.tool_id) as state:
+        assert state == {"enabled": False, "resident_agentcpm": True}
 
 
 def test_document_tool_rejects_path_outside_allowlist(tmp_path: Path, monkeypatch) -> None:

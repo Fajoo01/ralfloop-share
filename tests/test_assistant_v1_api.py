@@ -119,6 +119,17 @@ def test_fast_mode_overrides_general_heuristic(monkeypatch: pytest.MonkeyPatch) 
     assert provider.calls[0][1] == "qwen2.5:3b"
 
 
+def test_runtime_context_supplies_terminal_identity() -> None:
+    request = assistant_v1_api.AssistantV1Request(
+        message="Cos'è una APS in Italia?",
+        session_id="assistant-session",
+    )
+    context = assistant_v1_api._runtime_context(request, "assistant-session")
+
+    assert context["source"] == "ralf_terminal"
+    assert context["terminal_client"]["session_id"] == "assistant-session"
+
+
 def test_unified_route_bypasses_chat_provider() -> None:
     provider = FakeProvider()
 
