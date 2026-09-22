@@ -10,7 +10,7 @@ def test_facade_reuses_existing_registries_and_exposes_required_domains():
     required = {
         "email", "home", "tiremm", "bandi", "projects", "research", "documents",
         "knowledge", "calendar", "contacts", "infrastructure", "code", "media",
-        "personal_relational", "general_assistant",
+        "personal_relational", "general_assistant", "runts", "arci", "jellyfin", "education",
     }
 
     assert required <= set(registry.domains)
@@ -49,6 +49,14 @@ def test_facade_derives_tools_without_parallel_executor_registry():
     assert tools["abc_formula_loop"].source_registry.endswith("config/domain_capability_mapping.yaml")
     assert tools["deep_web_research_agentcpm_v1"].source_registry.endswith("config/model_tools.json")
     assert tools["home_assistant.adapter"].availability == "available"
+    memory = tools["memory.operational.mcp"]
+    assert memory.classification == "READ"
+    assert "memory.documents.search" in memory.capabilities
+    assert "memory.entities.read" in memory.capabilities
+    assert tools["arci.read_only.mcp"].classification == "READ"
+    assert tools["jellyfin.identity.mcp.write"].classification == "PROTECTED"
+    visual = tools["visual.memory.local"]
+    assert visual.availability == "constrained:text_regions_only"
     ds4 = tools["deepseek_v4_flash.semantic_critic"]
     assert ds4.capabilities == ("semantic_critic",)
     assert "HIGH_ONLY" in ds4.verification_method
@@ -105,3 +113,20 @@ def test_feature_flags_are_independent_and_default_off(monkeypatch):
     assert flags.home_assistant_live
     assert not flags.email_assistant_live
     assert not flags.semantic_judge_allow_normal
+
+
+def test_whatsapp_write_registry_requires_live_flag_and_approval_gate(monkeypatch):
+    import ralfloop_agent.unified_assistant.registry as registry_mod
+
+    original_exists = registry_mod.Path.exists
+    monkeypatch.setattr(registry_mod.Path, "exists", lambda self: True if str(self).endswith("/run/ralf-whatsapp-mcp/mcp.sock") else original_exists(self))
+    monkeypatch.setenv("RALFLOOP_WHATSAPP_ASSISTANT_LIVE", "0")
+    monkeypatch.setenv("RALFLOOP_ENABLE_TELEGRAM_APPROVAL_GATE", "0")
+    tools = {item.id: item for item in registry_mod.UnifiedRegistryFacade().list_tools()}
+    assert tools["whatsapp.web.mcp"].availability == "available"
+    assert tools["whatsapp.web.mcp.write"].availability == "constrained:write_feature_disabled"
+
+    monkeypatch.setenv("RALFLOOP_WHATSAPP_ASSISTANT_LIVE", "1")
+    monkeypatch.setenv("RALFLOOP_ENABLE_TELEGRAM_APPROVAL_GATE", "1")
+    tools = {item.id: item for item in registry_mod.UnifiedRegistryFacade().list_tools()}
+    assert tools["whatsapp.web.mcp.write"].availability == "available"

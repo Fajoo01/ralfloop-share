@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily refresh of Ralf ATM local routing graph
+
+[Timer]
+OnCalendar=*-*-* 04:15:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=ralf-atm-graph-refresh.service
+
+[Install]
+WantedBy=timers.target

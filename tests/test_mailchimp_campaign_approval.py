@@ -48,6 +48,8 @@ class FakeProvider:
             "subject": "changed" if self.create_mismatch else scope["subject"],
             "from_name": scope["from_name"],
             "reply_to": scope["reply_to"],
+            "preheader": scope["preheader"],
+            "title": scope["internal_title"],
             "content_sha256": scope["body_sha256"],
             "html_sha256": scope["html_sha256"],
             "sent": False,
@@ -384,5 +386,32 @@ def test_registry_separates_read_and_approval_bound_capabilities():
     assert all(cap.endswith(".read") or cap == "mailchimp.ping" for cap in read.capabilities)
     assert protected.classification.value == "CONFIRM_WRITE"
     assert protected.capabilities == (
-        "mailchimp.campaign.create.approved", "mailchimp.campaign.send.approved"
+        "mailchimp.campaign.create.approved",
+        "mailchimp.campaign.send.approved",
+        "mailchimp.member.subscribe.approved",
     )
+
+
+def test_campaign_fingerprint_binds_preheader_and_title():
+    campaign = {
+        "campaign_id": "campaign_123", "list_id": "80d24f2b10",
+        "subject": "Subject", "from_name": "Tiremm Innanz",
+        "reply_to": "info@example.invalid", "preheader": "Vecchio preheader",
+        "title": "Titolo interno", "content_sha256": "1" * 64,
+        "html_sha256": "2" * 64,
+    }
+    baseline = campaign_fingerprint(campaign)
+    assert campaign_fingerprint({**campaign, "preheader": "Nuovo preheader"}) != baseline
+    assert campaign_fingerprint({**campaign, "title": "Altro titolo"}) != baseline
+
+
+def test_send_approval_becomes_stale_if_preheader_changes(tmp_path):
+    store = store_for(tmp_path)
+    provider = FakeProvider()
+    scope = prepared_send(store, provider)
+    request_id = approve(store, SEND_ACTION, scope)
+    provider.campaigns["campaign_123"]["preheader"] = "preheader cambiato dopo approvazione"
+    result = MailchimpCampaignWorkflow(store, provider).execute_send(request_id, scope)
+    assert result["status"] == "DRAFT_CHANGED"
+    assert provider.send_calls == 0
+    assert store.get_request(request_id)["status"] == "stale"

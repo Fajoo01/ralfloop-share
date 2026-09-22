@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -7,6 +8,11 @@ from typing import Any, Callable, Mapping, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .browser_mcp_adapter import (
+    BROWSER_INTERACT_ACTION,
+    BrowserMCPApprovalProvider,
+    prepare_browser_interaction_payload,
+)
 from .contracts import AssistantFeatureFlags, PolicyClass
 from .conversation import (
     ConversationManager,
@@ -19,6 +25,9 @@ from .email_search import EmailSearchResult
 from .executor import UnifiedDAGExecutor
 from .fastweb_portal import FastwebPortalResult
 from .home import HomeIntentParser, HomePreparedAction, HomeWorkflow
+from .jellyfin_identity_write import (
+    JELLYFIN_APPLY_ACTION, prepare_jellyfin_identity_payload,
+)
 from .memory import MemoryRouter
 from .planner import UnifiedPlanner
 from .whatsapp_web import WhatsAppReadResult
@@ -61,6 +70,14 @@ class WhatsAppReadService(Protocol):
     def read(self, request: str, *, allowed_namespaces: tuple[str, ...]) -> WhatsAppReadResult: ...
 
 
+class MeteoReadService(Protocol):
+    def read(self, request: str) -> Mapping[str, Any]: ...
+
+
+class ATMReadService(Protocol):
+    def read(self, request: str) -> Mapping[str, Any]: ...
+
+
 class ApprovalBoundExecutor(Protocol):
     def execute(self, pending: PendingAction) -> dict[str, Any]: ...
 
@@ -87,12 +104,18 @@ class UnifiedAssistantCore:
         fastweb_portal: FastwebPortalService | None = None,
         whatsapp_read: WhatsAppReadService | None = None,
         mailchimp_gateway_factory: Callable[[], Any] | None = None,
+        meteo_read: MeteoReadService | None = None,
+        atm_read: ATMReadService | None = None,
         mailchimp_campaign_artifact_provider: Callable[[str], Mapping[str, Any] | None] | None = None,
         whatsapp_compose: UnifiedWhatsAppComposeService | None = None,
         recipient_resolver: RecipientResolver | None = None,
         approval_executor: ApprovalBoundExecutor | None = None,
         whatsapp_approval_executor: ApprovalBoundExecutor | None = None,
         mailchimp_approval_executor: ApprovalBoundExecutor | None = None,
+        jellyfin_identity_provider: Any | None = None,
+        jellyfin_approval_executor: ApprovalBoundExecutor | None = None,
+        browser_interaction_provider: BrowserMCPApprovalProvider | None = None,
+        browser_approval_executor: ApprovalBoundExecutor | None = None,
         home_workflow: HomeWorkflow | None = None,
         dag_executor: UnifiedDAGExecutor | None = None,
         dag_input_provider: Callable[[str], Mapping[str, Any]] | None = None,
@@ -107,12 +130,18 @@ class UnifiedAssistantCore:
         self.fastweb_portal = fastweb_portal
         self.whatsapp_read = whatsapp_read
         self.mailchimp_gateway_factory = mailchimp_gateway_factory
+        self.meteo_read = meteo_read
+        self.atm_read = atm_read
         self.mailchimp_campaign_artifact_provider = mailchimp_campaign_artifact_provider
         self.whatsapp_compose = whatsapp_compose
         self.recipient_resolver = recipient_resolver
         self.approval_executor = approval_executor
         self.whatsapp_approval_executor = whatsapp_approval_executor
         self.mailchimp_approval_executor = mailchimp_approval_executor
+        self.jellyfin_identity_provider = jellyfin_identity_provider
+        self.jellyfin_approval_executor = jellyfin_approval_executor
+        self.browser_interaction_provider = browser_interaction_provider
+        self.browser_approval_executor = browser_approval_executor
         self.home_workflow = home_workflow
         self.dag_executor = dag_executor
         self.dag_input_provider = dag_input_provider
@@ -183,13 +212,29 @@ class UnifiedAssistantCore:
             return self._read_fastweb(plan.model_dump(mode="json"))
         if assignment.skill == "whatsapp.read":
             return self._read_whatsapp(text, assignment.domain, plan.model_dump(mode="json"))
+        if assignment.skill == "atm.route":
+            return self._read_atm(
+                text,
+                plan.model_dump(mode="json"),
+            )
+        if assignment.skill == "meteo.read":
+            return self._read_meteo(
+                text,
+                plan.model_dump(mode="json"),
+            )
         if assignment.skill == "mailchimp.read":
             return self._read_mailchimp(
                 assignment,
                 plan.model_dump(mode="json"),
             )
+        if assignment.skill == "browser.interact":
+            return self._prepare_browser_interaction(assignment, plan.model_dump(mode="json"))
+        if assignment.skill == "jellyfin.apply_identity":
+            return self._prepare_jellyfin_identity(assignment, plan.model_dump(mode="json"))
         if assignment.skill in {"mailchimp.campaign.create", "mailchimp.campaign.send"}:
             return self._prepare_mailchimp_campaign(assignment, plan.model_dump(mode="json"))
+        if assignment.skill == "mailchimp.member.subscribe":
+            return self._prepare_mailchimp_member_subscribe(assignment, plan.model_dump(mode="json"))
         if assignment.skill in {"whatsapp.compose", "whatsapp.reply"}:
             return self._compose_whatsapp(
                 text, plan.model_dump(mode="json"),
@@ -200,10 +245,125 @@ class UnifiedAssistantCore:
             return self._compose_email(text, plan.model_dump(mode="json"))
         if assignment.domain == "home":
             return self._handle_home(text, plan.model_dump(mode="json"))
+        if self.dag_executor is not None and assignment.skill in self.dag_executor.adapters:
+            inputs = {"user.goal": text}
+            if self.dag_input_provider is not None:
+                inputs.update(self.dag_input_provider(text))
+            execution = self.dag_executor.execute(plan, inputs=inputs)
+            artifact = execution.artifacts[-1] if execution.artifacts else None
+            payload = artifact.payload if artifact is not None else {}
+            message = str(payload.get("message") or (
+                "Operazione completata." if execution.status == "completed" else "Operazione bloccata."
+            ))
+            status = (
+                str(artifact.status) if artifact is not None and artifact.status in {
+                    "completed", "clarification_required", "unavailable", "draft"
+                } else ("completed" if execution.status == "completed" else "blocked")
+            )
+            tool_executed = (
+                execution.status == "completed"
+                and status not in {"clarification_required", "unavailable", "blocked"}
+            )
+            return self._result(
+                status, message, plan=plan.model_dump(mode="json"),
+                execution=execution.model_dump(mode="json"),
+                tools_executed=tool_executed, selected_skill=assignment.skill,
+            )
+        if assignment.policy is not PolicyClass.READ:
+            return self._result(
+                "unavailable",
+                "Azione non eseguita: manca un executor approval-bound per questa capability.",
+                plan=plan.model_dump(mode="json"),
+                tools_executed=False, selected_skill=assignment.skill,
+                required_policy=assignment.policy.value,
+            )
         return self._result(
             "planned" if not plan.requires_clarification else "clarification_required",
             "Piano validato." if not plan.requires_clarification else "Serve specificare obiettivo o dominio.",
             plan=plan.model_dump(mode="json"),
+        )
+
+    def _prepare_browser_interaction(self, assignment, plan: dict[str, Any]) -> UnifiedAssistantResult:
+        if not self.flags.browser_interact_live:
+            return self._result(
+                "unavailable",
+                "Azione browser non eseguita: workflow approval-bound non abilitato.",
+                plan=plan, writes=0, tools_executed=False,
+                selected_skill="browser.interact", required_policy="CONFIRM_WRITE",
+            )
+        if self.browser_interaction_provider is None:
+            return self._result(
+                "unavailable", "Provider browser approval-bound non disponibile.",
+                plan=plan, writes=0, tools_executed=False,
+                selected_skill="browser.interact",
+            )
+        try:
+            payload = prepare_browser_interaction_payload(
+                self.browser_interaction_provider, assignment.arguments,
+            )
+        except ValueError as exc:
+            return self._result(
+                "clarification_required", str(exc), plan=plan, writes=0,
+                tools_executed=False, selected_skill="browser.interact",
+            )
+        except Exception:
+            return self._result(
+                "unavailable", "Snapshot browser non disponibile; nessuna approval creata.",
+                plan=plan, writes=0, tools_executed=False,
+                selected_skill="browser.interact",
+            )
+        display = "Browser: " + "; ".join(str(x) for x in payload["approval_summary"]) + ". Confermi?"
+        pending = self.conversation.stage(
+            domain="browser", action=BROWSER_INTERACT_ACTION,
+            policy=PolicyClass.CONFIRM_WRITE, payload=payload, displayed_text=display,
+        )
+        return self._result(
+            "draft_pending_approval", display, plan=plan,
+            pending_id=pending.pending_id, pending_domain="browser",
+            draft_version=pending.version, draft_digest=pending.payload_digest,
+            selected_skill="browser.interact", tools_executed=True, writes=0,
+        )
+
+    def _prepare_jellyfin_identity(self, assignment, plan: dict[str, Any]) -> UnifiedAssistantResult:
+        if not self.flags.jellyfin_identity_write_live:
+            return self._result(
+                "unavailable",
+                "Azione non eseguita: workflow Jellyfin approval-bound non abilitato.",
+                plan=plan, writes=0, tools_executed=False,
+                selected_skill="jellyfin.apply_identity", required_policy="PROTECTED",
+            )
+        required = {"item_id", "provider", "provider_id"}
+        if not required.issubset(assignment.arguments) or self.jellyfin_identity_provider is None:
+            return self._result(
+                "clarification_required",
+                "Serve una proposta Jellyfin esatta con item_id, provider e provider_id verificati; nessuna approval creata.",
+                plan=plan, writes=0, tools_executed=False,
+            )
+        try:
+            payload = prepare_jellyfin_identity_payload(
+                self.jellyfin_identity_provider, assignment.arguments,
+            )
+        except ValueError as exc:
+            return self._result(
+                "clarification_required", str(exc), plan=plan, writes=0, tools_executed=True,
+            )
+        except Exception:
+            return self._result(
+                "unavailable", "Jellyfin non disponibile; nessuna approval creata.",
+                plan=plan, writes=0, tools_executed=False,
+            )
+        display = (
+            f"Jellyfin: applicare a {payload['name'] or payload['item_id']} "
+            f"l'identità {payload['provider']}={payload['provider_id']}?"
+        )
+        pending = self.conversation.stage(
+            domain="jellyfin", action=JELLYFIN_APPLY_ACTION, policy=PolicyClass.PROTECTED,
+            payload=payload, displayed_text=display,
+        )
+        return self._result(
+            "protected_approval_required", display, plan=plan,
+            pending_id=pending.pending_id, pending_domain="jellyfin",
+            selected_skill="jellyfin.apply_identity", tools_executed=True, writes=0,
         )
 
     def _prepare_mailchimp_campaign(self, assignment, plan: dict[str, Any]) -> UnifiedAssistantResult:
@@ -231,6 +391,50 @@ class UnifiedAssistantCore:
         pending = self.conversation.stage(
             domain="mailchimp", action=action, policy=PolicyClass.CONFIRM_WRITE,
             payload=dict(payload), displayed_text=display,
+        )
+        return self._result(
+            "draft_pending_approval", display,
+            selected_skill=assignment.skill, pending_id=pending.pending_id,
+            draft_version=pending.version, draft_digest=pending.payload_digest,
+            writes=0, sends=0,
+        )
+
+    def _prepare_mailchimp_member_subscribe(self, assignment, plan: dict[str, Any]) -> UnifiedAssistantResult:
+        if not self.flags.mailchimp_campaign_live:
+            return self._result(
+                "denied", "Mailchimp protected workflow disabled; no provider mutation executed.",
+                plan=plan, writes=0, sends=0,
+            )
+        list_id = str(
+            assignment.arguments.get("list_id")
+            or os.getenv("RALF_MAILCHIMP_DEFAULT_LIST_ID", "")
+        ).strip()
+        email_address = str(assignment.arguments.get("email_address") or "").strip().casefold()
+        if not list_id:
+            return self._result(
+                "clarification_required",
+                "Serve il list_id dell'audience Mailchimp oppure RALF_MAILCHIMP_DEFAULT_LIST_ID.",
+                plan=plan, writes=0, sends=0,
+            )
+        if not email_address:
+            return self._result(
+                "clarification_required", "Serve l'indirizzo email da iscrivere.",
+                plan=plan, writes=0, sends=0,
+            )
+        payload = {
+            "list_id": list_id,
+            "email_address": email_address,
+            "first_name": str(assignment.arguments.get("first_name") or "").strip(),
+            "last_name": str(assignment.arguments.get("last_name") or "").strip(),
+            "provider_identity": "mailchimp.marketing",
+        }
+        display = (
+            f"Iscrizione Mailchimp pronta per {email_address} sulla lista {list_id}: "
+            "richiedere approval separata."
+        )
+        pending = self.conversation.stage(
+            domain="mailchimp", action="mailchimp_member_subscribe",
+            policy=PolicyClass.CONFIRM_WRITE, payload=payload, displayed_text=display,
         )
         return self._result(
             "draft_pending_approval", display,
@@ -383,6 +587,131 @@ class UnifiedAssistantCore:
             memory_trace=self._memory_trace(domain),
             persistent_memory_writes=0,
             side_effects=0,
+        )
+
+    def _read_atm(
+        self,
+        text: str,
+        plan: dict[str, Any],
+    ) -> UnifiedAssistantResult:
+        if self.atm_read is None:
+            return self._result(
+                "unavailable",
+                "ATM MCP non disponibile.",
+                plan=plan,
+                selected_skill="atm.route",
+                tools_executed=False,
+                side_effects=0,
+            )
+
+        result = dict(self.atm_read.read(text))
+        raw_status = str(result.get("status") or "ERROR")
+
+        if result.get("ok"):
+            status = "completed"
+        elif raw_status in {"LOCATION_REQUIRED", "DESTINATION_REQUIRED"}:
+            status = "clarification_required"
+        else:
+            status = "unavailable"
+
+        payload = dict(result.get("payload") or {})
+        destination = payload.get("destination") or {}
+
+        if isinstance(destination, Mapping):
+            target = str(
+                destination.get("label")
+                or destination.get("name")
+                or "ATM"
+            )
+        else:
+            target = "ATM"
+
+        self._audit(
+            domain="general_assistant",
+            intent="atm.route",
+            skill="atm.route",
+            policy=PolicyClass.READ,
+            target=target,
+            verification=raw_status,
+            tool_result=raw_status,
+            tool="atm.route.mcp",
+            memory_namespaces=(),
+        )
+
+        return self._result(
+            status,
+            str(result.get("response") or "Percorso ATM non disponibile."),
+            plan=plan,
+            interaction_class="TOOL_BACKED_READ",
+            selected_skill="atm.route",
+            tool_selected="atm.route.mcp",
+            atm_tool=result.get("tool"),
+            policy=PolicyClass.READ.value,
+            tools_executed=bool(result.get("read_operations")),
+            connector_operations=list(result.get("read_operations") or ()),
+            atm=payload,
+            location_source=result.get("location_source"),
+            side_effects=0,
+            writes=0,
+            sends=0,
+        )
+
+
+    def _read_meteo(
+        self,
+        text: str,
+        plan: dict[str, Any],
+    ) -> UnifiedAssistantResult:
+        if self.meteo_read is None:
+            return self._result(
+                "unavailable",
+                "Meteo MCP non disponibile.",
+                plan=plan,
+                selected_skill="meteo.read",
+                tools_executed=False,
+                side_effects=0,
+            )
+
+        result = dict(self.meteo_read.read(text))
+        raw_status = str(result.get("status") or "ERROR")
+
+        if result.get("ok"):
+            status = "completed"
+        elif raw_status == "LOCATION_REQUIRED":
+            status = "clarification_required"
+        else:
+            status = "unavailable"
+
+        payload = dict(result.get("payload") or {})
+
+        self._audit(
+            domain="general_assistant",
+            intent="meteo.read",
+            skill="meteo.read",
+            policy=PolicyClass.READ,
+            target=str(payload.get("location") or "weather"),
+            verification=raw_status,
+            tool_result=raw_status,
+            tool="meteo.radar.mcp",
+            memory_namespaces=(),
+        )
+
+        return self._result(
+            status,
+            str(result.get("response") or "Meteo non disponibile."),
+            plan=plan,
+            interaction_class="TOOL_BACKED_READ",
+            selected_skill="meteo.read",
+            tool_selected="meteo.radar.mcp",
+            meteo_tool=result.get("tool"),
+            policy=PolicyClass.READ.value,
+            tools_executed=bool(result.get("read_operations")),
+            connector_operations=list(result.get("read_operations") or ()),
+            meteo=payload,
+            location_source=result.get("location_source"),
+            side_effects=0,
+            writes=0,
+            sends=0,
         )
 
     def _read_mailchimp(
@@ -713,6 +1042,8 @@ class UnifiedAssistantCore:
         if not all((self.email_memory, self.email_pipeline, self.recipient_resolver)):
             return self._result("unavailable", "Email assistant adapter unavailable.", plan=plan)
         reply_requested = _is_reply_request(text)
+        explicit_cc = _explicit_copy_recipients(text, hidden=False)
+        explicit_bcc = _explicit_copy_recipients(text, hidden=True)
         exact_address = _verified_recipient_address(text) if reply_requested else None
         exact_message_id = _explicit_source_message_id(text) if reply_requested else None
 
@@ -824,9 +1155,12 @@ class UnifiedAssistantCore:
             risk=outcome.risk,
             validation_state=outcome.final_validator,
             reply_mode=reply_requested,
+            cc=explicit_cc,
+            bcc=explicit_bcc,
         )
         display = _email_display(
-            recipient.get("name") or label, outcome.body, resolved_subject
+            recipient.get("name") or label, outcome.body, resolved_subject,
+            cc=explicit_cc, bcc=explicit_bcc,
         )
         pending = self.conversation.stage(
             domain="email",
@@ -1019,18 +1353,72 @@ class UnifiedAssistantCore:
             status = str(result.get("status") or "failed")
             self._audit(
                 domain="mailchimp", intent=pending.action,
-                skill=("mailchimp.campaign.create" if pending.action == "mailchimp_campaign_create"
-                       else "mailchimp.campaign.send"),
+                skill=(
+                    "mailchimp.campaign.create" if pending.action == "mailchimp_campaign_create"
+                    else "mailchimp.campaign.send" if pending.action == "mailchimp_campaign_send"
+                    else "mailchimp.member.subscribe"
+                ),
                 policy=pending.policy, target=str(pending.payload.get("list_id") or ""),
                 verification=status, pending=pending,
                 tool="mailchimp.marketing.approval_bound", tool_result=status,
             )
-            if status in {"executed", "already_executed"}:
+            if status in {"executed", "already_executed", "already_subscribed"}:
                 self.conversation.clear("mailchimp")
-            elif status in {"CREATE_UNCERTAIN", "SEND_UNCERTAIN", "EXECUTION_UNCERTAIN"}:
+            elif status in {
+                "CREATE_UNCERTAIN", "SEND_UNCERTAIN", "SUBSCRIBE_UNCERTAIN",
+                "EXECUTION_UNCERTAIN", "MEMBER_REQUIRES_RECONSENT",
+            }:
                 self.conversation.clear("mailchimp")
             return self._result(status, "Workflow Mailchimp completato." if status == "executed"
                                 else "Workflow Mailchimp non eseguito o non verificato.", result=result)
+        if pending.domain == "jellyfin":
+            if not self.flags.jellyfin_identity_write_live:
+                return self._result("disabled", "Jellyfin identity write workflow disabled.", writes=0)
+            if not approval_matches(pending) or self.jellyfin_approval_executor is None:
+                return self._result(
+                    "approval_required", "Approvazione Jellyfin esplicita e hash-bound richiesta.", writes=0,
+                )
+            result = self.jellyfin_approval_executor.execute(pending)
+            status = str(result.get("status") or "failed")
+            self._audit(
+                domain="jellyfin", intent=pending.action, skill="jellyfin.apply_identity",
+                policy=pending.policy, target=str(pending.payload.get("item_id") or ""),
+                verification=status, pending=pending,
+                tool="jellyfin.identity.mcp.write", tool_result=status,
+            )
+            if status in {"EXECUTED_VERIFIED", "already_executed", "DRAFT_CHANGED",
+                          "EXECUTION_UNCERTAIN", "APPROVAL_INVALID"}:
+                self.conversation.clear("jellyfin")
+            return self._result(
+                status,
+                "Identità Jellyfin applicata e verificata." if status == "EXECUTED_VERIFIED"
+                else "Identità Jellyfin non applicata o non verificata.",
+                result=result,
+            )
+        if pending.domain == "browser":
+            if not self.flags.browser_interact_live:
+                return self._result("disabled", "Browser interaction workflow disabled.", writes=0)
+            if not approval_matches(pending) or self.browser_approval_executor is None:
+                return self._result(
+                    "approval_required", "Approvazione browser esplicita e hash-bound richiesta.", writes=0,
+                )
+            result = self.browser_approval_executor.execute(pending)
+            status = str(result.get("status") or "failed")
+            self._audit(
+                domain="browser", intent=pending.action, skill="browser.interact",
+                policy=pending.policy, target=str(pending.payload.get("target") or ""),
+                verification=status, pending=pending,
+                tool="browser.playwright.approval_bound", tool_result=status,
+            )
+            if status in {"EXECUTED_VERIFIED", "already_executed", "DRAFT_CHANGED",
+                          "EXECUTION_UNCERTAIN", "APPROVAL_INVALID"}:
+                self.conversation.clear("browser")
+            return self._result(
+                status,
+                "Azione browser eseguita e verificata con snapshot." if status == "EXECUTED_VERIFIED"
+                else "Azione browser non eseguita o non verificata.",
+                result=result,
+            )
         if pending.domain == "home":
             prepared = self._home_prepared.get(pending.pending_id)
             if prepared is None and self.home_workflow is not None:
@@ -1134,9 +1522,28 @@ def _recipient_label(text: str) -> str | None:
     return None
 
 
-def _email_display(recipient: str, body: str, subject: str = "") -> str:
+def _explicit_copy_recipients(text: str, *, hidden: bool) -> str:
+    marker = r"(?:ccn|bcc|copia\s+nascosta)" if hidden else r"(?:cc|copia)"
+    match = re.search(
+        rf"\b{marker}\b\s*:?\s*(.+?)(?=\s+(?:oggetto|subject|testo|corpo)\s*:|$)",
+        text, re.I,
+    )
+    if not match:
+        return ""
+    addresses = re.findall(
+        r"[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9.-]+\.[A-Z]{2,}",
+        match.group(1), re.I,
+    )
+    deduped = list(dict.fromkeys(address.casefold() for address in addresses))
+    return ",".join(deduped)
+
+
+def _email_display(
+    recipient: str, body: str, subject: str = "", *, cc: str = "", bcc: str = ""
+) -> str:
     subject_line = f"\nOggetto: {subject}\n" if subject else ""
-    return f"Bozza per {recipient}:{subject_line}\n{body}\n\nInvio?"
+    copies = (f"CC: {cc}\n" if cc else "") + (f"CCN: {bcc}\n" if bcc else "")
+    return f"Bozza per {recipient}:{subject_line}{copies}\n{body}\n\nInvio?"
 
 
 def _is_reply_request(text: str) -> bool:

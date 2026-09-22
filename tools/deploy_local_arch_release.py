@@ -8,6 +8,7 @@ from pathlib import Path
 import socket
 import subprocess
 import tempfile
+from urllib.request import urlopen
 
 
 PRODUCTION = Path("/home/sibilla-cumana/ralfloop-production")
@@ -22,7 +23,7 @@ def preflight(release: Path) -> dict[str, object]:
         "release_identity": release_identity(release),
         "manifest": verify_manifest(release),
         "functiongemma_model": MODEL.is_file(),
-        "port_19104_free": port_free(19104),
+        "functiongemma_endpoint": functiongemma_endpoint_check(),
         "glm_incompatible_idle": not process_match(("glm-run-machine", "colibri_glm")),
     }
     memory = meminfo()
@@ -98,6 +99,8 @@ def gate_marker_details(release: Path) -> tuple[bool, str | None, list[str]]:
         data = json.loads(marker.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False, None, ["gate_marker_invalid"]
+    if not isinstance(data, dict) or data.get("tested_commit") != release.resolve().name:
+        return False, None, ["gate_commit_mismatch"]
     return evaluate_quality_gate(data)
 
 
@@ -114,7 +117,7 @@ def evaluate_quality_gate(data: dict[str, object]) -> tuple[bool, str | None, li
         "approval_miss": data.get("approval_miss") == 0,
         "enough_ram": data.get("enough_ram") is True,
         "enough_swap": data.get("enough_swap") is True,
-        "port_19104_free": data.get("port_19104_free") is True,
+        "functiongemma_endpoint": data.get("functiongemma_endpoint") is True,
     }
     common_blockers = [name for name, passed in common.items() if not passed]
     if common_blockers:
@@ -164,6 +167,41 @@ def port_free(port: int) -> bool:
             return True
         except OSError:
             return False
+
+
+def _functiongemma_proxy_listener_owned() -> bool:
+    listeners = subprocess.run(
+        ["ss", "-ltnp"], check=False, text=True, capture_output=True,
+    ).stdout
+    for line in listeners.splitlines():
+        if "127.0.0.1:19104" not in line or 'users:(("socat"' not in line:
+            continue
+        match = __import__("re").search(r"pid=(\d+)", line)
+        if match is None:
+            return os.geteuid() == 0
+        try:
+            status = Path(f"/proc/{match.group(1)}/status").read_text(encoding="utf-8")
+        except OSError:
+            return False
+        uid_line = next((item for item in status.splitlines() if item.startswith("Uid:")), "")
+        fields = uid_line.split()
+        if len(fields) < 2:
+            return False
+        return os.geteuid() == 0 or int(fields[1]) == os.geteuid()
+    return False
+
+
+def functiongemma_endpoint_check() -> bool:
+    """Semantic port gate: free locally, owned loopback proxy + health when distributed."""
+    if os.environ.get("RALF_FUNCTIONGEMMA_PROXY_EXPECTED") != "1":
+        return port_free(19104)
+    if not _functiongemma_proxy_listener_owned():
+        return False
+    try:
+        with urlopen("http://127.0.0.1:19104/health", timeout=2) as response:
+            return response.status == 200
+    except OSError:
+        return False
 
 
 def process_match(needles: tuple[str, ...]) -> bool:

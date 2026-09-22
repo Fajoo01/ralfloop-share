@@ -483,6 +483,113 @@ def _model_deltas(events: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
     return sorted(set(increased)), sorted(set(decreased))
 
 
+def _patch_payload_from_file(path: Path) -> str:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    body = text.split("\n\n", 1)[1] if "\n\n" in text else text
+    parsed = parse_abc_command(body)
+    return str(parsed.get("payload") if parsed.get("is_abc") else body).strip()
+
+
+def _context_patch_records(base: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for source in load_jsonl(base / "sources.jsonl"):
+        if source.get("kind") != "telegram_patch":
+            continue
+        path = Path(str(source.get("patch_file") or ""))
+        if not path.exists():
+            continue
+        payload = _patch_payload_from_file(path)
+        low = payload.lower()
+        patch_type = "full_patch" if all(
+            marker in low for marker in ("fatti nuovi", "elementi da interpretare", "operativo")
+        ) else "micro_delta"
+        rows.append({**source, "payload": payload, "patch_type": patch_type})
+
+    def sort_key(row: dict[str, Any]) -> tuple[float, int]:
+        raw = str(row.get("created_at") or "").replace("Z", "+00:00")
+        try:
+            stamp = datetime.fromisoformat(raw).timestamp()
+        except (TypeError, ValueError):
+            stamp = float(row.get("mtime") or 0.0)
+        message_id = str(row.get("message_id") or "")
+        return stamp, int(message_id) if message_id.isdigit() else -1
+
+    return sorted(rows, key=sort_key)
+
+
+def _context_attenuations(base_payload: str, deltas: list[dict[str, Any]]) -> list[str]:
+    base_low = base_payload.lower()
+    delta_low = "\n".join(str(row.get("payload") or "") for row in deltas).lower()
+    social_exclusion = any(
+        marker in base_low for marker in ("non e stato invitato", "non invitato", "mancata inclusione", "senza invitare fabio")
+    )
+    short_scene = bool(re.search(r"\b20[:.]\d{2}\b", delta_low) and re.search(r"\b21[:.]\d{2}\b", delta_low))
+    return ["social_exclusion_cap_temporal_attenuation"] if social_exclusion and short_scene else []
+
+
+def build_current_context(base: Path, run_dir: Path) -> dict[str, Any]:
+    ensure_init(base)
+    records = _context_patch_records(base)
+    if not records:
+        return {
+            "dominant_full_patch": None,
+            "subsequent_deltas": [],
+            "attenuations": [],
+            "formula_scoring_input": "",
+            "merged_current_context": "",
+        }
+
+    full_indexes = [index for index, row in enumerate(records) if row.get("patch_type") == "full_patch"]
+    base_index = full_indexes[-1] if full_indexes else 0
+    dominant = records[base_index]
+    deltas = records[base_index + 1:]
+    base_payload = str(dominant.get("payload") or "").strip()
+    factual_deltas = [str(row.get("payload") or "").strip() for row in deltas if row.get("patch_type") == "micro_delta"]
+    attenuations = _context_attenuations(base_payload, deltas)
+
+    scoring_parts = ["# ABC Formula Scoring Input", "", "### current_facts", base_payload]
+    if factual_deltas:
+        scoring_parts += ["", "### factual_micro_deltas", *[f"- {item}" for item in factual_deltas]]
+    formula_scoring_input = "\n".join(scoring_parts).strip()
+
+    public_deltas = [
+        {
+            "patch_type": row.get("patch_type"),
+            "message_id": row.get("message_id", ""),
+            "created_at": row.get("created_at", ""),
+            "payload_hash": row.get("payload_hash", ""),
+            "payload": row.get("payload", ""),
+        }
+        for row in deltas
+    ]
+    merged_parts = [
+        "# RL ABC MERGED CURRENT",
+        "",
+        "## dominant_full_patch",
+        base_payload,
+        "",
+        "## subsequent_deltas",
+    ]
+    merged_parts += [f"- [{row['patch_type']}] {row['payload']}" for row in public_deltas] or ["- Nessun delta successivo."]
+    if attenuations:
+        merged_parts += ["", "## contextual_attenuations", *[f"- {item}" for item in attenuations]]
+    merged_parts += ["", "## formula_scoring_input", "", formula_scoring_input]
+
+    return {
+        "dominant_full_patch": {
+            "patch_file": dominant.get("patch_file", ""),
+            "message_id": dominant.get("message_id", ""),
+            "created_at": dominant.get("created_at", ""),
+            "payload_hash": dominant.get("payload_hash", ""),
+            "patch_type": dominant.get("patch_type", ""),
+        },
+        "subsequent_deltas": public_deltas,
+        "attenuations": attenuations,
+        "formula_scoring_input": formula_scoring_input,
+        "merged_current_context": "\n".join(merged_parts).strip() + "\n",
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="ABC local relational memory")
     parser.add_argument("--dir", default=None, help="memory directory; default ABC_MEMORY_DIR or ./abc_memory")

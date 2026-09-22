@@ -1,0 +1,22 @@
+--- a/src/meowgram/bot.py
++++ b/src/meowgram/bot.py
+@@ -574,7 +574,18 @@
+         if status in {"unauthorized", "chat_unauthorized", "private_chat_required"}:
+             return "Ralfloop approval: richiesta non autorizzata."
+         if status == "approved":
+-            return "Ralfloop approval: approvato. Serve ancora execute-approved."
++            execution = data.get("execution")
++            if isinstance(execution, dict):
++                execution_status = str(execution.get("status") or "")
++                if execution_status == "executed":
++                    return "Ralfloop approval: approvato ed eseguito."
++                if execution_status in {"already_executed", "already_subscribed"}:
++                    return "Ralfloop approval: approvato; azione già eseguita."
++                return (
++                    "Ralfloop approval: approvato, ma esecuzione non confermata "
++                    f"({execution_status or 'errore'}). Nessun retry automatico."
++                )
++            return "Ralfloop approval: approvato. Esecuzione separata richiesta."
+         if status == "rejected":
+             return "Ralfloop approval: rifiutato."
+         if status == "scope_digest_mismatch":

@@ -15,6 +15,11 @@ import sys
 import tempfile
 import time
 
+try:
+    from ralf_mcp_peer_auth import assign_socket_group, peer_allowed
+except ModuleNotFoundError:  # importlib-based tests/loaders run from repository root
+    from scripts.ralf_mcp_peer_auth import assign_socket_group, peer_allowed
+
 
 MAX_LINE = 8 * 1024 * 1024
 
@@ -166,9 +171,13 @@ def main() -> int:
         required=True,
     )
     parser.add_argument(
+        "--allow-group",
+        default="ralf-mcp",
+    )
+    parser.add_argument(
         "--allow-uid",
-        required=True,
         type=int,
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--command",
@@ -205,7 +214,10 @@ def main() -> int:
         )
 
         server.bind(str(path))
-        os.chmod(path, 0o600)
+        if args.allow_uid is None:
+            assign_socket_group(path, args.allow_group)
+        else:
+            os.chmod(path, 0o600)
         server.listen(4)
 
         signal.signal(
@@ -217,7 +229,7 @@ def main() -> int:
             conn, _ = server.accept()
 
             with conn:
-                if _peer_uid(conn) != args.allow_uid:
+                if not peer_allowed(conn, args.allow_group, args.allow_uid):
                     continue
 
                 _relay(

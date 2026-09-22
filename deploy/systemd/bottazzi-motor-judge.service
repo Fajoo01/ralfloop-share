@@ -1,0 +1,26 @@
+[Unit]
+Description=Bot-tazzi Motor bounded judge sidecar
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sibilla-cumana
+Group=sibilla-cumana
+WorkingDirectory=/home/sibilla-cumana/ralfloop-motor-judge/current
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/home/sibilla-cumana/ralfloop-motor-judge/current
+EnvironmentFile=/etc/ralfloop/bottazzi-motor-judge.env
+RuntimeDirectory=ralfloop
+RuntimeDirectoryMode=0770
+ExecStartPre=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python -m ralfloop_agent.integration.bottazzi_motor_judge_service preflight
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python -m ralfloop_agent.integration.bottazzi_motor_judge_service serve
+ExecStartPost=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python -m ralfloop_agent.integration.bottazzi_motor_judge_service wait-ready --timeout 180
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=210
+TimeoutStopSec=30
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

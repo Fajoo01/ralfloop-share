@@ -92,7 +92,8 @@ def test_production_venv_initializes_server_through_uid_guard(tmp_path):
             UnixMCPTransport(str(socket_path)), timeout=3
         ) as session:
             tools = session.list_tools()
-        assert len(tools) == 10
+        assert len(tools) == 11
+        assert "mailchimp_subscribe_approved_member" in {tool.name for tool in tools}
         assert socket_path.stat().st_mode & 0o777 == 0o600
         assert socket.socket(socket.AF_UNIX).family == socket.AF_UNIX
     finally:
@@ -117,3 +118,36 @@ def test_child_diagnostic_never_emits_stderr_content(tmp_path, capsys):
     assert "stderr_bytes=" in diagnostic
     assert "secret-token" not in diagnostic
     assert "Authorization" not in diagnostic
+
+
+def test_production_venv_initializes_server_through_group_guard(tmp_path):
+    socket_path = tmp_path / "mcp-group.sock"
+    process = subprocess.Popen(
+        [
+            str(PRODUCTION_PYTHON), str(BROKER_PATH),
+            "--socket", str(socket_path),
+            "--allow-group", "ralf-mcp",
+            "--python", str(PRODUCTION_PYTHON),
+            "--command", str(SERVER_PATH),
+            "--idle-timeout", "5",
+        ],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not socket_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        with MCPClientSession(UnixMCPTransport(str(socket_path)), timeout=3) as session:
+            tools = session.list_tools()
+        assert "mailchimp_subscribe_approved_member" in {tool.name for tool in tools}
+        assert socket_path.stat().st_mode & 0o777 == 0o660
+    finally:
+        process.terminate()
+        process.wait(timeout=3)
+
+
+def test_deploy_dropin_allows_approval_store_writes():
+    dropin = ROOT / "deploy/systemd/ralf-mailchimp-mcp-broker.service.d/70-approval-store-rw.conf"
+    text = dropin.read_text(encoding="utf-8")
+    assert "[Service]" in text
+    assert "ReadWritePaths=/var/lib/ralfloop" in text

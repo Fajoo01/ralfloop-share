@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -188,7 +189,18 @@ class UnifiedRegistryFacade:
     def _runtime_adapters(self) -> list[UnifiedToolSpec]:
         entities = json.loads(self.home_entities_path.read_text(encoding="utf-8"))
         entity_count = len(entities.get("entities") or [])
-        home_status = "available" if entity_count else "constrained:no_registered_entities"
+        home_provider = os.getenv("RALFLOOP_HOME_PROVIDER", "home_assistant").strip().casefold()
+        home_status = (
+            "constrained:provider_replaced_by_tuya_mcp"
+            if home_provider == "tuya_mcp"
+            else "available" if entity_count else "constrained:no_registered_entities"
+        )
+        tuya_socket = Path(os.getenv("RALF_TUYA_MCP_SOCKET", "/run/ralf-tuya-mcp/mcp.sock"))
+        tuya_status = (
+            "available" if home_provider == "tuya_mcp" and _observable_path_exists(tuya_socket)
+            else "constrained:broker_unavailable" if home_provider == "tuya_mcp"
+            else "constrained:not_selected"
+        )
         gmail_socket = Path("/run/ralf-google-workspace-mcp/mcp.sock")
         whatsapp_scopes = json.loads(self.whatsapp_scopes_path.read_text(encoding="utf-8"))
         whatsapp_work_profile = (
@@ -196,8 +208,60 @@ class UnifiedRegistryFacade:
             and whatsapp_scopes.get("default_namespace") == "tiremm"
         )
         whatsapp_socket = Path("/run/ralf-whatsapp-mcp/mcp.sock")
+        whatsapp_write_enabled = (
+            os.getenv("RALFLOOP_WHATSAPP_ASSISTANT_LIVE", "0") == "1"
+            and os.getenv("RALFLOOP_ENABLE_TELEGRAM_APPROVAL_GATE", "0") == "1"
+        )
         mailchimp_socket = Path("/run/ralf-mailchimp-mcp/mcp.sock")
+        meteo_socket = Path("/run/ralf-meteo-mcp/mcp.sock")
+        editorial_socket = Path("/tmp/ralf-editorial-mcp/mcp.sock")
+        bandi_socket = Path(os.getenv("RALF_BANDI_MCP_SOCKET", "/run/ralf-bandi-mcp/mcp.sock"))
+        browser_socket = Path("/run/ralf-browser-playwright-mcp/mcp.sock")
         rows = [UnifiedToolSpec(
+            id="bandi.research.mcp",
+            capabilities=("bandi_research_now", "bandi_latest", "bandi_search_latest", "bandi_get_opportunity"),
+            input_schema="strict Bandi MCP schemas; read-only discovery/review",
+            output_schema="ranked opportunities, deadlines, scores, criticalities, citations and persisted report refs",
+            classification=PolicyClass.READ,
+            side_effect_class="none",
+            availability="available" if _observable_path_exists(bandi_socket) else "constrained:broker_unavailable",
+            health="Unix MCP broker + exact four-tool allowlist",
+            verification_method="official-source-first bounded research; persisted report provenance; writes=0; sends=0",
+            source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "bandi_mcp_adapter.py"),
+        ), UnifiedToolSpec(
+            id="editorial.flyer.mcp",
+            capabilities=("flyer_create", "flyer_update", "flyer_projects", "flyer_brief", "flyer_review", "flyer_marketing_review", "flyer_media_review", "flyer_render"),
+            input_schema="strict editorial MCP schemas; project-bound files only",
+            output_schema="brief, marketing score, provenance, HTML, PDF, PNG and preflight",
+            classification=PolicyClass.AUTO_WRITE,
+            side_effect_class="local_project_filesystem_write",
+            availability="available" if _observable_path_exists(editorial_socket) else "constrained:broker_unavailable",
+            health="Unix stdio relay + exact eight-tool allowlist",
+            verification_method="strict MCP tool discovery; local A4 PDF/PNG/HTML output; no email/print/shell/browser",
+            source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "editorial_mcp_adapter.py"),
+        ), UnifiedToolSpec(
+            id="browser.playwright.read_only",
+            capabilities=("browser.snapshot.read", "browser.tabs.read"),
+            input_schema="strict browser snapshot or fixed browser_tabs action=list",
+            output_schema="untrusted page snapshot/tab metadata as data",
+            classification=PolicyClass.READ,
+            side_effect_class="none",
+            availability="available" if _observable_path_exists(browser_socket) else "constrained:broker_unavailable",
+            health="shared Playwright MCP Unix bridge",
+            verification_method="exact read allowlist; no click/type/upload/evaluate/run_code",
+            source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "browser_mcp_adapter.py"),
+        ), UnifiedToolSpec(
+            id="browser.playwright.approval_bound",
+            capabilities=("browser.click", "browser.type", "browser.upload", "browser.submit"),
+            input_schema="exact browser action scope bound to approval",
+            output_schema="provider result plus post-action readback",
+            classification=PolicyClass.CONFIRM_WRITE,
+            side_effect_class="confirmation_required",
+            availability="constrained:approval_executor_required",
+            health="raw Playwright MCP present; automatic execution disabled",
+            verification_method="never eligible for READ auto-route; exact approved action required",
+            source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "browser_mcp_adapter.py"),
+        ), UnifiedToolSpec(
             id="google_workspace.gmail.read_only",
             capabilities=("google_workspace.gmail.search", "google_workspace.gmail.read", "google_workspace.gmail.thread"),
             input_schema="EmailSearchIntent",
@@ -241,8 +305,13 @@ class UnifiedRegistryFacade:
             classification=PolicyClass.CONFIRM_WRITE,
             side_effect_class="confirmation_required",
             availability=(
-                "available" if whatsapp_socket.exists() and whatsapp_work_profile
-                else "constrained:broker_not_started"
+                "available"
+                if whatsapp_socket.exists() and whatsapp_work_profile and whatsapp_write_enabled
+                else (
+                    "constrained:write_feature_disabled"
+                    if whatsapp_socket.exists() and whatsapp_work_profile
+                    else "constrained:broker_not_started"
+                )
             ),
             health="Unix MCP broker + approval store",
             verification_method="hash/version/chat/message binding + CAS + outbound readback",
@@ -272,13 +341,62 @@ class UnifiedRegistryFacade:
             verification_method="read side_effects=0 + writes=0 + sends=0",
             source_registry=str(PROJECT_ROOT / "src" / "mailchimp.py"),
         ), UnifiedToolSpec(
+            id="atm.route.mcp",
+            capabilities=(
+                "atm.route",
+                "atm.route.named",
+                "atm.geocode",
+            ),
+            input_schema="Telegram GPS coordinates or named origin plus destination",
+            output_schema="verified ATM route summary / ETA / lines",
+            classification=PolicyClass.READ,
+            side_effect_class="none",
+            availability=(
+                "available"
+                if _observable_path_exists(Path("/run/ralf-atm-mcp/mcp.sock"))
+                else "constrained:broker_unavailable"
+            ),
+            health="Unix MCP broker + strict tool discovery",
+            verification_method="read-only ATM routing; side_effects=0",
+            source_registry=str(
+                PROJECT_ROOT
+                / "ralfloop_agent"
+                / "unified_assistant"
+                / "atm_mcp_adapter.py"
+            ),
+        ), UnifiedToolSpec(
+            id="meteo.radar.mcp",
+            capabilities=(
+                "meteo.current",
+                "meteo.radar",
+                "meteo.geocode",
+            ),
+            input_schema="Telegram GPS coordinates or written address",
+            output_schema="verified current weather / forecast / radar URL",
+            classification=PolicyClass.READ,
+            side_effect_class="none",
+            availability=(
+                "available"
+                if _observable_path_exists(meteo_socket)
+                else "constrained:broker_unavailable"
+            ),
+            health="Unix MCP broker + strict tool discovery",
+            verification_method="read-only weather/radar; side_effects=0",
+            source_registry=str(
+                PROJECT_ROOT
+                / "ralfloop_agent"
+                / "unified_assistant"
+                / "meteo_mcp_adapter.py"
+            ),
+        ), UnifiedToolSpec(
             id="mailchimp.marketing.approval_bound",
             capabilities=(
                 "mailchimp.campaign.create.approved",
                 "mailchimp.campaign.send.approved",
+                "mailchimp.member.subscribe.approved",
             ),
-            input_schema="exact canonical campaign scope + approval_request_id + execution_id",
-            output_schema="verified campaign state; no generic provider mutation",
+            input_schema="exact canonical Mailchimp scope + approval_request_id + execution_id",
+            output_schema="verified campaign/member state; no generic provider mutation",
             classification=PolicyClass.CONFIRM_WRITE,
             side_effect_class="confirmation_required",
             availability="constrained:approval_and_provider_required",
@@ -287,6 +405,17 @@ class UnifiedRegistryFacade:
             source_registry=str(
                 PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "mailchimp_campaign.py"
             ),
+        ), UnifiedToolSpec(
+            id="tuya.home.mcp",
+            capabilities=("home.state.read", "home.service.call"),
+            input_schema="strict Tuya MCP schemas over Home Assistant-owned Tuya entities",
+            output_schema="Tuya device/entity inventory, state, and verified service readback",
+            classification=PolicyClass.PROTECTED,
+            side_effect_class="mixed_read_and_policy_gated_write",
+            availability=tuya_status,
+            health="Unix MCP broker + Tuya ownership verification + Home Assistant readback",
+            verification_method="Tuya registry ownership; service allowlist; read before/write/read after",
+            source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "tuya_mcp.py"),
         ), UnifiedToolSpec(
             id="home_assistant.adapter",
             capabilities=("home.state.read", "home.service.call"),
@@ -299,6 +428,107 @@ class UnifiedRegistryFacade:
             verification_method="read before + write + read after",
             source_registry=str(self.home_entities_path),
         )]
+        rows.extend([
+            UnifiedToolSpec(
+                id="memory.operational.mcp",
+                capabilities=(
+                    "memory.documents.search", "memory.timeline.read",
+                    "memory.practices.read", "memory.entities.read",
+                ),
+                input_schema="strict semantic Memory MCP schemas",
+                output_schema="provenance-bearing operational memory records",
+                classification=PolicyClass.READ,
+                side_effect_class="none",
+                availability=(
+                    "available" if _observable_path_exists(Path("/run/ralf-memory-mcp/mcp.sock"))
+                    else "constrained:broker_unavailable"
+                ),
+                health="Unix MCP broker + SQLite query_only source",
+                verification_method="read-only MCP allowlist + source refs/content hashes",
+                source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "memory_mcp.py"),
+            ),
+            UnifiedToolSpec(
+                id="arci.read_only.mcp",
+                capabilities=(
+                    "arci.organization.read", "arci.members.read",
+                    "arci.cards.read", "arci.membership.verify",
+                ),
+                input_schema="strict semantic ARCI MCP schemas",
+                output_schema="authenticated ARCI records with read-only semantics",
+                classification=PolicyClass.READ, side_effect_class="none",
+                availability=(
+                    "available" if _observable_path_exists(Path("/run/ralf-arci-mcp/mcp.sock"))
+                    else "constrained:broker_unavailable"
+                ),
+                health="Unix MCP broker + authenticated source",
+                verification_method="tool allowlist + provider provenance; side_effects=0",
+                source_registry=str(PROJECT_ROOT / "scripts" / "ralf_arci_mcp_server.py"),
+            ),
+            UnifiedToolSpec(
+                id="jellyfin.identity.mcp.read",
+                capabilities=("jellyfin.identity.list", "jellyfin.identity.search", "jellyfin.identity.get"),
+                input_schema="Jellyfin semantic identity queries",
+                output_schema="candidate identities with observed library evidence",
+                classification=PolicyClass.READ, side_effect_class="none",
+                availability=(
+                    "available" if _observable_path_exists(Path("/run/ralf-jellyfin-mcp/mcp.sock"))
+                    else "constrained:broker_unavailable"
+                ),
+                health="Unix MCP broker + Jellyfin provider readback",
+                verification_method="read-only discovery + item provenance",
+                source_registry=str(PROJECT_ROOT / "scripts" / "ralf_jellyfin_identity_mcp_server.py"),
+            ),
+            UnifiedToolSpec(
+                id="jellyfin.identity.mcp.write",
+                capabilities=("jellyfin.identity.apply", "jellyfin.library.refresh", "jellyfin.deduplicate"),
+                input_schema="approved Jellyfin identity/library mutation",
+                output_schema="provider result requiring post-action verification",
+                classification=PolicyClass.PROTECTED, side_effect_class="protected",
+                availability="constrained:policy_gate_required",
+                health="Unix MCP broker + provider readback",
+                verification_method="explicit mutation policy + post-action Jellyfin readback",
+                source_registry=str(PROJECT_ROOT / "scripts" / "ralf_jellyfin_identity_mcp_server.py"),
+            ),
+            UnifiedToolSpec(
+                id="teacher.student.mcp",
+                capabilities=("teacher.explain", "teacher.exercise", "teacher.quiz", "teacher.progress"),
+                input_schema="student-only Teacher MCP schemas",
+                output_schema="bounded didactic result",
+                classification=PolicyClass.READ, side_effect_class="none",
+                availability=(
+                    "available" if _observable_path_exists(Path("/run/ralf-teacher-mcp/mcp.sock"))
+                    else "constrained:broker_unavailable"
+                ),
+                health="isolated student MCP broker",
+                verification_method="student-only capability boundary; no administrative tools",
+                source_registry=str(PROJECT_ROOT / "scripts" / "ralf_teacher_mcp_server.py"),
+            ),
+            UnifiedToolSpec(
+                id="visual.memory.local",
+                capabilities=("visual_document_retrieval",),
+                input_schema="document artifact + query",
+                output_schema="page/region evidence with provenance",
+                classification=PolicyClass.READ, side_effect_class="none",
+                availability="constrained:text_regions_only",
+                health="VisualRagWorker present; visual embedding backend not promoted",
+                verification_method="source hash + page/region provenance; ColSmol backend pending benchmark",
+                source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "local_arch" / "media.py"),
+            ),
+            UnifiedToolSpec(
+                id="amule.books.mcp",
+                capabilities=("amule.books.search", "amule.books.download", "amule.queue.read"),
+                input_schema="semantic aMule book query/queue request",
+                output_schema="search results, queue state or requested download",
+                classification=PolicyClass.PROTECTED, side_effect_class="mixed_read_and_write",
+                availability=(
+                    "available" if _observable_path_exists(Path("/run/ralf-amule-mcp/mcp.sock"))
+                    else "constrained:broker_unavailable"
+                ),
+                health="Unix MCP broker",
+                verification_method="search/queue read; downloads subject to workflow policy",
+                source_registry="/run/ralf-amule-mcp/mcp.sock",
+            ),
+        ])
         if self.semantic_judge_path.exists():
             raw = json.loads(self.semantic_judge_path.read_text(encoding="utf-8"))
             runtime = raw.get("deepseek_runtime") or {}

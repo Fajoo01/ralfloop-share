@@ -113,3 +113,47 @@ def test_real_ralf_read_only_magnolia_search_canary():
         gateway.discover()
         result = gateway.invoke("search", query="ARCI Magnolia", maxResults=10)
         assert isinstance(result, dict)
+
+
+def test_stream_request_yields_matching_notifications_then_result():
+    transport = FakeTransport([
+        {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-03-26", "capabilities": {}, "serverInfo": {"name": "test", "version": "1"}}},
+        {"jsonrpc": "2.0", "method": "other/event", "params": {"requestId": 2, "event": {"type": "delta", "text": "ignore"}}},
+        {"jsonrpc": "2.0", "method": "teacher/stream/event", "params": {"requestId": 2, "event": {"type": "delta", "text": "Ciao"}}},
+        {"jsonrpc": "2.0", "id": 2, "result": {"structuredContent": {"ok": True, "response": "Ciao"}, "content": []}},
+    ])
+    session = MCPClientSession(transport)
+    session.initialize()
+    events = list(session.stream_request(
+        "teacher/stream",
+        {"name": "teacher.explain", "arguments": {}},
+        notification_method="teacher/stream/event",
+    ))
+    assert events[0] == {"type": "notification", "event": {"type": "delta", "text": "Ciao"}}
+    assert events[1]["type"] == "result"
+    assert events[1]["result"]["structuredContent"]["ok"] is True
+
+
+def test_server_ping_request_is_answered_while_waiting_for_result():
+    transport = FakeTransport([
+        {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-03-26", "capabilities": {}, "serverInfo": {"name": "test", "version": "1"}}},
+        {"jsonrpc": "2.0", "id": 0, "method": "ping"},
+        {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"},
+        {"jsonrpc": "2.0", "id": 2, "result": {"tools": []}},
+    ])
+    session = MCPClientSession(transport)
+    session.initialize()
+    assert session.list_tools() == ()
+    assert {"jsonrpc": "2.0", "id": 0, "result": {}} in transport.sent
+
+
+def test_unknown_server_request_gets_method_not_found():
+    transport = FakeTransport([
+        {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-03-26", "capabilities": {}, "serverInfo": {"name": "test", "version": "1"}}},
+        {"jsonrpc": "2.0", "id": 99, "method": "roots/list", "params": {}},
+        {"jsonrpc": "2.0", "id": 2, "result": {"tools": []}},
+    ])
+    session = MCPClientSession(transport)
+    session.initialize()
+    assert session.list_tools() == ()
+    assert any(msg.get("id") == 99 and msg.get("error", {}).get("code") == -32601 for msg in transport.sent)

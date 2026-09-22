@@ -10,8 +10,9 @@ from .registry import UnifiedRegistryFacade
 
 _EMAIL_RE = re.compile(
     r"\b(?:scrivi\s+(?:una\s+mail\s+)?a|prepara\s+(?:una\s+)?(?:mail|email)|"
-    r"manda\s+(?:una\s+)?(?:mail|email)|rispondi\s+(?:alla|a\s+questa)\s+mail|"
-    r"rispondi\s+a\s+[\wÀ-ÿ][\wÀ-ÿ'. -]{0,80})\b",
+    r"manda\s+(?:una\s+)?(?:mail|email)|"
+    r"rispond(?:i|ere)\s+(?:all['’]\s*|alla\s+|a\s+questa\s+)(?:mail|email|appello|comunicazione)|"
+    r"rispond(?:i|ere)\s+a\s+[\wÀ-ÿ][\wÀ-ÿ'. -]{0,80})\b",
     re.I,
 )
 _HOME_RE = re.compile(
@@ -19,14 +20,117 @@ _HOME_RE = re.compile(
     r"temperatura|quanto\s+fa|fa\s+caldo|fa\s+freddo)\b",
     re.I,
 )
-_GRANT_RE = re.compile(r"\b(?:band[oi]|grant|contribut[oi]|finanziament[oi]|candidatur[ae])\b", re.I)
+_GRANT_RE = re.compile(r"\b(?:band[oi]|grant|contribut[oi]|finanziament[oi]|candidatur[ae]|opportunit[aà])\b", re.I)
+_GRANT_DISCOVER_RE = re.compile(r"\b(?:cerca(?:mi|re)?|trova(?:mi|re)?|scopri|ricerca|aggiorna|nuov[ioe]|apert[ioe]|opportunit[aà]|segnala)\b", re.I)
+_GRANT_REVIEW_RE = re.compile(r"\b(?:valuta|analizza|verifica|ammissibil|compatibil|conviene|requisit|scaden|budget|cofinanzi)\w*\b", re.I)
+_ARCI_GRANT_SOURCE_RE = re.compile(
+    r"(?=.*\barci(?:\s+milano)?\b)(?=.*\b(?:band[oi]|appello|comunicazione|circoli)\b)", re.I
+)
 _TIREMM_RE = re.compile(r"\b(?:tiremm|associazione|aps|partner|progetto)\b", re.I)
 _RELATIONAL_RE = re.compile(r"\b(?:rsc|abc|relazional[ei]|formula\s+loop)\b", re.I)
 _INFRA_RE = re.compile(r"\b(?:agentcpm|servizi[oa]?|spazio\s+libero|disco|server|amule)\b", re.I)
 _CODE_RE = re.compile(r"\b(?:codice|repository|repo|bug|debug|test|stacktrace)\b", re.I)
 _DOCUMENT_RE = re.compile(r"\b(?:pdf|document[oi]|allegat[oi]|estrai)\b", re.I)
 _RESEARCH_RE = re.compile(r"\b(?:ricerca|cerca\s+sul\s+web|fonti|deep\s+research)\b", re.I)
-_MEDIA_RE = re.compile(r"\b(?:video|audio|immagine|locandina|ffmpeg|sottotitol[oi])\b", re.I)
+_NORMATIVE_ADMIN_TOPIC_RE = re.compile(
+    r"\b(?:aps|ets|runts|terzo\s+settore|codice\s+del\s+terzo\s+settore|"
+    r"associazion[ei]\s+di\s+promozione\s+sociale|enti?\s+del\s+terzo\s+settore)\b",
+    re.I,
+)
+_NORMATIVE_INFO_RE = re.compile(
+    r"\b(?:cos['’]?[eè]|che\s+cos['’]?[eè]|definisci|spiega|normativ[ae]|legge|"
+    r"decreto|d\.?\s*lgs\.?|articol[oi]|requisit[oi]|obbligh[oi]|disciplina|"
+    r"cosa\s+prevede|chi\s+pu[oò]|come\s+funziona)\b",
+    re.I,
+)
+_EDITORIAL_RE = re.compile(r"\b(?:volantin[oi]|flyer|locandin[ae]|manifest[oi]|poster)\b", re.I)
+_MEDIA_RE = re.compile(r"\b(?:video|audio|immagine|ffmpeg|sottotitol[oi])\b", re.I)
+_JELLYFIN_RE = re.compile(r"\bjellyfin\b", re.I)
+_BROWSER_RE = re.compile(r"\b(?:browser|playwright|pagina\s+web|schede?\s+browser)\b", re.I)
+_BROWSER_INTERACTION_RE = re.compile(
+    r"\b(?:clicca|click|scrivi|digita|type|compila|fill|carica|upload|"
+    r"invia|submit|seleziona|select|trascina|drag|premi|press)\b", re.I
+)
+_BROWSER_TARGET_RE = re.compile(r"\b(?P<value>e[0-9]+)\b", re.I)
+_BROWSER_TYPE_RE = re.compile(r"\b(?:scrivi|digita|type|compila|fill)\b", re.I)
+_BROWSER_UPLOAD_RE = re.compile(r"\b(?:carica|upload)\b", re.I)
+_BROWSER_SUBMIT_RE = re.compile(r"\b(?:submit|invia|premi\s+invio)\b", re.I)
+_BROWSER_TEXT_RE = re.compile(
+    r"\b(?:testo|text)\s*[:=]\s*(?:\"(?P<dq>[^\"]*)\"|'(?P<sq>[^']*)'|(?P<raw>\S.*))",
+    re.I,
+)
+_BROWSER_FILE_RE = re.compile(
+    r"\b(?:file|path)\s*[:=]\s*(?:\"(?P<dq>[^\"]+)\"|'(?P<sq>[^']+)'|(?P<raw>\S+))",
+    re.I,
+)
+_JELLYFIN_MUTATION_RE = re.compile(
+    r"\b(?:applica|modifica|aggiorna|refresh|deduplica|elimina|rimuovi|correggi)\b", re.I
+)
+_JELLYFIN_ITEM_ID_RE = re.compile(r"\b(?:item[_ -]?id|jellyfin[_ -]?id)\s*[:=]\s*(?P<value>[a-f0-9]{32,64})\b", re.I)
+_JELLYFIN_PROVIDER_RE = re.compile(r"\bprovider\s*[:=]\s*(?P<value>tmdb|imdb)\b", re.I)
+_JELLYFIN_PROVIDER_ID_RE = re.compile(r"\bprovider[_ -]?id\s*[:=]\s*(?P<value>[A-Za-z0-9_-]{1,64})\b", re.I)
+_JELLYFIN_YEAR_RE = re.compile(r"\byear\s*[:=]\s*(?P<value>18\d{2}|19\d{2}|20\d{2})\b", re.I)
+
+
+def _jellyfin_apply_args(goal: str) -> dict[str, object]:
+    args: dict[str, object] = {}
+    for key, pattern in (("item_id", _JELLYFIN_ITEM_ID_RE), ("provider", _JELLYFIN_PROVIDER_RE), ("provider_id", _JELLYFIN_PROVIDER_ID_RE)):
+        match = pattern.search(goal)
+        if match:
+            args[key] = match.group("value")
+    year = _JELLYFIN_YEAR_RE.search(goal)
+    if year:
+        args["year"] = int(year.group("value"))
+    return args
+
+
+def _browser_interact_args(goal: str) -> dict[str, object]:
+    args: dict[str, object] = {}
+    target = _BROWSER_TARGET_RE.search(goal)
+    if target:
+        args["target"] = target.group("value").casefold()
+    if _BROWSER_UPLOAD_RE.search(goal):
+        args["logical_action"] = "upload"
+        paths = []
+        for match in _BROWSER_FILE_RE.finditer(goal):
+            value = match.group("dq") or match.group("sq") or match.group("raw") or ""
+            if value:
+                paths.append(value.strip())
+        if paths:
+            args["paths"] = paths
+    elif _BROWSER_TYPE_RE.search(goal):
+        args["logical_action"] = "type"
+        text = _BROWSER_TEXT_RE.search(goal)
+        if text:
+            value = text.group("dq") or text.group("sq") or text.group("raw") or ""
+            args["text"] = value.strip()
+    elif _BROWSER_SUBMIT_RE.search(goal):
+        args["logical_action"] = "submit"
+    else:
+        args["logical_action"] = "click"
+    return args
+
+_ARCI_RE = re.compile(r"\barci\b", re.I)
+_ARCI_MUTATION_RE = re.compile(
+    r"\b(?:modifica|aggiorna|elimina|rimuovi|aggiungi|iscrivi|crea|invia)\b", re.I
+)
+_ATM_RE = re.compile(
+    r"\b(?:atm|giromilano|mezzi\s+pubblici|trasporto\s+pubblico)\b"
+    r"|\bcome\s+(?:arrivo|vado|posso\s+andare)\b"
+    r"|\bportami\s+(?:a|al|alla|all['’]|in)\b"
+    r"|\bmezzi\s+(?:per|verso)\b"
+    r"|\bpercorso\s+(?:atm|con\s+i\s+mezzi)\b",
+    re.I,
+)
+
+_METEO_RE = re.compile(
+    r"\b(?:meteo|weather|previsioni(?:\s+meteo)?|piove|piover[àa]|pioggia|"
+    r"precipitazioni?|temporale|temporali|radar|vento|raffiche|"
+    r"che\s+tempo\s+fa|tempo\s+fa)\b"
+    r"|\btemperatura\s+(?:a|in|per)\s+",
+    re.I,
+)
+
 _BYPASS_RE = re.compile(r"\b(?:ignore previous|ignora (?:le )?regole|bypass|esegui shell)\b", re.I)
 _FASTWEB_RE = re.compile(r"\b(?:fastweb|myfastpage)\b", re.I)
 _FASTWEB_MUTATION_RE = re.compile(
@@ -62,6 +166,15 @@ _MAILCHIMP_CREATE_CAMPAIGN_RE = re.compile(
 _MAILCHIMP_SEND_CAMPAIGN_RE = re.compile(
     r"\b(?:invia|send)\b.*\bcampagna\b.*\bmailchimp\b|"
     r"\bmailchimp\b.*\b(?:invia|send)\b.*\bcampagna\b", re.I,
+)
+_MAILCHIMP_SUBSCRIBE_MEMBER_RE = re.compile(
+    r"\b(?:aggiungi|iscrivi|subscribe)\b.*\b(?:mailchimp|mailing\s+list|newsletter|audience)\b|"
+    r"\b(?:mailchimp|mailing\s+list|newsletter|audience)\b.*\b(?:aggiungi|iscrivi|subscribe)\b",
+    re.I,
+)
+_MAILCHIMP_LIST_ALIAS_RE = re.compile(r"\b(?:mailing\s+list|newsletter)\b", re.I)
+_MAILCHIMP_EMAIL_RE = re.compile(
+    r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}\b", re.I
 )
 _MAILCHIMP_AUDIENCE_RE = re.compile(
     r"\b(?:audience|audiences|liste?|pubblico|contatti)\b",
@@ -111,8 +224,9 @@ _MULTISOURCE_WHATSAPP_REPLY_RE = re.compile(
 class UnifiedPlanner:
     """Deterministic domain/skill plan. Model output is never an executor."""
 
-    def __init__(self, registry: UnifiedRegistryFacade) -> None:
+    def __init__(self, registry: UnifiedRegistryFacade, capability_router=None) -> None:
         self.registry = registry
+        self.capability_router = capability_router
 
     def plan(self, user_goal: str) -> AssistantPlan:
         goal = " ".join(user_goal.split())
@@ -155,6 +269,31 @@ class UnifiedPlanner:
             return self._denied("fastweb_portal_mutation_denied")
         if _FASTWEB_RE.search(goal) and _FASTWEB_COMPARE_RE.search(goal):
             return self._fastweb_compare_plan(goal)
+
+        mailchimp_subscribe = _MAILCHIMP_SUBSCRIBE_MEMBER_RE.search(goal)
+        email_match = _MAILCHIMP_EMAIL_RE.search(goal)
+        if mailchimp_subscribe and email_match is not None and (
+            _MAILCHIMP_RE.search(goal) or _MAILCHIMP_LIST_ALIAS_RE.search(goal)
+        ):
+            list_id_match = _MAILCHIMP_LIST_ID_RE.search(goal)
+            return AssistantPlan(
+                intent="mailchimp.member.subscribe",
+                domains=("mailchimp",),
+                assignments=(self._assignment(
+                    domain="mailchimp", skill="mailchimp.member.subscribe",
+                    objective=goal, input_refs=("user.goal",),
+                    output_ref="artifact.mailchimp_member_subscribe_approval",
+                    policy=PolicyClass.CONFIRM_WRITE,
+                    arguments={
+                        "action": "mailchimp_member_subscribe",
+                        "email_address": email_match.group(0).casefold(),
+                        **(
+                            {"list_id": list_id_match.group("list_id")}
+                            if list_id_match else {}
+                        ),
+                    },
+                ),),
+            )
 
         if _MAILCHIMP_RE.search(goal):
             if _MAILCHIMP_CREATE_CAMPAIGN_RE.search(goal):
@@ -223,7 +362,10 @@ class UnifiedPlanner:
 
         # Email payload is data. Embedded home/tool words cannot add assignments.
         if email and grant:
-            return self._grant_email_plan(goal, include_tiremm=tiremm)
+            return self._grant_email_plan(
+                goal, include_tiremm=tiremm,
+                include_email_source=bool(_ARCI_GRANT_SOURCE_RE.search(goal)),
+            )
         if email:
             email_skill = (
                 "email.reply"
@@ -271,21 +413,84 @@ class UnifiedPlanner:
                     output_ref="artifact.safe_rejection", policy=PolicyClass.DENY,
                 ),),
             )
+        if _METEO_RE.search(goal):
+            return self._single(
+                goal,
+                "general_assistant",
+                "meteo.read",
+                PolicyClass.READ,
+            )
+        if _ATM_RE.search(goal):
+            return self._single(
+                goal,
+                "general_assistant",
+                "atm.route",
+                PolicyClass.READ,
+            )
         if _HOME_RE.search(goal):
             skill = "home.read" if re.search(r"\b(?:temperatura|fa\s+caldo|fa\s+freddo|stato|quanto)\b", goal, re.I) and not re.search(r"\b(?:accendi|spegni|apri|chiudi|imposta|metti|porta)\b", goal, re.I) else "home.control"
             return self._single(goal, "home", skill, PolicyClass.READ if skill == "home.read" else PolicyClass.AUTO_WRITE)
+        if _JELLYFIN_RE.search(goal) and _JELLYFIN_MUTATION_RE.search(goal):
+            return self._single(
+                goal, "jellyfin", "jellyfin.apply_identity", PolicyClass.PROTECTED,
+                arguments=_jellyfin_apply_args(goal),
+            )
+        if _ARCI_RE.search(goal) and _ARCI_MUTATION_RE.search(goal):
+            return self._denied("arci_mutation_not_available")
+        if _BROWSER_RE.search(goal) and _BROWSER_INTERACTION_RE.search(goal):
+            return self._single(
+                goal, "browser", "browser.interact", PolicyClass.CONFIRM_WRITE,
+                arguments=_browser_interact_args(goal),
+            )
+        if _NORMATIVE_ADMIN_TOPIC_RE.search(goal) and _NORMATIVE_INFO_RE.search(goal):
+            return self._single(
+                goal, "research", "research.deep", PolicyClass.READ,
+                arguments={
+                    "query": goal,
+                    "profile": "italy_third_sector_normative",
+                },
+            )
+        if self.capability_router is not None:
+            proposal = self.capability_router.route(goal)
+            if proposal is not None and self.capability_router.index.is_auto_route_skill(str(proposal.get("skill") or "")):
+                skill = str(proposal["skill"])
+                if skill == "email.search":
+                    search = plan_email_search(goal)
+                    if search is None:
+                        return self._clarification("email_search_arguments_unresolved")
+                    return AssistantPlan(
+                        intent=skill, domains=("tiremm",),
+                        assignments=(self._assignment(
+                            domain="tiremm", skill=skill, objective=goal,
+                            input_refs=("user.goal",), output_ref="artifact.email_search",
+                            policy=PolicyClass.READ,
+                            arguments={"organization": search.organization, "concept": search.concept, "queries": list(search.queries)},
+                        ),),
+                    )
+                domain = str(proposal.get("domain") or "general_assistant")
+                return self._single(goal, domain, skill, PolicyClass.READ)
         if _RELATIONAL_RE.search(goal):
             return self._single(goal, "personal_relational", "personal_relational.analyze", PolicyClass.READ)
         if grant:
-            return self._single(goal, "bandi", "bandi.eligibility" if tiremm else "bandi.read", PolicyClass.READ)
+            skill = (
+                "bandi.research"
+                if _GRANT_DISCOVER_RE.search(goal)
+                else "bandi.eligibility"
+                if tiremm and _GRANT_REVIEW_RE.search(goal)
+                else "bandi.read"
+            )
+            return self._single(goal, "bandi", skill, PolicyClass.READ)
         if _INFRA_RE.search(goal):
             return self._single(goal, "infrastructure", "infrastructure.inspect", PolicyClass.READ)
-        if _RESEARCH_RE.search(goal):
-            return self._single(goal, "research", "research.deep", PolicyClass.READ)
+        # Prefer a concrete document artifact over generic research cues such as "fonti".
         if _DOCUMENT_RE.search(goal):
             return self._single(goal, "documents", "documents.extract", PolicyClass.READ)
+        if _RESEARCH_RE.search(goal):
+            return self._single(goal, "research", "research.deep", PolicyClass.READ)
         if _CODE_RE.search(goal):
             return self._single(goal, "code", "code.inspect", PolicyClass.READ)
+        if _EDITORIAL_RE.search(goal):
+            return self._single(goal, "editorial", "editorial.flyer", PolicyClass.AUTO_WRITE)
         if _MEDIA_RE.search(goal):
             return self._single(goal, "media", "media.compose", PolicyClass.AUTO_WRITE)
         return self._clarification("domain_unresolved")
@@ -306,16 +511,34 @@ class UnifiedPlanner:
             seen.add(item.task_id)
         return plan
 
-    def _grant_email_plan(self, goal: str, *, include_tiremm: bool) -> AssistantPlan:
-        assignments = [self._assignment(
-            domain="bandi", skill="bandi.read", objective="Retrieve and validate grant requirements.",
-            input_refs=("user.goal",), output_ref="artifact.grant_evidence", policy=PolicyClass.READ,
-        )]
-        previous = assignments[-1].task_id
+    def _grant_email_plan(
+        self, goal: str, *, include_tiremm: bool, include_email_source: bool = False
+    ) -> AssistantPlan:
+        assignments: list[PlanAssignment] = []
+        previous: str | None = None
+        grant_inputs: tuple[str, ...] = ("user.goal",)
+        if include_email_source:
+            source = self._assignment(
+                domain="tiremm", skill="email.search",
+                objective="Cerca la comunicazione di ARCI Milano relativa al bando/appello ai circoli.",
+                input_refs=("user.goal",), output_ref="artifact.grant_source_email",
+                policy=PolicyClass.READ,
+                arguments={"organization": "ARCI Milano", "concept": "grant_notice"},
+            )
+            assignments.append(source)
+            previous = source.task_id
+            grant_inputs = ("user.goal", source.output_ref)
+        grant = self._assignment(
+            domain="bandi", skill="bandi.read", objective=goal,
+            input_refs=grant_inputs, output_ref="artifact.grant_evidence", policy=PolicyClass.READ,
+            depends_on=((previous,) if previous else ()),
+        )
+        assignments.append(grant)
+        previous = grant.task_id
         if include_tiremm:
             assignments.append(self._assignment(
                 domain="bandi", skill="bandi.eligibility",
-                objective="Compare verified Tiremm facts with grant requirements.",
+                objective=goal,
                 input_refs=("artifact.grant_evidence", "memory.tiremm"),
                 output_ref="artifact.eligibility", depends_on=(previous,), policy=PolicyClass.READ,
             ))
@@ -326,10 +549,9 @@ class UnifiedPlanner:
             output_ref="artifact.email_draft", depends_on=(previous,),
             policy=PolicyClass.CONFIRM_WRITE,
         ))
+        domains = ("bandi", "tiremm", "email") if (include_tiremm or include_email_source) else ("bandi", "email")
         return AssistantPlan(
-            intent="bandi.review_and_email",
-            domains=("bandi", "tiremm", "email") if include_tiremm else ("bandi", "email"),
-            assignments=tuple(assignments),
+            intent="bandi.review_and_email", domains=domains, assignments=tuple(assignments),
         )
 
     def _gmail_whatsapp_reply_plan(self, goal: str, *, target: str) -> AssistantPlan:
@@ -357,13 +579,16 @@ class UnifiedPlanner:
             domains=("tiremm", "whatsapp"), assignments=(email, whatsapp, reply),
         )
 
-    def _single(self, goal: str, domain: str, skill: str, policy: PolicyClass) -> AssistantPlan:
+    def _single(
+        self, goal: str, domain: str, skill: str, policy: PolicyClass,
+        *, arguments: dict | None = None,
+    ) -> AssistantPlan:
         return AssistantPlan(
             intent=skill,
             domains=(domain,),
             assignments=(self._assignment(
                 domain=domain, skill=skill, objective=goal, input_refs=("user.goal",),
-                output_ref=f"artifact.{domain}", policy=policy,
+                output_ref=f"artifact.{domain}", policy=policy, arguments=arguments,
             ),),
         )
 

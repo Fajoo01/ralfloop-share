@@ -23,6 +23,7 @@ def build_release(
     output_root: str | Path = DEFAULT_OUTPUT_ROOT,
     current_link: str | Path | None = None,
     previous_release: str | Path | None = None,
+    quality_gate_file: str | Path | None = None,
 ) -> dict[str, Any]:
     repo_path = Path(repo).resolve()
     commit_sha = _git(repo_path, "rev-parse", commit).strip()
@@ -40,7 +41,11 @@ def build_release(
         archive = subprocess.check_output(_git_command(repo_path, "archive", "--format=tar", commit_sha), cwd=repo_path)
         with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as bundle:
             bundle.extractall(temporary, filter="data")
+        _install_quality_gate(temporary, quality_gate_file, commit_sha)
         _build_shell_parser(temporary)
+        _build_atm_router(temporary)
+        _build_teacher_grammar_mcp(temporary)
+        _build_teacher_core_mcp(temporary)
         metadata = {
             "schema_version": 1,
             "commit": commit_sha,
@@ -64,6 +69,44 @@ def build_release(
     if current_link:
         publish_current(release, current_link)
     return {**metadata, "release_dir": str(release), "files": len(rows)}
+
+
+QUALITY_GATE_BUNDLE = (
+    "gates.json",
+    "regression-comparison.json",
+    "model-verification.json",
+    "canary.json",
+    "architecture-benchmark-v2.json",
+    "functiongemma-real-canary.json",
+)
+
+
+def _install_quality_gate(
+    root: Path, source: str | Path | None, commit_sha: str
+) -> None:
+    target_root = root / ".ralf_run/local_arch_v1"
+    if target_root.exists():
+        shutil.rmtree(target_root)
+    if source is None:
+        return
+    source_path = Path(source)
+    if source_path.name != "gates.json":
+        raise RuntimeError("quality_gate_filename_invalid")
+    source_root = source_path.parent
+    parsed: dict[str, dict[str, Any]] = {}
+    for name in QUALITY_GATE_BUNDLE:
+        path = source_root / name
+        if not path.is_file():
+            raise RuntimeError(f"quality_gate_bundle_missing:{name}")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or data.get("tested_commit") != commit_sha:
+            raise RuntimeError(f"quality_gate_commit_mismatch:{name}")
+        parsed[name] = data
+    target_root.mkdir(parents=True, exist_ok=True)
+    for name, data in parsed.items():
+        (target_root / name).write_text(
+            json.dumps(data, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+        )
 
 
 def publish_current(release: str | Path, current_link: str | Path = DEFAULT_CURRENT_LINK) -> None:
@@ -98,6 +141,72 @@ def _build_shell_parser(root: Path) -> None:
     destination.chmod(0o555)
 
 
+def _build_atm_router(root: Path) -> None:
+    source = root / "tools" / "atm_router"
+    c_source = source / "atm_router.c"
+    header = source / "atm_router.h"
+
+    # Release storiche o repository che non contengono il router ATM
+    # devono continuare a essere costruibili.
+    if not c_source.is_file() or not header.is_file():
+        return
+
+    makefile = source / "Makefile"
+    if not makefile.is_file():
+        raise RuntimeError("atm_router_makefile_missing")
+
+    subprocess.run(
+        ["make", "-C", str(source), "atm-router"],
+        check=True,
+        shell=False,
+    )
+
+    destination = source / "atm-router"
+    if not destination.is_file():
+        raise RuntimeError("atm_router_binary_missing_after_build")
+
+    destination.chmod(0o555)
+
+
+def _build_teacher_grammar_mcp(root: Path) -> None:
+    source = root / "tools" / "teacher_grammar_mcp"
+    c_source = source / "main.c"
+    header = source / "sqlite3_min.h"
+    makefile = source / "Makefile"
+    jsmn = root / "third_party" / "jsmn" / "jsmn.h"
+    if not c_source.is_file() or not header.is_file() or not jsmn.is_file():
+        return
+    if not makefile.is_file():
+        raise RuntimeError("teacher_grammar_mcp_makefile_missing")
+    subprocess.run(["make", "-C", str(source), "ralf-teacher-grammar-mcp"], check=True, shell=False)
+    built = source / "ralf-teacher-grammar-mcp"
+    if not built.is_file():
+        raise RuntimeError("teacher_grammar_mcp_binary_missing_after_build")
+    destination = root / "bin" / "ralf-teacher-grammar-mcp"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(built, destination)
+    destination.chmod(0o555)
+
+
+def _build_teacher_core_mcp(root: Path) -> None:
+    source = root / "tools" / "teacher_core_mcp"
+    c_source = source / "main.c"
+    makefile = source / "Makefile"
+    jsmn = root / "third_party" / "jsmn" / "jsmn.h"
+    if not c_source.is_file() or not jsmn.is_file():
+        return
+    if not makefile.is_file():
+        raise RuntimeError("teacher_core_mcp_makefile_missing")
+    subprocess.run(["make", "-C", str(source), "ralf-teacher-core-mcp"], check=True, shell=False)
+    built = source / "ralf-teacher-core-mcp"
+    if not built.is_file():
+        raise RuntimeError("teacher_core_mcp_binary_missing_after_build")
+    destination = root / "bin" / "ralf-teacher-core-mcp"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(built, destination)
+    destination.chmod(0o555)
+
+
 def _make_read_only(root: Path) -> None:
     for path in sorted(root.rglob("*"), reverse=True):
         if path.is_symlink():
@@ -125,6 +234,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--current-link", default=str(DEFAULT_CURRENT_LINK))
     parser.add_argument("--publish", action="store_true")
     parser.add_argument("--record-previous")
+    parser.add_argument("--quality-gate")
     args = parser.parse_args(argv)
     if args.publish:
         raise SystemExit(
@@ -136,6 +246,7 @@ def main(argv: list[str] | None = None) -> int:
         args.output_root,
         None,
         args.record_previous,
+        args.quality_gate,
     )
     print(json.dumps(result, sort_keys=True, indent=2))
     return 0

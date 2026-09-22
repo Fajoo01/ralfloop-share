@@ -77,6 +77,34 @@ def test_bare_approval_routes_only_with_one_existing_mailchimp_pending(monkeypat
     assert is_unified_telegram_request("approvo", context) is True
 
 
+def test_bare_manda_routes_only_with_one_existing_email_pending(monkeypatch, tmp_path):
+    monkeypatch.setenv("RALFLOOP_UNIFIED_ASSISTANT", "1")
+    context = _pending_session(monkeypatch, tmp_path, "email")
+
+    assert is_unified_telegram_request("manda", context) is True
+
+
+def test_arci_appello_is_unified_grant_email_route(monkeypatch):
+    monkeypatch.setenv("RALFLOOP_UNIFIED_ASSISTANT", "1")
+    context = {
+        "source": "ralf_terminal", "telegram_user_id": 1,
+        "telegram_chat_id": 1, "telegram_message_id": 1,
+    }
+
+    route = unified_route_probe(
+        "Rispondi all'appello di ARCI Milano per il bando: Tiremm Innanz è interessata",
+        context,
+    )
+
+    assert route is not None
+    assert route["task_mode"] == "external_action"
+    assert route["skills_used"] == [
+        "email.search", "bandi.read", "bandi.eligibility", "email.compose"
+    ]
+    assert route["mcp_used"] == ["google_workspace.gmail", "bandi.research.mcp"]
+    assert route["requires_confirmation"] is True
+
+
 def test_bare_approval_without_pending_keeps_legacy_routing(monkeypatch, tmp_path):
     monkeypatch.setenv("RALFLOOP_UNIFIED_ASSISTANT", "1")
     context = _pending_session(monkeypatch, tmp_path)

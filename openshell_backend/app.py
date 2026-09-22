@@ -98,6 +98,13 @@ try:
 except Exception as exc:
     audit("chat_router_load_failed", error=repr(exc))
 
+try:
+    from openshell_backend.assistant_v1_api import router as assistant_v1_router
+
+    app.include_router(assistant_v1_router)
+except Exception as exc:
+    audit("assistant_v1_router_load_failed", error=repr(exc))
+
 
 def _read_arci_profile(context_factory=None) -> dict[str, object]:
     """Run fixed semantic ARCI read; never expose transport error details."""
@@ -1948,6 +1955,35 @@ def run_task(req: TaskRunRequest):
         return _run_task_impl(req)
     if classified.mode == "read_only_system_inspection":
         return _run_task_impl(req)
+    if "abc_relation" in classified.mcp_used and classified.mode != "external_action":
+        from ralfloop_agent.integration.capability_adapter import route_to_legacy_dict
+        from ralfloop_agent.nodes.reasoning import run_capability_reasoning_cycle
+
+        task_id = uuid.uuid4().hex
+        envelope = run_capability_reasoning_cycle(
+            req.user_goal,
+            {"task_id": task_id, "mode": req.mode},
+        )
+        evidence = envelope.evidence
+        ok = evidence is not None and evidence.exit_code == 0
+        return {
+            "ok": ok,
+            "mode": req.mode,
+            "current_role": "abc_relation_read",
+            "role_history": ["capability_router", "abc_relation_read"],
+            "stop_reason": "abc_relation_read_completed" if ok else "abc_relation_read_unavailable",
+            "interaction_mode": "agent",
+            "capability": "abc_relation",
+            "external_action": False,
+            "approval_required": False,
+            "capability_route": route_to_legacy_dict(envelope.route),
+            "result_envelope": envelope.model_dump(mode="json"),
+            "final_answer": envelope.answer,
+            "artifacts": [],
+            "audit_summary": [
+                f"abc_relation::read_only::{evidence.exit_code if evidence is not None else 'missing_evidence'}"
+            ],
+        }
     if (
         classified.mode == "external_action"
         and "browser" in classified.mcp_used
@@ -1957,6 +1993,8 @@ def run_task(req: TaskRunRequest):
     ):
         return _run_task_impl(req)
     if classified.mode == "external_action" and is_local_maintenance_intent(req.user_goal):
+        return _run_task_impl(req)
+    if classified.mode == "external_action" and classified.requires_confirmation:
         return _run_task_impl(req)
 
     from ralfloop_agent.providers.agent_gpu_handoff import AgentGpuCoordinator, AgentGpuHandoffError

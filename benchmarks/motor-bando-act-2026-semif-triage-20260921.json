@@ -1,0 +1,494 @@
+{
+  "case_digest": "8e71d98826169214ef8e965c6b677779ba39057310921aff552d73b436922cbc",
+  "case_key": "126d2d92aafb",
+  "chunk_count": 30,
+  "chunks": [
+    {
+      "case_key": "8d9aabf1d747",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 0,
+      "latency_ms": 387.889,
+      "pass_probability": 0.0706600695848465,
+      "probabilities": {
+        "PASS": 0.0706600695848465,
+        "REJECT": 0.007014639675617218,
+        "REQUEST_REVIEW": 0.9223253130912781
+      },
+      "prompt_sha256": "bfa208eecb2f82485a1441a56aed2222770b3449d6ed8fe0edb487431faffa07",
+      "rendered_tokens": 348
+    },
+    {
+      "case_key": "1a1ba39f079c",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 1,
+      "latency_ms": 336.094,
+      "pass_probability": 0.13896895945072174,
+      "probabilities": {
+        "PASS": 0.13896895945072174,
+        "REJECT": 0.003792457515373826,
+        "REQUEST_REVIEW": 0.8572385907173157
+      },
+      "prompt_sha256": "4449daf49642c6405459d3f974e9da84cf26d5dbcddef072c8f8a76bc544b141",
+      "rendered_tokens": 357
+    },
+    {
+      "case_key": "983dfa5662fe",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 2,
+      "latency_ms": 370.343,
+      "pass_probability": 0.03215670958161354,
+      "probabilities": {
+        "PASS": 0.03215670958161354,
+        "REJECT": 0.0018309371080249548,
+        "REQUEST_REVIEW": 0.9660123586654663
+      },
+      "prompt_sha256": "561f4fe8ce009a873b38c47d32713c54557220d42b5e91617b336c031dc79247",
+      "rendered_tokens": 359
+    },
+    {
+      "case_key": "8b87e821cf95",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 3,
+      "latency_ms": 329.003,
+      "pass_probability": 0.28080469369888306,
+      "probabilities": {
+        "PASS": 0.28080469369888306,
+        "REJECT": 0.006315099541097879,
+        "REQUEST_REVIEW": 0.7128801941871643
+      },
+      "prompt_sha256": "741ece6e2635cc88612b1482b5e0c782ffdf583aba2f8bca65d8245116f555a6",
+      "rendered_tokens": 323
+    },
+    {
+      "case_key": "2cb72ab338b9",
+      "decision": "PASS",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 4,
+      "latency_ms": 317.102,
+      "pass_probability": 0.5308036208152771,
+      "probabilities": {
+        "PASS": 0.5308036208152771,
+        "REJECT": 0.00778864324092865,
+        "REQUEST_REVIEW": 0.46140772104263306
+      },
+      "prompt_sha256": "e513a5f99e7841210add9cc9339d6cb433c318c685a6ab0aa549c9b545aa2f12",
+      "rendered_tokens": 339
+    },
+    {
+      "case_key": "1903b1416abf",
+      "decision": "PASS",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 5,
+      "latency_ms": 315.839,
+      "pass_probability": 0.5074509382247925,
+      "probabilities": {
+        "PASS": 0.5074509382247925,
+        "REJECT": 0.006114392541348934,
+        "REQUEST_REVIEW": 0.486434668302536
+      },
+      "prompt_sha256": "a988f96211a73dd4cc328a878927a79076ba019ed8be9420c3d97d5d97b91273",
+      "rendered_tokens": 334
+    },
+    {
+      "case_key": "fadc1239458e",
+      "decision": "PASS",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 6,
+      "latency_ms": 346.766,
+      "pass_probability": 0.6392856240272522,
+      "probabilities": {
+        "PASS": 0.6392856240272522,
+        "REJECT": 0.005206666886806488,
+        "REQUEST_REVIEW": 0.3555077314376831
+      },
+      "prompt_sha256": "515dff11c5292bc66d156a05aca79f1c89494c1139840a63c99db23b87e502f0",
+      "rendered_tokens": 328
+    },
+    {
+      "case_key": "a8d757d1fcbb",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 7,
+      "latency_ms": 320.165,
+      "pass_probability": 0.1130790114402771,
+      "probabilities": {
+        "PASS": 0.1130790114402771,
+        "REJECT": 0.0056646475568413734,
+        "REQUEST_REVIEW": 0.8812563419342041
+      },
+      "prompt_sha256": "91054fdf955c74fa8df737199a23835b47fea3467d1c47f90b2ab774e35a4b0d",
+      "rendered_tokens": 347
+    },
+    {
+      "case_key": "6e5ce8c42b34",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 8,
+      "latency_ms": 312.148,
+      "pass_probability": 0.18893340229988098,
+      "probabilities": {
+        "PASS": 0.18893340229988098,
+        "REJECT": 0.015291182324290276,
+        "REQUEST_REVIEW": 0.7957754135131836
+      },
+      "prompt_sha256": "1cf4e571605fe6bd12f1ef4d8fda4082a36b7b93d717de7ada405227d3257209",
+      "rendered_tokens": 328
+    },
+    {
+      "case_key": "e4b6b0f695d4",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 9,
+      "latency_ms": 323.138,
+      "pass_probability": 0.11150599271059036,
+      "probabilities": {
+        "PASS": 0.11150599271059036,
+        "REJECT": 0.005811132490634918,
+        "REQUEST_REVIEW": 0.8826828598976135
+      },
+      "prompt_sha256": "61eaa93c02f7de29340a488962e58c74e430c6038e809f2dd51d9af35b72ec47",
+      "rendered_tokens": 351
+    },
+    {
+      "case_key": "964d49121f8a",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 10,
+      "latency_ms": 319.924,
+      "pass_probability": 0.24404498934745789,
+      "probabilities": {
+        "PASS": 0.24404498934745789,
+        "REJECT": 0.010235587134957314,
+        "REQUEST_REVIEW": 0.7457194328308105
+      },
+      "prompt_sha256": "bf2139089267380192eadc09f678b11cbf6f8cf7c40568b717e3b23c69f4cfe9",
+      "rendered_tokens": 359
+    },
+    {
+      "case_key": "b8f8c4c99be1",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 11,
+      "latency_ms": 290.8,
+      "pass_probability": 0.20984527468681335,
+      "probabilities": {
+        "PASS": 0.20984527468681335,
+        "REJECT": 0.0056442879140377045,
+        "REQUEST_REVIEW": 0.7845104336738586
+      },
+      "prompt_sha256": "2f9ff0e14d595fd7fd1b3b1e512adc8114c68c903f2003f74b2c921f9fa97b71",
+      "rendered_tokens": 317
+    },
+    {
+      "case_key": "b46af613a224",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 12,
+      "latency_ms": 312.03,
+      "pass_probability": 0.16504806280136108,
+      "probabilities": {
+        "PASS": 0.16504806280136108,
+        "REJECT": 0.007160887587815523,
+        "REQUEST_REVIEW": 0.8277910351753235
+      },
+      "prompt_sha256": "446fa2516de9d08001c77533b8b439a589cf209b8dfbcbbc84cabb49da8c051c",
+      "rendered_tokens": 335
+    },
+    {
+      "case_key": "65ec02be6c99",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 13,
+      "latency_ms": 297.959,
+      "pass_probability": 0.16469870507717133,
+      "probabilities": {
+        "PASS": 0.16469870507717133,
+        "REJECT": 0.010498394258320332,
+        "REQUEST_REVIEW": 0.8248029351234436
+      },
+      "prompt_sha256": "541a4b9a15ff29b44a65ef2b0f0f46c49006efa468521d1f497c19c2849ba9c7",
+      "rendered_tokens": 321
+    },
+    {
+      "case_key": "76580f724729",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 14,
+      "latency_ms": 312.322,
+      "pass_probability": 0.087889663875103,
+      "probabilities": {
+        "PASS": 0.087889663875103,
+        "REJECT": 0.008129755966365337,
+        "REQUEST_REVIEW": 0.903980553150177
+      },
+      "prompt_sha256": "78810554192b48e99a55dc8b4cc316890d3b975a4093d5c54ad5a2219b2dc8fe",
+      "rendered_tokens": 320
+    },
+    {
+      "case_key": "2e5e5529632f",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 15,
+      "latency_ms": 307.503,
+      "pass_probability": 0.39748141169548035,
+      "probabilities": {
+        "PASS": 0.39748141169548035,
+        "REJECT": 0.006797196809202433,
+        "REQUEST_REVIEW": 0.5957213640213013
+      },
+      "prompt_sha256": "cfe7e2c89d17b9a62d0d176fb9d70319b425ca7077364df702002ce01894febd",
+      "rendered_tokens": 334
+    },
+    {
+      "case_key": "612d5463470b",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 16,
+      "latency_ms": 309.557,
+      "pass_probability": 0.15595223009586334,
+      "probabilities": {
+        "PASS": 0.15595223009586334,
+        "REJECT": 0.006810965947806835,
+        "REQUEST_REVIEW": 0.8372368216514587
+      },
+      "prompt_sha256": "0a182f0e6bbc9e3fdbf11b85cc9b441fbaef1badc43834134d7a5d7aadf4f890",
+      "rendered_tokens": 333
+    },
+    {
+      "case_key": "409dcc47d402",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 17,
+      "latency_ms": 312.225,
+      "pass_probability": 0.406419962644577,
+      "probabilities": {
+        "PASS": 0.406419962644577,
+        "REJECT": 0.006122593767940998,
+        "REQUEST_REVIEW": 0.5874574184417725
+      },
+      "prompt_sha256": "69997582b3c15bc7c3f5602d98ac53af6cd816494854b128204e842114632ac9",
+      "rendered_tokens": 330
+    },
+    {
+      "case_key": "4807da846841",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 18,
+      "latency_ms": 291.779,
+      "pass_probability": 0.20215895771980286,
+      "probabilities": {
+        "PASS": 0.20215895771980286,
+        "REJECT": 0.01003173552453518,
+        "REQUEST_REVIEW": 0.7878093123435974
+      },
+      "prompt_sha256": "8ce330cb6933ab8dd9964874050b19852253a6f03b14889c891de3a7dcc2e5ad",
+      "rendered_tokens": 324
+    },
+    {
+      "case_key": "e7982cc72128",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 19,
+      "latency_ms": 309.87,
+      "pass_probability": 0.2221178412437439,
+      "probabilities": {
+        "PASS": 0.2221178412437439,
+        "REJECT": 0.007070512045174837,
+        "REQUEST_REVIEW": 0.7708116769790649
+      },
+      "prompt_sha256": "aea2a1205f2e38e74d6bf69ba93c2b2726d175c17fd0096c172a37bfa55edac9",
+      "rendered_tokens": 319
+    },
+    {
+      "case_key": "6a6583a81dc2",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 20,
+      "latency_ms": 319.513,
+      "pass_probability": 0.17758914828300476,
+      "probabilities": {
+        "PASS": 0.17758914828300476,
+        "REJECT": 0.007977527566254139,
+        "REQUEST_REVIEW": 0.8144333362579346
+      },
+      "prompt_sha256": "d4adca02277fb878e2593cdcff781b076614e0c6e11eee8c43b3c7a86b50b813",
+      "rendered_tokens": 350
+    },
+    {
+      "case_key": "5f773ff28531",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 21,
+      "latency_ms": 325.549,
+      "pass_probability": 0.09282384812831879,
+      "probabilities": {
+        "PASS": 0.09282384812831879,
+        "REJECT": 0.007718251086771488,
+        "REQUEST_REVIEW": 0.8994578719139099
+      },
+      "prompt_sha256": "888b1c73a8e758ecce0112fb485bfb1c191ab5d1fe66f3db0770606dc362aee6",
+      "rendered_tokens": 327
+    },
+    {
+      "case_key": "bf42aaedd6ab",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 22,
+      "latency_ms": 332.734,
+      "pass_probability": 0.0933106541633606,
+      "probabilities": {
+        "PASS": 0.0933106541633606,
+        "REJECT": 0.0051293703727424145,
+        "REQUEST_REVIEW": 0.9015599489212036
+      },
+      "prompt_sha256": "1467541d7a747c7455dbd6246cd6a677afa4b5fb6321f1ea148e0a347fa0e062",
+      "rendered_tokens": 355
+    },
+    {
+      "case_key": "6baab7789b60",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 23,
+      "latency_ms": 297.501,
+      "pass_probability": 0.2880280613899231,
+      "probabilities": {
+        "PASS": 0.2880280613899231,
+        "REJECT": 0.013063933700323105,
+        "REQUEST_REVIEW": 0.6989080309867859
+      },
+      "prompt_sha256": "c7ed6f6e168b90151b5c4ce34554867cd261d2274b60b48fba2f4107be11b429",
+      "rendered_tokens": 323
+    },
+    {
+      "case_key": "278b8d4f1761",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 24,
+      "latency_ms": 305.093,
+      "pass_probability": 0.13076646625995636,
+      "probabilities": {
+        "PASS": 0.13076646625995636,
+        "REJECT": 0.011393754743039608,
+        "REQUEST_REVIEW": 0.8578397631645203
+      },
+      "prompt_sha256": "2673bac566f8c2b6ceddaf0121cc3a0b9f50fa9d11f88c157b01a12da081c603",
+      "rendered_tokens": 308
+    },
+    {
+      "case_key": "55b4ff27ace3",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 25,
+      "latency_ms": 311.601,
+      "pass_probability": 0.45679330825805664,
+      "probabilities": {
+        "PASS": 0.45679330825805664,
+        "REJECT": 0.005133284721523523,
+        "REQUEST_REVIEW": 0.5380734205245972
+      },
+      "prompt_sha256": "5a6d17db3dccad72e4a67ce62bf3dae6f7f4050331890d186e5d8ce9488bbcbe",
+      "rendered_tokens": 332
+    },
+    {
+      "case_key": "16b03562fa02",
+      "decision": "PASS",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 26,
+      "latency_ms": 318.711,
+      "pass_probability": 0.6041778326034546,
+      "probabilities": {
+        "PASS": 0.6041778326034546,
+        "REJECT": 0.004913715645670891,
+        "REQUEST_REVIEW": 0.39090844988822937
+      },
+      "prompt_sha256": "3ef8df195b662b2e2f2697d7a64b02382e5d136a17d39966634c5a7ad04dfeb7",
+      "rendered_tokens": 342
+    },
+    {
+      "case_key": "117d4d644ee4",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 27,
+      "latency_ms": 347.712,
+      "pass_probability": 0.3925662636756897,
+      "probabilities": {
+        "PASS": 0.3925662636756897,
+        "REJECT": 0.008919267915189266,
+        "REQUEST_REVIEW": 0.5985144376754761
+      },
+      "prompt_sha256": "891ce41fe45abff1a6ebab82e7fbc6877fb33ea57005751f38192fefb529c533",
+      "rendered_tokens": 360
+    },
+    {
+      "case_key": "38a6af75dae6",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 28,
+      "latency_ms": 325.858,
+      "pass_probability": 0.3267212510108948,
+      "probabilities": {
+        "PASS": 0.3267212510108948,
+        "REJECT": 0.010191026143729687,
+        "REQUEST_REVIEW": 0.6630877256393433
+      },
+      "prompt_sha256": "d7cb064540ef12d7b0ec007ee102d574fe7560b18035b67b025749e678fb5dd3",
+      "rendered_tokens": 353
+    },
+    {
+      "case_key": "4ebdde82964d",
+      "decision": "REQUEST_REVIEW",
+      "escalate": true,
+      "fast_pass": false,
+      "index": 29,
+      "latency_ms": 312.329,
+      "pass_probability": 0.17271701991558075,
+      "probabilities": {
+        "PASS": 0.17271701991558075,
+        "REJECT": 0.005903314333409071,
+        "REQUEST_REVIEW": 0.8213796615600586
+      },
+      "prompt_sha256": "cb1cebae06be539292cdc1d6bf7dd9c8d84ac46cb1f287473ed3110d887e995d",
+      "rendered_tokens": 318
+    }
+  ],
+  "escalation_chunks": 30,
+  "fast_pass_chunks": 0,
+  "max_chunk_tokens": 360,
+  "phase": "semif_triage",
+  "schema_version": 1,
+  "threshold": 0.97,
+  "total_rendered_tokens": 10074
+}

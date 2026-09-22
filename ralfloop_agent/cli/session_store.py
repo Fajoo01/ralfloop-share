@@ -46,7 +46,7 @@ ALLOWED_RECORD_KEYS = {
 
 ASSISTANT_STATE_KEYS = {"schema_version", "last_intent", "last_entities", "pending"}
 PENDING_STATE_KEYS = {
-    "email", "whatsapp", "mailchimp", "runts", "home", "infrastructure", "bandi", "clarification",
+    "email", "whatsapp", "mailchimp", "jellyfin", "browser", "runts", "home", "infrastructure", "bandi", "clarification",
 }
 PENDING_ACTION_KEYS = {
     "pending_id",
@@ -74,9 +74,29 @@ def default_sessions_dir() -> Path:
     return base / "ralf" / "sessions"
 
 
+def default_introspection_dir() -> Path:
+    configured = os.getenv("RALF_SESSION_INTROSPECTION_DIR")
+    if configured:
+        return Path(configured).expanduser()
+    data_home = os.getenv("XDG_DATA_HOME")
+    base = Path(data_home).expanduser() if data_home else Path.home() / ".local" / "share"
+    return base / "ralf" / "session-introspection"
+
+
 class SessionStore:
-    def __init__(self, root: str | os.PathLike[str] | None = None) -> None:
+    def __init__(
+        self,
+        root: str | os.PathLike[str] | None = None,
+        *,
+        introspection_root: str | os.PathLike[str] | None = None,
+    ) -> None:
         self.root = Path(root).expanduser() if root is not None else default_sessions_dir()
+        if introspection_root is not None:
+            self.introspection_root: Path | None = Path(introspection_root).expanduser()
+        elif root is None:
+            self.introspection_root = default_introspection_dir()
+        else:
+            self.introspection_root = None
 
     def create(self, *, cwd: str, model: str | None = None, context_enabled: bool = True) -> dict[str, Any]:
         now = _timestamp()
@@ -117,6 +137,7 @@ class SessionStore:
             _fsync_directory(self.root)
             record.clear()
             record.update(payload)
+            self._sync_introspection(payload)
         finally:
             try:
                 temp_path.unlink()
@@ -170,10 +191,72 @@ class SessionStore:
         return sorted(rows, key=lambda row: row["updated_at"], reverse=True)
 
     def delete(self, session_id: str) -> None:
+        session_id = _validate_session_id(session_id)
         try:
-            self._path(_validate_session_id(session_id)).unlink()
+            self._path(session_id).unlink()
         except FileNotFoundError as exc:
             raise SessionStoreError("session_not_found") from exc
+        if self.introspection_root is not None:
+            try:
+                self._introspection_path(session_id).unlink()
+            except FileNotFoundError:
+                pass
+
+    def _sync_introspection(self, payload: dict[str, Any]) -> None:
+        if self.introspection_root is None:
+            return
+        session_id = _validate_session_id(payload.get("session_id"))
+        root = self.introspection_root
+        if root.is_symlink():
+            raise SessionStoreError("introspection_directory_invalid")
+        root.mkdir(parents=True, exist_ok=True, mode=0o750)
+        os.chmod(root, 0o750)
+        path = self._introspection_path(session_id)
+        previous_history: list[dict[str, str]] = []
+        if path.exists():
+            if path.is_symlink():
+                raise SessionStoreError("introspection_invalid")
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(existing, dict) and existing.get("session_id") == session_id:
+                    previous_history = _sanitize_history(existing.get("history"))
+            except (OSError, json.JSONDecodeError):
+                previous_history = []
+        current_history = _sanitize_history(payload.get("history"))
+        merged_history = _merge_history(previous_history, current_history)
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        archive = {
+            "schema_version": "ralf_session_transcript_v1",
+            "session_id": session_id,
+            "created_at": str(payload.get("created_at") or ""),
+            "updated_at": str(payload.get("updated_at") or ""),
+            "cwd": _safe_scalar(payload.get("cwd") or ""),
+            "model": _safe_scalar(payload["model"]) if payload.get("model") else None,
+            "provider": _safe_scalar(metadata["provider"]) if metadata.get("provider") else None,
+            "history": merged_history,
+        }
+        fd, temp_name = tempfile.mkstemp(prefix=f".{session_id}.", suffix=".tmp", dir=root)
+        temp_path = Path(temp_name)
+        try:
+            os.fchmod(fd, 0o640)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(archive, handle, ensure_ascii=False, separators=(",", ":"))
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_path, path)
+            os.chmod(path, 0o640)
+            _fsync_directory(root)
+        finally:
+            try:
+                temp_path.unlink()
+            except FileNotFoundError:
+                pass
+
+    def _introspection_path(self, session_id: str) -> Path:
+        if self.introspection_root is None:
+            raise SessionStoreError("introspection_disabled")
+        return self.introspection_root / f"{session_id}.json"
 
     def _ensure_root(self) -> None:
         if self.root.is_symlink():
@@ -319,6 +402,20 @@ def _sanitize_history(value: Any) -> list[dict[str, str]]:
         history.append({"role": role, "content": content})
     return history
 
+
+
+def _merge_history(previous: list[dict[str, str]], current: list[dict[str, str]]) -> list[dict[str, str]]:
+    if not current:
+        return list(previous)
+    if not previous:
+        return list(current)
+    maximum = min(len(previous), len(current))
+    overlap = 0
+    for size in range(maximum, 0, -1):
+        if previous[-size:] == current[:size]:
+            overlap = size
+            break
+    return [*previous, *current[overlap:]]
 
 def _redact_text(text: str) -> str:
     text = STORED_CONTROL_RE.sub("", text)

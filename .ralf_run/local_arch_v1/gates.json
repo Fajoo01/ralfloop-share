@@ -1,6 +1,5 @@
 {
   "approval_miss": 0,
-  "baseline_commit": "611bbf4d0ce103d8fd1dd948758e990d52aad330",
   "baseline_exit": "139",
   "baseline_failure_ids": [
     "tests.test_abc_formula_loop::test_formula_uses_merged_context",
@@ -17,9 +16,7 @@
     "tests.test_domain_capability_mapping::test_mapping_sources_verify_against_declared_checksums",
     "tests.test_first_real_bando_domain::test_registry_tracks_draft_without_active_route",
     "tests.test_llama_cpp_lifecycle_reaper::test_backend_shutdown_invokes_managed_child_reaper",
-    "tests.test_mcp_transport_real::test_real_broker_initialize_and_tools_list",
     "tests.test_meowgram_runts_review_patch::test_runts_review_formatter_patch_preserves_approval_and_other_domains",
-    "tests.test_portal_backend::test_backend_registers_portal_routes",
     "tests.test_ralf_gpu_handoff::test_magnolia_host_runner_loads_existing_safe_approval_configuration",
     "tests.test_recursive_mas_bounded_provenance::test_feature_math_and_telegram_invariants",
     "tests.test_recursive_mas_domain_forensics::test_adapter_modifies_hidden_state_with_finite_statistics",
@@ -72,12 +69,11 @@
   ],
   "baseline_suite": {
     "errors": 0,
-    "failures": 66,
+    "failures": 64,
     "skipped": 21,
-    "tests": 2472
+    "tests": 2562
   },
   "benchmark_minimum": true,
-  "candidate_commit": "5ec06f87b7e0a8594e34db3217608a921092496a",
   "candidate_exit": "139",
   "candidate_failure_ids": [
     "tests.test_abc_formula_loop::test_formula_uses_merged_context",
@@ -90,13 +86,9 @@
     "tests.test_abc_formula_loop::test_structured_auto_invito_implicito_scores",
     "tests.test_abc_formula_loop::test_structured_food_opening_removes_logistica_pura",
     "tests.test_abc_formula_loop::test_third_presence_with_no_affection_no_overnight_autonomy_is_small_delta",
-    "tests.test_capability_runtime_integration::test_openshell_external_action_requires_confirmation_before_runtime",
     "tests.test_domain_capability_mapping::test_mapping_sources_verify_against_declared_checksums",
     "tests.test_first_real_bando_domain::test_registry_tracks_draft_without_active_route",
-    "tests.test_llama_cpp_lifecycle_reaper::test_backend_shutdown_invokes_managed_child_reaper",
-    "tests.test_mcp_transport_real::test_real_broker_initialize_and_tools_list",
     "tests.test_meowgram_runts_review_patch::test_runts_review_formatter_patch_preserves_approval_and_other_domains",
-    "tests.test_portal_backend::test_backend_registers_portal_routes",
     "tests.test_ralf_gpu_handoff::test_magnolia_host_runner_loads_existing_safe_approval_configuration",
     "tests.test_recursive_mas_bounded_provenance::test_feature_math_and_telegram_invariants",
     "tests.test_recursive_mas_domain_forensics::test_adapter_modifies_hidden_state_with_finite_statistics",
@@ -149,33 +141,31 @@
   ],
   "candidate_suite": {
     "errors": 0,
-    "failures": 66,
-    "skipped": 21,
-    "tests": 2483
+    "failures": 62,
+    "skipped": 24,
+    "tests": 2742
   },
   "deploy_allowed": true,
   "deploy_blockers": [],
   "enough_ram": true,
   "enough_swap": true,
   "full_suite_clean": false,
+  "functiongemma_endpoint": true,
   "functiongemma_real": true,
   "manifest": "pending_release_build",
   "new_failures": 0,
   "no_host_candidate_execution": true,
   "no_regression": true,
   "policy_bypass": 0,
-  "port_19104_free": true,
   "preexisting_failures_only": true,
   "quality_gate_path": "preexisting_failures_only",
-  "ram_available_mb": 47497,
-  "regression_comparison_sha256": "554795a2a818c3e9c62054eac0cea0e45cdf08cd1148e6b28de77430d612e99d",
+  "ram_available_mb": 41632,
   "runtime_canary": "pass",
   "sandbox": true,
-  "scoped_test_count": 65,
+  "scoped_test_count": 74,
   "scoped_tests": true,
   "suite_exit_preexisting_same": true,
   "suite_report_complete": true,
-  "swap_free_mb": 2639,
-  "v": 2,
-  "verified_at": "2026-09-08T17:28:55Z"
+  "swap_free_mb": 747,
+  "v": 2
 }

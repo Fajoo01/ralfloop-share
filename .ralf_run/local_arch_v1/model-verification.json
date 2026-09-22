@@ -1,7 +1,7 @@
 {
   "approval_miss": 0,
   "canary_evidence": ".ralf_run/local_arch_v1/functiongemma-real-canary.json",
-  "canary_sha256": "bef7fcf6e798ff472ffb9b2bc64f2f4a76bde199aca80e7eba94414563307ff4",
+  "canary_sha256": "2749be8b825e41a99aae6b76ef1c8455395897aa435d41abdc07bce0afa9a2f8",
   "cpu_only": true,
   "functiongemma_real": true,
   "local_model_present": true,
@@ -9,7 +9,7 @@
   "policy_bypass": 0,
   "runtime_canary": "pass",
   "sha256": "83940d4dd9676710856f43523bed096164a595a96f6b34771610a03937de5270",
-  "tested_commit": "2f1ad3182b0ae1a19c1d36b1502c32affed1f930",
+  "tested_commit": "42037de6e4916dad5d79310855ba07f7ce25c6a2",
   "v": 2,
-  "verified_at": "2026-08-29T10:56:03Z"
+  "verified_at": "2026-09-10T15:49:02Z"
 }

@@ -25,9 +25,9 @@ from src.mcp_transport import MCP_PROTOCOL_VERSION
 from ralfloop_agent.domains.domain_approval import effective_approval_status, scope_digest
 from ralfloop_agent.domains.domain_approval_store import DomainApprovalStore
 from ralfloop_agent.unified_assistant.mailchimp_campaign import (
-    CREATE_ACTION, SEND_ACTION,
+    CREATE_ACTION, SEND_ACTION, SUBSCRIBE_ACTION,
     build_mailchimp_campaign_create_scope, build_mailchimp_campaign_send_scope,
-    campaign_fingerprint,
+    build_mailchimp_member_subscribe_scope, campaign_fingerprint,
 )
 
 
@@ -78,10 +78,13 @@ MEMBER_STATUS = {
 }
 
 DIGEST = {"type": "string", "pattern": r"^[a-f0-9]{64}$"}
-EXECUTION_ID = {"type": "string", "pattern": r"^mc(?:create|send)_[a-f0-9]{24}$"}
+EXECUTION_ID = {"type": "string", "pattern": r"^mc(?:create|send|subscribe)_[a-f0-9]{24}$"}
 REQUEST_ID = {"type": "string", "pattern": r"^apr_[A-Za-z0-9_-]{8,128}$"}
 SHORT_TEXT = {"type": "string", "minLength": 1, "maxLength": 255}
+OPTIONAL_TEXT = {"type": "string", "maxLength": 255}
 BODY_TEXT = {"type": "string", "minLength": 1, "maxLength": 200000}
+EMAIL_ADDRESS = {"type": "string", "minLength": 3, "maxLength": 320, "pattern": r"^[^@\s]+@[^@\s]+\.[^@\s]+$"}
+NAME_TEXT = {"type": "string", "maxLength": 255}
 
 
 TOOLS: dict[str, dict[str, Any]] = {
@@ -139,10 +142,18 @@ TOOLS: dict[str, dict[str, Any]] = {
         "campaign_id": RESOURCE_ID, "list_id": RESOURCE_ID,
         "provider_campaign_sha256": DIGEST, "subject": SHORT_TEXT,
         "from_name": SHORT_TEXT, "reply_to": SHORT_TEXT,
+        "preheader": OPTIONAL_TEXT, "title": OPTIONAL_TEXT,
         "content_sha256": DIGEST, "html_sha256": DIGEST, "provider_identity": SHORT_TEXT,
     }, ("approval_request_id", "execution_id", "campaign_id", "list_id",
         "provider_campaign_sha256", "subject", "from_name", "reply_to",
-        "content_sha256", "html_sha256", "provider_identity")),
+        "preheader", "title", "content_sha256", "html_sha256", "provider_identity")),
+    "mailchimp_subscribe_approved_member": _schema({
+        "approval_request_id": REQUEST_ID, "execution_id": EXECUTION_ID,
+        "list_id": RESOURCE_ID, "email_address": EMAIL_ADDRESS,
+        "first_name": NAME_TEXT, "last_name": NAME_TEXT,
+        "provider_identity": SHORT_TEXT,
+    }, ("approval_request_id", "execution_id", "list_id", "email_address",
+        "first_name", "last_name", "provider_identity")),
 }
 
 
@@ -253,8 +264,6 @@ class MailchimpClient:
             method=method,
         )
 
-        if empty_ok and not raw:
-            return {}
         try:
             with urlopen(
                 request,
@@ -296,6 +305,9 @@ class MailchimpClient:
                 "SOURCE_UNAVAILABLE"
             ) from exc
 
+        if empty_ok and not raw:
+            return {}
+
         try:
             payload = json.loads(
                 raw.decode("utf-8")
@@ -324,6 +336,8 @@ class MailchimpClient:
             "subject": str(settings.get("subject_line") or ""),
             "from_name": str(settings.get("from_name") or ""),
             "reply_to": str(settings.get("reply_to") or ""),
+            "preheader": str(settings.get("preview_text") or ""),
+            "title": str(settings.get("title") or ""),
             "content_sha256": hashlib.sha256(plain.encode()).hexdigest(),
             "html_sha256": hashlib.sha256(html_content.encode()).hexdigest(),
             "sent": str(info.get("status") or "") in {"sending", "sent"},
@@ -380,7 +394,21 @@ class MailchimpClient:
             f"campaigns/{campaign_id}/content", method="PUT",
             body={"plain_text": scope["body_text"], "html": scope["html_body"]},
         )
-        return self.get_campaign(campaign_id)
+        info = self._request(f"campaigns/{campaign_id}")
+        content = self._request(f"campaigns/{campaign_id}/content")
+        observed = self._campaign_view(info, content)
+        plain = str(content.get("plain_text") or "")
+        html_content = str(content.get("html") or "")
+        expected_html_prefix = str(scope["html_body"]).rstrip()
+        if expected_html_prefix.endswith("</html>"):
+            expected_html_prefix = expected_html_prefix[:-7].rstrip()
+        if expected_html_prefix.endswith("</body>"):
+            expected_html_prefix = expected_html_prefix[:-7].rstrip()
+        observed["content_verified"] = (
+            plain.startswith(str(scope["body_text"]))
+            and html_content.startswith(expected_html_prefix)
+        )
+        return observed
 
     def send_campaign(self, campaign_id: str) -> dict[str, Any]:
         self._request(
@@ -610,6 +638,54 @@ class MailchimpClient:
         return {"results": rows}
 
 
+    @staticmethod
+    def _subscriber_hash(email_address: str) -> str:
+        normalized = str(email_address or "").strip().casefold()
+        return hashlib.md5(normalized.encode("utf-8")).hexdigest()
+
+    def get_member(self, list_id: str, email_address: str) -> dict[str, Any] | None:
+        subscriber_hash = self._subscriber_hash(email_address)
+        try:
+            item = self._request(f"lists/{list_id}/members/{subscriber_hash}")
+        except MailchimpAPIError as exc:
+            if exc.status == "NOT_FOUND":
+                return None
+            raise
+        merge_fields = item.get("merge_fields")
+        if not isinstance(merge_fields, Mapping):
+            merge_fields = {}
+        return {
+            "list_id": list_id,
+            "id": str(item.get("id") or subscriber_hash),
+            "email_address": str(item.get("email_address") or "").strip().casefold(),
+            "status": str(item.get("status") or ""),
+            "merge_fields": dict(merge_fields),
+            "last_changed": item.get("last_changed"),
+        }
+
+    def subscribe_member(self, scope: Mapping[str, Any]) -> dict[str, Any]:
+        email_address = str(scope["email_address"]).strip().casefold()
+        subscriber_hash = self._subscriber_hash(email_address)
+        merge_fields = {}
+        if str(scope.get("first_name") or ""):
+            merge_fields["FNAME"] = str(scope["first_name"])
+        if str(scope.get("last_name") or ""):
+            merge_fields["LNAME"] = str(scope["last_name"])
+        self._request(
+            f"lists/{scope['list_id']}/members/{subscriber_hash}",
+            method="PUT",
+            body={
+                "email_address": email_address,
+                "status_if_new": "subscribed",
+                **({"merge_fields": merge_fields} if merge_fields else {}),
+            },
+        )
+        observed = self.get_member(str(scope["list_id"]), email_address)
+        if observed is None:
+            raise MailchimpAPIError("MALFORMED_RESPONSE")
+        return observed
+
+
 class MailchimpMCPServer:
     def __init__(
         self,
@@ -641,6 +717,8 @@ class MailchimpMCPServer:
                 "Create one exact draft after an independently verified approval claim.",
             "mailchimp_send_approved_campaign":
                 "Send one exact verified campaign after a separate approval claim.",
+            "mailchimp_subscribe_approved_member":
+                "Subscribe one exact audience member after approval; never silently reactivates unsubscribed or cleaned members.",
         }
 
         return [
@@ -672,19 +750,29 @@ class MailchimpMCPServer:
             return _error("AUTH_REQUIRED")
 
         try:
-            if name in {"mailchimp_create_approved_campaign", "mailchimp_send_approved_campaign"}:
+            if name in {
+                "mailchimp_create_approved_campaign",
+                "mailchimp_send_approved_campaign",
+                "mailchimp_subscribe_approved_member",
+            }:
                 if self.approval_store is None:
                     return _error("APPROVAL_REQUIRED")
                 request_id = str(arguments["approval_request_id"])
-                action = CREATE_ACTION if name == "mailchimp_create_approved_campaign" else SEND_ACTION
+                action = {
+                    "mailchimp_create_approved_campaign": CREATE_ACTION,
+                    "mailchimp_send_approved_campaign": SEND_ACTION,
+                    "mailchimp_subscribe_approved_member": SUBSCRIBE_ACTION,
+                }[name]
                 material = {
                     key: value for key, value in arguments.items()
                     if key not in {"approval_request_id", "execution_id"}
                 }
-                scope = (
-                    build_mailchimp_campaign_create_scope(material)
-                    if action == CREATE_ACTION else build_mailchimp_campaign_send_scope(material)
-                )
+                if action == CREATE_ACTION:
+                    scope = build_mailchimp_campaign_create_scope(material)
+                elif action == SEND_ACTION:
+                    scope = build_mailchimp_campaign_send_scope(material)
+                else:
+                    scope = build_mailchimp_member_subscribe_scope(material)
                 row = self.approval_store.get_request(request_id)
                 if (
                     row is None or row.get("action") != action
@@ -693,34 +781,46 @@ class MailchimpMCPServer:
                     or arguments.get("execution_id") != scope.get("execution_id")
                 ):
                     return _error("APPROVAL_INVALID")
+
+                before = None
                 try:
                     if action == CREATE_ACTION:
                         self.client._request(f"lists/{scope['list_id']}")
-                    else:
+                    elif action == SEND_ACTION:
                         before = self.client.get_campaign(str(scope["campaign_id"]))
                         if (
                             before.get("sent")
                             or campaign_fingerprint(before) != scope["provider_campaign_sha256"]
-                            or any(before.get(key) != scope.get(key) for key in (
+                            or any(str(before.get(key) or "") != str(scope.get(key) or "") for key in (
                                 "campaign_id", "list_id", "subject", "from_name", "reply_to",
-                                "content_sha256", "html_sha256"
+                                "preheader", "title", "content_sha256", "html_sha256"
                             ))
                         ):
                             self.approval_store.mark_stale(request_id, ["mailchimp_provider_campaign_changed"])
                             return _error("DRAFT_CHANGED")
+                    else:
+                        before = self.client.get_member(
+                            str(scope["list_id"]), str(scope["email_address"])
+                        )
+                        if before is not None and str(before.get("status") or "") != "subscribed":
+                            self.approval_store.mark_stale(
+                                request_id, ["mailchimp_member_requires_reconsent"]
+                            )
+                            return _error("MEMBER_REQUIRES_RECONSENT")
                 except MailchimpAPIError as exc:
                     return _error(exc.status, http_status=exc.http_status, detail=exc.detail)
+
                 claim = self.approval_store.claim_execution(request_id, action=action)
                 if not claim.get("claimed"):
                     return _error(str(claim.get("status") or "APPROVAL_INVALID"))
+
                 if action == CREATE_ACTION:
                     try:
                         observed = self.client.create_campaign(scope)
                         expected = {
                             "list_id": scope["list_id"], "subject": scope["subject"],
                             "from_name": scope["from_name"], "reply_to": scope["reply_to"],
-                            "content_sha256": scope["body_sha256"],
-                            "html_sha256": scope["html_sha256"], "sent": False,
+                            "content_verified": True, "sent": False,
                         }
                         if any(observed.get(key) != value for key, value in expected.items()):
                             raise RuntimeError("create_postcondition_mismatch")
@@ -736,6 +836,51 @@ class MailchimpMCPServer:
                         request_id, action=action, success=True, result=result,
                     )
                     return _mutation("create_approved_campaign", result, writes=2, sends=0)
+
+                if action == SUBSCRIBE_ACTION:
+                    if before is not None:
+                        result = {
+                            "status": "already_subscribed", "state": "SUBSCRIBED",
+                            "subscribed": True, "list_id": scope["list_id"],
+                            "email_address": scope["email_address"],
+                            "retry_allowed": False,
+                        }
+                        self.approval_store.finish_claimed_execution(
+                            request_id, action=action, success=True, result=result,
+                        )
+                        return _mutation("subscribe_approved_member", result, writes=0, sends=0)
+                    try:
+                        observed = self.client.subscribe_member(scope)
+                        if (
+                            str(observed.get("list_id") or "") != str(scope["list_id"])
+                            or str(observed.get("email_address") or "").casefold()
+                            != str(scope["email_address"]).casefold()
+                            or str(observed.get("status") or "") != "subscribed"
+                        ):
+                            raise RuntimeError("subscribe_postcondition_mismatch")
+                    except Exception:
+                        failed = {
+                            "status": "SUBSCRIBE_UNCERTAIN", "subscribed": False,
+                            "retry_allowed": False,
+                        }
+                        self.approval_store.finish_claimed_execution(
+                            request_id, action=action, success=False, result=failed,
+                        )
+                        return _error("SUBSCRIBE_UNCERTAIN")
+                    result = {
+                        "status": "executed", "state": "SUBSCRIBED",
+                        "subscribed": True,
+                        "list_id": str(observed.get("list_id") or scope["list_id"]),
+                        "email_address": str(observed.get("email_address") or scope["email_address"]),
+                        "member_status": str(observed.get("status") or ""),
+                        "provider_evidence": dict(observed),
+                        "retry_allowed": False,
+                    }
+                    self.approval_store.finish_claimed_execution(
+                        request_id, action=action, success=True, result=result,
+                    )
+                    return _mutation("subscribe_approved_member", result, writes=1, sends=0)
+
                 try:
                     observed = self.client.send_campaign(str(scope["campaign_id"]))
                     if not observed.get("sent") or campaign_fingerprint(observed) != campaign_fingerprint(before):

@@ -183,6 +183,20 @@ def _decode_json_line(raw_line: bytes | str, *, source: str) -> dict[str, Any]:
     return payload
 
 
+def _safe_request_options(
+    value: Mapping[str, Any] | None,
+    *,
+    reserved: set[str] | frozenset[str],
+) -> dict[str, Any]:
+    if value is None:
+        return {}
+    return {
+        key: item
+        for key, item in value.items()
+        if isinstance(key, str) and key not in reserved
+    }
+
+
 class OllamaChatProvider:
     name = "ollama"
 
@@ -193,11 +207,16 @@ class OllamaChatProvider:
         model: str,
         settings: ChatProviderSettings | None = None,
         session: requests.Session | None = None,
+        request_options: Mapping[str, Any] | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.default_model = model
         self.settings = settings or ChatProviderSettings()
         self.session = session or requests.Session()
+        self.request_options = _safe_request_options(
+            request_options,
+            reserved={"model", "messages", "stream"},
+        )
 
     def chat(
         self,
@@ -209,7 +228,12 @@ class OllamaChatProvider:
         try:
             response = self.session.post(
                 f"{self.base_url}/api/chat",
-                json={"model": selected_model, "messages": list(messages), "stream": False},
+                json={
+                    **self.request_options,
+                    "model": selected_model,
+                    "messages": list(messages),
+                    "stream": False,
+                },
                 headers={"Accept": "application/json"},
                 timeout=self.settings.requests_timeout,
             )
@@ -258,7 +282,12 @@ class OllamaChatProvider:
             try:
                 response = self.session.post(
                     f"{self.base_url}/api/chat",
-                    json={"model": selected_model, "messages": list(messages), "stream": True},
+                    json={
+                        **self.request_options,
+                        "model": selected_model,
+                        "messages": list(messages),
+                        "stream": True,
+                    },
                     headers={"Accept": "application/x-ndjson"},
                     stream=True,
                     timeout=self.settings.requests_timeout,
@@ -574,7 +603,7 @@ def _with_chat_model_fallback(config: dict[str, Any]) -> dict[str, Any]:
     return {**config, "runtimes": {**runtimes, runtime_name: updated_runtime}}
 
 
-def _runtime_values(config: dict[str, Any]) -> tuple[str, str, str]:
+def _runtime_values(config: dict[str, Any]) -> tuple[str, str, str, dict[str, Any]]:
     runtime_name = str(config.get("default_runtime") or "ollama")
     runtimes = config.get("runtimes")
     runtime_config = runtimes.get(runtime_name, {}) if isinstance(runtimes, dict) else {}
@@ -587,7 +616,14 @@ def _runtime_values(config: dict[str, Any]) -> tuple[str, str, str]:
     model = "qwen2.5:7b"
     if isinstance(models, dict):
         model = str(models.get("chat") or models.get("default") or models.get("planner") or model)
-    return runtime_type, base_url, model
+    raw_request_options = runtime_config.get("chat_request_options")
+    if raw_request_options is None:
+        request_options: dict[str, Any] = {}
+    elif isinstance(raw_request_options, Mapping):
+        request_options = dict(raw_request_options)
+    else:
+        raise ValueError("chat_request_options must be an object")
+    return runtime_type, base_url, model, request_options
 
 
 def build_chat_provider(
@@ -606,7 +642,7 @@ def build_chat_provider(
         else _positive_env_float("RALF_CHAT_INACTIVITY_TIMEOUT", DEFAULT_INACTIVITY_TIMEOUT_SEC),
     )
     try:
-        runtime_name, base_url, model = _runtime_values(_runtime_config(config_path))
+        runtime_name, base_url, model, request_options = _runtime_values(_runtime_config(config_path))
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
         raise ChatProviderConfigurationError("invalid_runtime_config") from exc
 
@@ -618,6 +654,7 @@ def build_chat_provider(
             model=model,
             settings=settings,
             session=session,
+            request_options=request_options,
         )
     elif runtime_name in {"openai_compat", "lmstudio"}:
         provider = OpenAICompatibleChatProvider(
@@ -626,6 +663,7 @@ def build_chat_provider(
             provider_name=runtime_name,
             settings=settings,
             session=session,
+            request_options=request_options,
         )
     else:
         raise ChatProviderConfigurationError(f"unsupported_runtime:{runtime_name or 'unknown'}")

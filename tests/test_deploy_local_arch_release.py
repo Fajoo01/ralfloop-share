@@ -25,7 +25,7 @@ def legacy_gate() -> dict[str, object]:
         "approval_miss": 0,
         "enough_ram": True,
         "enough_swap": True,
-        "port_19104_free": True,
+        "functiongemma_endpoint": True,
         "full_suite_clean": False,
         "preexisting_failures_only": True,
         "no_regression": True,
@@ -95,13 +95,34 @@ def test_candidate_error_blocks() -> None:
     assert_blocked(data)
 
 
+def test_distributed_endpoint_requires_owned_proxy(monkeypatch) -> None:
+    monkeypatch.setenv("RALF_FUNCTIONGEMMA_PROXY_EXPECTED", "1")
+    monkeypatch.setattr(deploy, "_functiongemma_proxy_listener_owned", lambda: False)
+    assert deploy.functiongemma_endpoint_check() is False
+
+
+def test_distributed_endpoint_accepts_owned_healthy_proxy(monkeypatch) -> None:
+    monkeypatch.setenv("RALF_FUNCTIONGEMMA_PROXY_EXPECTED", "1")
+    monkeypatch.setattr(deploy, "_functiongemma_proxy_listener_owned", lambda: True)
+
+    class Response:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+
+    monkeypatch.setattr(deploy, "urlopen", lambda *args, **kwargs: Response())
+    assert deploy.functiongemma_endpoint_check() is True
+
+
 def _release(root: Path, directory: str, commit: str) -> Path:
     release = root / "releases" / directory
     gate = release / ".ralf_run/local_arch_v1/gates.json"
     gate.parent.mkdir(parents=True)
     metadata = release / "RELEASE.json"
     metadata.write_text(json.dumps({"commit": commit}), encoding="utf-8")
-    gate.write_text(json.dumps(legacy_gate()), encoding="utf-8")
+    gate_data = legacy_gate()
+    gate_data["tested_commit"] = commit
+    gate.write_text(json.dumps(gate_data), encoding="utf-8")
     rows = []
     for path in (metadata, gate):
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -121,6 +142,20 @@ def _allow_preflight(monkeypatch, production: Path, model: Path) -> None:
         lambda: {"MemAvailable": 8192, "SwapFree": 1024},
     )
 
+
+
+
+def test_gate_marker_rejects_wrong_tested_commit(tmp_path, monkeypatch) -> None:
+    production = tmp_path / "production"
+    candidate = _release(production, "c" * 40, "c" * 40)
+    gate = candidate / ".ralf_run/local_arch_v1/gates.json"
+    data = json.loads(gate.read_text())
+    data["tested_commit"] = "d" * 40
+    gate.write_text(json.dumps(data), encoding="utf-8")
+    allowed, path, blockers = deploy.gate_marker_details(candidate)
+    assert allowed is False
+    assert path is None
+    assert blockers == ["gate_commit_mismatch"]
 
 def test_publish_rejects_release_commit_directory_mismatch(tmp_path, monkeypatch) -> None:
     production = tmp_path / "production"

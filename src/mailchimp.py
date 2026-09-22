@@ -23,6 +23,7 @@ READ_TOOLS = frozenset({
 PROTECTED_TOOLS = frozenset({
     "mailchimp_create_approved_campaign",
     "mailchimp_send_approved_campaign",
+    "mailchimp_subscribe_approved_member",
 })
 ALL_TOOLS = READ_TOOLS | PROTECTED_TOOLS
 
@@ -238,8 +239,14 @@ class MailchimpApprovedMCPWorkflow:
     def execute_send(self, request_id: str, scope: Mapping[str, Any]) -> dict[str, Any]:
         return self._execute("mailchimp_send_approved_campaign", request_id, scope)
 
+    def execute_subscribe(self, request_id: str, scope: Mapping[str, Any]) -> dict[str, Any]:
+        return self._execute("mailchimp_subscribe_approved_member", request_id, scope)
+
     def _execute(self, tool: str, request_id: str, scope: Mapping[str, Any]) -> dict[str, Any]:
         computed = {"action", "version", "artifact_sha256", "body_sha256"}
+        # html_sha256 is derived for campaign creation, but it is a required
+        # hash-bound input when sending an existing campaign.  Do not strip it
+        # from the protected send call.
         if tool == "mailchimp_create_approved_campaign":
             computed.add("html_sha256")
         arguments = {

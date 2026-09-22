@@ -3,14 +3,33 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import uuid4
 
+from ralfloop_agent.integration.abc_relation_read import ABCRelationReadAdapter, render_abc_relation_answer
 from ralfloop_agent.integration.capability_adapter import route_task
 from ralfloop_agent.models.result_envelope import ResultEnvelope
+from ralfloop_agent.integration.verification_judge import run_verification_judge, verification_blocks
 from src import audit
 from src.confirmation import get_confirmation
 from src.executor import ShellExecutor
 from src.mcp_client import MCPClient, NeedsConfirmationError
-from src.models import PatchEvidence
+from src.models import Evidence, PatchEvidence
 from src.text_mas_proxy import build_text_mas_trace
+
+
+def _abc_read_evidence(user_goal: str) -> tuple[Evidence, dict, str]:
+    resolution = ABCRelationReadAdapter().resolve(user_goal)
+    evidence = Evidence(
+        command="mcp:abc_relation:read_only",
+        path="abc_relation",
+        exit_code=0 if resolution.available else 1,
+        stdout=resolution.render(),
+        stderr=None if resolution.available else resolution.error,
+    )
+    meta = {
+        "read_mcp": "abc_relation",
+        "read_mcp_available": resolution.available,
+        "fallback_skills": list(resolution.fallback_skills),
+    }
+    return evidence, meta, render_abc_relation_answer(user_goal, resolution)
 
 
 def run_capability_reasoning_cycle(user_goal: str, context: dict | None = None) -> ResultEnvelope:
@@ -26,7 +45,12 @@ def run_capability_reasoning_cycle(user_goal: str, context: dict | None = None) 
     audit.log_operation("sandbox_initialized", {"task_id": task_id, "sandbox_path": str(executor.base_dir)})
 
     if route.mode == "check_only":
-        evidence = executor.run_in_sandbox(["ls", "-la"], cwd=".")
+        if "abc_relation" in route.mcp_used:
+            evidence, read_meta, answer = _abc_read_evidence(user_goal)
+            meta.update(read_meta)
+        else:
+            evidence = executor.run_in_sandbox(["ls", "-la"], cwd=".")
+            answer = "check_only evidence collected"
         envelope = ResultEnvelope(
             route=route,
             evidence=evidence,
@@ -35,7 +59,7 @@ def run_capability_reasoning_cycle(user_goal: str, context: dict | None = None) 
             verification_policy=route.verification_policy,
             collaboration_trace=collaboration_trace,
             jury_trace=collaboration_trace,
-            answer="check_only evidence collected",
+            answer=answer,
             meta=meta,
         )
         audit.log_operation("reasoning_cycle_check_only", envelope.model_dump(mode="json"))
@@ -52,6 +76,14 @@ def run_capability_reasoning_cycle(user_goal: str, context: dict | None = None) 
             diff=evidence.stdout or "",
             tests=["pending: run targeted tests before patch"],
         )
+        candidate_answer = "patch_allowed requires repro, diff and tests"
+        judge_trace = run_verification_judge(
+            user_goal, route, patch, candidate_answer, {**context, "task_id": task_id}
+        )
+        patch_meta = {**meta}
+        if judge_trace is not None:
+            patch_meta["verification_judge"] = judge_trace
+        answer = "verification_judge_blocked" if verification_blocks(route, judge_trace) else candidate_answer
         envelope = ResultEnvelope(
             route=route,
             evidence=patch,
@@ -60,8 +92,8 @@ def run_capability_reasoning_cycle(user_goal: str, context: dict | None = None) 
             verification_policy=route.verification_policy,
             collaboration_trace=collaboration_trace,
             jury_trace=collaboration_trace,
-            answer="patch_allowed requires repro, diff and tests",
-            meta=meta,
+            answer=answer,
+            meta=patch_meta,
         )
         audit.log_operation("reasoning_cycle_patch_allowed", envelope.model_dump(mode="json"))
         return envelope

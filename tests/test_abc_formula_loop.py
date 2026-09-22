@@ -37,6 +37,12 @@ def test_determinismo(tmp_path: Path):
     json.dumps(second, ensure_ascii=False)
 
 
+def test_every_evidence_rule_has_versioned_weight():
+    weights = afl.load_weights()
+    missing = {rule.weight_key for rule in afl.EVIDENCE_RULES} - set(weights)
+    assert missing == set()
+
+
 def test_mind_reading_non_pesa_come_fatto(tmp_path: Path):
     result = _score("Arianna sta male per AntonLuca.", tmp_path)
     inference = next(item for item in result["evidence"] if item["kind"] == "inference")

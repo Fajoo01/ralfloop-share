@@ -30,6 +30,43 @@ def test_loader_reports_missing_without_inventing(tmp_path: Path) -> None:
     assert all(row["status"] == "missing_or_oversized" for row in result["sources"].values())
 
 
+
+
+def test_loader_resolves_explicit_bando_reference_without_cross_fallback(tmp_path: Path, monkeypatch) -> None:
+    from ralfloop_agent.domains import bandi_runtime_context as module
+
+    calls = tmp_path / "calls"
+    requested = calls / "RLJ12026054688"
+    legacy = calls / module.DEFAULT_BANDO_REF
+    requested.mkdir(parents=True)
+    legacy.mkdir(parents=True)
+    (requested / "eligibility.json").write_text('{"call_id":"RLJ12026054688"}', encoding="utf-8")
+    (legacy / "eligibility.json").write_text('{"call_id":"RLD12025048623"}', encoding="utf-8")
+    monkeypatch.setattr(module, "DEFAULT_CALLS_ROOT", calls)
+
+    result = module.load_bandi_runtime_context(bando_ref="rlj12026054688")
+
+    assert result["requested_bando_ref"] == "RLJ12026054688"
+    assert result["resolution"] == "reference_specific"
+    assert result["eligibility"]["call_id"] == "RLJ12026054688"
+    assert "RLD12025048623" not in json.dumps(result)
+
+
+def test_loader_missing_explicit_bando_never_uses_legacy_default(tmp_path: Path, monkeypatch) -> None:
+    from ralfloop_agent.domains import bandi_runtime_context as module
+
+    calls = tmp_path / "calls"
+    legacy = calls / module.DEFAULT_BANDO_REF
+    legacy.mkdir(parents=True)
+    (legacy / "eligibility.json").write_text('{"call_id":"RLD12025048623"}', encoding="utf-8")
+    monkeypatch.setattr(module, "DEFAULT_CALLS_ROOT", calls)
+
+    result = module.load_bandi_runtime_context(bando_ref="RLJ12026054688")
+
+    assert result["requested_bando_ref"] == "RLJ12026054688"
+    assert "eligibility" not in result
+    assert all(row["status"] == "missing_or_oversized" for row in result["sources"].values())
+
 def test_bandi_goal_reads_staged_context(monkeypatch) -> None:
     decision = DeterministicPlanner().choose_next_action(
         "Qual è lo stato della candidatura Arianna?", 0

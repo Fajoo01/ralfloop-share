@@ -1,0 +1,31 @@
+[Unit]
+Description=Bot-tazzi Bandi read-only MCP broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sibilla-cumana
+Group=sibilla-cumana
+WorkingDirectory=/home/sibilla-cumana/ralfloop-production/current
+UMask=0077
+RuntimeDirectory=ralf-bandi-mcp
+RuntimeDirectoryMode=0700
+Environment=TZ=Europe/Rome
+Environment=BANDI_WEEKLY_STATE_DIR=/home/sibilla-cumana/.local/state/ralfloop/bandi_weekly_deep_research
+Environment=RALFLOOP_BANDO_SEARCH_PROVIDER=searxng
+Environment=RALFLOOP_SEARXNG_URL=http://127.0.0.1:8889
+Environment=RALFLOOP_SEARXNG_ENGINES=bing,startpage,duckduckgo
+Environment=BANDI_SEMANTIC_RETRIEVAL_ENABLED=1
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_bandi_mcp_broker.py --socket /run/ralf-bandi-mcp/mcp.sock --allow-uid 1000 --command /home/sibilla-cumana/ralfloop-production/current/scripts/bot-tazzi-bandi-mcp --idle-timeout 300
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/sibilla-cumana/.local/state/ralfloop/bandi_weekly_deep_research
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

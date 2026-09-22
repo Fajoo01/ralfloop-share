@@ -11,238 +11,1451 @@
   "domains": [
     {
       "id": "email",
-      "aliases": ["mail", "gmail", "posta", "risposta email"],
+      "aliases": [
+        "mail",
+        "gmail",
+        "posta",
+        "risposta email"
+      ],
       "description": "Evidence-backed email drafting, validation and approval-bound sending.",
-      "supported_skills": ["email.search", "email.compose", "email.reply"],
-      "allowed_memory_namespaces": ["tiremm", "general_preferences"],
+      "supported_skills": [
+        "email.search",
+        "email.compose",
+        "email.reply"
+      ],
+      "allowed_memory_namespaces": [
+        "tiremm",
+        "general_preferences"
+      ],
       "context_builder": "ralfloop_agent.domains.email_reply.build_email_reply_domain",
       "policy": "email_reply_domain_v1 + DomainApprovalStore",
-      "validators": ["validate_draft_against_domain", "semantic HIGH_ONLY", "scope_digest"],
-      "specialist_capabilities": ["qwen_draft", "deepseek_v4_flash.semantic_critic"],
+      "validators": [
+        "validate_draft_against_domain",
+        "semantic HIGH_ONLY",
+        "scope_digest"
+      ],
+      "specialist_capabilities": [
+        "qwen_draft",
+        "deepseek_v4_flash.semantic_critic"
+      ],
       "status": "ready",
-      "source_refs": ["src/google_workspace.py", "ralfloop_agent/domains/email_reply.py"]
+      "source_refs": [
+        "src/google_workspace.py",
+        "ralfloop_agent/domains/email_reply.py"
+      ]
     },
     {
       "id": "home",
-      "aliases": ["casa", "domotica", "home assistant"],
+      "aliases": [
+        "casa",
+        "domotica",
+        "home assistant"
+      ],
       "description": "Config-driven Home Assistant intent, entity resolution, policy and readback verification.",
-      "supported_skills": ["home.read", "home.control"],
-      "allowed_memory_namespaces": ["home", "general_preferences"],
+      "supported_skills": [
+        "home.read",
+        "home.control"
+      ],
+      "allowed_memory_namespaces": [
+        "home",
+        "general_preferences"
+      ],
       "context_builder": "ralfloop_agent.unified_assistant.home.HomeEntityRegistry",
       "policy": "deterministic HomeActionPolicy",
-      "validators": ["entity allowlist", "service allowlist", "range", "readback"],
+      "validators": [
+        "entity allowlist",
+        "service allowlist",
+        "range",
+        "readback"
+      ],
       "specialist_capabilities": [],
       "status": "constrained",
-      "source_refs": ["config/home_entities_v1.json", "ralfloop_agent/unified_assistant/home.py"]
+      "source_refs": [
+        "config/home_entities_v1.json",
+        "ralfloop_agent/unified_assistant/home.py"
+      ]
     },
     {
       "id": "whatsapp",
-      "aliases": ["whatsapp web", "wapp", "messaggi whatsapp"],
+      "aliases": [
+        "whatsapp web",
+        "wapp",
+        "messaggi whatsapp"
+      ],
       "description": "Work-profile WhatsApp read navigation and approval-bound compose/reply through semantic MCP tools.",
-      "supported_skills": ["whatsapp.read", "whatsapp.compose", "whatsapp.reply"],
-      "allowed_memory_namespaces": ["tiremm"],
+      "supported_skills": [
+        "whatsapp.read",
+        "whatsapp.compose",
+        "whatsapp.reply"
+      ],
+      "allowed_memory_namespaces": [
+        "tiremm"
+      ],
       "context_builder": "ralfloop_agent.unified_assistant.whatsapp_web.WhatsAppWebReadOnly",
       "policy": "READ/READ_NAVIGATION; all send/reply CONFIRM_WRITE",
-      "validators": ["work namespace", "payload hash", "approval CAS", "provider verification"],
-      "specialist_capabilities": ["qwen_draft", "deepseek_v4_flash.semantic_critic"],
+      "validators": [
+        "work namespace",
+        "payload hash",
+        "approval CAS",
+        "provider verification"
+      ],
+      "specialist_capabilities": [
+        "qwen_draft",
+        "deepseek_v4_flash.semantic_critic"
+      ],
       "status": "ready",
-      "source_refs": ["src/whatsapp.py", "scripts/ralf_whatsapp_mcp_server.py", "config/whatsapp_memory_scopes_v1.json"]
+      "source_refs": [
+        "src/whatsapp.py",
+        "scripts/ralf_whatsapp_mcp_server.py",
+        "config/whatsapp_memory_scopes_v1.json"
+      ]
     },
     {
       "id": "tiremm",
-      "aliases": ["tiremm innanz", "associazione"],
-      "description": "Verified organization, project, grant, partner, decision and communication context.",
-      "supported_skills": ["tiremm.context", "email.search", "fastweb.portal.read", "fastweb.compare", "whatsapp.read", "whatsapp.compose", "whatsapp.reply", "bandi.eligibility", "email.compose"],
-      "allowed_memory_namespaces": ["tiremm", "general_preferences"],
-      "context_builder": "ralfloop_agent.unified_assistant.memory.MemoryRouter",
-      "policy": "verified evidence precedence",
-      "validators": ["source_refs required", "derived is not fact"],
-      "specialist_capabilities": ["regione_act_dimensioning"],
-      "status": "constrained",
-      "source_refs": ["config/reply_context_profiles.json", "config/domain_capability_mapping.yaml", "config/whatsapp_memory_scopes_v1.json", "ralfloop_agent/unified_assistant/fastweb_portal.py"]
+      "aliases": [
+        "tiremm innanz",
+        "associazione"
+      ],
+      "description": "Verified organization/project/communication context retrieved through domain-scoped memory and provider MCP evidence.",
+      "supported_skills": [
+        "tiremm.context",
+        "email.search",
+        "fastweb.portal.read",
+        "fastweb.compare",
+        "whatsapp.read",
+        "whatsapp.compose",
+        "whatsapp.reply",
+        "bandi.eligibility",
+        "email.compose"
+      ],
+      "allowed_memory_namespaces": [
+        "tiremm",
+        "general_preferences"
+      ],
+      "context_builder": "ralfloop_agent.unified_assistant.memory_mcp.MemoryMCPServer",
+      "policy": "verified evidence precedence + minimum domain-scoped retrieval",
+      "validators": [
+        "source_refs required",
+        "content hashes",
+        "derived is not fact",
+        "memory read-only"
+      ],
+      "specialist_capabilities": [
+        "regione_act_dimensioning"
+      ],
+      "status": "ready",
+      "source_refs": [
+        "config/reply_context_profiles.json",
+        "config/domain_capability_mapping.yaml",
+        "config/whatsapp_memory_scopes_v1.json",
+        "ralfloop_agent/unified_assistant/fastweb_portal.py"
+      ]
     },
     {
       "id": "bandi",
-      "aliases": ["bando", "grant", "finanziamento"],
-      "description": "Grant source retrieval and deterministic rulebook analysis.",
-      "supported_skills": ["bandi.read", "bandi.eligibility"],
-      "allowed_memory_namespaces": ["tiremm"],
-      "context_builder": "ralfloop_agent.domains.capability_registry.CanonicalCapabilityRegistry",
-      "policy": "official source precedence",
-      "validators": ["source checksum", "deterministic rules"],
-      "specialist_capabilities": ["regione_act_dimensioning"],
+      "aliases": [
+        "bando",
+        "grant",
+        "finanziamento"
+      ],
+      "description": "Fresh grant discovery, persisted opportunity monitoring and deterministic Tiremm eligibility over the Bandi MCP.",
+      "supported_skills": [
+        "bandi.research",
+        "bandi.read",
+        "bandi.eligibility",
+        "bandi.discovery",
+        "bandi.refresh"
+      ],
+      "allowed_memory_namespaces": [
+        "tiremm"
+      ],
+      "context_builder": "ralfloop_agent.unified_assistant.bandi_mcp_adapter.BandiMCPContext",
+      "policy": "official-source-first; read-only research; no application or external submission",
+      "validators": [
+        "strict MCP allowlist",
+        "official source provenance",
+        "document completeness",
+        "source checksum",
+        "deterministic eligibility",
+        "writes=0"
+      ],
+      "specialist_capabilities": [
+        "regione_act_dimensioning",
+        "bandi.latest.read",
+        "bandi.search.read",
+        "bandi.opportunity.read",
+        "bandi.research.refresh"
+      ],
       "status": "ready",
-      "source_refs": ["config/domain_capability_mapping.yaml", "domains/registry.json"]
+      "source_refs": [
+        "ralfloop_agent/unified_assistant/bandi_mcp_adapter.py",
+        "ralfloop_agent/unified_assistant/bandi_research_mcp.py",
+        "ralfloop_agent/domains/bandi_weekly_research.py",
+        "ralfloop_agent/unified_assistant/bandi_mcp.py"
+      ]
     },
     {
       "id": "personal_relational",
-      "aliases": ["rsc", "abc", "calcolatrice relazionale"],
+      "aliases": [
+        "rsc",
+        "abc",
+        "calcolatrice relazionale"
+      ],
       "description": "Isolated ABC/RSC observations, hypotheses and derived formula results.",
-      "supported_skills": ["personal_relational.analyze"],
-      "allowed_memory_namespaces": ["personal_relational", "general_preferences"],
+      "supported_skills": [
+        "personal_relational.analyze"
+      ],
+      "allowed_memory_namespaces": [
+        "personal_relational",
+        "general_preferences"
+      ],
       "context_builder": "openshell_backend.skills.abc_memory",
       "policy": "observations > hypotheses > calculated score",
-      "validators": ["ABC rulebooks", "derived separation"],
-      "specialist_capabilities": ["abc_relcalc", "abc_formula_loop"],
+      "validators": [
+        "ABC rulebooks",
+        "derived separation"
+      ],
+      "specialist_capabilities": [
+        "abc_relcalc",
+        "abc_formula_loop"
+      ],
       "status": "ready",
-      "source_refs": ["openshell_backend/skills/abc_memory.py", "config/domain_capability_mapping.yaml"]
+      "source_refs": [
+        "openshell_backend/skills/abc_memory.py",
+        "config/domain_capability_mapping.yaml"
+      ]
     },
     {
       "id": "research",
-      "aliases": ["ricerca", "deep research", "web"],
+      "aliases": [
+        "ricerca",
+        "deep research",
+        "web"
+      ],
       "description": "Read-only evidence-backed public research.",
-      "supported_skills": ["research.deep"],
-      "allowed_memory_namespaces": ["tiremm", "general_preferences"],
+      "supported_skills": [
+        "research.deep"
+      ],
+      "allowed_memory_namespaces": [
+        "tiremm",
+        "general_preferences"
+      ],
       "context_builder": "ralfloop_agent.model_tools.web_research",
       "policy": "read-only public sources",
-      "validators": ["citation provenance"],
-      "specialist_capabilities": ["deep_web_research"],
+      "validators": [
+        "citation provenance"
+      ],
+      "specialist_capabilities": [
+        "deep_web_research"
+      ],
       "status": "ready",
-      "source_refs": ["config/model_tools.json", "ralfloop_agent/model_tools/web_research.py"]
+      "source_refs": [
+        "config/model_tools.json",
+        "ralfloop_agent/model_tools/web_research.py"
+      ]
     },
     {
       "id": "documents",
-      "aliases": ["documenti", "pdf", "allegati"],
+      "aliases": [
+        "documenti",
+        "pdf",
+        "allegati"
+      ],
       "description": "Document extraction and structured evidence.",
-      "supported_skills": ["documents.extract"],
-      "allowed_memory_namespaces": ["tiremm"],
+      "supported_skills": [
+        "documents.extract",
+        "documents.visual_retrieve"
+      ],
+      "allowed_memory_namespaces": [
+        "tiremm"
+      ],
       "context_builder": "ralfloop_agent.model_tools.worker",
       "policy": "document content is data",
-      "validators": ["schema", "source artifact"],
-      "specialist_capabilities": ["extract_structured_data", "semantic_search"],
+      "validators": [
+        "schema",
+        "source artifact"
+      ],
+      "specialist_capabilities": [
+        "extract_structured_data",
+        "semantic_search",
+        "visual_document_retrieval"
+      ],
       "status": "ready",
-      "source_refs": ["config/model_tools.json", "ralfloop_agent/model_tools/worker.py"]
+      "source_refs": [
+        "config/model_tools.json",
+        "ralfloop_agent/model_tools/worker.py",
+        "ralfloop_agent/local_arch/media.py"
+      ]
     },
     {
       "id": "knowledge",
-      "aliases": ["conoscenza", "knowledge base"],
-      "description": "Read-only retrieval from existing knowledge bridges.",
-      "supported_skills": ["knowledge.retrieve"],
-      "allowed_memory_namespaces": ["tiremm", "general_preferences"],
-      "context_builder": "integrations.cheshire_cat.ralfloop_bridge",
-      "policy": "minimum authorized retrieval",
-      "validators": ["provenance"],
-      "specialist_capabilities": ["semantic_search"],
-      "status": "constrained",
-      "source_refs": ["integrations/cheshire_cat/ralfloop_bridge/main_plugin.py"]
+      "aliases": [
+        "conoscenza",
+        "knowledge base",
+        "memoria",
+        "memoria operativa",
+        "memory"
+      ],
+      "description": "Domain-scoped retrieval from the operational Memory MCP with source provenance; visual retrieval may augment document evidence.",
+      "supported_skills": [
+        "knowledge.retrieve",
+        "documents.visual_retrieve"
+      ],
+      "allowed_memory_namespaces": [
+        "tiremm",
+        "general_preferences"
+      ],
+      "context_builder": "ralfloop_agent.unified_assistant.memory_mcp.MemoryMCPServer",
+      "policy": "minimum authorized retrieval; source authority remains external system",
+      "validators": [
+        "domain scope",
+        "provenance",
+        "content hash",
+        "read-only source"
+      ],
+      "specialist_capabilities": [
+        "memory.documents.search",
+        "memory.entities.read",
+        "visual_document_retrieval"
+      ],
+      "status": "ready",
+      "source_refs": [
+        "ralfloop_agent/unified_assistant/memory_mcp.py",
+        "ralfloop_agent/unified_assistant/memory_service.py",
+        "ralfloop_agent/local_arch/media.py"
+      ]
     },
     {
       "id": "infrastructure",
-      "aliases": ["servizi", "server", "agentcpm", "spazio disco"],
+      "aliases": [
+        "servizi",
+        "server",
+        "agentcpm",
+        "spazio disco"
+      ],
       "description": "Allowlisted inspection and protected operational workflows.",
-      "supported_skills": ["infrastructure.inspect"],
-      "allowed_memory_namespaces": ["infrastructure"],
+      "supported_skills": [
+        "infrastructure.inspect"
+      ],
+      "allowed_memory_namespaces": [
+        "infrastructure"
+      ],
       "context_builder": "ralfloop_agent.integration.system_inspection",
       "policy": "READ automatic; writes protected",
-      "validators": ["health/state readback"],
+      "validators": [
+        "health/state readback"
+      ],
       "specialist_capabilities": [],
       "status": "constrained",
-      "source_refs": ["ralfloop_agent/integration/system_inspection.py", "src/executor.py"]
+      "source_refs": [
+        "ralfloop_agent/integration/system_inspection.py",
+        "src/executor.py"
+      ]
     },
     {
       "id": "code",
-      "aliases": ["codice", "repository", "debug"],
+      "aliases": [
+        "codice",
+        "repository",
+        "debug"
+      ],
       "description": "Sandboxed code context and remote-code workflow; no free-form shell execution.",
-      "supported_skills": ["code.inspect"],
-      "allowed_memory_namespaces": ["infrastructure", "general_preferences"],
+      "supported_skills": [
+        "code.inspect"
+      ],
+      "allowed_memory_namespaces": [
+        "infrastructure",
+        "general_preferences"
+      ],
       "context_builder": "ralfloop_agent.model_tools.remote_code",
       "policy": "sandbox + approval for mutation",
-      "validators": ["artifact hash", "sandbox audit"],
-      "specialist_capabilities": ["sandboxed_remote_code"],
+      "validators": [
+        "artifact hash",
+        "sandbox audit"
+      ],
+      "specialist_capabilities": [
+        "sandboxed_remote_code"
+      ],
       "status": "ready",
-      "source_refs": ["ralfloop_agent/model_tools/remote_code.py", "config/model_tools.json"]
+      "source_refs": [
+        "ralfloop_agent/model_tools/remote_code.py",
+        "config/model_tools.json"
+      ]
     },
     {
       "id": "media",
-      "aliases": ["video", "audio", "immagine", "amule"],
+      "aliases": [
+        "video",
+        "audio",
+        "immagine",
+        "amule"
+      ],
       "description": "Local media generation and composition with artifact provenance.",
-      "supported_skills": ["media.compose"],
-      "allowed_memory_namespaces": ["media", "general_preferences"],
+      "supported_skills": [
+        "media.compose"
+      ],
+      "allowed_memory_namespaces": [
+        "media",
+        "general_preferences"
+      ],
       "context_builder": "ralfloop_agent.local_arch.media",
       "policy": "artifact-only; publishing protected",
-      "validators": ["artifact hash"],
-      "specialist_capabilities": ["media_compose", "social_image", "social_video"],
+      "validators": [
+        "artifact hash"
+      ],
+      "specialist_capabilities": [
+        "media_compose",
+        "social_image",
+        "social_video"
+      ],
       "status": "ready",
-      "source_refs": ["ralfloop_agent/local_arch/media.py", "config/local_arch_tools_v1.json"]
+      "source_refs": [
+        "ralfloop_agent/local_arch/media.py",
+        "config/local_arch_tools_v1.json"
+      ]
+    },
+    {
+      "id": "editorial",
+      "aliases": [
+        "volantino",
+        "flyer",
+        "locandina",
+        "poster",
+        "manifesto"
+      ],
+      "description": "Local source-grounded flyer review and rendering through the editorial MCP.",
+      "supported_skills": [
+        "editorial.flyer"
+      ],
+      "allowed_memory_namespaces": [
+        "tiremm",
+        "general_preferences"
+      ],
+      "context_builder": "ralfloop_agent.unified_assistant.editorial_mcp_adapter.EditorialMCPContext",
+      "policy": "local artifact generation only; no send/print/publish",
+      "validators": [
+        "strict MCP allowlist",
+        "source provenance",
+        "marketing preflight",
+        "visual preflight"
+      ],
+      "specialist_capabilities": [],
+      "status": "ready",
+      "source_refs": [
+        "ralfloop_agent/unified_assistant/editorial_mcp_adapter.py",
+        "/home/bandi/bot-tazzi-editorial-mcp"
+      ]
     },
     {
       "id": "projects",
-      "aliases": ["progetti", "progetto"],
+      "aliases": [
+        "progetti",
+        "progetto"
+      ],
       "description": "Project context adapter over authorized organization memory.",
-      "supported_skills": ["tiremm.context"],
-      "allowed_memory_namespaces": ["tiremm"],
+      "supported_skills": [
+        "tiremm.context"
+      ],
+      "allowed_memory_namespaces": [
+        "tiremm"
+      ],
       "context_builder": "ralfloop_agent.unified_assistant.memory.MemoryRouter",
       "policy": "verified project evidence",
-      "validators": ["source_refs required"],
+      "validators": [
+        "source_refs required"
+      ],
       "specialist_capabilities": [],
       "status": "constrained",
-      "source_refs": ["config/reply_context_profiles.json"]
+      "source_refs": [
+        "config/reply_context_profiles.json"
+      ]
     },
     {
       "id": "calendar",
-      "aliases": ["calendario", "agenda"],
+      "aliases": [
+        "calendario",
+        "agenda"
+      ],
       "description": "Placeholder adapter contract; no calendar provider is registered.",
       "supported_skills": [],
-      "allowed_memory_namespaces": ["general_preferences"],
+      "allowed_memory_namespaces": [
+        "general_preferences"
+      ],
       "context_builder": "unavailable",
       "policy": "DENY until provider registration",
       "validators": [],
       "specialist_capabilities": [],
       "status": "constrained",
-      "source_refs": ["config/local_arch_tools_v1.json"]
+      "source_refs": [
+        "config/local_arch_tools_v1.json"
+      ]
     },
     {
       "id": "contacts",
-      "aliases": ["contatti", "rubrica"],
+      "aliases": [
+        "contatti",
+        "rubrica"
+      ],
       "description": "Placeholder adapter contract; no contacts provider is registered.",
       "supported_skills": [],
-      "allowed_memory_namespaces": ["general_preferences"],
+      "allowed_memory_namespaces": [
+        "general_preferences"
+      ],
       "context_builder": "unavailable",
       "policy": "DENY until provider registration",
       "validators": [],
       "specialist_capabilities": [],
       "status": "constrained",
-      "source_refs": ["config/local_arch_tools_v1.json"]
+      "source_refs": [
+        "config/local_arch_tools_v1.json"
+      ]
     },
     {
       "id": "general_assistant",
-      "aliases": ["assistente", "generale"],
+      "aliases": [
+        "assistente",
+        "generale"
+      ],
       "description": "Safe fallback routing and clarification without implicit side effects.",
-      "supported_skills": ["assistant.clarify"],
-      "allowed_memory_namespaces": ["general_preferences"],
+      "supported_skills": [
+        "assistant.clarify",
+        "meteo.read",
+        "atm.route"
+      ],
+      "allowed_memory_namespaces": [
+        "general_preferences"
+      ],
       "context_builder": "ralfloop_agent.unified_assistant.planner.UnifiedPlanner",
       "policy": "READ or clarification",
-      "validators": ["capability allowlist"],
+      "validators": [
+        "capability allowlist"
+      ],
       "specialist_capabilities": [],
       "status": "ready",
-      "source_refs": ["ralfloop_agent/unified_assistant/planner.py"]
+      "source_refs": [
+        "ralfloop_agent/unified_assistant/planner.py"
+      ]
+    },
+    {
+      "id": "runts",
+      "aliases": [
+        "registro unico terzo settore",
+        "runts lombardia"
+      ],
+      "description": "RUNTS practices, PEC notifications, decisions and documents projected into operational memory.",
+      "supported_skills": [
+        "runts.context"
+      ],
+      "allowed_memory_namespaces": [
+        "tiremm"
+      ],
+      "context_builder": "ralfloop_agent.unified_assistant.memory_mcp.MemoryMCPServer",
+      "policy": "read operational projection; writes remain separate approval-bound RUNTS capabilities",
+      "validators": [
+        "source provenance",
+        "content hash",
+        "domain=runts/pec",
+        "read-only memory"
+      ],
+      "specialist_capabilities": [
+        "memory.entities.read",
+        "memory.documents.search",
+        "memory.timeline.read"
+      ],
+      "status": "ready",
+      "source_refs": [
+        "ralfloop_agent/unified_assistant/memory_mcp.py",
+        "ralfloop_agent/unified_assistant/pec_runts_mcp.py"
+      ]
+    },
+    {
+      "id": "arci",
+      "aliases": [
+        "arci portal",
+        "soci arci",
+        "tesseramento arci"
+      ],
+      "description": "Authenticated ARCI organization, member, card and membership evidence through read-only MCP.",
+      "supported_skills": [
+        "arci.context"
+      ],
+      "allowed_memory_namespaces": [
+        "tiremm"
+      ],
+      "context_builder": "scripts.ralf_arci_mcp_server.ArciMCPServer",
+      "policy": "authenticated semantic reads only; mutations are separate protected capabilities",
+      "validators": [
+        "strict MCP schema",
+        "provider provenance",
+        "side_effects=0"
+      ],
+      "specialist_capabilities": [
+        "arci.organization.read",
+        "arci.members.read",
+        "arci.cards.read",
+        "arci.membership.verify"
+      ],
+      "status": "ready",
+      "source_refs": [
+        "scripts/ralf_arci_mcp_server.py",
+        "ralfloop_agent/unified_assistant/arci_portal.py"
+      ]
+    },
+    {
+      "id": "jellyfin",
+      "aliases": [
+        "jellyfin media",
+        "film non identificati",
+        "libreria jellyfin"
+      ],
+      "description": "Jellyfin identity and library evidence; mutations remain protected and separately verified.",
+      "supported_skills": [
+        "jellyfin.identify",
+        "jellyfin.apply_identity"
+      ],
+      "allowed_memory_namespaces": [
+        "media"
+      ],
+      "context_builder": "MCP:/run/ralf-jellyfin-mcp/mcp.sock",
+      "policy": "read discovery automatic; identity/library mutation protected",
+      "validators": [
+        "candidate evidence",
+        "provider readback",
+        "post-action verification"
+      ],
+      "specialist_capabilities": [
+        "jellyfin.identity.list",
+        "jellyfin.identity.search",
+        "jellyfin.identity.apply"
+      ],
+      "status": "ready",
+      "source_refs": [
+        "/home/bandi/bot-tazzi/scripts/ralf_jellyfin_mcp_server.py"
+      ]
+    },
+    {
+      "id": "education",
+      "aliases": [
+        "teacher",
+        "tutor",
+        "insegnante",
+        "doposcuola"
+      ],
+      "description": "Student-only didactic domain backed by the isolated Teacher MCP surface.",
+      "supported_skills": [
+        "education.tutor"
+      ],
+      "allowed_memory_namespaces": [
+        "general_preferences"
+      ],
+      "context_builder": "MCP:/run/ralf-teacher-mcp/mcp.sock",
+      "policy": "student-only teaching capability boundary; no administrative/general tools",
+      "validators": [
+        "teacher MCP allowlist",
+        "student session scope"
+      ],
+      "specialist_capabilities": [
+        "teacher.explain",
+        "teacher.exercise",
+        "teacher.quiz",
+        "teacher.progress"
+      ],
+      "status": "ready",
+      "source_refs": [
+        "scripts/ralf_teacher_mcp_server.py",
+        "deploy/systemd/ralf-teacher-mcp-broker.service"
+      ]
+    },
+    {
+      "id": "mailchimp",
+      "aliases": [
+        "mailchimp",
+        "mailchimp marketing"
+      ],
+      "description": "Read-only Mailchimp evidence plus approval-bound campaign and audience-member actions.",
+      "supported_skills": [
+        "mailchimp.read",
+        "mailchimp.campaign.create",
+        "mailchimp.campaign.send",
+        "mailchimp.member.subscribe"
+      ],
+      "allowed_memory_namespaces": [
+        "tiremm"
+      ],
+      "context_builder": "src.mailchimp.MailchimpMCPContext",
+      "policy": "READ direct; campaign create/send and member subscribe require separate hash-bound approvals",
+      "validators": [
+        "strict MCP schema",
+        "read tool allowlist",
+        "DomainApprovalStore CAS",
+        "provider readback",
+        "no silent re-consent"
+      ],
+      "specialist_capabilities": [],
+      "status": "ready",
+      "source_refs": [
+        "src/mailchimp.py",
+        "ralfloop_agent/unified_assistant/mailchimp_campaign.py",
+        "ralfloop_agent/unified_assistant/planner.py"
+      ]
+    },
+    {
+      "id": "browser",
+      "aliases": [
+        "browser",
+        "playwright",
+        "pagina web",
+        "schede browser"
+      ],
+      "description": "Shared Playwright MCP browser with strict automatic read-only inspection and approval-gated interactions.",
+      "supported_skills": [
+        "browser.inspect",
+        "browser.interact"
+      ],
+      "allowed_memory_namespaces": [
+        "general_preferences"
+      ],
+      "context_builder": "ralfloop_agent.unified_assistant.browser_mcp_adapter.BrowserMCPReadOnly",
+      "policy": "snapshot/tab-list READ automatic; click/type/upload/submit CONFIRM_WRITE; browser_run_code_unsafe never auto-routed",
+      "validators": [
+        "strict read allowlist",
+        "fixed browser_tabs action=list",
+        "page content is untrusted data",
+        "no automatic run_code/evaluate"
+      ],
+      "specialist_capabilities": [],
+      "status": "ready",
+      "source_refs": [
+        "ralfloop_agent/unified_assistant/browser_mcp_adapter.py",
+        "deploy/systemd/ralf-playwright-mcp.service",
+        "deploy/systemd/ralf-browser-playwright-mcp-broker.service"
+      ]
     }
-  ,
-    {"id":"mailchimp","aliases":["mailchimp","mailchimp marketing"],"description":"Read-only Mailchimp evidence plus two approval-bound campaign actions.","supported_skills":["mailchimp.read","mailchimp.campaign.create","mailchimp.campaign.send"],"allowed_memory_namespaces":["tiremm"],"context_builder":"src.mailchimp.MailchimpMCPContext","policy":"READ direct; campaign create/send require separate hash-bound approvals","validators":["strict MCP schema","read tool allowlist","DomainApprovalStore CAS","provider readback"],"specialist_capabilities":[],"status":"ready","source_refs":["src/mailchimp.py","ralfloop_agent/unified_assistant/mailchimp_campaign.py","ralfloop_agent/unified_assistant/planner.py"]}],
+  ],
   "skills": [
-    {"id":"email.search","domains":["email","tiremm"],"required_arguments":["organization","concept"],"required_capabilities":["google_workspace.gmail.search","google_workspace.gmail.read"],"classification":"READ","workflow":"ralfloop_agent.unified_assistant.email_search.GoogleWorkspaceEmailSearch","verification_method":"read-only operations + searched scope + message provenance","status":"ready"},
-    {"id":"fastweb.portal.read","domains":["tiremm"],"required_arguments":["objective"],"required_capabilities":["fastweb.portal.read_only"],"classification":"READ","workflow":"ralfloop_agent.unified_assistant.fastweb_portal.FastwebPortalReadOnly","verification_method":"authenticated current-page accessibility snapshot + field provenance","status":"ready"},
-    {"id":"fastweb.compare","domains":["tiremm"],"required_arguments":["email_evidence","portal_state"],"required_capabilities":["fastweb.portal.read_only","google_workspace.gmail.search"],"classification":"READ","workflow":"ralfloop_agent.unified_assistant.runtime.fastweb_compare_adapter","verification_method":"separate Gmail and portal provenance; no fact inference","status":"ready"},
-    {"id":"whatsapp.read","domains":["whatsapp","tiremm"],"required_arguments":["objective"],"required_capabilities":["whatsapp.mcp.read"],"classification":"READ","workflow":"src.whatsapp.WhatsAppGateway","verification_method":"strict semantic MCP schema + work namespace + provenance + zero side effects","status":"ready"},
-    {"id":"whatsapp.compose","domains":["whatsapp","tiremm"],"required_arguments":["chat","objective"],"required_capabilities":["whatsapp.mcp.read","whatsapp.mcp.send"],"classification":"CONFIRM_WRITE","workflow":"ralfloop_agent.unified_assistant.whatsapp_send.UnifiedWhatsAppApprovalExecutor","verification_method":"exact version/hash/chat binding + approval CAS + outbound message verification","status":"ready"},
-    {"id":"whatsapp.reply","domains":["whatsapp","tiremm"],"required_arguments":["chat","message_id","objective"],"required_capabilities":["whatsapp.mcp.read","whatsapp.mcp.reply"],"classification":"CONFIRM_WRITE","workflow":"ralfloop_agent.unified_assistant.whatsapp_send.UnifiedWhatsAppApprovalExecutor","verification_method":"exact version/hash/chat/message binding + approval CAS + reply verification","status":"ready"},
-    {"id":"email.compose","domains":["email","tiremm","bandi"],"required_arguments":["recipient","objective"],"required_capabilities":["google_workspace.gmail.draft","email_reply_domain_v1"],"classification":"CONFIRM_WRITE","workflow":"src.google_workspace.MagnoliaWorkflow","verification_method":"approved exact draft hash + Gmail provider result","status":"ready"},
-    {"id":"email.reply","domains":["email","tiremm"],"required_arguments":["thread_ref","objective"],"required_capabilities":["google_workspace.gmail.reply","email_reply_domain_v1"],"classification":"CONFIRM_WRITE","workflow":"src.google_workspace.MagnoliaWorkflow","verification_method":"observed thread + approved scope digest + provider result","status":"ready"},
-    {"id":"home.read","domains":["home"],"required_arguments":["target"],"required_capabilities":["home.state.read"],"classification":"READ","workflow":"ralfloop_agent.unified_assistant.home.HomeWorkflow","verification_method":"Home Assistant state read","status":"constrained"},
-    {"id":"home.control","domains":["home"],"required_arguments":["target","service"],"required_capabilities":["home.state.read","home.service.call"],"classification":"AUTO_WRITE","workflow":"ralfloop_agent.unified_assistant.home.HomeWorkflow","verification_method":"read before + write + read after","status":"constrained"},
-    {"id":"tiremm.context","domains":["tiremm","projects"],"required_arguments":["subject"],"required_capabilities":[],"classification":"READ","workflow":"ralfloop_agent.unified_assistant.memory.MemoryRouter","verification_method":"authorized namespace + provenance","status":"constrained"},
-    {"id":"bandi.read","domains":["bandi"],"required_arguments":["grant_ref"],"required_capabilities":["regione_act_dimensioning"],"classification":"READ","workflow":"ralfloop_agent.domains.capability_registry.CanonicalCapabilityRegistry","verification_method":"official source refs + checksums","status":"ready"},
-    {"id":"bandi.eligibility","domains":["bandi","tiremm"],"required_arguments":["grant_ref","organization_ref"],"required_capabilities":["regione_act_dimensioning"],"classification":"READ","workflow":"ralfloop_agent.domains.capability_registry.CanonicalCapabilityRegistry","verification_method":"deterministic rules + unresolved inputs","status":"ready"},
-    {"id":"personal_relational.analyze","domains":["personal_relational"],"required_arguments":["evidence"],"required_capabilities":["abc_formula_loop"],"classification":"READ","workflow":"openshell_backend.skills.abc_formula_loop","verification_method":"formula version + evidence separation","status":"ready"},
-    {"id":"research.deep","domains":["research","bandi"],"required_arguments":["query"],"required_capabilities":["deep_web_research"],"classification":"READ","workflow":"ralfloop_agent.model_tools.web_research","verification_method":"citation provenance completeness","status":"ready"},
-    {"id":"documents.extract","domains":["documents","bandi"],"required_arguments":["artifact_ref"],"required_capabilities":["extract_structured_data"],"classification":"READ","workflow":"ralfloop_agent.model_tools.worker","verification_method":"output schema + source artifact","status":"ready"},
-    {"id":"knowledge.retrieve","domains":["knowledge","tiremm"],"required_arguments":["query"],"required_capabilities":["semantic_search"],"classification":"READ","workflow":"integrations.cheshire_cat.ralfloop_bridge","verification_method":"source refs","status":"constrained"},
-    {"id":"infrastructure.inspect","domains":["infrastructure"],"required_arguments":["target"],"required_capabilities":[],"classification":"READ","workflow":"ralfloop_agent.integration.system_inspection","verification_method":"observed health/state","status":"constrained"},
-    {"id":"code.inspect","domains":["code"],"required_arguments":["objective"],"required_capabilities":["sandboxed_remote_code"],"classification":"READ","workflow":"ralfloop_agent.model_tools.remote_code","verification_method":"sandbox audit + artifact hash","status":"ready"},
-    {"id":"media.compose","domains":["media"],"required_arguments":["artifact_refs","objective"],"required_capabilities":["media_compose"],"classification":"AUTO_WRITE","workflow":"ralfloop_agent.local_arch.media","verification_method":"artifact hash","status":"ready"},
-    {"id":"assistant.clarify","domains":["general_assistant"],"required_arguments":["question"],"required_capabilities":["ask_user"],"classification":"READ","workflow":"ralfloop_agent.unified_assistant.planner.UnifiedPlanner","verification_method":"explicit user answer","status":"ready"}
-  ,
-    {"id":"mailchimp.read","domains":["mailchimp"],"required_arguments":["operation"],"required_capabilities":["mailchimp.ping","mailchimp.audiences.read","mailchimp.campaigns.read","mailchimp.campaign_content.read","mailchimp.members.read","mailchimp.segments.read","mailchimp.tags.read","mailchimp.member_tags.read"],"classification":"READ","workflow":"ralfloop_agent.unified_assistant.core.UnifiedAssistantCore._read_mailchimp","verification_method":"strict MCP schema + side_effects=0 + writes=0 + sends=0","status":"ready"},
-    {"id":"mailchimp.campaign.create","domains":["mailchimp"],"required_arguments":["action"],"required_capabilities":["mailchimp.campaign.create.approved"],"classification":"CONFIRM_WRITE","workflow":"ralfloop_agent.unified_assistant.mailchimp_campaign.MailchimpCampaignWorkflow.execute_create","verification_method":"separate scope approval + CAS + campaign readback","status":"ready"},
-    {"id":"mailchimp.campaign.send","domains":["mailchimp"],"required_arguments":["action"],"required_capabilities":["mailchimp.campaign.send.approved"],"classification":"CONFIRM_WRITE","workflow":"ralfloop_agent.unified_assistant.mailchimp_campaign.MailchimpCampaignWorkflow.execute_send","verification_method":"separate scope approval + provider fingerprint + CAS + sent readback","status":"ready"}]
+    {
+      "id": "email.search",
+      "domains": [
+        "email",
+        "tiremm"
+      ],
+      "required_arguments": [
+        "organization",
+        "concept"
+      ],
+      "required_capabilities": [
+        "google_workspace.gmail.search",
+        "google_workspace.gmail.read"
+      ],
+      "classification": "READ",
+      "workflow": "ralfloop_agent.unified_assistant.email_search.GoogleWorkspaceEmailSearch",
+      "verification_method": "read-only operations + searched scope + message provenance",
+      "status": "ready"
+    },
+    {
+      "id": "fastweb.portal.read",
+      "domains": [
+        "tiremm"
+      ],
+      "required_arguments": [
+        "objective"
+      ],
+      "required_capabilities": [
+        "fastweb.portal.read_only"
+      ],
+      "classification": "READ",
+      "workflow": "ralfloop_agent.unified_assistant.fastweb_portal.FastwebPortalReadOnly",
+      "verification_method": "authenticated current-page accessibility snapshot + field provenance",
+      "status": "ready"
+    },
+    {
+      "id": "fastweb.compare",
+      "domains": [
+        "tiremm"
+      ],
+      "required_arguments": [
+        "email_evidence",
+        "portal_state"
+      ],
+      "required_capabilities": [
+        "fastweb.portal.read_only",
+        "google_workspace.gmail.search"
+      ],
+      "classification": "READ",
+      "workflow": "ralfloop_agent.unified_assistant.runtime.fastweb_compare_adapter",
+      "verification_method": "separate Gmail and portal provenance; no fact inference",
+      "status": "ready"
+    },
+    {
+      "id": "whatsapp.read",
+      "domains": [
+        "whatsapp",
+        "tiremm"
+      ],
+      "required_arguments": [
+        "objective"
+      ],
+      "required_capabilities": [
+        "whatsapp.mcp.read"
+      ],
+      "classification": "READ",
+      "workflow": "src.whatsapp.WhatsAppGateway",
+      "verification_method": "strict semantic MCP schema + work namespace + provenance + zero side effects",
+      "status": "ready"
+    },
+    {
+      "id": "whatsapp.compose",
+      "domains": [
+        "whatsapp",
+        "tiremm"
+      ],
+      "required_arguments": [
+        "chat",
+        "objective"
+      ],
+      "required_capabilities": [
+        "whatsapp.mcp.read",
+        "whatsapp.mcp.send"
+      ],
+      "classification": "CONFIRM_WRITE",
+      "workflow": "ralfloop_agent.unified_assistant.whatsapp_send.UnifiedWhatsAppApprovalExecutor",
+      "verification_method": "exact version/hash/chat binding + approval CAS + outbound message verification",
+      "status": "ready"
+    },
+    {
+      "id": "whatsapp.reply",
+      "domains": [
+        "whatsapp",
+        "tiremm"
+      ],
+      "required_arguments": [
+        "chat",
+        "message_id",
+        "objective"
+      ],
+      "required_capabilities": [
+        "whatsapp.mcp.read",
+        "whatsapp.mcp.reply"
+      ],
+      "classification": "CONFIRM_WRITE",
+      "workflow": "ralfloop_agent.unified_assistant.whatsapp_send.UnifiedWhatsAppApprovalExecutor",
+      "verification_method": "exact version/hash/chat/message binding + approval CAS + reply verification",
+      "status": "ready"
+    },
+    {
+      "id": "email.compose",
+      "domains": [
+        "email",
+        "tiremm",
+        "bandi"
+      ],
+      "required_arguments": [
+        "recipient",
+        "objective"
+      ],
+      "required_capabilities": [
+        "google_workspace.gmail.draft",
+        "email_reply_domain_v1"
+      ],
+      "classification": "CONFIRM_WRITE",
+      "workflow": "src.google_workspace.MagnoliaWorkflow",
+      "verification_method": "approved exact draft hash + Gmail provider result",
+      "status": "ready"
+    },
+    {
+      "id": "email.reply",
+      "domains": [
+        "email",
+        "tiremm"
+      ],
+      "required_arguments": [
+        "thread_ref",
+        "objective"
+      ],
+      "required_capabilities": [
+        "google_workspace.gmail.reply",
+        "email_reply_domain_v1"
+      ],
+      "classification": "CONFIRM_WRITE",
+      "workflow": "src.google_workspace.MagnoliaWorkflow",
+      "verification_method": "observed thread + approved scope digest + provider result",
+      "status": "ready"
+    },
+    {
+      "id": "home.read",
+      "domains": [
+        "home"
+      ],
+      "required_arguments": [
+        "target"
+      ],
+      "required_capabilities": [
+        "home.state.read"
+      ],
+      "classification": "READ",
+      "workflow": "ralfloop_agent.unified_assistant.home.HomeWorkflow",
+      "verification_method": "Home Assistant state read",
+      "status": "constrained"
+    },
+    {
+      "id": "home.control",
+      "domains": [
+        "home"
+      ],
+      "required_arguments": [
+        "target",
+        "service"
+      ],
+      "required_capabilities": [
+        "home.state.read",
+        "home.service.call"
+      ],
+      "classification": "AUTO_WRITE",
+      "workflow": "ralfloop_agent.unified_assistant.home.HomeWorkflow",
+      "verification_method": "read before + write + read after",
+      "status": "constrained"
+    },
+    {
+      "id": "tiremm.context",
+      "domains": [
+        "tiremm",
+        "projects"
+      ],
+      "required_arguments": [
+        "subject"
+      ],
+      "required_capabilities": [
+        "memory.entities.read",
+        "memory.documents.search"
+      ],
+      "classification": "READ",
+      "workflow": "ralfloop_agent.unified_assistant.memory_mcp.MemoryMCPServer",
+      "verification_method": "authorized domain scope + source provenance/content hashes",
+      "status": "ready"
+    },
+    {
+      "id": "bandi.research",
+      "domains": [
+        "bandi",
+        "tiremm"
+      ],
+      "required_arguments": [
+        "objective"
+      ],
+      "required_capabilities": [
+        "bandi_research_now",
+        "bandi_latest",
+        "bandi_search_latest",
+        "bandi_get_opportunity"
+      ],
+      "classification": "READ",
+      "workflow": "ralfloop_agent.unified_assistant.bandi_mcp_adapter.BandiMCPContext.request",
+      "verification_method": "bounded fresh search + official-source-first filtering + persisted report + zero external writes",
+      "status": "ready"
+    },
+    {
+      "id": "bandi.read",
+      "domains": [
+        "bandi"
+      ],
+      "required_arguments": [
+        "objective"
+      ],
+      "required_capabilities": [
+        "bandi_latest",
+        "bandi_search_latest",
+        "bandi_get_opportunity",
+        "regione_act_dimensioning"
+      ],
+      "classification": "READ",
+      "workflow": "ralfloop_agent.unified_assistant.bandi_mcp_adapter.BandiMCPContext.request",
+      "verification_method": "strict Bandi MCP + persisted official-source report + provenance + checksums",
+      "status": "ready"
+    },
+    {
+      "id": "bandi.eligibility",
+      "domains": [
+        "bandi",
+        "tiremm"
+      ],
+      "required_arguments": [
+        "objective"
+      ],
+      "required_capabilities": [
+        "bandi_search_latest",
+        "bandi_get_opportunity",
+        "regione_act_dimensioning"
+      ],
+      "classification": "READ",
+      "workflow": "ralfloop_agent.unified_assistant.bandi_mcp_adapter.BandiMCPContext.request",
+      "verification_method": "Bandi MCP candidate evidence + deterministic compatibility fields + unresolved criticalities",
+      "status": "ready"
+    },
+    {
+      "id": "bandi.discovery",
+      "domains": [
+        "bandi"
+      ],
+      "required_arguments": [
+        "query"
+      ],
+      "required_capabilities": [
+        "bandi.latest.read",
+        "bandi.search.read",
+        "bandi.opportunity.read"
+      ],
+      "classification": "READ",
+      "workflow": "MCP:/run/ralf-bandi-mcp/mcp.sock",
+      "verification_method": "persisted Bandi report + source URLs/call keys; zero mutation",
+      "status": "ready"
+    },
+    {
+      "id": "bandi.refresh",
+      "domains": [
+        "bandi",
+        "research"
+      ],
+      "required_arguments": [
+        "focus"
+      ],
+      "required_capabilities": [
+        "bandi.research.refresh"
+      ],
+      "classification": "AUTO_WRITE",
+      "workflow": "MCP:/run/ralf-bandi-mcp/mcp.sock",
+      "verification_method": "bounded official-source-first research + persisted report provenance",
+      "status": "ready"
+    },
+    {
+      "id": "personal_relational.analyze",
+      "domains": [
+        "personal_relational"
+      ],
+      "required_arguments": [
+        "evidence"
+      ],
+      "required_capabilities": [
+        "abc_formula_loop"
+      ],
+      "classification": "READ",
+      "workflow": "openshell_backend.skills.abc_formula_loop",
+      "verification_method": "formula version + evidence separation",
+      "status": "ready"
+    },
+    {
+      "id": "research.deep",
+      "domains": [
+        "research",
+        "bandi"
+      ],
+      "required_arguments": [
+        "query"
+      ],
+      "required_capabilities": [
+        "deep_web_research"
+      ],
+      "classification": "READ",
+      "workflow": "ralfloop_agent.model_tools.web_research",
+      "verification_method": "citation provenance completeness",
+      "status": "ready"
+    },
+    {
+      "id": "documents.extract",
+      "domains": [
+        "documents",
+        "bandi"
+      ],
+      "required_arguments": [
+        "artifact_ref"
+      ],
+      "required_capabilities": [
+        "extract_structured_data"
+      ],
+      "classification": "READ",
+      "workflow": "ralfloop_agent.model_tools.worker",
+      "verification_method": "output schema + source artifact",
+      "status": "ready"
+    },
+    {
+      "id": "knowledge.retrieve",
+      "domains": [
+        "knowledge",
+        "tiremm"
+      ],
+      "required_arguments": [
+        "query"
+      ],
+      "required_capabilities": [
+        "memory.documents.search",
+        "memory.entities.read"
+      ],
+      "classification": "READ",
+      "workflow": "ralfloop_agent.unified_assistant.memory_mcp.MemoryMCPServer",
+      "verification_method": "domain-scoped read-only retrieval + source refs/content hashes",
+      "status": "ready"
+    },
+    {
+      "id": "infrastructure.inspect",
+      "domains": [
+        "infrastructure"
+      ],
+      "required_arguments": [
+        "target"
+      ],
+      "required_capabilities": [],
+      "classification": "READ",
+      "workflow": "ralfloop_agent.integration.system_inspection",
+      "verification_method": "observed health/state",
+      "status": "constrained"
+    },
+    {
+      "id": "code.inspect",
+      "domains": [
+        "code"
+      ],
+      "required_arguments": [
+        "objective"
+      ],
+      "required_capabilities": [
+        "sandboxed_remote_code"
+      ],
+      "classification": "READ",
+      "workflow": "ralfloop_agent.model_tools.remote_code",
+      "verification_method": "sandbox audit + artifact hash",
+      "status": "ready"
+    },
+    {
+      "id": "media.compose",
+      "domains": [
+        "media"
+      ],
+      "required_arguments": [
+        "artifact_refs",
+        "objective"
+      ],
+      "required_capabilities": [
+        "media_compose"
+      ],
+      "classification": "AUTO_WRITE",
+      "workflow": "ralfloop_agent.local_arch.media",
+      "verification_method": "artifact hash",
+      "status": "ready"
+    },
+    {
+      "id": "editorial.flyer",
+      "domains": [
+        "editorial",
+        "tiremm"
+      ],
+      "required_arguments": [
+        "objective"
+      ],
+      "required_capabilities": [
+        "flyer_projects",
+        "flyer_brief",
+        "flyer_review",
+        "flyer_marketing_review",
+        "flyer_media_review",
+        "flyer_render"
+      ],
+      "classification": "AUTO_WRITE",
+      "workflow": "ralfloop_agent.unified_assistant.editorial_mcp_adapter.EditorialMCPContext.request",
+      "verification_method": "strict MCP discovery + source provenance + marketing/media preflight + local artifact output",
+      "status": "ready"
+    },
+    {
+      "id": "assistant.clarify",
+      "domains": [
+        "general_assistant"
+      ],
+      "required_arguments": [
+        "question"
+      ],
+      "required_capabilities": [
+        "ask_user"
+      ],
+      "classification": "READ",
+      "workflow": "ralfloop_agent.unified_assistant.planner.UnifiedPlanner",
+      "verification_method": "explicit user answer",
+      "status": "ready"
+    },
+    {
+      "id": "runts.context",
+      "domains": [
+        "runts",
+        "tiremm"
+      ],
+      "required_arguments": [
+        "query"
+      ],
+      "required_capabilities": [
+        "memory.entities.read",
+        "memory.documents.search",
+        "memory.timeline.read"
+      ],
+      "classification": "READ",
+      "workflow": "ralfloop_agent.unified_assistant.memory_mcp.MemoryMCPServer",
+      "verification_method": "read-only operational memory + provenance/content hashes",
+      "status": "ready"
+    },
+    {
+      "id": "arci.context",
+      "domains": [
+        "arci",
+        "tiremm"
+      ],
+      "required_arguments": [
+        "query"
+      ],
+      "required_capabilities": [
+        "arci.organization.read",
+        "arci.members.read",
+        "arci.cards.read",
+        "arci.membership.verify"
+      ],
+      "classification": "READ",
+      "workflow": "MCP:/run/ralf-arci-mcp/mcp.sock",
+      "verification_method": "strict MCP read tools + provider evidence",
+      "status": "ready"
+    },
+    {
+      "id": "jellyfin.identify",
+      "domains": [
+        "jellyfin",
+        "media"
+      ],
+      "required_arguments": [
+        "query"
+      ],
+      "required_capabilities": [
+        "jellyfin.identity.list",
+        "jellyfin.identity.search"
+      ],
+      "classification": "READ",
+      "workflow": "MCP:/run/ralf-jellyfin-mcp/mcp.sock",
+      "verification_method": "candidate identity evidence; zero mutation",
+      "status": "ready"
+    },
+    {
+      "id": "jellyfin.apply_identity",
+      "domains": [
+        "jellyfin",
+        "media"
+      ],
+      "required_arguments": [
+        "item_id",
+        "candidate_id"
+      ],
+      "required_capabilities": [
+        "jellyfin.identity.apply"
+      ],
+      "classification": "PROTECTED",
+      "workflow": "MCP:/run/ralf-jellyfin-mcp/mcp.sock",
+      "verification_method": "protected mutation + Jellyfin provider readback",
+      "status": "ready"
+    },
+    {
+      "id": "education.tutor",
+      "domains": [
+        "education"
+      ],
+      "required_arguments": [
+        "user_goal"
+      ],
+      "required_capabilities": [
+        "teacher.explain",
+        "teacher.exercise",
+        "teacher.quiz",
+        "teacher.progress"
+      ],
+      "classification": "READ",
+      "workflow": "MCP:/run/ralf-teacher-mcp/mcp.sock",
+      "verification_method": "student-only MCP boundary + session evidence",
+      "status": "ready"
+    },
+    {
+      "id": "documents.visual_retrieve",
+      "domains": [
+        "documents",
+        "knowledge"
+      ],
+      "required_arguments": [
+        "artifact_ref",
+        "query"
+      ],
+      "required_capabilities": [
+        "visual_document_retrieval"
+      ],
+      "classification": "READ",
+      "workflow": "ralfloop_agent.local_arch.media.VisualRagWorker",
+      "verification_method": "page/region provenance; visual embedding backend required before promotion",
+      "status": "constrained"
+    },
+    {
+      "id": "mailchimp.read",
+      "domains": [
+        "mailchimp"
+      ],
+      "required_arguments": [
+        "operation"
+      ],
+      "required_capabilities": [
+        "mailchimp.ping",
+        "mailchimp.audiences.read",
+        "mailchimp.campaigns.read",
+        "mailchimp.campaign_content.read",
+        "mailchimp.members.read",
+        "mailchimp.segments.read",
+        "mailchimp.tags.read",
+        "mailchimp.member_tags.read"
+      ],
+      "classification": "READ",
+      "workflow": "ralfloop_agent.unified_assistant.core.UnifiedAssistantCore._read_mailchimp",
+      "verification_method": "strict MCP schema + side_effects=0 + writes=0 + sends=0",
+      "status": "ready"
+    },
+    {
+      "id": "mailchimp.campaign.create",
+      "domains": [
+        "mailchimp"
+      ],
+      "required_arguments": [
+        "action"
+      ],
+      "required_capabilities": [
+        "mailchimp.campaign.create.approved"
+      ],
+      "classification": "CONFIRM_WRITE",
+      "workflow": "ralfloop_agent.unified_assistant.mailchimp_campaign.MailchimpCampaignWorkflow.execute_create",
+      "verification_method": "separate scope approval + CAS + campaign readback",
+      "status": "ready"
+    },
+    {
+      "id": "mailchimp.campaign.send",
+      "domains": [
+        "mailchimp"
+      ],
+      "required_arguments": [
+        "action"
+      ],
+      "required_capabilities": [
+        "mailchimp.campaign.send.approved"
+      ],
+      "classification": "CONFIRM_WRITE",
+      "workflow": "ralfloop_agent.unified_assistant.mailchimp_campaign.MailchimpCampaignWorkflow.execute_send",
+      "verification_method": "separate scope approval + provider fingerprint + CAS + sent readback",
+      "status": "ready"
+    },
+    {
+      "id": "mailchimp.member.subscribe",
+      "domains": [
+        "mailchimp"
+      ],
+      "required_arguments": [
+        "action",
+        "email_address"
+      ],
+      "required_capabilities": [
+        "mailchimp.member.subscribe.approved"
+      ],
+      "classification": "CONFIRM_WRITE",
+      "workflow": "ralfloop_agent.unified_assistant.mailchimp_campaign.MailchimpCampaignWorkflow.execute_subscribe",
+      "verification_method": "exact member scope approval + CAS + pre-read + subscribed readback; unsubscribed/cleaned never silently reactivated",
+      "status": "ready"
+    },
+    {
+      "id": "meteo.read",
+      "domains": [
+        "general_assistant"
+      ],
+      "required_arguments": [
+        "objective"
+      ],
+      "required_capabilities": [
+        "meteo.current",
+        "meteo.radar",
+        "meteo.geocode"
+      ],
+      "classification": "READ",
+      "workflow": "ralfloop_agent.unified_assistant.meteo_mcp_adapter.MeteoMCPReadOnly",
+      "verification_method": "strict MCP discovery + Telegram GPS/address provenance + side_effects=0",
+      "status": "ready"
+    },
+    {
+      "id": "atm.route",
+      "domains": [
+        "general_assistant"
+      ],
+      "required_arguments": [
+        "objective"
+      ],
+      "required_capabilities": [
+        "atm.route",
+        "atm.route.named",
+        "atm.geocode"
+      ],
+      "classification": "READ",
+      "workflow": "ralfloop_agent.unified_assistant.atm_mcp_adapter.ATMMCPReadOnly",
+      "verification_method": "strict MCP discovery + Telegram GPS/named-origin provenance + side_effects=0",
+      "status": "ready"
+    },
+    {
+      "id": "browser.inspect",
+      "auto_route": true,
+      "routing_hints": [
+        "browser",
+        "playwright",
+        "snapshot browser",
+        "snapshot pagina",
+        "ispeziona pagina web",
+        "leggi pagina web",
+        "schede browser",
+        "tab browser"
+      ],
+      "domains": [
+        "browser"
+      ],
+      "required_arguments": [
+        "objective"
+      ],
+      "required_capabilities": [
+        "browser.snapshot.read",
+        "browser.tabs.read"
+      ],
+      "classification": "READ",
+      "workflow": "ralfloop_agent.unified_assistant.browser_mcp_adapter.browser_inspect_adapter",
+      "verification_method": "strict tool allowlist: browser_snapshot or browser_tabs action=list; side_effects=0",
+      "status": "ready"
+    },
+    {
+      "id": "browser.interact",
+      "routing_hints": [
+        "clicca browser",
+        "scrivi browser",
+        "digita browser",
+        "compila pagina",
+        "carica file browser",
+        "upload browser",
+        "submit browser",
+        "invia form"
+      ],
+      "domains": [
+        "browser"
+      ],
+      "required_arguments": [
+        "action",
+        "target"
+      ],
+      "required_capabilities": [
+        "browser.click",
+        "browser.type",
+        "browser.upload",
+        "browser.submit"
+      ],
+      "classification": "CONFIRM_WRITE",
+      "workflow": "approval-bound browser action executor required",
+      "verification_method": "never auto-routed; exact action approval plus post-action snapshot required",
+      "status": "constrained"
+    }
+  ]
 }
