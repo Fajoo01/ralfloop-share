@@ -52,7 +52,7 @@ def main() -> int:
         cases = [("A", "trova il percorso minimo", "AF", "shortest_path"),
                  ("B", "richiesta su PDF scannerizzato con una tabella", "VR", "visual_rag"),
                  ("C", "pubblica il post", "AP", "external_action"),
-                 ("D", "definisci una strategia ambigua per un problema nuovo", "LM", "colibri_director")]
+                 ("D", "definisci una strategia ambigua per un problema nuovo", "LM", "bottazzi_motor")]
         results = []
         for label, text, action, target in cases:
             decision = router.classify(text)
