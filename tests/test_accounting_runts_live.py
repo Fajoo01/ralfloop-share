@@ -356,3 +356,142 @@ def test_commercialista_adapter_consumes_external_evidence_snapshot(tmp_path):
     assert audit["human_confirmation_batch"]["executable"] is False
     assert "gmail:message:abc" in artifact.evidence_refs
     assert "pronti per conferma umana" in artifact.payload["message"]
+
+def test_pending_paypal_authorization_is_suppressed_and_settled_raw_payment_is_recovered(tmp_path):
+    import json
+    db = tmp_path / "runts_suite.db"
+    build_db(db)
+    conn = sqlite3.connect(db)
+    conn.execute("""
+        CREATE TABLE movements_raw (
+            raw_id INTEGER PRIMARY KEY,
+            import_id INTEGER NOT NULL,
+            row_number INTEGER NOT NULL,
+            payload_originale_json TEXT NOT NULL
+        )
+    """)
+    conn.execute(
+        "INSERT INTO imports(import_id,filename,source_type,import_timestamp,hash_file,parser_usato,account_id) VALUES(?,?,?,?,?,?,?)",
+        (108, "paypal.CSV", "csv_generic", "2026-01-01T00:00:01", "paypal-hash", "csv_upload_v1", 1),
+    )
+    conn.executemany(
+        """INSERT INTO movements(
+            movement_id,import_id,account_id,data_movimento,descrizione_originale,
+            importo_signed,contropartita,category_id,project_id,internal_category_id,
+            is_transfer,is_duplicate,movement_kind,notes,stato_validazione
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        [
+            (8,108,1,"2025-01-22","PayPal",-4.72,"PayPal",5,None,None,0,0,None,None,"da_rivedere"),
+            (9,108,1,"2025-01-23","PayPal",-54.99,"PayPal",5,None,None,0,0,None,None,"da_rivedere"),
+            (10,108,1,"2025-01-23","PayPal",4.72,"PayPal",5,None,None,0,0,None,None,"da_rivedere"),
+        ],
+    )
+    raw_rows = [
+        {"Nome":"PayPal","Tipo":"Blocco conto per autorizzazione aperta","Stato":"In sospeso","Lordo":"-4,72","Codice transazione":"HOLD-1","Codice transazione di riferimento":"AUTH-1","Impatto sul saldo":"Addebito"},
+        {"Nome":"AMZN Mktp IT","Tipo":"Transazione generica con carta di debito PayPal","Stato":"Completata","Lordo":"-54,99","Codice transazione":"SETTLED-1","Codice transazione di riferimento":"AUTH-1","Impatto sul saldo":"Addebito"},
+        {"Nome":"PayPal","Tipo":"Storno di blocco conto generico","Stato":"Completata","Lordo":"4,72","Codice transazione":"REV-1","Codice transazione di riferimento":"HOLD-1","Impatto sul saldo":"Accredito"},
+    ]
+    conn.executemany(
+        "INSERT INTO movements_raw(raw_id,import_id,row_number,payload_originale_json) VALUES(?,?,?,?)",
+        [(101 + index, 108, index, json.dumps(payload)) for index, payload in enumerate(raw_rows, start=1)],
+    )
+    conn.commit()
+    conn.close()
+
+    before = sha256(db)
+    result = audit_runts_missing_documents(db, year=2025)
+    after = sha256(db)
+
+    assert before == after
+    assert result["summary"]["raw_expense_movement_count"] == 5
+    assert result["summary"]["paypal_pending_authorization_suppressed_count"] == 1
+    assert result["summary"]["paypal_pending_authorization_suppressed_total_eur"] == "4.72"
+    assert result["summary"]["expense_movement_count"] == 4
+    assert result["summary"]["paypal_raw_settled_match_count"] == 1
+    assert all(row["movement_id"] != "8" for row in result["rows"])
+    settled = next(row for row in result["rows"] if row["movement_id"] == "9")
+    assert settled["ready_for_human_confirmation"] is True
+    assert settled["paypal_raw_settled_match"] is True
+    evidence = next(ev for ev in settled["external_evidence"] if ev["kind"] == "paypal_raw_settled_transaction")
+    assert evidence["merchant"] == "AMZN Mktp IT"
+    assert evidence["fiscal_document"] is False
+    assert evidence["transaction_reference_hash"]
+
+def test_exact_paypal_topup_group_match_never_invents_pair_identity(tmp_path):
+    db = tmp_path / "runts_suite.db"
+    build_db(db)
+    conn = sqlite3.connect(db)
+    conn.executemany(
+        "INSERT INTO imports(import_id,filename,source_type,import_timestamp,hash_file,parser_usato,account_id) VALUES(?,?,?,?,?,?,?)",
+        [
+            (108, "bank.xlsx", "xlsx_bank_italia", "2026-01-01T00:00:01", "bank-topup", "fixture", 1),
+            (109, "paypal.CSV", "csv_generic", "2026-01-01T00:00:02", "paypal-topup", "fixture", 1),
+        ],
+    )
+    conn.executemany(
+        """INSERT INTO movements(
+            movement_id,import_id,account_id,data_movimento,descrizione_originale,
+            importo_signed,contropartita,category_id,project_id,internal_category_id,
+            is_transfer,is_duplicate,movement_kind,notes,stato_validazione
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        [
+            (8,108,1,"2025-11-03","Pagamenti paesi UE DEL 29/10/25 C/O PAYPAL *ADD TO BAL CARTA N. 1006",-5,"",5,None,None,0,0,None,None,"da_rivedere"),
+            (9,108,1,"2025-11-03","Pagamenti paesi UE DEL 29/10/25 C/O PAYPAL *ADD TO BAL CARTA N. 1006",-5,"",5,None,None,0,0,None,None,"da_rivedere"),
+            (10,109,1,"2025-10-29","Versamento generico con carta",5,"",None,None,None,0,0,None,None,"importato"),
+            (11,109,1,"2025-10-29","Versamento generico con carta",5,"",None,None,None,0,0,None,None,"importato"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+    result = audit_runts_missing_documents(db, year=2025)
+    matched = [row for row in result["rows"] if row["movement_id"] in {"8","9"}]
+    assert len(matched) == 2
+    assert all(row["ready_for_human_confirmation"] for row in matched)
+    assert all(row["suggested_human_decision"] == "confirm_internal_transfer" for row in matched)
+    for row in matched:
+        evidence = next(ev for ev in row["external_evidence"] if ev["kind"] == "paypal_balance_transfer_group_match")
+        assert evidence["pairing_identity_unresolved"] is True
+        assert evidence["candidate_count"] == 2
+        assert evidence["debit_group_count"] == 2
+        assert evidence["fiscal_document"] is False
+    assert result["summary"]["paypal_balance_transfer_group_match_count"] == 2
+
+
+def test_revolut_completed_payment_raw_evidence_is_ready_but_not_fiscal_document(tmp_path):
+    import json
+    db = tmp_path / "runts_suite.db"
+    build_db(db)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE movements_raw(raw_id INTEGER PRIMARY KEY, import_id INTEGER NOT NULL, row_number INTEGER NOT NULL, payload_originale_json TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO imports(import_id,filename,source_type,import_timestamp,hash_file,parser_usato,account_id) VALUES(?,?,?,?,?,?,?)",
+        (108, "revolut.xlsx", "xlsx_revolut", "2026-01-01T00:00:01", "revolut-hash", "xlsx_revolut_v1", 1),
+    )
+    conn.execute(
+        """INSERT INTO movements(
+            movement_id,import_id,account_id,data_movimento,descrizione_originale,
+            importo_signed,contropartita,category_id,project_id,internal_category_id,
+            is_transfer,is_duplicate,movement_kind,notes,stato_validazione
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (8,108,1,"2025-10-02","To Arci Milano",-135.20,"",5,None,None,0,0,None,None,"da_rivedere"),
+    )
+    conn.execute(
+        "INSERT INTO movements_raw(raw_id,import_id,row_number,payload_originale_json) VALUES(?,?,?,?)",
+        (101,108,1,json.dumps({
+            "data":"2025-10-02","descrizione":"To Arci Milano","descrizione_banca":"To Arci Milano",
+            "importo":"-135.20","Tipo":"Pagamento","State":"COMPLETATO","parser_layout":"revolut_xlsx",
+        })),
+    )
+    conn.commit()
+    conn.close()
+    result = audit_runts_missing_documents(db, year=2025)
+    row = next(item for item in result["rows"] if item["movement_id"] == "8")
+    assert row["ready_for_human_confirmation"] is True
+    assert row["revolut_completed_payment_match"] is True
+    evidence = next(ev for ev in row["external_evidence"] if ev["kind"] == "revolut_completed_payment_reference")
+    assert evidence["confidence"] == 95
+    assert evidence["fiscal_document"] is False
+    assert row["original_document_status"] == "MISSING"
+    assert result["summary"]["revolut_completed_payment_match_count"] == 1

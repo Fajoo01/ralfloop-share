@@ -107,6 +107,10 @@ def test_bank_native_references_are_strong_payment_context_not_fiscal_documents(
     fee = extract_bank_native_reference({"movement_id":"2447","description":"COMPETENZE SPESE"})
     assert fee["kind"] == "bank_fee_statement_reference" and fee["confidence"] == 95
     assert fee["fiscal_document"] is False
+    singular_fee = extract_bank_native_reference({"movement_id":"2405","description":"COMMISSIONE"})
+    assert singular_fee["kind"] == "bank_fee_statement_reference" and singular_fee["confidence"] == 95
+    withholding = extract_bank_native_reference({"movement_id":"2163","description":"Ritenute Su Interessi"})
+    assert withholding["kind"] == "bank_interest_withholding_reference" and withholding["confidence"] == 95
     sdd = extract_bank_native_reference({"movement_id":"2500","description":"PAGAMENTO UTENZA TELEFONICA CORE RCUR Prg.Car.: 250240490021197 FASTWEB SPA - ADDEBITO FASTWEB 2025- M003048569 SDD 11662640"})
     assert sdd["kind"] == "bank_sdd_utility_reference" and sdd["confidence"] == 92
     card = extract_bank_native_reference({"movement_id":"2465","description":"Pagamenti paesi UE DEL 07/03/25 IN ITALIA A MILANO Valuta EUR Paese Italia C/O JustEatItaly CARTA N. 483847******1006 - CIRCUITO VISA"})

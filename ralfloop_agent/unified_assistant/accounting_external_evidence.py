@@ -28,7 +28,8 @@ _BANK_SDD_UTILITY_RE = re.compile(r"\bPAGAMENTO\s+UTENZA(?:\s+TELEFONICA)?\b.*\b
 _BANK_CARD_MERCHANT_RE = re.compile(r"\bPagamenti\s+paesi\s+UE\s+DEL\s+\d{2}/\d{2}/\d{2}\b.*\bC/O\s+.+?\s+CARTA\s+N\.", re.I)
 _BANK_F24_RE = re.compile(r"\b(?:DELEGA\s+F24|ADD\.DELEGA\s+F24)\b", re.I)
 _BANK_CBILL_RE = re.compile(r"\bCBILL\b", re.I)
-_BANK_FEE_RE = re.compile(r"^\s*(?:COMPETENZE\s+SPESE|COMMISSIONI(?:\s+BANCARIE)?|CANONE\s+CONTO)\s*$", re.I)
+_BANK_FEE_RE = re.compile(r"^\s*(?:COMPETENZE\s+SPESE|COMMISSIONE|COMMISSIONI(?:\s+BANCARIE)?|CANONE\s+CONTO)\s*$", re.I)
+_BANK_WITHHOLDING_RE = re.compile(r"^\s*RITENUT[AE]\s+SU\s+INTERESSI\s*$", re.I)
 _BANK_TRANSFER_RE = re.compile(r"\b(?:ADDEBITO\s+BONIFICO|DISPOSIZIONE\s+DI\s+BONIFICO|Bonifico\s+Disposto)\b", re.I)
 _BANK_PURPOSE_RE = re.compile(r"\b(?:FATTURA|RICEVUTA|NOTA|RIMBORSO|AFFITTO|PRESTITO|TESSER|SUPPORTO|INTERVALLO|LEZION|COMPENSO)\w*\b", re.I)
 
@@ -94,6 +95,8 @@ def extract_bank_native_reference(movement: Mapping[str, Any]) -> dict[str, Any]
         kind, confidence = "bank_card_merchant_reference", 90
     elif _BANK_FEE_RE.fullmatch(description):
         kind, confidence = "bank_fee_statement_reference", 95
+    elif _BANK_WITHHOLDING_RE.fullmatch(description):
+        kind, confidence = "bank_interest_withholding_reference", 95
     elif _BANK_TRANSFER_RE.search(description):
         cro = _BANK_CRO_RE.search(description)
         purpose = _BANK_PURPOSE_RE.search(description)

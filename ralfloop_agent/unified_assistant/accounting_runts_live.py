@@ -4,6 +4,8 @@ from contextlib import contextmanager
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+import hashlib
+import json
 import re
 import sqlite3
 from typing import Any, Iterator, Mapping
@@ -46,6 +48,9 @@ def _expense_rows(conn: sqlite3.Connection, year: int) -> list[sqlite3.Row]:
         SELECT
             m.movement_id,
             m.import_id,
+            i.filename AS import_filename,
+            i.source_type AS import_source_type,
+            i.parser_usato AS import_parser,
             i.hash_file AS import_hash,
             i.import_timestamp,
             ROW_NUMBER() OVER (PARTITION BY m.import_id ORDER BY m.movement_id) AS import_row_ordinal,
@@ -100,7 +105,161 @@ def _expense_rows(conn: sqlite3.Connection, year: int) -> list[sqlite3.Row]:
     ).fetchall()
 
 
-def _dedupe_replayed_import_rows(rows: list[sqlite3.Row]) -> tuple[list[dict[str, Any]], int]:
+def _attach_raw_source_rows(
+    conn: sqlite3.Connection, rows: list[sqlite3.Row]
+) -> list[dict[str, Any]]:
+    output = [dict(row) for row in rows]
+    for row in output:
+        row["raw_source_id"] = None
+        row["raw_source_row_number"] = None
+        row["raw_payload_json"] = None
+    if not output or not _table_exists(conn, "movements_raw"):
+        return output
+    import_ids = sorted({int(row["import_id"]) for row in output})
+    placeholders = ",".join("?" for _ in import_ids)
+    ordinal_by_key: dict[tuple[int, int], int] = {}
+    counters: dict[int, int] = {}
+    for source in conn.execute(
+        f"SELECT movement_id, import_id FROM movements WHERE import_id IN ({placeholders}) ORDER BY import_id, movement_id",
+        tuple(import_ids),
+    ):
+        import_id = int(source["import_id"])
+        ordinal = counters.get(import_id, 0) + 1
+        counters[import_id] = ordinal
+        ordinal_by_key[(import_id, int(source["movement_id"]))] = ordinal
+    raw_by_key = {
+        (int(raw["import_id"]), int(raw["row_number"])): raw
+        for raw in conn.execute(
+            f"SELECT raw_id, import_id, row_number, payload_originale_json FROM movements_raw WHERE import_id IN ({placeholders})",
+            tuple(import_ids),
+        )
+    }
+    for row in output:
+        key = (int(row["import_id"]), int(row["movement_id"]))
+        ordinal = ordinal_by_key.get(key)
+        row["raw_source_row_number"] = ordinal
+        raw = raw_by_key.get((key[0], int(ordinal))) if ordinal is not None else None
+        if raw is not None:
+            row["raw_source_id"] = int(raw["raw_id"])
+            row["raw_payload_json"] = str(raw["payload_originale_json"] or "")
+    return output
+
+
+def _raw_payload(row: Mapping[str, Any]) -> dict[str, Any]:
+    raw = row.get("raw_payload_json")
+    if not raw:
+        return {}
+    try:
+        value = json.loads(str(raw))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _is_pending_paypal_authorization(row: Mapping[str, Any]) -> bool:
+    payload = _raw_payload(row)
+    return (
+        str(payload.get("Tipo") or "").strip().casefold()
+        == "blocco conto per autorizzazione aperta"
+        and str(payload.get("Stato") or "").strip().casefold() == "in sospeso"
+        and (
+            str(payload.get("Nome") or "").strip().casefold() == "paypal"
+            or "paypal" in str(row.get("import_filename") or "").casefold()
+        )
+    )
+
+
+def _revolut_completed_raw_evidence(
+    row: Mapping[str, Any], *, amount: Decimal
+) -> dict[str, Any] | None:
+    payload = _raw_payload(row)
+    raw_id = row.get("raw_source_id")
+    if raw_id is None:
+        return None
+    source_is_revolut = (
+        str(row.get("import_source_type") or "").strip().casefold() == "xlsx_revolut"
+        or str(payload.get("parser_layout") or "").strip().casefold() == "revolut_xlsx"
+    )
+    description = " ".join(
+        str(payload.get(key) or "").strip()
+        for key in ("descrizione_banca", "descrizione")
+        if str(payload.get(key) or "").strip()
+    )[:320]
+    if (
+        not source_is_revolut
+        or str(payload.get("State") or "").strip().casefold() != "completato"
+        or str(payload.get("Tipo") or "").strip().casefold() != "pagamento"
+        or not description
+    ):
+        return None
+    try:
+        raw_amount = abs(_q2(payload.get("importo")))
+    except Exception:
+        return None
+    if raw_amount != amount:
+        return None
+    payload_hash = hashlib.sha256(
+        str(row.get("raw_payload_json") or "").encode("utf-8")
+    ).hexdigest()
+    return {
+        "kind": "revolut_completed_payment_reference",
+        "confidence": 95,
+        "provenance_ref": f"runts:movement_raw:{int(raw_id)}",
+        "description": description,
+        "amount_eur": str(amount),
+        "content_hash": payload_hash,
+        "content_role": "completed_payment_statement_evidence",
+        "fiscal_document": False,
+    }
+
+
+def _paypal_settled_raw_evidence(
+    row: Mapping[str, Any], *, amount: Decimal
+) -> dict[str, Any] | None:
+    payload = _raw_payload(row)
+    raw_id = row.get("raw_source_id")
+    if raw_id is None:
+        return None
+    allowed_types = {
+        "transazione generica con carta di debito paypal",
+        "pagamento",
+        "pagamento express checkout",
+    }
+    raw_type = str(payload.get("Tipo") or "").strip()
+    merchant = " ".join(str(payload.get("Nome") or "").split())[:160]
+    if (
+        raw_type.casefold() not in allowed_types
+        or str(payload.get("Stato") or "").strip().casefold() != "completata"
+        or str(payload.get("Impatto sul saldo") or "").strip().casefold() != "addebito"
+        or not merchant
+    ):
+        return None
+    try:
+        raw_amount = abs(_q2(payload.get("Lordo")))
+    except Exception:
+        return None
+    if raw_amount != amount:
+        return None
+    transaction_id = str(payload.get("Codice transazione") or "").strip()
+    payload_hash = hashlib.sha256(str(row.get("raw_payload_json") or "").encode("utf-8")).hexdigest()
+    return {
+        "kind": "paypal_raw_settled_transaction",
+        "confidence": 97,
+        "provenance_ref": f"runts:movement_raw:{int(raw_id)}",
+        "merchant": merchant,
+        "raw_type": raw_type,
+        "amount_eur": str(amount),
+        "transaction_reference_hash": (
+            hashlib.sha256(transaction_id.encode("utf-8")).hexdigest()
+            if transaction_id else None
+        ),
+        "content_hash": payload_hash,
+        "content_role": "settled_payment_evidence",
+        "fiscal_document": False,
+    }
+
+
+def _dedupe_replayed_import_rows(rows: list[Mapping[str, Any]]) -> tuple[list[dict[str, Any]], int]:
     """Represent an identical imported source once in the documentary review queue.
 
     This does not decide which ledger account owns the source.  It only suppresses
@@ -258,6 +417,18 @@ def _candidate_supplier_invoices(
 _PAYPAL_TOPUP_DATE_RE = re.compile(r"\bDEL\s+(\d{2})/(\d{2})/(\d{2})\b", re.I)
 
 
+def _paypal_topup_target_date(description: str | None, movement_date: str | None) -> str | None:
+    target_date = movement_date
+    match = _PAYPAL_TOPUP_DATE_RE.search(str(description or ""))
+    if match:
+        day, month, year2 = map(int, match.groups())
+        try:
+            target_date = date(2000 + year2, month, day).isoformat()
+        except ValueError:
+            return None
+    return str(target_date) if target_date else None
+
+
 def _candidate_paypal_balance_transfer(
     conn: sqlite3.Connection, *, amount: Decimal, movement_date: str | None,
     description: str | None, import_id: int,
@@ -265,11 +436,7 @@ def _candidate_paypal_balance_transfer(
     text = str(description or "")
     if "PAYPAL *ADD TO BAL" not in text.upper():
         return []
-    target_date = movement_date
-    match = _PAYPAL_TOPUP_DATE_RE.search(text)
-    if match:
-        day, month, year2 = map(int, match.groups())
-        target_date = date(2000 + year2, month, day).isoformat()
+    target_date = _paypal_topup_target_date(text, movement_date)
     if not target_date:
         return []
     rows = conn.execute(
@@ -300,6 +467,85 @@ def _candidate_paypal_balance_transfer(
         (str(amount), int(import_id), target_date, target_date),
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+def _promote_exact_paypal_transfer_groups(
+    conn: sqlite3.Connection, cases: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in cases:
+        if row.get("ready_for_human_confirmation"):
+            continue
+        description = str(row.get("description") or "")
+        if "PAYPAL *ADD TO BAL" not in description.upper():
+            continue
+        target_date = _paypal_topup_target_date(description, str(row.get("movement_date") or ""))
+        if not target_date:
+            continue
+        key = (str(_q2(row.get("amount_eur"))), target_date)
+        groups.setdefault(key, []).append(row)
+    for (amount, target_date), group in groups.items():
+        candidates = [dict(row) for row in conn.execute(
+            """
+            SELECT m.movement_id, m.import_id, m.account_id, m.data_movimento,
+                   m.importo_signed, m.descrizione_originale, i.filename, i.hash_file
+            FROM movements m
+            JOIN imports i ON i.import_id = m.import_id
+            WHERE m.importo_signed > 0
+              AND ABS(ROUND(m.importo_signed, 2) - ROUND(CAST(? AS REAL), 2)) <= 0.01
+              AND m.data_movimento = ?
+              AND (
+                    LOWER(COALESCE(i.filename,'')) LIKE '%paypal%'
+                    OR LOWER(COALESCE(m.descrizione_originale,'')) LIKE '%versamento generico con carta%'
+              )
+            ORDER BY m.import_id, m.movement_id
+            """,
+            (amount, target_date),
+        ).fetchall()]
+        if not candidates or len(candidates) != len(group):
+            continue
+        candidate_ids = sorted(int(row["movement_id"]) for row in candidates)
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                {
+                    "amount_eur": amount,
+                    "target_date": target_date,
+                    "debit_movement_ids": sorted(int(row["movement_id"]) for row in group),
+                    "credit_movement_ids": candidate_ids,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        for row in group:
+            movement_id = str(row["movement_id"])
+            provenance_ref = f"runts:paypal_balance_transfer_group:{fingerprint}:debit:{movement_id}"
+            evidence = {
+                "kind": "paypal_balance_transfer_group_match",
+                "confidence": 96,
+                "provenance_ref": provenance_ref,
+                "candidate_credit_movement_ids": candidate_ids,
+                "candidate_count": len(candidate_ids),
+                "debit_group_count": len(group),
+                "target_date": target_date,
+                "amount_eur": amount,
+                "economic_role": "internal_transfer_candidate",
+                "pairing_identity_unresolved": len(group) > 1,
+                "fiscal_document": False,
+            }
+            external = list(row.get("external_evidence") or ())
+            external.append(evidence)
+            row["external_evidence"] = external
+            refs = list(row.get("evidence_refs") or ())
+            refs.append(provenance_ref)
+            row["evidence_refs"] = list(dict.fromkeys(str(ref) for ref in refs if str(ref)))
+            row["ready_for_human_confirmation"] = True
+            row["suggested_human_decision"] = "confirm_internal_transfer"
+            row["reconstruction_evidence_score"] = max(
+                int(row.get("reconstruction_evidence_score") or 0), 96
+            )
+            row["paypal_balance_transfer_group_match"] = True
+    return cases
 
 
 def _candidate_amazon_orders(
@@ -382,6 +628,8 @@ def build_runts_document_case(
         movement_date=row.get("data_movimento"),
         description=" ".join(str(value or "") for value in (row.get("descrizione_originale"), row.get("contropartita"))),
     )
+    raw_paypal_evidence = _paypal_settled_raw_evidence(row, amount=amount)
+    raw_revolut_evidence = _revolut_completed_raw_evidence(row, amount=amount)
 
     original_refs = [f"runts:project_document:{doc['document_id']}" for doc in linked]
     candidate_refs, candidate_score = _candidate_refs(
@@ -395,6 +643,10 @@ def build_runts_document_case(
         f"runts:import:{import_id}" for import_id in represented_import_ids
     ]
     context_refs: list[str] = list(candidate_refs)
+    if raw_paypal_evidence is not None:
+        context_refs.append(str(raw_paypal_evidence["provenance_ref"]))
+    if raw_revolut_evidence is not None:
+        context_refs.append(str(raw_revolut_evidence["provenance_ref"]))
     paypal_transfer_unique = candidates_paypal_transfer[0] if len(candidates_paypal_transfer) == 1 else None
     if paypal_transfer_unique is not None:
         context_refs.extend([
@@ -442,7 +694,15 @@ def build_runts_document_case(
     if amazon_unique is not None:
         base_score += 35
     evidence_score = 100 if original_refs else min(98 if paypal_transfer_unique is not None else 95, base_score + candidate_score)
+    if raw_paypal_evidence is not None:
+        evidence_score = max(evidence_score, int(raw_paypal_evidence["confidence"]))
+    if raw_revolut_evidence is not None:
+        evidence_score = max(evidence_score, int(raw_revolut_evidence["confidence"]))
     external_evidence = []
+    if raw_paypal_evidence is not None:
+        external_evidence.append(dict(raw_paypal_evidence))
+    if raw_revolut_evidence is not None:
+        external_evidence.append(dict(raw_revolut_evidence))
     if paypal_transfer_unique is not None:
         external_evidence.append({
             "kind": "paypal_balance_transfer_pair",
@@ -484,9 +744,13 @@ def build_runts_document_case(
         "candidate_document_count": len(candidate_refs),
         "paypal_balance_transfer_candidate_count": len(candidates_paypal_transfer),
         "amazon_order_candidate_count": len(candidates_amazon),
+        "paypal_raw_settled_match": raw_paypal_evidence is not None,
+        "revolut_completed_payment_match": raw_revolut_evidence is not None,
         "external_evidence": external_evidence,
         "suggested_human_decision": "confirm_internal_transfer" if paypal_transfer_unique is not None else "approve_reconstruction",
-        "ready_for_human_confirmation": bool(paypal_transfer_unique or amazon_unique),
+        "ready_for_human_confirmation": bool(
+            paypal_transfer_unique or amazon_unique or raw_paypal_evidence or raw_revolut_evidence
+        ),
         "live_source": "runts_suite_sqlite_readonly",
     })
     return review
@@ -517,15 +781,19 @@ def audit_runts_missing_documents(
     with open_runts_readonly(db_path) as conn:
         data_version = int(conn.execute("PRAGMA data_version").fetchone()[0])
         raw_rows = _expense_rows(conn, year)
-        rows, source_duplicate_suppressed_count = _dedupe_replayed_import_rows(raw_rows)
+        source_rows = _attach_raw_source_rows(conn, raw_rows)
+        rows, source_duplicate_suppressed_count = _dedupe_replayed_import_rows(source_rows)
+        paypal_pending_holds = [row for row in rows if _is_pending_paypal_authorization(row)]
+        economic_rows = [row for row in rows if not _is_pending_paypal_authorization(row)]
         cases = [
             build_runts_document_case(
                 conn,
                 row,
                 human_decision=decisions.get(str(row["movement_id"])),
             )
-            for row in rows
+            for row in economic_rows
         ]
+        cases = _promote_exact_paypal_transfer_groups(conn, cases)
     from .accounting_external_evidence import enrich_rows_with_bank_native, enforce_unique_external_evidence
     cases = enrich_rows_with_bank_native(cases)
     if evidence_snapshot is not None:
@@ -546,6 +814,9 @@ def audit_runts_missing_documents(
         1 for row in cases if row.get("accounting_status") == "HUMAN_APPROVED_RECONSTRUCTION"
     )
     raw_total_amount = sum((-_q2(row["importo_signed"]) for row in raw_rows), Decimal("0"))
+    paypal_pending_hold_total = sum(
+        (-_q2(row["importo_signed"]) for row in paypal_pending_holds), Decimal("0")
+    )
     total_amount = sum((_q2(row["amount_eur"]) for row in cases), Decimal("0"))
     missing_amount = sum(
         (_q2(row["amount_eur"]) for row in cases if row["original_document_status"] == "MISSING"),
@@ -557,6 +828,9 @@ def audit_runts_missing_documents(
     amazon_matches = [row for row in cases if any(ev.get("kind") == "amazon_order" for ev in row.get("external_evidence") or ())]
     paypal_matches = [row for row in cases if any(ev.get("kind") == "paypal_email_receipt" for ev in row.get("external_evidence") or ())]
     paypal_transfer_pairs = [row for row in cases if any(ev.get("kind") == "paypal_balance_transfer_pair" for ev in row.get("external_evidence") or ())]
+    paypal_transfer_groups = [row for row in cases if any(ev.get("kind") == "paypal_balance_transfer_group_match" for ev in row.get("external_evidence") or ())]
+    paypal_raw_settled_matches = [row for row in cases if any(ev.get("kind") == "paypal_raw_settled_transaction" for ev in row.get("external_evidence") or ())]
+    revolut_completed_matches = [row for row in cases if any(ev.get("kind") == "revolut_completed_payment_reference" for ev in row.get("external_evidence") or ())]
     bank_native_matches = [
         row for row in cases
         if any(str(ev.get("kind") or "").startswith("bank_") for ev in row.get("external_evidence") or ())
@@ -581,6 +855,8 @@ def audit_runts_missing_documents(
             "raw_expense_movement_count": len(raw_rows),
             "raw_expense_total_eur": str(raw_total_amount),
             "source_duplicate_suppressed_count": source_duplicate_suppressed_count,
+            "paypal_pending_authorization_suppressed_count": len(paypal_pending_holds),
+            "paypal_pending_authorization_suppressed_total_eur": str(paypal_pending_hold_total),
             "expense_movement_count": len(cases),
             "expense_total_eur": str(total_amount),
             "linked_original_count": len(linked),
@@ -590,6 +866,9 @@ def audit_runts_missing_documents(
             "amazon_order_match_count": len(amazon_matches),
             "paypal_email_receipt_match_count": len(paypal_matches),
             "paypal_balance_transfer_pair_count": len(paypal_transfer_pairs),
+            "paypal_balance_transfer_group_match_count": len(paypal_transfer_groups),
+            "paypal_raw_settled_match_count": len(paypal_raw_settled_matches),
+            "revolut_completed_payment_match_count": len(revolut_completed_matches),
             "bank_native_reference_match_count": len(bank_native_matches),
             "ready_for_human_confirmation_count": len(ready),
             "unresolved_evidence_count": max(0, (len(cases) - len(linked)) - len(ready)),

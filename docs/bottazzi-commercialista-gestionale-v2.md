@@ -100,3 +100,23 @@ Bank-native evidence is also parsed deterministically from the existing statemen
 Exact replayed imports with the same source hash are represented once in the documentary review queue. This does not delete production movements and does not decide which account owns the source; conflicting account ownership remains explicit. PayPal `ADD TO BAL` debits are paired with exact opposite PayPal CSV credits when possible and proposed as `confirm_internal_transfer`, never excluded automatically.
 
 Real 2025 canary on 2026-09-23: 121 PayPal receipt emails were collected from the authenticated Tiremm Gmail mailbox. The raw documentary candidate set is 482 rows / EUR 23047.36; 18 replayed source rows are neutralised in the review projection, leaving 464 unique-source cases / EUR 20836.36. The audit finds 107 unique PayPal email matches, 10 Amazon order matches, 79 PayPal balance-transfer pairs and 64 bank-native references. A hash-bound non-executing batch contains 250 cases / EUR 17128.58 ready for human decision: 171 suggested `approve_reconstruction` and 79 suggested `confirm_internal_transfer`. The remaining evidence-unresolved queue is 214 cases. `writes=0`; originals remain missing unless a real original is linked, and no tax/VAT/grant/RUNTS eligibility is inferred.
+
+## Production review UI activation
+
+The production review API and Bot-tazzi UI use a dedicated systemd `EnvironmentFile` (`/etc/ralfloop/accounting-review.env`) rather than embedding host-specific accounting paths in the service drop-in. The committed deployment template is `deploy/systemd/ralfloop-backend-accounting-review.conf`; `deploy/systemd/accounting-review.env.example` documents replaceable variables without committing private source paths or credentials.
+
+Human review decisions are stored separately from RUNTS Suite in `BOTTAZZI_ACCOUNTING_REVIEW_DB`. Every write is bound to the current batch SHA-256 and item SHA-256; stale evidence fails closed. The review endpoint never mutates the RUNTS database, and a decision in this local review store is not itself a tax filing, payment, or RUNTS submission.
+
+Production smoke on 2026-09-23 after activation: 250 ready cases, 214 evidence-unresolved cases and 18 replayed-source rows neutralised; zero RUNTS writes and zero human decisions pre-applied. The UI therefore starts with the full human decision backlog rather than silently accepting suggestions.
+
+## Raw-source reconciliation hardening
+
+The legacy importer had flattened important source semantics. The Commercialista now reads `movements_raw` in read-only mode and binds the preserved raw row back to the corresponding movement without rewriting the ledger.
+
+For PayPal, `Blocco conto per autorizzazione aperta` rows whose raw state is `In sospeso` are treated as temporary authorization holds rather than documentary expenses. They are suppressed only from the review projection and remain untouched in RUNTS Suite. Settled raw PayPal transactions are accepted as strong payment evidence (`fiscal_document=false`) when type, completed state, balance impact and exact amount agree.
+
+For `PAYPAL *ADD TO BAL`, the bank description contains the actual PayPal transaction date. Exact-date/amount transfer groups are accepted only when debit and credit group cardinalities balance. A 2↔2 or 3↔3 group is not converted into invented one-to-one pairs: the evidence explicitly records `pairing_identity_unresolved=true` and still requires human confirmation of the internal-transfer interpretation.
+
+Completed Revolut raw rows (`Tipo=Pagamento`, `State=COMPLETATO`) are also strong payment evidence, but remain non-fiscal evidence. This makes payments such as `To Arci Milano` ready for human bookkeeping confirmation without inventing their accounting or tax purpose.
+
+Real 2025 canary after this hardening: 126 pending PayPal authorization holds / EUR 394.32 are removed from the documentary-expense projection; 338 economic review cases / EUR 20442.04 remain. The evidence layer finds 118 settled PayPal raw matches, 79 direct PayPal balance-transfer pairs, 39 additional exact balanced transfer-group rows, 2 completed Revolut payments and 77 bank-native references. The hash-bound human batch contains 315 cases / EUR 17946.04 ready for a decision, leaving 23 unresolved cases: 18 cash withdrawals whose destination is not proven and 5 PayPal top-ups without a sufficiently strong counterpart. No cash withdrawal is auto-classified from the old `Fitti Passivi AIG` category because those rows remain `da_rivedere` with no manual review decision.
