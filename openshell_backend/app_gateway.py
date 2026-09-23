@@ -172,6 +172,31 @@ def assistant_status() -> Response:
     return _proxy_response(upstream)
 
 
+@app.api_route("/assistant/v1/tasks", methods=["GET", "POST"])
+@app.api_route(
+    "/assistant/v1/tasks/{rest_of_path:path}",
+    methods=["GET", "POST", "PATCH", "DELETE"],
+)
+async def assistant_tasks(request: Request, rest_of_path: str = "") -> Response:
+    suffix = f"/{rest_of_path}" if rest_of_path else ""
+    headers = {}
+    content_type = request.headers.get("content-type")
+    if content_type:
+        headers["content-type"] = content_type
+    try:
+        upstream = requests.request(
+            request.method,
+            f"{BACKEND}/assistant/v1/tasks{suffix}",
+            params=list(request.query_params.multi_items()),
+            data=await request.body(),
+            headers=headers,
+            timeout=10,
+        )
+    except requests.RequestException:
+        return JSONResponse({"detail": "assistant_backend_unavailable"}, status_code=503)
+    return _proxy_response(upstream)
+
+
 @app.post("/assistant/v1/chat")
 def assistant_chat(payload: dict[str, Any]) -> Response:
     outgoing = dict(payload)

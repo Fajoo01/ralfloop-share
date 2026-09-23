@@ -9,7 +9,7 @@
         android:allowBackup="false"
         android:label="Bot-tazzi"
         android:icon="@drawable/ic_bot_tazzi"
-        android:usesCleartextTraffic="true"
+        android:usesCleartextTraffic="false"
         android:theme="@android:style/Theme.Material.NoActionBar">
         <activity
             android:name=".MainActivity"
