@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from openshell_backend.accounting_review_api import router as accounting_review_router
 from openshell_backend.chat_api import (
     ChatHistoryMessage,
     ChatRequest,
@@ -43,6 +44,7 @@ from ralfloop_agent.unified_assistant.task_queue import (
     TaskState,
 )
 router = APIRouter(prefix="/assistant/v1", tags=["assistant-v1"])
+router.include_router(accounting_review_router)
 ASSISTANT_UI_PATH = Path(__file__).with_name("bottazzi_ui.html")
 
 DEEP_HINT_RE = re.compile(

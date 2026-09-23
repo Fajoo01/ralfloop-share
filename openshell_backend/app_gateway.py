@@ -239,6 +239,31 @@ async def assistant_call_recordings(request: Request) -> Response:
     return JSONResponse({"ok": True, "recording": recording}, status_code=201)
 
 
+@app.api_route("/assistant/v1/accounting/review", methods=["GET"])
+@app.api_route(
+    "/assistant/v1/accounting/review/{rest_of_path:path}",
+    methods=["GET", "POST"],
+)
+async def assistant_accounting_review(request: Request, rest_of_path: str = "") -> Response:
+    suffix = f"/{rest_of_path}" if rest_of_path else ""
+    headers = {}
+    content_type = request.headers.get("content-type")
+    if content_type:
+        headers["content-type"] = content_type
+    try:
+        upstream = requests.request(
+            request.method,
+            f"{BACKEND}/assistant/v1/accounting/review{suffix}",
+            params=list(request.query_params.multi_items()),
+            data=await request.body(),
+            headers=headers,
+            timeout=30,
+        )
+    except requests.RequestException:
+        return JSONResponse({"detail": "assistant_backend_unavailable"}, status_code=503)
+    return _proxy_response(upstream)
+
+
 @app.post("/assistant/v1/chat")
 def assistant_chat(payload: dict[str, Any]) -> Response:
     outgoing = dict(payload)

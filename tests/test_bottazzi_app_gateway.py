@@ -140,6 +140,42 @@ def test_call_recording_ingest_is_direct_and_idempotent(client: TestClient) -> N
     assert len(listing.json()["recordings"]) == 1
 
 
+def test_commercialista_panel_is_present_in_private_app(client: TestClient) -> None:
+    client.post("/login", json={"password": "app-pass"})
+    ui = client.get("/")
+    assert 'id="commercialista"' in ui.text
+    assert 'id="accountingSheet"' in ui.text
+    assert "/assistant/v1/accounting/review" in ui.text
+    assert "Applica suggerite al blocco" in ui.text
+
+
+def test_accounting_review_proxy_stays_authenticated_and_forwards_body(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert client.get("/assistant/v1/accounting/review").status_code == 401
+    client.post("/login", json={"password": "app-pass"})
+    seen = {}
+
+    class FakeResponse:
+        status_code = 200
+        content = b'{"ok":true,"runts_writes":0}'
+        headers = {"content-type": "application/json"}
+        ok = True
+
+    def fake_request(method, url, *, params, data, headers, timeout):
+        seen.update(method=method, url=url, params=params, data=data, headers=headers, timeout=timeout)
+        return FakeResponse()
+
+    monkeypatch.setattr(app_gateway.requests, "request", fake_request)
+    response = client.post(
+        "/assistant/v1/accounting/review/decisions",
+        json={"year": 2025, "batch_sha256": "a" * 64, "items": []},
+    )
+    assert response.status_code == 200
+    assert response.json()["runts_writes"] == 0
+    assert seen["method"] == "POST"
+    assert seen["url"].endswith("/assistant/v1/accounting/review/decisions")
+    assert b'"year":2025' in seen["data"]
+
+
 def test_android_shell_has_no_source_hardcoded_backend() -> None:
     root = Path(__file__).resolve().parents[1] / "android" / "bottazzi-app"
     gradle = (root / "app" / "build.gradle").read_text(encoding="utf-8")
