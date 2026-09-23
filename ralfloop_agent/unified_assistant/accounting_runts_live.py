@@ -208,6 +208,28 @@ def _candidate_supplier_invoices(
     return [dict(row) for row in rows]
 
 
+def _candidate_amazon_orders(
+    conn: sqlite3.Connection, *, amount: Decimal, movement_date: str | None, description: str | None,
+) -> list[dict[str, Any]]:
+    if not _table_exists(conn, "amazon_orders") or not movement_date:
+        return []
+    haystack = str(description or "").casefold()
+    if "amazon" not in haystack and "amzn" not in haystack:
+        return []
+    rows = conn.execute(
+        """
+        SELECT order_id, order_date, total_amount, currency, payment_method
+        FROM amazon_orders
+        WHERE ABS(ROUND(total_amount, 2) - ROUND(CAST(? AS REAL), 2)) <= 0.01
+          AND ABS(julianday(order_date) - julianday(?)) <= 7
+        ORDER BY ABS(julianday(order_date) - julianday(?)), order_id
+        LIMIT 20
+        """,
+        (str(amount), movement_date, movement_date),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def _candidate_refs(
     *, project_documents: list[Mapping[str, Any]],
     supporting_documents: list[Mapping[str, Any]],
@@ -253,6 +275,12 @@ def build_runts_document_case(
         amount=amount,
         movement_date=row.get("data_movimento"),
     )
+    candidates_amazon = _candidate_amazon_orders(
+        conn,
+        amount=amount,
+        movement_date=row.get("data_movimento"),
+        description=" ".join(str(value or "") for value in (row.get("descrizione_originale"), row.get("contropartita"))),
+    )
 
     original_refs = [f"runts:project_document:{doc['document_id']}" for doc in linked]
     candidate_refs, candidate_score = _candidate_refs(
@@ -265,6 +293,9 @@ def build_runts_document_case(
         f"runts:import:{int(row['import_id'])}",
     ]
     context_refs: list[str] = list(candidate_refs)
+    amazon_unique = candidates_amazon[0] if len(candidates_amazon) == 1 else None
+    if amazon_unique is not None:
+        context_refs.append(f"runts:amazon_order:{amazon_unique['order_id']}")
     if project_id is not None:
         context_refs.append(f"runts:project:{int(project_id)}")
     category_id = row.get("runts_category_id_override") or row.get("category_id_manuale") or row.get("category_id")
@@ -298,7 +329,21 @@ def build_runts_document_case(
         base_score += 10
     if str(row.get("notes") or "").strip():
         base_score += 5
+    if amazon_unique is not None:
+        base_score += 35
     evidence_score = 100 if original_refs else min(95, base_score + candidate_score)
+    external_evidence = []
+    if amazon_unique is not None:
+        external_evidence.append({
+            "kind": "amazon_order",
+            "confidence": 90,
+            "provenance_ref": f"runts:amazon_order:{amazon_unique['order_id']}",
+            "order_id": amazon_unique["order_id"],
+            "date": amazon_unique.get("order_date"),
+            "amount_eur": str(_q2(amazon_unique.get("total_amount"))),
+            "payment_method": amazon_unique.get("payment_method"),
+            "fiscal_document": False,
+        })
     review.update({
         "movement_date": row.get("data_movimento"),
         "description": row.get("descrizione_originale"),
@@ -311,6 +356,9 @@ def build_runts_document_case(
         "reconstruction_evidence_score": evidence_score,
         "candidate_document_refs": candidate_refs,
         "candidate_document_count": len(candidate_refs),
+        "amazon_order_candidate_count": len(candidates_amazon),
+        "external_evidence": external_evidence,
+        "ready_for_human_confirmation": bool(amazon_unique),
         "live_source": "runts_suite_sqlite_readonly",
     })
     return review
@@ -334,6 +382,7 @@ def latest_expense_year(db_path: str | Path) -> int | None:
 def audit_runts_missing_documents(
     db_path: str | Path, *, year: int,
     human_decisions: Mapping[str, str] | None = None,
+    evidence_snapshot: Mapping[str, Any] | None = None,
     limit: int | None = None,
 ) -> dict[str, Any]:
     decisions = dict(human_decisions or {})
@@ -348,9 +397,15 @@ def audit_runts_missing_documents(
             )
             for row in rows
         ]
+    from .accounting_external_evidence import enforce_unique_external_evidence
+    if evidence_snapshot is not None:
+        from .accounting_external_evidence import enrich_rows_with_paypal
+        cases = enrich_rows_with_paypal(cases, evidence_snapshot)
+    cases = enforce_unique_external_evidence(cases)
     cases.sort(
         key=lambda item: (
             item["original_document_status"] == "PRESENT",
+            not bool(item.get("ready_for_human_confirmation")),
             -int(item.get("reconstruction_evidence_score") or 0),
             -_q2(item["amount_eur"]),
             int(item["movement_id"]),
@@ -367,6 +422,11 @@ def audit_runts_missing_documents(
     )
     with_candidates = [row for row in cases if row.get("candidate_document_count")]
     linked = [row for row in cases if row["original_document_status"] == "PRESENT"]
+    ready = [row for row in cases if row.get("ready_for_human_confirmation") and row["original_document_status"] == "MISSING"]
+    amazon_matches = [row for row in cases if any(ev.get("kind") == "amazon_order" for ev in row.get("external_evidence") or ())]
+    paypal_matches = [row for row in cases if any(ev.get("kind") == "paypal_email_receipt" for ev in row.get("external_evidence") or ())]
+    from .accounting_review import build_human_confirmation_batch
+    confirmation_batch = build_human_confirmation_batch(cases, year=year)
     displayed = cases if limit is None else cases[: max(0, int(limit))]
     return {
         "source": {
@@ -375,6 +435,11 @@ def audit_runts_missing_documents(
             "db_path": str(Path(db_path).expanduser().resolve()),
             "data_version": data_version,
             "year": year,
+            "external_evidence_snapshot_sha256": (
+                str(evidence_snapshot.get("_snapshot_sha256"))
+                if isinstance(evidence_snapshot, Mapping) and evidence_snapshot.get("_snapshot_sha256")
+                else None
+            ),
         },
         "summary": {
             "expense_movement_count": len(cases),
@@ -383,10 +448,14 @@ def audit_runts_missing_documents(
             "missing_original_count": len(cases) - len(linked),
             "missing_original_total_eur": str(missing_amount),
             "candidate_document_match_count": len(with_candidates),
+            "amazon_order_match_count": len(amazon_matches),
+            "paypal_email_receipt_match_count": len(paypal_matches),
+            "ready_for_human_confirmation_count": len(ready),
             "human_review_required_count": review_required_count,
             "human_approved_reconstruction_count": approved_reconstruction_count,
             "invented_documents": 0,
         },
+        "human_confirmation_batch": confirmation_batch,
         "rows": displayed,
         "total_rows_before_limit": len(cases),
         "invariants": {

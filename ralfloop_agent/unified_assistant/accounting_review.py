@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import hashlib
+import json
 from typing import Any, Mapping
 
 from .accounting import parse_eur
@@ -173,6 +175,63 @@ def build_human_review_proposal(review: Mapping[str, Any], *, evidence_ids: tupl
     )
 
 
+def build_human_confirmation_batch(rows: list[Mapping[str, Any]], *, year: int) -> dict[str, Any]:
+    """Build a hash-bound, non-executing batch for strong-evidence missing-original cases."""
+    selected = [
+        dict(row) for row in rows
+        if row.get("ready_for_human_confirmation")
+        and row.get("original_document_status") == "MISSING"
+        and row.get("human_review_required")
+    ]
+    items = []
+    total = Decimal("0")
+    refs: list[str] = []
+    for row in selected:
+        amount = parse_eur(row.get("amount_eur"))
+        total += amount
+        evidence = []
+        for ev in row.get("external_evidence") or ():
+            ref = str(ev.get("provenance_ref") or "").strip()
+            if ref:
+                refs.append(ref)
+                evidence.append({
+                    "kind": ev.get("kind"),
+                    "provenance_ref": ref,
+                    "confidence": ev.get("confidence"),
+                    "fiscal_document": bool(ev.get("fiscal_document")),
+                })
+        items.append({
+            "movement_id": str(row.get("movement_id")),
+            "date": row.get("movement_date"),
+            "amount_eur": str(amount),
+            "counterparty": row.get("counterparty"),
+            "description": row.get("description"),
+            "suggested_decision": "approve_reconstruction",
+            "original_document_status": "MISSING",
+            "external_evidence": evidence,
+        })
+    canonical = json.dumps(
+        {"year": year, "items": items}, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return {
+        "batch_id": f"accounting.review.{year}.{digest[:24]}",
+        "batch_sha256": digest,
+        "year": year,
+        "item_count": len(items),
+        "total_eur": str(total),
+        "items": items,
+        "evidence_refs": list(dict.fromkeys(refs)),
+        "requires_human_approval": True,
+        "executable": False,
+        "allowed_batch_decisions": ["approve_reconstruction", "approve_nonreportable", "reject"],
+        "item_exclusions_allowed": True,
+        "invented_documents": 0,
+        "tax_or_grant_eligibility_not_implied": True,
+        "writes": 0,
+    }
+
+
 def reconstructed_total(queue: Mapping[str, Any]) -> Decimal:
     return sum(
         (
@@ -185,6 +244,7 @@ def reconstructed_total(queue: Mapping[str, Any]) -> Decimal:
 
 
 __all__ = [
+    "build_human_confirmation_batch",
     "build_human_review_proposal",
     "build_missing_document_review_queue",
     "reconstructed_total",

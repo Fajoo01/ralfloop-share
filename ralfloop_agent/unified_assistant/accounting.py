@@ -268,10 +268,19 @@ def accounting_read_adapter(
         if requested_year is not None:
             review_limit = max(1, min(int(inputs.get("accounting.review_limit") or 50), 1000))
             decisions = inputs.get("accounting.human_decisions")
+            evidence_snapshot = None
+            evidence_snapshot_path = (
+                inputs.get("accounting.evidence_snapshot_path")
+                or os.getenv("BOTTAZZI_ACCOUNTING_EVIDENCE_SNAPSHOT")
+            )
+            if evidence_snapshot_path:
+                from .accounting_external_evidence import load_evidence_snapshot
+                evidence_snapshot = load_evidence_snapshot(evidence_snapshot_path)
             live_audit = audit_runts_missing_documents(
                 runts_db_path,
                 year=int(requested_year),
                 human_decisions=decisions if isinstance(decisions, Mapping) else None,
+                evidence_snapshot=evidence_snapshot,
                 limit=review_limit,
             )
             if document_review_queue is None and operation == "document_review":
@@ -282,6 +291,7 @@ def accounting_read_adapter(
                     "postable_count": live_summary["expense_movement_count"] - live_summary["human_review_required_count"],
                     "blocked_count": 0,
                     "human_approved_reconstruction_count": live_summary["human_approved_reconstruction_count"],
+                    "ready_for_human_confirmation_count": live_summary.get("ready_for_human_confirmation_count", 0),
                     "missing_original_count": live_summary["missing_original_count"],
                     "rows": live_audit["rows"],
                     "invariants": live_audit["invariants"],
@@ -327,14 +337,15 @@ def accounting_read_adapter(
     elif operation == "document_review" and document_review_queue is not None:
         pending = int(document_review_queue["review_required_count"])
         reconstructed = int(document_review_queue["human_approved_reconstruction_count"])
+        ready = int(document_review_queue.get("ready_for_human_confirmation_count") or 0)
         missing = int(document_review_queue["missing_original_count"])
         total_cases = int(document_review_queue.get("case_count") or len(document_review_queue["rows"]))
         shown = len(document_review_queue["rows"])
         shown_note = f"; mostrati {shown} prioritari" if shown < total_cases else ""
         message = (
             f"Revisione giustificativi: {total_cases} casi{shown_note}, "
-            f"{missing} originali mancanti, {pending} da decidere manualmente, "
-            f"{reconstructed} ricostruzioni approvate dall’umano. "
+            f"{missing} originali mancanti, {ready} già corredati da prove forti e pronti per conferma umana, "
+            f"{pending} ancora formalmente da decidere, {reconstructed} ricostruzioni già approvate dall’umano. "
             "La quadratura contabile resta separata dalla validità fiscale/rendicontativa: nessuna ricevuta viene inventata."
         )
     elif operation == "document_review":
@@ -356,6 +367,21 @@ def accounting_read_adapter(
             for row in document_review_queue.get("rows") or ()
             for ref in row.get("evidence_refs") or ()
         )
+        refs += tuple(
+            str(ev.get("provenance_ref"))
+            for row in document_review_queue.get("rows") or ()
+            for ev in row.get("external_evidence") or ()
+            if str(ev.get("provenance_ref") or "").strip()
+        )
+    aggregate_refs: tuple[str, ...] = ()
+    if live_audit:
+        batch_sha = str((live_audit.get("human_confirmation_batch") or {}).get("batch_sha256") or "").strip()
+        snapshot_sha = str((live_audit.get("source") or {}).get("external_evidence_snapshot_sha256") or "").strip()
+        if batch_sha:
+            aggregate_refs += (f"accounting:review_batch:{batch_sha}",)
+        if snapshot_sha:
+            aggregate_refs += (f"accounting:evidence_snapshot:{snapshot_sha}",)
+    refs = tuple(dict.fromkeys((*aggregate_refs, *refs)))[:64]
     return StructuredArtifact.create(
         artifact_type="accounting_read",
         status="completed" if (

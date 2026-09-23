@@ -85,3 +85,13 @@ The live audit selects outgoing association movements after basic duplicate/tran
 Real canary on 2026-09-23: year 2025 produced 482 outgoing review candidates for EUR 23047.36, with zero formally linked originals in the current database; year 2026 produced two candidates for EUR 132.90, one formally documented and one requiring review. These are documentary-review candidates, not a claim that every amount is a final deductible/RUNTS management expense.
 
 Private review snapshots are written outside Git under /home/bandi/.local/share/bottazzi/accounting/ and are not production accounting state.
+
+## External evidence enrichment
+
+The documentary audit can consume a cached external-evidence snapshot through `accounting.evidence_snapshot_path` or `BOTTAZZI_ACCOUNTING_EVIDENCE_SNAPSHOT`. Gmail is never rescanned on every accounting query: `accounting_external_evidence.py` partitions PayPal receipt searches by month, uses only Gmail READ operations, hydrates matching messages and stores a private snapshot outside Git.
+
+PayPal receipt parsing extracts amount, merchant, message date, transaction id and payment-card suffix. These records are `payment_evidence`, explicitly `fiscal_document=false`. Matching requires exact amount, a bounded date distance, merchant similarity and a unique candidate. The same external provenance reference cannot support two movements; conflicts fail closed.
+
+Existing `amazon_orders` are also reused read-only. An Amazon order is considered strong contextual evidence only for Amazon-labelled movements with exact amount and a bounded date distance. It never becomes an invoice or receipt automatically.
+
+Real 2025 canary on 2026-09-23: 121 PayPal receipt emails were collected from the authenticated Tiremm Gmail mailbox. The enriched 2025 RUNTS audit found 107 unique PayPal-to-movement matches; 10 of those movements also have a unique matching Amazon order. The resulting hash-bound human-confirmation batch contains 107 movements totalling EUR 3022.22. The batch is non-executable, `writes=0`, and preserves `original_document_status=MISSING`; human approval is still required and does not imply tax, VAT, grant or RUNTS documentary eligibility.

@@ -212,3 +212,64 @@ def test_commercialista_reconciliation_can_use_latest_live_year(tmp_path):
     assert artifact.payload["runts_live_audit"]["source"]["year"] == 2025
     assert "3 uscite" in artifact.payload["message"]
     assert "sola lettura" in artifact.payload["message"]
+
+
+def test_amazon_order_is_strong_context_evidence_but_not_fiscal_document(tmp_path):
+    db = tmp_path / "runts_suite.db"
+    build_db(db)
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE amazon_orders(order_id TEXT PRIMARY KEY, order_date TEXT, total_amount REAL, currency TEXT, payment_method TEXT)")
+    conn.execute("UPDATE movements SET descrizione_originale='Amazon.it', contropartita='Amazon.it' WHERE movement_id=1")
+    conn.execute("INSERT INTO amazon_orders VALUES(?,?,?,?,?)", ("ORDER-1","2025-03-09",42.50,"EUR","MasterCard - 2055"))
+    conn.commit(); conn.close()
+    result = audit_runts_missing_documents(db, year=2025)
+    row = next(item for item in result["rows"] if item["movement_id"] == "1")
+    assert row["amazon_order_candidate_count"] == 1
+    assert row["ready_for_human_confirmation"] is True
+    assert row["original_document_status"] == "MISSING"
+    assert row["human_review_required"] is True
+    assert row["external_evidence"][0]["kind"] == "amazon_order"
+    assert row["external_evidence"][0]["fiscal_document"] is False
+    assert result["summary"]["amazon_order_match_count"] == 1
+    assert result["summary"]["ready_for_human_confirmation_count"] == 1
+
+
+def test_commercialista_adapter_consumes_external_evidence_snapshot(tmp_path):
+    import json
+    db = tmp_path / "runts_suite.db"
+    build_db(db)
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE movements SET descrizione_originale='Cartoleria Fixture', contropartita='Cartoleria Fixture' WHERE movement_id=1")
+    conn.commit()
+    conn.close()
+    snapshot = tmp_path / "evidence.json"
+    snapshot.write_text(json.dumps({
+        "schema_version": 1,
+        "receipts": [{
+            "kind": "paypal_email_receipt",
+            "message_id": "abc",
+            "date": "2025-03-09",
+            "amount_eur": "42.50",
+            "merchant": "Cartoleria Fixture",
+            "transaction_id": "TX1",
+            "card_suffix": "2055",
+            "provenance_ref": "gmail:message:abc",
+            "content_hash": "a" * 64,
+            "fiscal_document": False,
+        }],
+    }))
+    artifact = accounting_read_adapter(
+        _assignment("Controlla le ricevute perse del 2025"),
+        {
+            "accounting.runts_db_path": str(db),
+            "accounting.evidence_snapshot_path": str(snapshot),
+            "accounting.review_limit": 10,
+        },
+    )
+    audit = artifact.payload["runts_live_audit"]
+    assert audit["summary"]["paypal_email_receipt_match_count"] == 1
+    assert audit["summary"]["ready_for_human_confirmation_count"] == 1
+    assert audit["human_confirmation_batch"]["item_count"] == 1
+    assert audit["human_confirmation_batch"]["executable"] is False
+    assert "gmail:message:abc" in artifact.evidence_refs
+    assert "pronti per conferma umana" in artifact.payload["message"]
