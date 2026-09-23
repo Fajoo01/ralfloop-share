@@ -325,7 +325,7 @@ def _sanitize_assistant_state(value: Any) -> dict[str, Any]:
         raise SessionStoreError("unsupported_assistant_state")
     safe_entities: dict[str, list[str]] = {}
     for domain, entities in last_entities.items():
-        if domain not in PENDING_STATE_KEYS | {"personal_relational", "tiremm", "research", "code", "media"}:
+        if domain not in PENDING_STATE_KEYS | {"personal_relational", "tiremm", "research", "code", "media", "general_assistant"}:
             raise SessionStoreError("unsupported_assistant_state")
         if not isinstance(entities, (list, tuple)) or len(entities) > 8:
             raise SessionStoreError("unsupported_assistant_state")

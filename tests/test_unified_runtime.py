@@ -53,6 +53,50 @@ def _pending_session(monkeypatch, tmp_path, *domains):
     }
 
 
+def _atm_session(monkeypatch, tmp_path, destination="Coop"):
+    root = tmp_path / "sessions"
+    monkeypatch.setenv("RALFLOOP_UNIFIED_SESSION_DIR", str(root))
+    store = SessionStore(root)
+    terminal_session_id = "assistant-atm-followup"
+    session_id = f"terminal-{terminal_session_id}"
+    runtime._ensure_session(store, session_id)
+    adapter = SessionConversationAdapter(store)
+    conversation = adapter.load(session_id)
+    conversation.remember(
+        intent="atm.route",
+        domain="general_assistant",
+        entities=(destination,),
+    )
+    adapter.save(session_id, conversation)
+    return {
+        "source": "ralf_terminal",
+        "assistant_surface": "assistant_v1",
+        "session_id": terminal_session_id,
+        "terminal_client": {"session_id": terminal_session_id},
+    }
+
+
+def test_contextual_gps_followup_stays_on_atm_mcp(monkeypatch, tmp_path):
+    monkeypatch.setenv("RALFLOOP_UNIFIED_ASSISTANT", "1")
+    context = _atm_session(monkeypatch, tmp_path)
+
+    assert is_unified_telegram_request("Sì usa il GPS", context) is True
+    route = unified_route_probe("Sì usa il GPS", context)
+
+    assert route is not None
+    assert route["intent"] == "atm.route"
+    assert route["arguments"] == {"destination": "Coop", "continuation": True}
+    assert route["mcp_connectors"] == ["atm.route.mcp"]
+
+
+def test_standalone_gps_phrase_does_not_force_atm_without_context(monkeypatch, tmp_path):
+    monkeypatch.setenv("RALFLOOP_UNIFIED_ASSISTANT", "1")
+    context = _pending_session(monkeypatch, tmp_path)
+
+    assert is_unified_telegram_request("Sì usa il GPS", context) is False
+    assert unified_route_probe("Sì usa il GPS", context) is None
+
+
 def test_telegram_bridge_is_feature_flagged_and_legacy_first(monkeypatch):
     context = {
         "source": "telegram_natural", "telegram_user_id": 1,

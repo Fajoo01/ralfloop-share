@@ -79,6 +79,10 @@ from src.whatsapp import WhatsAppMCPContext
 
 
 _LEGACY = re.compile(r"^(?:/|rl:|rsc\b|abc\b|atm\b|apri\s+cancello\b)", re.I)
+_ATM_LOCATION_FOLLOWUP_RE = re.compile(
+    r"\b(?:gps|posizione|geolocalizzazione|localizzazione|qui|qua)\b",
+    re.I,
+)
 _SUPPORTED = re.compile(
     r"\b(?:scrivi\s+(?:una\s+mail\s+)?a|prepara\s+(?:una\s+)?(?:mail|email)|"
     r"manda\s+(?:una\s+)?(?:mail|email)|rispond(?:i|ere)\s+(?:all['’]\s*|alla\s+|a\s+questa\s+)(?:mail|email|appello|comunicazione)|"
@@ -217,6 +221,7 @@ def is_unified_telegram_request(text: str, context: Mapping[str, Any]) -> bool:
         and bool(
             _SUPPORTED.search(text)
             or _EMAIL_READ_SUPPORTED.search(text)
+            or _atm_location_followup_destination(text, context)
             or _is_pec_runts_request(text)
             or explicit_runts
             or re.fullmatch(r"\s*(?:otp[\s:-]*)?[0-9]{6}\s*", text, re.I)
@@ -259,6 +264,27 @@ def _has_single_approvable_pending(context: Mapping[str, Any]) -> bool:
     )
 
 
+def _atm_location_followup_destination(
+    text: str,
+    context: Mapping[str, Any],
+) -> str | None:
+    """Resolve a terse GPS/location reply only inside an existing ATM route conversation."""
+    if not _ATM_LOCATION_FOLLOWUP_RE.search(text):
+        return None
+    try:
+        session_id = _session_id(context)
+        store = SessionStore(os.getenv(
+            "RALFLOOP_UNIFIED_SESSION_DIR",
+            str(Path.home() / ".local" / "state" / "ralf" / "unified-sessions"),
+        ))
+        conversation = SessionConversationAdapter(store).load(session_id)
+    except (OSError, SessionStoreError, TypeError, ValueError):
+        return None
+    if conversation.state.last_intent != "atm.route":
+        return None
+    return conversation.last_entity("general_assistant")
+
+
 def unified_route_probe(
     text: str,
     context: Mapping[str, Any],
@@ -274,6 +300,23 @@ def unified_route_probe(
         and (source.startswith("telegram_") or source == "ralf_terminal")
     ):
         return None
+    atm_followup_destination = _atm_location_followup_destination(text, context)
+    if atm_followup_destination:
+        return {
+            "task_mode": "tool_backed_read",
+            "mode": "tool_backed_read",
+            "interaction_class": "TOOL_BACKED_READ",
+            "intent": "atm.route",
+            "arguments": {"destination": atm_followup_destination, "continuation": True},
+            "domains": ["general_assistant"],
+            "skills_used": ["atm.route"],
+            "domain_skills": ["atm.route"],
+            "mcp_used": ["atm.route.mcp"],
+            "mcp_connectors": ["atm.route.mcp"],
+            "write_policy": "no_write",
+            "evidence_first": True,
+            "requires_confirmation": False,
+        }
     if not is_unified_telegram_request(text, context) and not flags_override:
         return None
     if flags_override and not (
