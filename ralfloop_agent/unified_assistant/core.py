@@ -213,6 +213,41 @@ class UnifiedAssistantCore:
                             writes=int(payload.get("writes") or 0),
                             sends=int(payload.get("sends") or 0),
                         )
+                    if artifact_status == "required_documents_missing":
+                        support = payload.get("supporting_documents")
+                        support = support if isinstance(support, Mapping) else {}
+                        attachments = [
+                            str(item.get("filename") or "")
+                            for item in support.get("attachments") or ()
+                            if isinstance(item, Mapping) and str(item.get("filename") or "")
+                        ]
+                        missing_rows = [
+                            str(item) for item in payload.get("missing_requirements") or ()
+                        ]
+                        labels = {
+                            "completed_difensore_form": "modulo del Difensore compilato e sottoscritto",
+                            "identity_document_or_digitally_signed_form": (
+                                "documento d'identità valido oppure modulo firmato digitalmente"
+                            ),
+                        }
+                        missing = "; ".join(labels.get(item, item) for item in missing_rows)
+                        message = (
+                            f"Documentazione TARI preparata: {len(attachments)} PDF verificati e associati alla bozza. "
+                            f"Mancano i documenti obbligatori richiesti dal Difensore: {missing}. "
+                            "Nessuna richiesta di approvazione è stata creata e nessuna PEC è stata inviata."
+                        )
+                        return self._result(
+                            "clarification_required", message,
+                            plan=plan.model_dump(mode="json"),
+                            execution=execution.model_dump(mode="json"),
+                            tools_executed=execution.status == "completed",
+                            selected_skill="pec.prepare_send",
+                            supporting_attachments=attachments,
+                            missing_requirements=missing_rows,
+                            approval_created=False,
+                            writes=0,
+                            sends=0,
+                        )
                     if artifact_status == "draft_fields_required":
                         missing = ", ".join(str(item) for item in payload.get("missing") or ())
                         return self._result(

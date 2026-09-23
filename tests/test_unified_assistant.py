@@ -21,6 +21,10 @@ from ralfloop_agent.unified_assistant.memory import MemoryRouter
 from ralfloop_agent.unified_assistant.planner import UnifiedPlanner
 from ralfloop_agent.unified_assistant.capability_rag_router import CapabilityRAGRouter
 from ralfloop_agent.unified_assistant.registry import UnifiedRegistryFacade
+from ralfloop_agent.unified_assistant.pec_case_support import (
+    required_document_gate,
+    stage_tari_supporting_documents,
+)
 from ralfloop_agent.unified_assistant.runtime import _pec_prepare_values
 from ralfloop_agent.unified_assistant.skill_adapters import research_deep_adapter
 
@@ -384,6 +388,88 @@ def test_pec_prepare_values_autofill_from_read_artifact_preserves_explicit_field
     assert "pratica TARI" in values["body"]
 
 
+def test_difensore_required_document_gate_rejects_blank_or_missing_form(tmp_path):
+    import hashlib
+
+    blank = b"official blank template"
+    source = {
+        "payload": {
+            "messages": [{
+                "sender": "difensore.regionale@pec.consiglio.regione.lombardia.it",
+                "attachments": [{
+                    "filename": "Modulo Richiesta Intervento DIFENSORE con infomativa.docx",
+                    "content_hash": hashlib.sha256(blank).hexdigest(),
+                }],
+            }],
+        },
+    }
+    blank_path = tmp_path / "Modulo Richiesta Intervento DIFENSORE con infomativa.docx"
+    blank_path.write_bytes(blank)
+    gate = required_document_gate(source, (str(blank_path),))
+    assert gate["missing"] == [
+        "completed_difensore_form",
+        "identity_document_or_digitally_signed_form",
+    ]
+
+    completed = tmp_path / "Modulo Richiesta Intervento DIFENSORE compilato.docx"
+    completed.write_bytes(b"filled form")
+    identity = tmp_path / "carta_identita.pdf"
+    identity.write_bytes(b"identity")
+    gate = required_document_gate(source, (str(completed), str(identity)))
+    assert gate["missing"] == []
+
+
+def test_stage_tari_supporting_documents_verifies_hashes_and_is_idempotent(tmp_path):
+    import base64
+    import hashlib
+
+    blobs = {}
+    attachments = []
+    for index in range(5):
+        names = (
+            f"ACCERTAMENTI 2024_GIUGNO_21.06.2024_9R0000005061371{index}0001.pdf",
+            f"PIPLCMILIMG_2024_Febbraio_2024_21.02.2024_AR_6970418505{index}3.pdf",
+        )
+        for name in names:
+            data = ("data:" + name).encode()
+            attachment_id = f"part-{len(attachments) + 1}"
+            blobs[attachment_id] = data
+            attachments.append({
+                "attachment_id": attachment_id,
+                "filename": name,
+                "size": len(data),
+                "content_hash": hashlib.sha256(data).hexdigest(),
+            })
+
+    class Gateway:
+        def call(self, name, arguments):
+            if name == "pec_search_messages":
+                return {"messages": [{
+                    "native_id": "imap.test.235",
+                    "received_at": "2026-08-26T13:45:59Z",
+                    "attachments": attachments,
+                }]}
+            attachment_id = arguments["attachment_id"]
+            data = blobs[attachment_id]
+            return {"attachment": {
+                "data_base64": base64.b64encode(data).decode("ascii"),
+            }}
+
+    first = stage_tari_supporting_documents(
+        Gateway(), "Invia la PEC al Difensore per la pratica TARI", outbox_root=tmp_path,
+    )
+    assert first["status"] == "staged"
+    assert len(first["paths"]) == 10
+    assert first["local_staging_writes"] == 10
+    assert all((tmp_path / "tari-support" / first["packet_digest"] / path.split("/")[-1]).is_file() for path in first["paths"])
+
+    second = stage_tari_supporting_documents(
+        Gateway(), "Invia la PEC al Difensore per la pratica TARI", outbox_root=tmp_path,
+    )
+    assert second["paths"] == first["paths"]
+    assert second["local_staging_writes"] == 0
+
+
 def test_arci_grant_reply_reads_source_email_before_bando_and_never_skips_provenance():
     planner = UnifiedPlanner(UnifiedRegistryFacade())
 
@@ -711,6 +797,56 @@ def test_pec_prepare_dag_surfaces_missing_fields_instead_of_completed(monkeypatc
     assert "Mancano i campi della bozza" in result.message
     assert "Nessuna PEC è stata inviata" in result.message
     assert result.data["tools_executed"] is True
+
+
+def test_pec_prepare_dag_blocks_approval_until_difensore_documents_are_complete(monkeypatch, tmp_path):
+    socket = tmp_path / "pec-write.sock"
+    socket.touch()
+    monkeypatch.setenv("RALF_PEC_WRITE_MCP_SOCKET", str(socket))
+    core, _, _, _ = build_core()
+
+    def read_source(assignment, _inputs):
+        return StructuredArtifact.create(
+            artifact_type="pec_read",
+            status="completed",
+            producer_task_id=assignment.task_id,
+            payload={"messages": [{"native_id": "imap.test.240"}], "writes": 0, "sends": 0},
+        )
+
+    def requirements_missing(assignment, _inputs):
+        return StructuredArtifact.create(
+            artifact_type="pec_write_request",
+            status="required_documents_missing",
+            producer_task_id=assignment.task_id,
+            payload={
+                "status": "required_documents_missing",
+                "missing_requirements": [
+                    "completed_difensore_form",
+                    "identity_document_or_digitally_signed_form",
+                ],
+                "approval_created": False,
+                "supporting_documents": {
+                    "attachments": [
+                        {"filename": f"support-{index}.pdf"} for index in range(10)
+                    ],
+                },
+                "writes": 0,
+                "sends": 0,
+            },
+        )
+
+    core.dag_executor = UnifiedDAGExecutor(
+        core.planner.registry,
+        {"pec.read": read_source, "pec.prepare_send": requirements_missing},
+    )
+    result = core.handle("Invia la PEC al Difensore regionale e porta a termine la pratica TARI")
+
+    assert result.status == "clarification_required"
+    assert "10 PDF verificati" in result.message
+    assert "modulo del Difensore compilato" in result.message
+    assert result.data["approval_created"] is False
+    assert result.data["writes"] == 0
+    assert result.data["sends"] == 0
 
 
 def test_pec_prepare_dag_surfaces_hash_bound_approval(monkeypatch, tmp_path):
