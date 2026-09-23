@@ -172,19 +172,10 @@ def _recover_stored_source_home_tab(cdp: ChromeCdp, tabs, store: HandoffStore, r
     candidate = tabs[0]
     if not stored_url or normalize_chatgpt_conversation_url(candidate.url):
         return None, resolution, error
-    ui = cdp.chatgpt_ui_state(candidate.target_id)
-    if not bool(ui.get("authenticated")) or not bool(ui.get("ready")):
-        return None, resolution, error
-    cdp.navigate_chatgpt_conversation(candidate.target_id, stored_url)
-    store.update_source_chat(candidate.target_id, stored_url)
-    refreshed = next((tab for tab in cdp.targets() if tab.target_id == candidate.target_id), candidate)
-    return refreshed, {
-        "source_recovered": True,
-        "source_recovered_by_navigation": True,
-        "previous_source_target_id": resolution.get("source_target_id"),
-        "source_target_id": candidate.target_id,
-        "source_chat_url": stored_url,
-    }, None
+    # Never hijack the visible Home tab after a browser restart. The persisted
+    # worker may be old compared with conversations opened on another client.
+    # Recovery continues in a dedicated background target instead.
+    return None, {**resolution, "foreground_preserved": True}, error
 
 
 def _recover_stored_source_new_tab(cdp: ChromeCdp, store: HandoffStore, resolution: dict, error: str | None):
@@ -195,7 +186,7 @@ def _recover_stored_source_new_tab(cdp: ChromeCdp, store: HandoffStore, resoluti
         return None, resolution, error
     target_id = None
     try:
-        target_id = cdp.create_chatgpt_target(clear_cache=False)
+        target_id = cdp.create_chatgpt_target(clear_cache=False, background=True)
         ui = cdp.navigate_chatgpt_conversation(target_id, stored_url)
         if not bool(ui.get("authenticated")) or not bool(ui.get("ready")):
             raise CdpError("stored_source_recovery_target_not_ready")
@@ -242,7 +233,7 @@ def _archive_source_conversation(
     temporary_target_id = None
     try:
         if target is None:
-            temporary_target_id = cdp.create_chatgpt_target(clear_cache=False)
+            temporary_target_id = cdp.create_chatgpt_target(clear_cache=False, background=True)
             cdp.navigate_chatgpt_conversation(temporary_target_id, normalized)
             target_id = temporary_target_id
         else:
@@ -482,7 +473,7 @@ def cmd_adopt_external(args: argparse.Namespace) -> int:
     watcher_created = False
     try:
         if watcher is None:
-            watcher_id = cdp.create_chatgpt_target(clear_cache=False)
+            watcher_id = cdp.create_chatgpt_target(clear_cache=False, background=True)
             watcher_created = True
         conversation_urls = cdp.conversation_urls(watcher_id, reload=not watcher_created)
         tabs = [t for t in cdp.targets() if t.target_type == "page" and t.is_chatgpt]

@@ -3,6 +3,8 @@ Description=Bot-tazzi dedicated ChatGPT Chrome login mode
 After=network-online.target
 Wants=network-online.target
 Conflicts=bottazzi-gpt-browser.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple

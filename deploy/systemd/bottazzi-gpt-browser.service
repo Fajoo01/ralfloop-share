@@ -2,6 +2,8 @@
 Description=Bot-tazzi dedicated ChatGPT Chrome (isolated profile)
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple

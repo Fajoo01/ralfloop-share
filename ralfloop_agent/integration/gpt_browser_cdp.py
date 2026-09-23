@@ -576,8 +576,8 @@ class ChromeCdp:
             raise CdpError("conversation_scan_unauthenticated")
         raise CdpError("conversation_scan_timeout")
 
-    def create_chatgpt_target(self, *, clear_cache: bool = False) -> str:
-        target_id = self.create_target("about:blank")
+    def create_chatgpt_target(self, *, clear_cache: bool = False, background: bool = False) -> str:
+        target_id = self.create_target("about:blank", background=background)
         target = self._wait_target(target_id)
         if not target.websocket_url:
             raise CdpError("new_target_missing_websocket")
@@ -762,8 +762,11 @@ class ChromeCdp:
             "cache_cleared": True,
         }
 
-    def create_target(self, url: str) -> str:
-        response = self._browser_call("Target.createTarget", {"url": url})
+    def create_target(self, url: str, *, background: bool = False) -> str:
+        params: dict[str, Any] = {"url": url}
+        if background:
+            params["background"] = True
+        response = self._browser_call("Target.createTarget", params)
         target_id = str(response.get("targetId") or "")
         if not target_id:
             raise CdpError("target_create_failed")

@@ -169,6 +169,8 @@ def test_gpt_browser_units_recreate_disposable_cache_after_boot() -> None:
         unit = (repo / relative).read_text(encoding="utf-8")
         assert "RuntimeDirectory=bottazzi-gpt-browser-cache" in unit
         assert "RuntimeDirectoryMode=0700" in unit
+        assert "StartLimitIntervalSec=60" in unit
+        assert "StartLimitBurst=5" in unit
         assert "Environment=TMPDIR=/run/bottazzi-gpt-browser-cache" in unit
         assert "Environment=BOTTAZZI_GPT_CACHE_DIR=/run/bottazzi-gpt-browser-cache" in unit
         assert "ReadWritePaths=/home/bandi/.local/share/bottazzi-gpt-browser /run/bottazzi-gpt-browser-cache" in unit
@@ -177,7 +179,7 @@ def test_gpt_browser_units_recreate_disposable_cache_after_boot() -> None:
     assert "${BOTTAZZI_GPT_CACHE_DIR:-/run/bottazzi-gpt-browser-cache}" in script
 
 
-def test_gpt_browser_script_reopens_persisted_worker_url(tmp_path) -> None:
+def test_gpt_browser_script_restores_tabs_without_forcing_persisted_worker_url(tmp_path) -> None:
     repo = Path(__file__).resolve().parents[1]
     fake_chrome = tmp_path / "fake-chrome.sh"
     args_file = tmp_path / "args.txt"
@@ -199,7 +201,9 @@ def test_gpt_browser_script_reopens_persisted_worker_url(tmp_path) -> None:
     )
     subprocess.run([str(repo / "scripts/bottazzi_gpt_browser.sh")], check=True, env=env)
     args = args_file.read_text(encoding="utf-8").splitlines()
-    assert args[-1] == "https://chatgpt.com/c/restart-worker"
+    assert "--restore-last-session" in args
+    assert "https://chatgpt.com/c/restart-worker" not in args
+    assert args[-1] == "https://chatgpt.com/"
 
 
 def test_mutation_lock_is_nonblocking_and_exclusive(tmp_path) -> None:
@@ -346,7 +350,7 @@ class FakeAdoptionCdp:
             "composer_chars": 0,
         }
 
-    def create_chatgpt_target(self, *, clear_cache: bool = False) -> str:
+    def create_chatgpt_target(self, *, clear_cache: bool = False, background: bool = False) -> str:
         target_id = f"archive-temp-{len(self.temporary_urls) + 1}"
         self.temporary_urls[target_id] = "https://chatgpt.com/"
         return target_id
@@ -393,7 +397,7 @@ class FakeRecoveryCdp:
     def chatgpt_ui_state(self, target_id: str):
         return dict(self.ui_by_target.get(target_id) or {"authenticated": True, "ready": True, "user_turns": 0})
 
-    def create_chatgpt_target(self, *, clear_cache: bool = False) -> str:
+    def create_chatgpt_target(self, *, clear_cache: bool = False, background: bool = False) -> str:
         target_id = f"archive-temp-{len(self._targets)}"
         self._targets.append(BrowserTarget(target_id, "page", "https://chatgpt.com/", "temp", f"ws://{target_id}"))
         return target_id
@@ -844,11 +848,13 @@ class NewTabRecoveryCdp:
         ]
         self.navigated: list[tuple[str, str]] = []
         self.closed: list[str] = []
+        self.created_background: list[bool] = []
 
     def targets(self):
         return [target for target in self._targets if target.target_id not in self.closed]
 
-    def create_chatgpt_target(self, *, clear_cache: bool = False) -> str:
+    def create_chatgpt_target(self, *, clear_cache: bool = False, background: bool = False) -> str:
+        self.created_background.append(background)
         self._targets.append(BrowserTarget("recovery", "page", "https://chatgpt.com/", "recovery", "ws://recovery"))
         return "recovery"
 
@@ -879,6 +885,7 @@ def test_stale_source_multi_tab_recovers_in_new_exact_tab_without_hijack(tmp_pat
     assert error is None
     assert source is not None and source.target_id == "recovery"
     assert info["source_recovered_by_new_tab"] is True
+    assert cdp.created_background == [True]
     assert cdp.navigated == [("recovery", "https://chatgpt.com/c/abc")]
     assert [(tab.target_id, tab.url) for tab in cdp.targets() if tab.target_id.startswith("unrelated-")] == original
     assert cdp.closed == []
@@ -907,7 +914,7 @@ def test_stale_source_multi_tab_recovery_failure_closes_only_created_tab(tmp_pat
     assert current["source_chat_url"] == "https://chatgpt.com/c/abc"
 
 
-def test_stale_source_recovers_by_navigating_single_home_tab(tmp_path) -> None:
+def test_stale_source_home_tab_is_preserved_instead_of_hijacked(tmp_path) -> None:
     store = HandoffStore(tmp_path)
     store.save(Handoff(goal="x", current_state="y"))
     store.update_source_chat("stale-target", "https://chatgpt.com/c/abc")
@@ -916,14 +923,14 @@ def test_stale_source_recovers_by_navigating_single_home_tab(tmp_path) -> None:
     source, info, error = _resolve_stored_source(tabs, store)
     assert source is None and error == "stored_source_not_found"
 
-    source, info, error = _recover_stored_source_home_tab(cdp, tabs, store, info, error)
+    recovered, info, recovery_error = _recover_stored_source_home_tab(cdp, tabs, store, info, error)
 
-    assert error is None
-    assert source is not None and source.target_id == "fresh-target"
-    assert cdp.navigated == [("fresh-target", "https://chatgpt.com/c/abc")]
-    assert info["source_recovered_by_navigation"] is True
+    assert recovered is None
+    assert recovery_error == "stored_source_not_found"
+    assert info["foreground_preserved"] is True
+    assert cdp.navigated == []
     current = store.load_current()
-    assert current["source_chat"] == "fresh-target"
+    assert current["source_chat"] == "stale-target"
     assert current["source_chat_url"] == "https://chatgpt.com/c/abc"
 
 
@@ -955,6 +962,19 @@ def test_chatgpt_target_detection() -> None:
     assert BrowserTarget("1", "page", "https://chatgpt.com/c/abc", "x").is_chatgpt
     assert BrowserTarget("2", "page", "https://foo.chatgpt.com/", "x").is_chatgpt
     assert not BrowserTarget("3", "page", "https://example.com/?next=chatgpt.com", "x").is_chatgpt
+
+
+def test_create_target_can_stay_in_background(monkeypatch) -> None:
+    cdp = ChromeCdp("http://127.0.0.1:1")
+    calls: list[tuple[str, dict]] = []
+
+    def browser_call(method, params=None):
+        calls.append((method, dict(params or {})))
+        return {"targetId": "background-target"}
+
+    monkeypatch.setattr(cdp, "_browser_call", browser_call)
+    assert cdp.create_target("about:blank", background=True) == "background-target"
+    assert calls == [("Target.createTarget", {"url": "about:blank", "background": True})]
 
 
 def test_archive_chatgpt_conversation_clicks_only_archive_action(monkeypatch) -> None:
