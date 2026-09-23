@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from hashlib import sha256
+
 from ralfloop_agent.integration.collaboration_backend import select_collaboration_backend
 from src.models import CapabilityRoute, JuryPolicy, VerificationPolicy
+from src.pheromone_router import PheromoneRouter, default_pheromone_db, pheromone_mode
 from src.routing_config import (
     any_unnegated_trigger_matches,
     any_trigger_matches,
@@ -64,6 +67,7 @@ class CapabilityRouter:
             route_only=True,
         )
         verification_policy = self._verification_policy(mode)
+        adaptive_routing = self._adaptive_shadow(mode, skills_used, mcp_used)
 
         reasoning = (
             f"{reason}; skills={skills_used or ['none']}; "
@@ -80,6 +84,7 @@ class CapabilityRouter:
             jury_policy=jury_policy,
             collaboration_backend=collaboration_backend,
             verification_policy=verification_policy,
+            adaptive_routing=adaptive_routing,
             jury=jury_policy,
         )
 
@@ -132,6 +137,48 @@ class CapabilityRouter:
             if any_trigger_matches(words, goal):
                 matched.append(connector)
         return matched
+
+    def _adaptive_shadow(
+        self,
+        route_mode: str,
+        skills_used: list[str],
+        mcp_used: list[str],
+    ) -> dict | None:
+        mode = pheromone_mode()
+        if mode == "off":
+            return None
+
+        scorer = PheromoneRouter(default_pheromone_db())
+        groups: dict[str, dict] = {}
+        for group_name, values in (("skills", skills_used), ("mcp", mcp_used)):
+            candidates = list(dict.fromkeys(values))
+            if len(candidates) < 2:
+                continue
+            fingerprint = sha256("\0".join(sorted(candidates)).encode("utf-8")).hexdigest()[:12]
+            context = f"capability:{route_mode}:{group_name}:{fingerprint}"
+            scores = scorer.rank(context, candidates)
+            groups[group_name] = {
+                "context": context,
+                "scores": [
+                    {
+                        "candidate": item.candidate,
+                        "probability": item.probability,
+                        "pheromone": item.pheromone,
+                        "observations": item.observations,
+                        "successes": item.successes,
+                        "failures": item.failures,
+                    }
+                    for item in scores
+                ],
+            }
+
+        return {
+            "mode": mode,
+            "selection_applied": False,
+            "policy_boundary": "deterministic_router_authorizes_candidates_first",
+            "activation_gate": "explicit_equivalence_group_required",
+            "groups": groups,
+        }
 
     def _jury_policy(
         self,

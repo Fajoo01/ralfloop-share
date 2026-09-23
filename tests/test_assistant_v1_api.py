@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import random
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -419,3 +420,113 @@ def test_fast_lane_reuses_canonical_inference_config(
     provider = assistant_v1_api.get_fast_lane_provider()
     assert provider is not None
     assert provider.default_model == "qwen2.5-3b"
+
+
+
+def test_pheromone_shadow_learns_without_changing_model(
+    monkeypatch: pytest.MonkeyPatch, tmp_path,
+) -> None:
+    db = tmp_path / "pheromone.sqlite3"
+    monkeypatch.setenv("RALF_PHEROMONE_ROUTING", "shadow")
+    monkeypatch.setenv("RALF_PHEROMONE_DB", str(db))
+    monkeypatch.setenv("BOTTAZZI_ASSISTANT_FAST_MODEL", "base-model")
+    monkeypatch.setenv("BOTTAZZI_ASSISTANT_FAST_MODEL_POOL", "base-model,alt-model")
+    provider = FakeProvider()
+
+    payload = _client(
+        provider,
+        route_probe=_no_route,
+        unified_runner=_unexpected_unified,
+    ).post(
+        "/assistant/v1/chat",
+        json={"message": "ciao", "mode": "fast"},
+    ).json()
+
+    assert provider.calls[0][1] == "base-model"
+    adaptive = payload["metadata"]["adaptive_model_routing"]
+    assert adaptive["mode"] == "shadow"
+    assert adaptive["selection_applied"] is False
+    scores = {
+        item.candidate: item
+        for item in assistant_v1_api.PheromoneRouter(db).rank(
+            "assistant:model:fast", ["base-model", "alt-model"]
+        )
+    }
+    assert scores["base-model"].observations == 1
+    assert scores["base-model"].successes == 1
+    assert scores["alt-model"].observations == 0
+
+
+def test_pheromone_active_can_select_only_from_explicit_model_pool(
+    monkeypatch: pytest.MonkeyPatch, tmp_path,
+) -> None:
+    db = tmp_path / "pheromone.sqlite3"
+    real_router = assistant_v1_api.PheromoneRouter
+    trainer = real_router(db)
+    for _ in range(50):
+        trainer.observe(
+            "assistant:model:fast",
+            "alt-model",
+            outcome="success",
+            latency_ms=1,
+        )
+    trainer.observe(
+        "assistant:model:fast",
+        "base-model",
+        outcome="timeout",
+        latency_ms=10_000,
+    )
+
+    def seeded_router(path):
+        return real_router(path, rng=random.Random(1))
+
+    monkeypatch.setattr(assistant_v1_api, "PheromoneRouter", seeded_router)
+    monkeypatch.setenv("RALF_PHEROMONE_ROUTING", "active")
+    monkeypatch.setenv("RALF_PHEROMONE_DB", str(db))
+    monkeypatch.setenv("BOTTAZZI_ASSISTANT_FAST_MODEL", "base-model")
+    monkeypatch.setenv("BOTTAZZI_ASSISTANT_FAST_MODEL_POOL", "base-model,alt-model")
+    provider = FakeProvider()
+
+    payload = _client(
+        provider,
+        route_probe=_no_route,
+        unified_runner=_unexpected_unified,
+    ).post(
+        "/assistant/v1/chat",
+        json={"message": "ciao", "mode": "fast"},
+    ).json()
+
+    assert provider.calls[0][1] == "alt-model"
+    adaptive = payload["metadata"]["adaptive_model_routing"]
+    assert adaptive["selection_applied"] is True
+    assert adaptive["selection_changed"] is True
+    assert adaptive["selected"] == "alt-model"
+    assert {item["candidate"] for item in adaptive["candidates"]} == {
+        "base-model",
+        "alt-model",
+    }
+
+
+def test_explicit_user_model_is_never_overridden_by_pheromone_active(
+    monkeypatch: pytest.MonkeyPatch, tmp_path,
+) -> None:
+    db = tmp_path / "pheromone.sqlite3"
+    monkeypatch.setenv("RALF_PHEROMONE_ROUTING", "active")
+    monkeypatch.setenv("RALF_PHEROMONE_DB", str(db))
+    monkeypatch.setenv("BOTTAZZI_ASSISTANT_FAST_MODEL", "base-model")
+    monkeypatch.setenv("BOTTAZZI_ASSISTANT_FAST_MODEL_POOL", "base-model,alt-model")
+    provider = FakeProvider()
+
+    payload = _client(
+        provider,
+        route_probe=_no_route,
+        unified_runner=_unexpected_unified,
+    ).post(
+        "/assistant/v1/chat",
+        json={"message": "ciao", "mode": "fast", "model": "user-picked"},
+    ).json()
+
+    assert provider.calls[0][1] == "user-picked"
+    adaptive = payload["metadata"]["adaptive_model_routing"]
+    assert adaptive["selection_applied"] is False
+    assert adaptive["selected"] == "user-picked"

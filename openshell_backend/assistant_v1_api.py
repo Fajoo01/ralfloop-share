@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.pheromone_router import PheromoneRouter, default_pheromone_db, pheromone_mode
 from openshell_backend.accounting_review_api import router as accounting_review_router
 from openshell_backend.chat_api import (
     ChatHistoryMessage,
@@ -230,6 +231,87 @@ def _deep_model(request: AssistantV1Request) -> str | None:
     return request.model or _configured_model("BOTTAZZI_ASSISTANT_DEEP_MODEL")
 
 
+def _adaptive_model_pool(lane: str, selected_model: str | None) -> tuple[str, ...]:
+    raw = os.getenv(f"BOTTAZZI_ASSISTANT_{lane.upper()}_MODEL_POOL", "")
+    candidates = [item.strip() for item in raw.split(",") if item.strip()]
+    if selected_model and selected_model not in candidates:
+        candidates.insert(0, selected_model)
+    return tuple(dict.fromkeys(candidates))
+
+
+def _adaptive_model_choice(
+    lane: str,
+    selected_model: str | None,
+    *,
+    explicit_model: bool,
+) -> tuple[str | None, dict[str, Any] | None]:
+    mode = pheromone_mode()
+    if mode == "off" or not selected_model:
+        return selected_model, None
+    candidates = _adaptive_model_pool(lane, selected_model)
+    if len(candidates) < 2:
+        return selected_model, {
+            "mode": mode,
+            "selection_applied": False,
+            "context": f"assistant:model:{lane}",
+            "candidates": list(candidates),
+            "activation_gate": "explicit_model_pool_requires_two_candidates",
+        }
+    scorer = PheromoneRouter(default_pheromone_db())
+    context = f"assistant:model:{lane}"
+    scores = scorer.rank(context, candidates)
+    chosen = selected_model
+    selection_applied = False
+    selection_changed = False
+    if mode == "active" and not explicit_model and lane in {"fast", "general"}:
+        chosen = scorer.choose(context, candidates).selected
+        selection_applied = True
+        selection_changed = chosen != selected_model
+    return chosen, {
+        "mode": mode,
+        "selection_applied": selection_applied,
+        "selection_changed": selection_changed,
+        "context": context,
+        "selected": chosen,
+        "baseline": selected_model,
+        "candidates": [
+            {
+                "candidate": item.candidate,
+                "probability": item.probability,
+                "pheromone": item.pheromone,
+                "observations": item.observations,
+                "successes": item.successes,
+                "failures": item.failures,
+            }
+            for item in scores
+        ],
+        "policy_boundary": "configured_equivalent_models_only",
+    }
+
+
+def _record_adaptive_model_outcome(
+    lane: str,
+    model: str | None,
+    *,
+    outcome: str,
+    latency_ms: int,
+    quality: float,
+) -> None:
+    if pheromone_mode() == "off" or not model:
+        return
+    try:
+        PheromoneRouter(default_pheromone_db()).observe(
+            f"assistant:model:{lane}",
+            model,
+            outcome=outcome,
+            quality=quality,
+            latency_ms=max(0, latency_ms),
+        )
+    except Exception:
+        # Adaptive telemetry must never break the deterministic assistant path.
+        return
+
+
 def _deep_requested(request: AssistantV1Request) -> bool:
     if request.mode == "deep":
         return True
@@ -341,6 +423,11 @@ def assistant_v1_chat(
             metadata=metadata,
         )
     model_lane, selected_model, routing_reason = _model_lane(request)
+    selected_model, adaptive_model_routing = _adaptive_model_choice(
+        model_lane,
+        selected_model,
+        explicit_model=request.model is not None,
+    )
     if model_lane == "deep":
         chat_request = _chat_request(request, session_id=session_id)
         try:
@@ -351,7 +438,22 @@ def assistant_v1_chat(
                 mode="assistant_deep",
             )
         except RuntimeError as exc:
+            _record_adaptive_model_outcome(
+                "deep",
+                motor.config.model,
+                outcome="failure",
+                latency_ms=int((time.monotonic() - started) * 1000),
+                quality=0.0,
+            )
             raise HTTPException(status_code=503, detail="bottazzi_motor_unavailable") from exc
+        deep_duration_ms = int((time.monotonic() - started) * 1000)
+        _record_adaptive_model_outcome(
+            "deep",
+            motor.config.model,
+            outcome="success",
+            latency_ms=deep_duration_ms,
+            quality=0.25,
+        )
         provenance = empty_execution_provenance(
             provider="bottazzi_motor",
             endpoint=motor.config.base_url,
@@ -364,10 +466,11 @@ def assistant_v1_chat(
             provider="bottazzi_motor",
             model=motor.config.model,
             session_id=session_id,
-            duration_ms=int((time.monotonic() - started) * 1000),
+            duration_ms=deep_duration_ms,
             approval_required=False,
             metadata=metadata_with_provenance({
                 "assistant_version": 1,
+                "adaptive_model_routing": adaptive_model_routing,
                 "local_only": True,
                 "route_source": "bottazzi_motor",
                 "reasoning_mode": "deep",
@@ -382,6 +485,13 @@ def assistant_v1_chat(
     if model_lane == "fast" and request.model is None and fast_provider is not None:
         active_provider = fast_provider
     if isinstance(active_provider, ChatProviderError):
+        _record_adaptive_model_outcome(
+            model_lane,
+            selected_model,
+            outcome="failure",
+            latency_ms=int((time.monotonic() - started) * 1000),
+            quality=0.0,
+        )
         raise HTTPException(
             status_code=_provider_status(active_provider),
             detail=active_provider.code,
@@ -394,11 +504,20 @@ def assistant_v1_chat(
             model=selected_model,
         )
     except ChatProviderError as exc:
+        outcome = "timeout" if "timeout" in str(exc.code).lower() else "failure"
+        _record_adaptive_model_outcome(
+            model_lane,
+            selected_model,
+            outcome=outcome,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            quality=0.0,
+        )
         raise HTTPException(
             status_code=_provider_status(exc),
             detail=exc.code,
         ) from exc
 
+    chat_duration_ms = int((time.monotonic() - started) * 1000)
     provenance = empty_execution_provenance(
         provider=result.provider,
         endpoint=str(result.metadata.get("endpoint") or "") or None,
@@ -408,10 +527,18 @@ def assistant_v1_chat(
         result.text,
         provenance,
     )
+    _record_adaptive_model_outcome(
+        model_lane,
+        result.model,
+        outcome="success",
+        latency_ms=chat_duration_ms,
+        quality=0.10 if claim_blocked else 0.25,
+    )
     metadata = metadata_with_provenance(
         {
             **result.metadata,
             "assistant_version": 1,
+            "adaptive_model_routing": adaptive_model_routing,
             "local_only": True,
             "route_source": "local_chat",
             "reasoning_mode": model_lane,
@@ -438,7 +565,7 @@ def assistant_v1_chat(
         provider=result.provider,
         model=result.model,
         session_id=session_id,
-        duration_ms=int((time.monotonic() - started) * 1000),
+        duration_ms=chat_duration_ms,
         approval_required=False,
         metadata=metadata,
     )

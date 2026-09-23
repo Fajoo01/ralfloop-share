@@ -82,6 +82,7 @@ class CapabilityRoute(BaseModel):
     jury_policy: JuryPolicy = Field(default_factory=JuryPolicy)
     collaboration_backend: CollaborationBackend = Field(default_factory=CollaborationBackend)
     verification_policy: VerificationPolicy = Field(default_factory=VerificationPolicy)
+    adaptive_routing: dict | None = None
     jury: JuryPolicy = Field(default_factory=JuryPolicy)
 
 
