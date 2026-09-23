@@ -8,6 +8,7 @@ from typing import Any, Iterable, Protocol
 
 from pydantic import Field, model_validator
 
+from .agenda_ingress import AgendaIntake
 from .contracts import StrictModel
 from .event_router import EventOrigin, EventRouter, RoutedEvent, event_id
 from .memory_service import MemoryDocument, MemoryEntity, MemoryEvent, MemoryService
@@ -153,9 +154,10 @@ class RuntsAuthBoundaryProvider:
 
 
 class PecRuntsService:
-    def __init__(self, memory: MemoryService, pec: PecReadProvider, runts: RuntsReadProvider, *, runtsuite: RuntsuitePracticeProvider | None = None, router: EventRouter | None = None, response_preparer=None) -> None:
+    def __init__(self, memory: MemoryService, pec: PecReadProvider, runts: RuntsReadProvider, *, runtsuite: RuntsuitePracticeProvider | None = None, router: EventRouter | None = None, response_preparer=None, agenda_intake: AgendaIntake | None = None) -> None:
         self.memory, self.pec, self.runts, self.runtsuite, self.router = memory, pec, runts, runtsuite, router
         self.response_preparer=response_preparer
+        self.agenda_intake=agenda_intake
 
     def prepare_practice_response(self, practice_id):
         if self.response_preparer is None:raise ValueError("RUNTS_PREPARE_NOT_CONFIGURED")
@@ -258,6 +260,8 @@ class PecRuntsService:
         if row.body:
             self.memory.put_document(MemoryDocument.build(document_id="document." + entity_id, title=row.subject, body=row.body, source=row.source))
         if fresh:
+            if self.agenda_intake is not None:
+                self.agenda_intake.ingest_pec(row)
             self._emit("PEC_MESSAGE_DISCOVERED", row.native_id, row.observed_at, (entity_id,), {"runts_reference": row.runts_reference}, row.source)
             if row.runts_reference:
                 self._emit("PEC_RUNTS_NOTIFICATION", row.native_id, row.observed_at, (entity_id,), {"runts_reference": row.runts_reference}, row.source)

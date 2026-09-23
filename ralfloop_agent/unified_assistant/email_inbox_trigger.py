@@ -9,6 +9,7 @@ from typing import Any, Callable, Mapping
 
 from ralfloop_agent.cli.session_store import SessionStore, SessionStoreError
 
+from .agenda_ingress import AgendaIntake
 from .conversation import SessionConversationAdapter
 from .event_router import EventOrigin, EventRouter, RoutedEvent, event_id
 from .memory_service import MemoryEntity, MemoryService
@@ -43,6 +44,7 @@ class GmailInboxTrigger:
         lookback: str = "2d",
         max_results: int = 50,
         now: Callable[[], datetime] | None = None,
+        agenda_intake: AgendaIntake | None = None,
     ) -> None:
         if telegram_user_id <= 0 or telegram_chat_id <= 0:
             raise ValueError("gmail_trigger_telegram_identity_required")
@@ -58,6 +60,7 @@ class GmailInboxTrigger:
         self.lookback = lookback
         self.max_results = max(1, min(int(max_results), 50))
         self.now = now or (lambda: datetime.now(UTC))
+        self.agenda_intake = agenda_intake
 
     def poll(self) -> GmailTriggerResult:
         rows = self._search()
@@ -96,6 +99,8 @@ class GmailInboxTrigger:
             if self.memory.put_entity(candidate):
                 queued += 1
             self.router.route(self._event(message))
+            if self.agenda_intake is not None:
+                self.agenda_intake.ingest_email(message)
 
         self._save_state({
             "schema_version": "gmail_inbox_trigger_v1",

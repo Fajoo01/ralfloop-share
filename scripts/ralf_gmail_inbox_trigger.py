@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 from ralfloop_agent.domains.domain_approval import DomainApprovalPolicy
+from ralfloop_agent.unified_assistant.agenda_ingress import build_default_agenda_intake
 from ralfloop_agent.unified_assistant.email_inbox_trigger import GmailInboxTrigger
 from ralfloop_agent.unified_assistant.email_send import GoogleWorkspaceEmailContext
 from ralfloop_agent.unified_assistant.event_router import EventRouter
@@ -33,12 +34,14 @@ def main() -> int:
     ))
     factory = lambda: GoogleWorkspaceEmailContext(socket, account, timeout)
     with MemoryService(memory_path) as memory:
+        agenda_intake = build_default_agenda_intake(memory)
         trigger = GmailInboxTrigger(
             gateway_factory=factory, memory=memory, router=EventRouter(memory),
             response_runner=run_unified_telegram, account=account,
             telegram_user_id=next(iter(policy.allowed_user_ids)),
             telegram_chat_id=next(iter(policy.allowed_chat_ids)),
             session_root=session_root, state_path=state_path,
+            agenda_intake=agenda_intake,
         )
         print(json.dumps(trigger.poll().__dict__, ensure_ascii=False, sort_keys=True))
     return 0

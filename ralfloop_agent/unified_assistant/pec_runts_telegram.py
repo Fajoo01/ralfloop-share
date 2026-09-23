@@ -253,6 +253,7 @@ def execute_telegram_read(
         with BottazziOperationalRuntime(
             memory_path, pec_provider=pec_provider,
             runts_provider=runts_provider or RuntsAuthBoundaryProvider(),
+            agenda_enabled=True,
         ) as runtime:
             query = (
                 "pec posta certificata nuovi messaggi ricevuti"
@@ -399,7 +400,7 @@ def execute_telegram_prepare(text, *, memory_path, pec_provider=None, runts_prov
             transport=PecAuthenticatedCdpTransport();transports.append(transport)
             pec_provider=PecAuthenticatedBrowserAdapter(transport)
     try:
-        with BottazziOperationalRuntime(memory_path,pec_provider=pec_provider,runts_provider=runts_provider or RuntsAuthBoundaryProvider(),runts_response_preparer=response_preparer) as runtime:
+        with BottazziOperationalRuntime(memory_path,pec_provider=pec_provider,runts_provider=runts_provider or RuntsAuthBoundaryProvider(),runts_response_preparer=response_preparer,agenda_enabled=True) as runtime:
             pec=runtime.invoke_pec_runts("cerca PEC riferimento pratica RUNTS",{"runts_reference":decision.arguments.practice_id,"limit":100})
             # A PEC notification is optional; RUNTS remains authoritative.
             result=runtime.invoke_pec_runts(text,decision.arguments.model_dump())

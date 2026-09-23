@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from functools import lru_cache
 import json
 import os
@@ -31,6 +32,11 @@ from ralfloop_agent.providers.chat import (
     ChatProviderError,
     OpenAICompatibleChatProvider,
 )
+from ralfloop_agent.unified_assistant.agenda import (
+    AgendaPipeline, AgendaSource, AgendaStore, calendar_provider_from_env,
+)
+from ralfloop_agent.unified_assistant.memory_service import MemoryService
+from ralfloop_agent.unified_assistant.agenda_motor import agenda_ambiguity_resolver_from_env
 from ralfloop_agent.unified_assistant.runtime import (
     run_unified_telegram,
     unified_route_probe,
@@ -81,6 +87,16 @@ class AssistantV1Response(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class AssistantAgendaIngestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    channel: str = Field(pattern=r"^[a-z][a-z0-9_.-]{0,63}$")
+    sender: str = Field(min_length=1, max_length=500)
+    native_id: str = Field(min_length=1, max_length=500)
+    timestamp: datetime
+    original_text: str = Field(min_length=1, max_length=50_000)
+
+
 class AssistantTaskCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -128,6 +144,24 @@ def get_motor_client() -> BotTazziMotorJudge:
 @lru_cache(maxsize=1)
 def get_task_queue() -> BotTazziTaskQueue:
     return BotTazziTaskQueue.from_env()
+
+
+def get_agenda_pipeline():
+    memory_path = Path(os.getenv(
+        "RALFLOOP_OPERATIONAL_MEMORY_PATH",
+        str(Path.home() / ".local/share/bottazzi/runtime-production/operational-memory.sqlite3"),
+    ))
+    memory = MemoryService(memory_path)
+    try:
+        yield AgendaPipeline(
+            store=AgendaStore.from_env(),
+            queue=get_task_queue(),
+            memory=memory,
+            calendar=calendar_provider_from_env(),
+            ambiguity_resolver=agenda_ambiguity_resolver_from_env(),
+        )
+    finally:
+        memory.close()
 
 
 _DEFAULT_INFERENCE_CONFIG = (
@@ -435,6 +469,22 @@ def assistant_v1_chat(
     )
 
 
+@router.post("/agenda/ingest")
+def assistant_v1_agenda_ingest(
+    request: AssistantAgendaIngestRequest,
+    agenda: Annotated[AgendaPipeline, Depends(get_agenda_pipeline)],
+) -> dict[str, Any]:
+    try:
+        results = agenda.process_all(AgendaSource(
+            channel=request.channel, sender=request.sender, native_id=request.native_id,
+            timestamp=request.timestamp, original_text=request.original_text,
+        ))
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    dumped = [result.model_dump(mode="json") for result in results]
+    return {"ok": True, "agenda": dumped[0] if dumped else None, "agenda_results": dumped}
+
+
 @router.get("/tasks")
 def assistant_v1_tasks(
     queue: Annotated[BotTazziTaskQueue, Depends(get_task_queue)],
@@ -526,7 +576,7 @@ def assistant_v1_status() -> dict[str, Any]:
         "local_only": True,
         "cloud_llm_required": False,
         "ui_path": "/assistant/v1",
-        "routes": ["unified", "local_chat", "deep_chat", "task_queue"],
+        "routes": ["unified", "local_chat", "deep_chat", "task_queue", "agenda"],
         "model_policy": "small_first",
         "task_queue_classifier": "JEV",
         "task_queue_priority_domains": ["money", "love", "family"],

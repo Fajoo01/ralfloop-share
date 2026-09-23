@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable, Mapping
 
+from .agenda_ingress import build_default_agenda_intake
 from .bandi_service import BandiService, SourceAdapter
 from .event_router import EventRouter
 from .media_quality import MediaQualityService
@@ -29,9 +30,11 @@ class BottazziOperationalRuntime:
         runts_provider: RuntsReadProvider | None = None,
         runtsuite_provider: RuntsuiteReadOnlyAdapter | None = None,
         runts_response_preparer=None,
+        agenda_enabled: bool = False,
     ) -> None:
         self.metrics = OperationalMetrics()
         self.memory = MemoryService(memory_path)
+        self.agenda_intake = build_default_agenda_intake(self.memory) if agenda_enabled else None
         self.nightly_queue = NightlyQueue(self.memory)
         self.nightly_sink = NightlyEventSink(self.nightly_queue)
         self.events = EventRouter(
@@ -52,7 +55,7 @@ class BottazziOperationalRuntime:
             self.nightly_queue, providers or {},
             deterministic_handlers=deterministic_handlers, metrics=self.metrics,
         )
-        self.pec_runts = PecRuntsService(self.memory, pec_provider, runts_provider, runtsuite=runtsuite_provider, router=self.events, response_preparer=runts_response_preparer) if pec_provider and runts_provider else None
+        self.pec_runts = PecRuntsService(self.memory, pec_provider, runts_provider, runtsuite=runtsuite_provider, router=self.events, response_preparer=runts_response_preparer, agenda_intake=self.agenda_intake) if pec_provider and runts_provider else None
         self.pec_runts_mcp = PecRuntsMCPServer(self.pec_runts) if self.pec_runts else None
         self.pec_runts_capabilities = CapabilityRegistry(capability_descriptors())
 
