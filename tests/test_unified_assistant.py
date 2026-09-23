@@ -22,6 +22,7 @@ from ralfloop_agent.unified_assistant.planner import UnifiedPlanner
 from ralfloop_agent.unified_assistant.capability_rag_router import CapabilityRAGRouter
 from ralfloop_agent.unified_assistant.registry import UnifiedRegistryFacade
 from ralfloop_agent.unified_assistant.pec_case_support import (
+    inspect_difensore_tari_case_status,
     required_document_gate,
     stage_tari_supporting_documents,
 )
@@ -417,6 +418,44 @@ def test_difensore_required_document_gate_rejects_blank_or_missing_form(tmp_path
     identity.write_bytes(b"identity")
     gate = required_document_gate(source, (str(completed), str(identity)))
     assert gate["missing"] == []
+
+
+def test_difensore_tari_case_status_is_read_only_and_reports_existing_preparation(tmp_path):
+    import hashlib
+
+    blank = b"official blank template"
+    source = {
+        "payload": {
+            "messages": [{
+                "sender": "difensore.regionale@pec.consiglio.regione.lombardia.it",
+                "body": "Protocollo numero GAR.2026.0013417 del 27/08/2026.",
+                "attachments": [{
+                    "filename": "Modulo Richiesta Intervento DIFENSORE con infomativa.docx",
+                    "content_hash": hashlib.sha256(blank).hexdigest(),
+                }],
+            }],
+        },
+    }
+    (tmp_path / "DRAFT_reply_GAR.2026.0013417.txt").write_text("draft")
+    packet = tmp_path / "tari-support" / "packet"
+    packet.mkdir(parents=True)
+    for index in range(5):
+        (packet / f"ACCERTAMENTI 2024_GIUGNO_21.06.2024_9R0000005061371{index}0001.pdf").write_bytes(b"a")
+        (packet / f"PIPLCMILIMG_2024_Febbraio_2024_21.02.2024_AR_6970418505{index}3.pdf").write_bytes(b"b")
+
+    status = inspect_difensore_tari_case_status(source, outbox_root=tmp_path)
+
+    assert status["protocol"] == "GAR.2026.0013417"
+    assert status["draft_present"] is True
+    assert status["supporting_documents"] == 10
+    assert status["missing"] == [
+        "completed_difensore_form",
+        "identity_document_or_digitally_signed_form",
+    ]
+    assert status["writes"] == 0
+    assert status["sends"] == 0
+
+
 
 
 def test_stage_tari_supporting_documents_verifies_hashes_and_is_idempotent(tmp_path):

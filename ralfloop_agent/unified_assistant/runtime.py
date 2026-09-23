@@ -42,7 +42,7 @@ from .browser_mcp_adapter import (
 from .editorial_mcp_adapter import EditorialMCPContext
 from .bandi_mcp_adapter import BandiMCPContext
 from .pec_mcp_adapter import PecMCPContext
-from .pec_case_support import required_document_gate, stage_tari_supporting_documents
+from .pec_case_support import inspect_difensore_tari_case_status, required_document_gate, stage_tari_supporting_documents
 from .pec_write_mcp_adapter import PecWriteMCPContext
 from .digital_signing import ArubaSignApprovalWorkflow, DigitalSigningError
 from .meteo_mcp_adapter import MeteoMCPReadOnly
@@ -779,6 +779,31 @@ def run_unified_telegram(
     def pec_adapter(assignment, _inputs):
         with pec_gateway_factory() as gateway:
             result = gateway.request(assignment.objective)
+        folded_objective = assignment.objective.casefold()
+        status_question = (
+            "difensore" in folded_objective
+            and any(marker in folded_objective for marker in ("messa", "stato", "pronta", "pronto", "a che punto", "come siamo"))
+        )
+        if status_question:
+            case_status = inspect_difensore_tari_case_status({"payload": result})
+            missing_labels = {
+                "completed_difensore_form": "modulo del Difensore compilato e sottoscritto",
+                "identity_document_or_digitally_signed_form": "documento d'identità valido oppure modulo firmato digitalmente",
+            }
+            missing = [missing_labels.get(item, item) for item in case_status.get("missing") or ()]
+            protocol = str(case_status.get("protocol") or "")
+            draft_text = "bozza presente" if case_status.get("draft_present") else "bozza non ancora presente"
+            support_count = int(case_status.get("supporting_documents") or 0)
+            if missing:
+                missing_text = " Mancano: " + "; ".join(missing) + "."
+            else:
+                missing_text = " Documentazione obbligatoria completa."
+            result["message"] = (
+                f"Pratica Difensore {protocol or 'TARI'}: {draft_text}; "
+                f"{support_count} PDF TARI già in staging." + missing_text +
+                " Nessuna PEC è stata inviata."
+            )
+            result["case_status"] = case_status
         facts = tuple(
             {
                 "message_id": str(item.get("native_id") or ""),

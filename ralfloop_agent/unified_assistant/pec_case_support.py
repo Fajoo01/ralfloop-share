@@ -80,6 +80,49 @@ def required_document_gate(
     return {"required": required, "missing": missing, "gate": "difensore_official_form"}
 
 
+def inspect_difensore_tari_case_status(
+    source_artifact: Mapping[str, Any],
+    *,
+    outbox_root: str | Path | None = None,
+) -> dict[str, Any]:
+    """Inspect the existing local Difensore/TARI preparation state without mutating it."""
+    message = _source_message(source_artifact)
+    if message is None:
+        return {"status": "source_missing", "draft_present": False, "supporting_documents": 0, "required": [], "missing": [], "writes": 0, "sends": 0}
+    sender = str(message.get("sender") or "").casefold()
+    if _DIFENSORE_SENDER not in sender:
+        return {"status": "not_applicable", "draft_present": False, "supporting_documents": 0, "required": [], "missing": [], "writes": 0, "sends": 0}
+
+    root = Path(outbox_root or os.getenv("BOTTAZZI_PEC_OUTBOX_ROOT", "/var/lib/ralfloop/pec-outbox")).resolve()
+    source_body = str(message.get("body") or "")
+    protocol_match = re.search(r"\bprotocollo(?:\s+numero)?\s+([A-Z0-9.-]+)", source_body, re.I)
+    protocol = protocol_match.group(1) if protocol_match else ""
+    draft_present = bool(protocol) and (root / f"DRAFT_reply_{protocol}.txt").is_file()
+
+    support_count = 0
+    support_root = root / "tari-support"
+    if support_root.is_dir():
+        for packet in support_root.iterdir():
+            if not packet.is_dir():
+                continue
+            names = [item.name for item in packet.iterdir() if item.is_file()]
+            count = sum(1 for name in names if _TARI_ASSESSMENT_RE.match(name) or _TARI_NOTIFICATION_RE.match(name))
+            support_count = max(support_count, count)
+
+    explicit_paths = tuple(str(item) for item in root.iterdir() if item.is_file()) if root.is_dir() else ()
+    gate = required_document_gate(source_artifact, explicit_paths)
+    return {
+        "status": "ready_for_missing_documents" if gate.get("missing") else "documents_complete",
+        "protocol": protocol,
+        "draft_present": draft_present,
+        "supporting_documents": support_count,
+        "required": list(gate.get("required") or ()),
+        "missing": list(gate.get("missing") or ()),
+        "writes": 0,
+        "sends": 0,
+    }
+
+
 def stage_tari_supporting_documents(
     gateway: PecReadGateway,
     objective: str,
@@ -177,4 +220,4 @@ def stage_tari_supporting_documents(
     }
 
 
-__all__ = ["required_document_gate", "stage_tari_supporting_documents"]
+__all__ = ["inspect_difensore_tari_case_status", "required_document_gate", "stage_tari_supporting_documents"]
