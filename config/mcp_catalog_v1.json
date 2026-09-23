@@ -63,6 +63,25 @@
     "/tmp/ralf-*-mcp/mcp.sock"
   ],
   "term_aliases": {
+    "baffoflix": [
+      "jellyfin",
+      "access",
+      "password",
+      "quick connect"
+    ],
+    "password": [
+      "password",
+      "recovery",
+      "quick connect"
+    ],
+    "dimenticata": [
+      "password",
+      "recovery"
+    ],
+    "dimenticato": [
+      "password",
+      "recovery"
+    ],
     "browser": [
       "browser"
     ],

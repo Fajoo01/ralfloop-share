@@ -18,8 +18,17 @@ DEDUP_PYTHON = "/home/sibilla-cumana/jellyfin-novita-agent/.venv_backend/bin/pyt
 
 
 class JellyfinMCPServer:
-    def __init__(self, url: str, token: str) -> None:
+    def __init__(
+        self,
+        url: str,
+        token: str,
+        *,
+        public_url: str = "",
+        landing_url: str = "",
+    ) -> None:
         self.url = url.rstrip("/")
+        self.public_url = public_url.rstrip("/")
+        self.landing_url = landing_url.rstrip("/")
         self.headers = {"X-Emby-Token": token, "Content-Type": "application/json"}
 
     def list_tools(self) -> list[dict[str, Any]]:
@@ -49,6 +58,16 @@ class JellyfinMCPServer:
             tool("jellyfin_deduplicate", "Remove lower-quality duplicate media after playback checks.", {
                 "confirm": {"type": "boolean", "const": True},
             }, ["confirm"]),
+            tool("baffoflix_get_access_info", "Return the configured public BaffoFlix entry points and live public health without exposing internal addresses or credentials.", {}, []),
+            tool("baffoflix_start_password_recovery", "Start Jellyfin's native password-recovery flow for one exact username. Does not expose the server-side PIN file. Explicit confirmation required.", {
+                "username": {"type": "string", "minLength": 1, "maxLength": 240},
+                "confirm": {"type": "boolean", "const": True},
+            }, ["username", "confirm"]),
+            tool("baffoflix_authorize_quick_connect", "Authorize one pending Quick Connect code for an already verified non-admin Jellyfin user. The user_id must come from a trusted identity link, not free-form requester text. Explicit confirmation required.", {
+                "code": {"type": "string", "minLength": 6, "maxLength": 8, "pattern": "^[A-Za-z0-9-]+$"},
+                "user_id": {"type": "string", "minLength": 32, "maxLength": 64, "pattern": "^[A-Fa-f0-9]+$"},
+                "confirm": {"type": "boolean", "const": True},
+            }, ["code", "user_id", "confirm"]),
         ]
 
     def call(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
@@ -67,9 +86,110 @@ class JellyfinMCPServer:
                 return self.refresh(arguments)
             if name == "jellyfin_deduplicate":
                 return self.deduplicate(arguments)
+            if name == "baffoflix_get_access_info" and not arguments:
+                return self.baffoflix_access_info()
+            if name == "baffoflix_start_password_recovery":
+                return self.baffoflix_start_password_recovery(arguments)
+            if name == "baffoflix_authorize_quick_connect":
+                return self.baffoflix_authorize_quick_connect(arguments)
             return result({"ok": False, "status": "POLICY_DENIED"}, True)
         except requests.RequestException as exc:
             return result({"ok": False, "status": "SOURCE_UNAVAILABLE", "error": str(exc)[:300]}, True)
+
+    def baffoflix_access_info(self) -> dict[str, Any]:
+        if not self.public_url and not self.landing_url:
+            return result({"ok": False, "status": "CONFIG_REQUIRED"}, True)
+        public: dict[str, Any] = {}
+        if self.public_url:
+            response = requests.get(
+                self.public_url + "/System/Info/Public",
+                headers={"Accept": "application/json"},
+                timeout=8,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, Mapping):
+                return result({"ok": False, "status": "MALFORMED_RESPONSE"}, True)
+            public = {
+                "server_name": str(payload.get("ServerName") or "") or None,
+                "version": str(payload.get("Version") or "") or None,
+                "product_name": str(payload.get("ProductName") or "") or None,
+                "server_id": str(payload.get("Id") or "") or None,
+            }
+        return result({
+            "ok": True,
+            "status": "AVAILABLE",
+            "landing_url": self.landing_url or None,
+            "server_url": self.public_url or None,
+            "public_health": public,
+        }, False)
+
+    def baffoflix_start_password_recovery(self, arguments: Mapping[str, Any]) -> dict[str, Any]:
+        if set(arguments) != {"username", "confirm"}:
+            return result({"ok": False, "status": "MALFORMED_REQUEST"}, True)
+        if arguments.get("confirm") is not True:
+            return result({"ok": False, "status": "CONFIRMATION_REQUIRED"}, True)
+        username = str(arguments.get("username") or "").strip()
+        if not username or len(username) > 240 or any(ord(ch) < 32 for ch in username):
+            return result({"ok": False, "status": "USERNAME_INVALID"}, True)
+        response = requests.post(
+            self.url + "/Users/ForgotPassword",
+            json={"EnteredUsername": username},
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json() if response.content else {}
+        if not isinstance(payload, Mapping):
+            return result({"ok": False, "status": "MALFORMED_RESPONSE"}, True)
+        action = str(payload.get("Action") or "")
+        return result({
+            "ok": True,
+            "status": "STARTED",
+            "username": username,
+            "action": action or None,
+            "pin_required": action.casefold() == "pincode",
+            "pin_expires_at": payload.get("PinExpirationDate"),
+            "pin_file_exposed": False,
+        }, False)
+
+    def baffoflix_authorize_quick_connect(self, arguments: Mapping[str, Any]) -> dict[str, Any]:
+        if set(arguments) != {"code", "user_id", "confirm"}:
+            return result({"ok": False, "status": "MALFORMED_REQUEST"}, True)
+        if arguments.get("confirm") is not True:
+            return result({"ok": False, "status": "CONFIRMATION_REQUIRED"}, True)
+        code = str(arguments.get("code") or "").strip().upper()
+        user_id = str(arguments.get("user_id") or "").strip()
+        if not re.fullmatch(r"[A-Z0-9-]{6,8}", code):
+            return result({"ok": False, "status": "QUICK_CONNECT_CODE_INVALID"}, True)
+        if not re.fullmatch(r"[A-Fa-f0-9]{32,64}", user_id):
+            return result({"ok": False, "status": "USER_ID_INVALID"}, True)
+        user = self.get(f"/Users/{user_id}")
+        if not isinstance(user, Mapping) or str(user.get("Id") or "") != user_id:
+            return result({"ok": False, "status": "USER_NOT_FOUND"}, True)
+        policy = user.get("Policy") or {}
+        if not isinstance(policy, Mapping):
+            return result({"ok": False, "status": "MALFORMED_RESPONSE"}, True)
+        if bool(policy.get("IsAdministrator", False)):
+            return result({"ok": False, "status": "ADMIN_ACCOUNT_DENIED"}, True)
+        if bool(policy.get("IsDisabled", False)):
+            return result({"ok": False, "status": "ACCOUNT_DISABLED"}, True)
+        response = requests.post(
+            self.url + "/QuickConnect/Authorize",
+            params={"Code": code, "UserId": user_id},
+            headers=self.headers,
+            timeout=20,
+        )
+        response.raise_for_status()
+        authorized = response.json() if response.content else True
+        if authorized is not True:
+            return result({"ok": False, "status": "QUICK_CONNECT_REJECTED"}, True)
+        return result({
+            "ok": True,
+            "status": "AUTHORIZED",
+            "user_id": user_id,
+            "username": str(user.get("Name") or "") or None,
+        }, False)
 
     def unidentified(self) -> dict[str, Any]:
         payload = self.get("/Items", {"Recursive": "true", "IncludeItemTypes": "Movie",
@@ -233,7 +353,18 @@ def response(request: Mapping[str, Any], server: JellyfinMCPServer) -> dict[str,
 
 def main() -> int:
     config = json.loads(Path(os.getenv("JELLYFIN_CONFIG", DEFAULT_CONFIG)).read_text(encoding="utf-8"))
-    server = JellyfinMCPServer(str(config.get("jellyfin_url") or ""), str(config.get("jellyfin_token") or ""))
+    public_url = os.getenv(
+        "BAFFOFLIX_PUBLIC_URL", str(config.get("baffoflix_public_url") or "")
+    )
+    landing_url = os.getenv(
+        "BAFFOFLIX_LANDING_URL", str(config.get("baffoflix_landing_url") or "")
+    )
+    server = JellyfinMCPServer(
+        str(config.get("jellyfin_url") or ""),
+        str(config.get("jellyfin_token") or ""),
+        public_url=public_url,
+        landing_url=landing_url,
+    )
     for line in sys.stdin:
         try:
             request = json.loads(line)
