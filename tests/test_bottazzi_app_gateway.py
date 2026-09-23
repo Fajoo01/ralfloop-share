@@ -68,6 +68,36 @@ def test_app_internet_agent_stays_gateway_bounded(client: TestClient, monkeypatc
     assert seen["context"]["app_internet_agent"] is True
 
 
+def test_app_internet_agent_retry_reuses_previous_user_question(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    client.post("/login", json={"password": "app-pass"})
+    seen = {}
+
+    class FakeResponse:
+        status_code = 200
+        content = b'{"ok":true,"response":"grounded"}'
+        headers = {"content-type": "application/json"}
+        ok = True
+
+    def fake_post(url, *, json, timeout):
+        seen.update(json)
+        return FakeResponse()
+
+    monkeypatch.setattr(app_gateway.requests, "post", fake_post)
+    previous = "com è messa la email da inviare al difensore civico?"
+    response = client.post("/assistant/v1/chat", json={
+        "message": "riprova",
+        "history": [
+            {"role": "user", "content": previous},
+            {"role": "assistant", "content": "risposta sbagliata"},
+        ],
+        "allow_tools": True,
+        "app_internet_agent": True,
+    })
+    assert response.status_code == 200
+    assert "Domanda originale: " + previous in seen["message"]
+    assert "Domanda originale: riprova" not in seen["message"]
+
+
 def test_task_queue_proxy_uses_authenticated_gateway(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     client.post("/login", json={"password": "app-pass"})
     seen = {}

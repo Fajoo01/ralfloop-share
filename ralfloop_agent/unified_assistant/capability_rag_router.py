@@ -317,9 +317,10 @@ class CapabilityRAGIndex:
             # Certified mail is its own channel: "posta certificata" must never
             # be demoted to ordinary Gmail merely because it contains "posta".
             pec_channel = "pec" in query_terms or "posta certificata" in normalized or "posta elettronica certificata" in normalized
-            if pec_channel and skill_id == "pec.read":
+            pec_case = "difensore civico" in normalized or "difensore regionale" in normalized
+            if (pec_channel or pec_case) and skill_id == "pec.read":
                 score += 12.0
-            elif pec_channel:
+            elif pec_channel or pec_case:
                 score -= 12.0
             elif query_terms & {"mail", "email", "gmail", "posta"} and skill_id != "email.search":
                 score -= 12.0

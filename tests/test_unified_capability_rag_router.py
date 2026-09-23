@@ -34,6 +34,7 @@ def test_capability_rag_routes_current_leaf_reads():
         "quanto paghiamo sul portale Fastweb?": "fastweb.portal.read",
         "leggi la PEC del Difensore regionale": "pec.read",
         "posta certificata sulla TARI": "pec.read",
+        "com è messa la email da inviare al difensore civico?": "pec.read",
         "qual è lo stato della luce in Home Assistant?": "home.read",
         "quali bandi aperti abbiamo?": "bandi.research",
     }
@@ -207,6 +208,20 @@ def test_generic_pec_uses_standalone_capability_not_legacy_runts_vertical():
     assert route["skills_used"] == ["pec.read"]
     assert route["mcp_used"] == ["pec.read.mcp"]
     assert route["write_policy"] == "no_write"
+
+
+def test_difensore_case_status_phrase_reaches_standalone_pec():
+    text = "com è messa la email da inviare al difensore civico?"
+    route = unified_route_probe(
+        text,
+        {"source": "ralf_terminal", "assistant_surface": "assistant_v1"},
+        flags_override=_assistant_flags(),
+    )
+    assert route is not None
+    assert route["intent"] == "pec.read"
+    assert route["domains"] == ["pec"]
+    assert route["skills_used"] == ["pec.read"]
+    assert route["mcp_used"] == ["pec.read.mcp"]
 
 
 def test_specific_pec_search_reads_exact_message_and_never_writes():

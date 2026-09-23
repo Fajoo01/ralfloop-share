@@ -84,7 +84,7 @@ _SUPPORTED = re.compile(
     r"rispondi\s+(?:a|alla\s+mail(?:\s+di)?)|accendi|spegni|apri|chiudi|"
     r"imposta|metti|porta|abbassala|alzala|temperatura|quanto\s+fa|fa\s+caldo|"
     r"fa\s+freddo|rendila|cambiala|aggiungi|modifica|ok|invia|mandala|va\s+bene|annulla|"
-    r"fastweb|myfastpage|whatsapp|wapp|mailchimp|pec|posta\s+certificata|posta\s+elettronica\s+certificata|webmail\s+pec|"
+    r"fastweb|myfastpage|whatsapp|wapp|mailchimp|pec|posta\s+certificata|posta\s+elettronica\s+certificata|webmail\s+pec|difensore\s+(?:civico|regionale)|"
     r"meteo|weather|previsioni|piove|piover[aà]|pioggia|"
     r"temporale|radar|precipitazioni|vento|atm|giromilano|"
     r"mezzi\s+pubblici|trasporto\s+pubblico|portami|band[oi]|grant|contribut[oi]|finanziament[oi]|candidatur[ae]|opportunit[aà]|"

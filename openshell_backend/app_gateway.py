@@ -203,6 +203,16 @@ def assistant_chat(payload: dict[str, Any]) -> Response:
     internet_agent = bool(outgoing.pop("app_internet_agent", False))
     if internet_agent:
         original = str(outgoing.get("message") or "").strip()
+        if original.casefold() in {"riprova", "riprovaci", "prova di nuovo", "di nuovo"}:
+            history = outgoing.get("history")
+            if isinstance(history, list):
+                for item in reversed(history):
+                    if not isinstance(item, dict) or str(item.get("role") or "") != "user":
+                        continue
+                    previous = str(item.get("content") or "").strip()
+                    if previous:
+                        original = previous
+                        break
         outgoing["message"] = (
             "Fai una ricerca approfondita su Internet in sola lettura, con fonti e provenance. "
             "Usa prima fonti primarie o manuali ufficiali, poi GitHub upstream e forum tecnici quando pertinenti. "
