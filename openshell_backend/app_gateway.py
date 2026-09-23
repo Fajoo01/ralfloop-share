@@ -135,7 +135,11 @@ def logout(request: Request) -> JSONResponse:
 
 @app.get("/healthz")
 def healthz() -> dict[str, Any]:
-    return {"ok": True, "service": "bottazzi-app-gateway"}
+    return {
+        "ok": True,
+        "service": "bottazzi-app-gateway",
+        "call_recordings": True,
+    }
 
 
 def _ui() -> HTMLResponse:
