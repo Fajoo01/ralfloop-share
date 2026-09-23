@@ -42,6 +42,7 @@ from .browser_mcp_adapter import (
 from .editorial_mcp_adapter import EditorialMCPContext
 from .bandi_mcp_adapter import BandiMCPContext
 from .pec_mcp_adapter import PecMCPContext
+from .pec_case_support import required_document_gate, stage_tari_supporting_documents
 from .pec_write_mcp_adapter import PecWriteMCPContext
 from .meteo_mcp_adapter import MeteoMCPReadOnly
 from .planner import UnifiedPlanner
@@ -797,14 +798,40 @@ def run_unified_telegram(
             _inputs,
             assignment.objective,
         )
-        with pec_write_gateway_factory() as gateway:
-            result = gateway.prepare(
-                recipient=str(args.get("recipient") or "") or None,
-                subject=str(args.get("subject") or "") or None,
-                body=str(args.get("body") or "") or None,
-                attachment_paths=tuple(str(x) for x in args.get("attachment_paths") or ()),
-                requested_by=str(context.get("requested_by") or "bot-tazzi"),
-            )
+        explicit_paths = tuple(str(x) for x in args.get("attachment_paths") or ())
+        source = _inputs.get("artifact.pec_source")
+        support = {
+            "status": "not_applicable", "paths": [], "attachments": [],
+            "local_staging_writes": 0, "writes": 0, "sends": 0,
+        }
+        gate = {"required": [], "missing": [], "gate": "none"}
+        if isinstance(source, Mapping):
+            with pec_gateway_factory() as reader:
+                support = stage_tari_supporting_documents(reader, assignment.objective)
+            gate = required_document_gate(source, explicit_paths)
+        support_paths = tuple(str(x) for x in support.get("paths") or ())
+        attachment_paths = tuple(dict.fromkeys(explicit_paths + support_paths))
+        args["attachment_paths"] = list(attachment_paths)
+        missing_requirements = tuple(str(x) for x in gate.get("missing") or ())
+        if missing_requirements:
+            result = {
+                "ok": True,
+                "status": "required_documents_missing",
+                "missing_requirements": list(missing_requirements),
+                "approval_required": True,
+                "approval_created": False,
+                "writes": 0,
+                "sends": 0,
+            }
+        else:
+            with pec_write_gateway_factory() as gateway:
+                result = gateway.prepare(
+                    recipient=str(args.get("recipient") or "") or None,
+                    subject=str(args.get("subject") or "") or None,
+                    body=str(args.get("body") or "") or None,
+                    attachment_paths=attachment_paths,
+                    requested_by=str(context.get("requested_by") or "bot-tazzi"),
+                )
         return StructuredArtifact.create(
             artifact_type="pec_write_request",
             status=str(result.get("status") or "blocked"),
@@ -815,8 +842,10 @@ def run_unified_telegram(
                     "recipient": str(args.get("recipient") or ""),
                     "subject": str(args.get("subject") or ""),
                     "body": str(args.get("body") or ""),
-                    "attachment_paths": [str(x) for x in args.get("attachment_paths") or ()],
+                    "attachment_paths": list(attachment_paths),
                 },
+                "supporting_documents": support,
+                "required_document_gate": gate,
                 "content_boundary": "pec_draft_not_sent",
                 "writer_separate_from_reader": True,
                 "writes": int(result.get("writes") or 0),
