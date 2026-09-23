@@ -88,16 +88,21 @@ class ChromeCdp:
             composer = Array.from(document.querySelectorAll(selector)).find(visible) || null;
             if (composer) break;
           }
-          const text = (document.body && document.body.innerText || '').slice(0, 4000);
-          const loginHint = /(?:log in|sign in|accedi|continua con)/i.test(text);
+          const loginControls = Array.from(document.querySelectorAll('button,a'))
+            .filter(visible)
+            .filter((el) => /(?:log in|sign in|accedi|registrati|sign up)/i.test((el.innerText || '').trim()));
+          const authenticatedHint = loginControls.length === 0;
           return JSON.stringify({
-            ready: Boolean(composer),
+            ready: Boolean(composer) && authenticatedHint,
+            composer_ready: Boolean(composer),
+            authenticated_hint: authenticatedHint,
+            login_controls: loginControls.length,
             title: document.title || '',
             url: location.href,
             user_turns: document.querySelectorAll('[data-message-author-role="user"]').length,
             assistant_turns: document.querySelectorAll('[data-message-author-role="assistant"]').length,
             page_age_minutes: Math.max(0, Math.floor(performance.now() / 60000)),
-            interaction_required: !composer && (loginHint || /ci siamo quasi/i.test(document.title || '')),
+            interaction_required: !authenticatedHint || !composer || /ci siamo quasi/i.test(document.title || ''),
             composer_kind: composer ? (composer.id || composer.tagName || '').toLowerCase() : null,
           });
         })()"""
@@ -138,6 +143,7 @@ class ChromeCdp:
             raise CdpError(f"chatgpt_not_ready:{reason}")
 
         target = self._wait_target(str(state["target_id"]))
+        baseline_user_turns = int(state.get("user_turns") or 0)
         if not target.websocket_url:
             raise CdpError("chatgpt_target_missing_websocket")
         prompt_json = json.dumps(prompt, ensure_ascii=False)
@@ -188,11 +194,24 @@ class ChromeCdp:
         if not isinstance(injected, dict) or not injected.get("ok"):
             reason = injected.get("reason", "unknown") if isinstance(injected, dict) else "unknown"
             raise CdpError(f"prompt_injection_failed:{reason}")
+        submit_confirmed = False
         if submit:
             common = {"key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13, "nativeVirtualKeyCode": 13}
             self._page_call(target.websocket_url, "Input.dispatchKeyEvent", {"type": "keyDown", **common})
             self._page_call(target.websocket_url, "Input.dispatchKeyEvent", {"type": "keyUp", **common})
-        return {"target_id": target.target_id, "injected": True, "submitted": submit}
+            confirm_deadline = time.monotonic() + 10.0
+            while time.monotonic() < confirm_deadline:
+                current_target = self._wait_target(target.target_id)
+                if not current_target.is_chatgpt:
+                    raise CdpError("submit_interaction_required")
+                current_state = self.chatgpt_ui_state(target.target_id)
+                if int(current_state.get("user_turns") or 0) > baseline_user_turns:
+                    submit_confirmed = True
+                    break
+                time.sleep(0.25)
+            if not submit_confirmed:
+                raise CdpError("submit_not_confirmed")
+        return {"target_id": target.target_id, "injected": True, "submitted": submit_confirmed, "submit_confirmed": submit_confirmed}
 
     def handoff_to_new_chat(self, prompt: str, *, submit: bool = True) -> dict[str, Any]:
         previous = [target for target in self.targets() if target.target_type == "page" and target.is_chatgpt]

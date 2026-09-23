@@ -116,8 +116,12 @@ def test_rotate_closes_only_old_chatgpt_and_clears_cache() -> None:
     assert ("ws://new", "Page.navigate") in cdp.calls
 
 class FakeInjectCdp(FakeCdp):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sent = False
+
     def chatgpt_ui_state(self, target_id=None):
-        return {"ready": True, "target_id": target_id or self.new_id}
+        return {"ready": True, "target_id": target_id or self.new_id, "user_turns": 1 if self.sent else 0}
 
     def _wait_target(self, target_id, *, attempts=20):
         return BrowserTarget(target_id, "page", "https://chatgpt.com/", "new", "ws://new")
@@ -126,6 +130,8 @@ class FakeInjectCdp(FakeCdp):
         self.calls.append((websocket_url, method))
         if method == "Runtime.evaluate":
             return {"result": {"value": json.dumps({"ok": True})}}
+        if method == "Input.dispatchKeyEvent" and (params or {}).get("type") == "keyUp":
+            self.sent = True
         return {}
 
 
@@ -147,3 +153,14 @@ def test_handoff_failure_keeps_old_chatgpt_tab_open() -> None:
     with pytest.raises(CdpError, match="interaction_required"):
         cdp.handoff_to_new_chat("handoff")
     assert cdp.closed == ["new"]
+
+class RedirectingInjectCdp(FakeInjectCdp):
+    def _wait_target(self, target_id, *, attempts=20):
+        url = "https://accounts.google.com/" if self.sent else "https://chatgpt.com/"
+        return BrowserTarget(target_id, "page", url, "redirect", "ws://new")
+
+
+def test_inject_prompt_rejects_auth_redirect() -> None:
+    cdp = RedirectingInjectCdp()
+    with pytest.raises(CdpError, match="submit_interaction_required"):
+        cdp.inject_prompt("handoff", target_id="new", submit=True)
