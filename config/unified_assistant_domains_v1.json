@@ -561,6 +561,8 @@
         "Decimal arithmetic",
         "versioned ETS rulebook",
         "no inferred tax status",
+        "missing originals require human review",
+        "bookkeeping reconstruction never becomes fabricated documentary evidence",
         "writes=0",
         "sends=0"
       ],
@@ -570,6 +572,9 @@
       "status": "ready",
       "source_refs": [
         "ralfloop_agent/unified_assistant/accounting.py",
+        "ralfloop_agent/unified_assistant/accounting_review.py",
+        "ralfloop_agent/unified_assistant/tiremm_admin.py",
+        "ralfloop_agent/unified_assistant/runts_financial.py",
         "config/accounting_ets_rules_v1.json"
       ]
     },

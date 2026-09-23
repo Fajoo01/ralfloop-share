@@ -134,7 +134,8 @@ CAPABILITY_HINTS: dict[str, tuple[str, ...]] = {
         "commercialista", "contabilita", "contabilità", "bilancio", "bilancio ets",
         "rendiconto", "rendiconto ets", "rendiconto per cassa", "modello d", "modello e",
         "prima nota", "riconciliazione", "fattura", "fatture", "ricevute",
-        "f24", "iva", "scadenze fiscali",
+        "f24", "iva", "scadenze fiscali", "giustificativo", "giustificativi",
+        "ricevuta persa", "scontrino perso", "pezza giustificativa", "far quadrare",
     ),
 }
 

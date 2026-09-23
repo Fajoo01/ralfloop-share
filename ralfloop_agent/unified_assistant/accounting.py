@@ -211,10 +211,10 @@ def classify_accounting_request(goal: str) -> str:
     folded = goal.casefold()
     if re.search(r"\b(?:rendiconto|modello\s+[de]|bilancio\s+ets|runts)\b", folded):
         return "ets_report"
-    if re.search(r"\b(?:riconcili|moviment[io]|estratto\s+conto|prima\s+nota)\b", folded):
-        return "reconciliation"
-    if re.search(r"\b(?:fattur[ae]|ricevut[ae]|scontrin[io])\b", folded):
+    if re.search(r"\b(?:fattur[ae]|ricevut[ae]|scontrin[io]|giustificativ[oi]|pezz[ae]\s+giustificativ[ae])\b", folded):
         return "document_review"
+    if re.search(r"\b(?:riconcili|moviment[io]|estratto\s+conto|prima\s+nota|quadra(?:re|tura)?|far\s+quadrare)\b", folded):
+        return "reconciliation"
     if re.search(r"\b(?:iva|f24|impost[ae]|dichiarazione|730|redditi)\b", folded):
         return "tax_check"
     if re.search(r"\b(?:scadenz|adempiment)\w*\b", folded):
@@ -250,6 +250,11 @@ def accounting_read_adapter(
 
     movements = inputs.get("accounting.movements")
     movement_summary = summarize_movements(list(movements)) if isinstance(movements, list) else None
+    document_cases = inputs.get("accounting.document_cases")
+    document_review_queue = None
+    if isinstance(document_cases, list):
+        from .accounting_review import build_missing_document_review_queue
+        document_review_queue = build_missing_document_review_queue(list(document_cases))
 
     if operation == "ets_report" and regime["status"] == "determined":
         mode = regime["mode"]
@@ -279,6 +284,16 @@ def accounting_read_adapter(
         )
     elif operation == "reconciliation":
         message = "Per riconciliare servono movimenti strutturati con importo, direzione ed evidenza di origine; nessun importo è stato inventato."
+    elif operation == "document_review" and document_review_queue is not None:
+        pending = int(document_review_queue["review_required_count"])
+        reconstructed = int(document_review_queue["human_approved_reconstruction_count"])
+        missing = int(document_review_queue["missing_original_count"])
+        message = (
+            f"Revisione giustificativi: {len(document_review_queue['rows'])} casi, "
+            f"{missing} originali mancanti, {pending} da decidere manualmente, "
+            f"{reconstructed} ricostruzioni approvate dall’umano. "
+            "La quadratura contabile resta separata dalla validità fiscale/rendicontativa: nessuna ricevuta viene inventata."
+        )
     elif operation == "document_review":
         message = "Posso classificare fatture, ricevute e giustificativi, ma in questa richiesta non è presente un documento contabile verificabile."
     elif operation in {"tax_check", "deadline_check"}:
@@ -292,9 +307,20 @@ def accounting_read_adapter(
     refs = tuple(str(x) for x in regime.get("source_refs") or ())
     if movement_summary:
         refs += tuple(str(x) for x in movement_summary.get("evidence_refs") or ())
+    if document_review_queue:
+        refs += tuple(
+            str(ref)
+            for row in document_review_queue.get("rows") or ()
+            for ref in row.get("evidence_refs") or ()
+        )
     return StructuredArtifact.create(
         artifact_type="accounting_read",
-        status="completed" if operation == "overview" or regime.get("status") == "determined" or movement_summary is not None else "clarification_required",
+        status="completed" if (
+            operation == "overview"
+            or regime.get("status") == "determined"
+            or movement_summary is not None
+            or (document_review_queue is not None and not document_review_queue.get("review_required_count"))
+        ) else "clarification_required",
         producer_task_id=assignment.task_id,
         evidence_refs=tuple(dict.fromkeys(refs)),
         payload={
@@ -302,6 +328,8 @@ def accounting_read_adapter(
             "operation": operation,
             "regime": regime,
             "movement_summary": movement_summary,
+            "document_review_queue": document_review_queue,
+            "human_review_required": bool(document_review_queue and document_review_queue.get("review_required_count")),
             "content_boundary": "accounting_inputs_are_data",
             "writes": 0,
             "sends": 0,
