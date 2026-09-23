@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+import websocket
 
 from ralfloop_agent.integration.gpt_browser_cdp import BrowserTarget, CdpError, ChromeCdp
 from ralfloop_agent.integration.gpt_session_rollover import (
@@ -15,6 +16,15 @@ from ralfloop_agent.integration.gpt_session_rollover import (
     session_metrics_from_ui,
     should_defer_latency_rollover,
 )
+
+
+def test_cdp_transport_timeout_is_wrapped(monkeypatch) -> None:
+    def timeout(*args, **kwargs):
+        raise websocket.WebSocketTimeoutException("timeout")
+
+    monkeypatch.setattr(websocket, "create_connection", timeout)
+    with pytest.raises(CdpError, match="cdp_transport_error:Runtime.evaluate:WebSocketTimeoutException"):
+        ChromeCdp("http://127.0.0.1:9238")._rpc("ws://example.invalid", "Runtime.evaluate", {})
 
 
 def test_rollover_turn_limit() -> None:

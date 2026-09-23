@@ -549,12 +549,13 @@ class ChromeCdp:
     def _rpc(self, websocket_url: str, method: str, params: dict[str, Any] | None) -> dict[str, Any]:
         request_id = self._next_id
         self._next_id += 1
-        ws = websocket.create_connection(
-            websocket_url,
-            timeout=self.timeout_s,
-            suppress_origin=True,
-        )
+        ws = None
         try:
+            ws = websocket.create_connection(
+                websocket_url,
+                timeout=self.timeout_s,
+                suppress_origin=True,
+            )
             ws.send(json.dumps({"id": request_id, "method": method, "params": params or {}}))
             deadline = time.monotonic() + self.timeout_s
             while time.monotonic() < deadline:
@@ -567,8 +568,13 @@ class ChromeCdp:
                 result = message.get("result")
                 return result if isinstance(result, dict) else {}
             raise CdpError(f"cdp_timeout:{method}")
+        except CdpError:
+            raise
+        except (websocket.WebSocketException, OSError, TimeoutError) as exc:
+            raise CdpError(f"cdp_transport_error:{method}:{type(exc).__name__}") from exc
         finally:
-            ws.close()
+            if ws is not None:
+                ws.close()
 
     def _http_json(self, path: str) -> Any:
         request = urllib.request.Request(self.endpoint + path, method="GET")

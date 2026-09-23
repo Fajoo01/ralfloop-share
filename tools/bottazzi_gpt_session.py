@@ -33,19 +33,24 @@ def cmd_status(args: argparse.Namespace) -> int:
         health = cdp.health()
         targets = cdp.targets()
         tabs = [t for t in targets if t.target_type == "page" and t.is_chatgpt]
+        tab_rows = []
+        for t in tabs:
+            row = {"id": t.target_id, "title": t.title, "url": t.url}
+            try:
+                row["ui"] = cdp.chatgpt_ui_state(t.target_id)
+            except CdpError as exc:
+                row["ui"] = {
+                    "ready": False,
+                    "target_id": t.target_id,
+                    "reason": "cdp_probe_failed",
+                    "error": str(exc),
+                }
+            tab_rows.append(row)
         browser = {
             "ok": True,
             "browser": health.get("Browser"),
             "endpoint": args.endpoint,
-            "chatgpt_tabs": [
-                {
-                    "id": t.target_id,
-                    "title": t.title,
-                    "url": t.url,
-                    "ui": cdp.chatgpt_ui_state(t.target_id),
-                }
-                for t in tabs
-            ],
+            "chatgpt_tabs": tab_rows,
         }
     except CdpError as exc:
         browser = {"ok": False, "endpoint": args.endpoint, "error": str(exc)}
