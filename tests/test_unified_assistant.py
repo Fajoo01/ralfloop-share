@@ -802,7 +802,7 @@ def test_home_gate_ok_confirms_only_pending_home():
     )
 
     pending = core.handle("Apri il cancello")
-    done = core.handle("ok", domain_hint="home")
+    done = core.handle("Sì")
 
     assert pending.status == "confirmation_required"
     assert done.status == "verified"

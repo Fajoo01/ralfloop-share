@@ -18,7 +18,7 @@ PENDING_DOMAINS = (
     "home", "infrastructure", "bandi", "clarification",
 )
 CONFIRM_WORDS = frozenset({
-    "ok", "invia", "manda", "mandala", "sì invia", "si invia", "va bene",
+    "ok", "sì", "si", "invia", "manda", "mandala", "sì invia", "si invia", "va bene",
     "confermo", "approvo", "procedi",
 })
 CANCEL_WORDS = frozenset({"annulla", "cancella", "no"})

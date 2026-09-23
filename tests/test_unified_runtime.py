@@ -76,6 +76,44 @@ def _atm_session(monkeypatch, tmp_path, destination="Coop"):
     }
 
 
+def _home_pending_terminal_session(monkeypatch, tmp_path):
+    root = tmp_path / "sessions"
+    monkeypatch.setenv("RALFLOOP_UNIFIED_SESSION_DIR", str(root))
+    store = SessionStore(root)
+    terminal_session_id = "assistant-home-confirm"
+    session_id = f"terminal-{terminal_session_id}"
+    runtime._ensure_session(store, session_id)
+    adapter = SessionConversationAdapter(store)
+    conversation = adapter.load(session_id)
+    conversation.stage(
+        domain="home",
+        action="open_cover",
+        policy=PolicyClass.CONFIRM_WRITE,
+        payload={"operation": "open_cover", "targets": ["cover.gate"], "value": None},
+        displayed_text="Confermi open_cover su cover.gate?",
+    )
+    adapter.save(session_id, conversation)
+    return {
+        "source": "ralf_terminal",
+        "assistant_surface": "assistant_v1",
+        "session_id": terminal_session_id,
+        "terminal_client": {"session_id": terminal_session_id},
+    }
+
+
+def test_bare_yes_routes_single_home_confirmation(monkeypatch, tmp_path):
+    monkeypatch.setenv("RALFLOOP_UNIFIED_ASSISTANT", "1")
+    context = _home_pending_terminal_session(monkeypatch, tmp_path)
+
+    assert is_unified_telegram_request("Sì", context) is True
+    route = unified_route_probe("Sì", context)
+
+    assert route is not None
+    assert route["intent"] == "home.control"
+    assert route["task_mode"] == "external_action"
+    assert route["mcp_connectors"] == ["home_assistant.adapter"]
+
+
 def test_contextual_gps_followup_stays_on_atm_mcp(monkeypatch, tmp_path):
     monkeypatch.setenv("RALFLOOP_UNIFIED_ASSISTANT", "1")
     context = _atm_session(monkeypatch, tmp_path)

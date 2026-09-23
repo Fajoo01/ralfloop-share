@@ -227,7 +227,10 @@ def is_unified_telegram_request(text: str, context: Mapping[str, Any]) -> bool:
             or re.fullmatch(r"\s*(?:otp[\s:-]*)?[0-9]{6}\s*", text, re.I)
             or (
                 _is_positive_confirmation(text)
-                and _has_single_approvable_pending(context)
+                and (
+                    _has_single_approvable_pending(context)
+                    or _has_single_home_confirmation_pending(context)
+                )
             )
         )
     )
@@ -260,6 +263,30 @@ def _has_single_approvable_pending(context: Mapping[str, Any]) -> bool:
         and active[0].domain in {"email", "whatsapp", "mailchimp", "jellyfin"}
         and active[0].policy.value in {"CONFIRM_WRITE", "PROTECTED"}
         and bool(active[0].approval_ref)
+        and payload_matches(active[0])
+    )
+
+
+def _has_single_home_confirmation_pending(context: Mapping[str, Any]) -> bool:
+    """Allow a bare yes only for one hash-valid reversible Home confirmation."""
+    try:
+        session_id = _session_id(context)
+        store = SessionStore(os.getenv(
+            "RALFLOOP_UNIFIED_SESSION_DIR",
+            str(Path.home() / ".local" / "state" / "ralf" / "unified-sessions"),
+        ))
+        conversation = SessionConversationAdapter(store).load(session_id)
+    except (OSError, SessionStoreError, TypeError, ValueError):
+        return False
+    active = [
+        item for name in PENDING_DOMAINS
+        if (item := getattr(conversation.state.pending, name)) is not None
+        and item.expires_at > int(datetime.now(UTC).timestamp())
+    ]
+    return (
+        len(active) == 1
+        and active[0].domain == "home"
+        and active[0].policy.value == "CONFIRM_WRITE"
         and payload_matches(active[0])
     )
 
@@ -300,6 +327,22 @@ def unified_route_probe(
         and (source.startswith("telegram_") or source == "ralf_terminal")
     ):
         return None
+    if _is_positive_confirmation(text) and _has_single_home_confirmation_pending(context):
+        return {
+            "task_mode": "external_action",
+            "mode": "external_action",
+            "interaction_class": "EXTERNAL_ACTION",
+            "intent": "home.control",
+            "arguments": {"confirmation": True},
+            "domains": ["home"],
+            "skills_used": ["home.control"],
+            "domain_skills": ["home.control"],
+            "mcp_used": ["home_assistant.adapter"],
+            "mcp_connectors": ["home_assistant.adapter"],
+            "write_policy": "policy_gated",
+            "evidence_first": True,
+            "requires_confirmation": False,
+        }
     atm_followup_destination = _atm_location_followup_destination(text, context)
     if atm_followup_destination:
         return {
