@@ -20,8 +20,14 @@ fi
 probe="$($PY "$TOOL" --endpoint "$ENDPOINT" shepherd 2>/dev/null || true)"
 [[ -n "$probe" ]] || exit 0
 
-read -r rollover ready < <(printf '%s' "$probe" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); ui=d.get("ui") or {}; print(1 if d.get("rollover") else 0, 1 if ui.get("ready") else 0)' 2>/dev/null || echo '0 0')
+read -r rollover ready user_turns response_in_progress latency_only < <(printf '%s' "$probe" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); ui=d.get("ui") or {}; reasons=list(d.get("reasons") or []); print(1 if d.get("rollover") else 0, 1 if ui.get("ready") else 0, int(ui.get("user_turns") or 0), 1 if ui.get("response_in_progress") else 0, 1 if reasons == ["latency_limit"] else 0)' 2>/dev/null || echo '0 0 0 0 0')
 [[ "$rollover" == "1" && "$ready" == "1" ]] || exit 0
+# A handoff's first response may legitimately take time, and an actively
+# streaming response should not be killed merely because total latency crossed
+# the threshold. Other rollover reasons (turns/age/errors) remain unaffected.
+if [[ "$latency_only" == "1" ]] && { (( user_turns <= 1 )) || [[ "$response_in_progress" == "1" ]]; }; then
+  exit 0
+fi
 
 if (
   for ((i=0; i<=COUNTDOWN_SECONDS; i++)); do
