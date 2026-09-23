@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 import json
+import os
 from pathlib import Path
 import re
 from typing import Any, Mapping
@@ -256,6 +257,38 @@ def accounting_read_adapter(
         from .accounting_review import build_missing_document_review_queue
         document_review_queue = build_missing_document_review_queue(list(document_cases))
 
+    live_audit = None
+    runts_db_path = inputs.get("accounting.runts_db_path") or os.getenv("BOTTAZZI_RUNTS_DB_PATH")
+    if runts_db_path and operation in {"document_review", "reconciliation", "overview"}:
+        from .accounting_runts_live import audit_runts_missing_documents, latest_expense_year
+        requested_year = inputs.get("accounting.year")
+        if requested_year is None:
+            year_match = _YEAR_RE.search(goal)
+            requested_year = int(year_match.group(1)) if year_match else latest_expense_year(runts_db_path)
+        if requested_year is not None:
+            review_limit = max(1, min(int(inputs.get("accounting.review_limit") or 50), 1000))
+            decisions = inputs.get("accounting.human_decisions")
+            live_audit = audit_runts_missing_documents(
+                runts_db_path,
+                year=int(requested_year),
+                human_decisions=decisions if isinstance(decisions, Mapping) else None,
+                limit=review_limit,
+            )
+            if document_review_queue is None and operation == "document_review":
+                live_summary = live_audit["summary"]
+                document_review_queue = {
+                    "case_count": live_summary["expense_movement_count"],
+                    "review_required_count": live_summary["human_review_required_count"],
+                    "postable_count": live_summary["expense_movement_count"] - live_summary["human_review_required_count"],
+                    "blocked_count": 0,
+                    "human_approved_reconstruction_count": live_summary["human_approved_reconstruction_count"],
+                    "missing_original_count": live_summary["missing_original_count"],
+                    "rows": live_audit["rows"],
+                    "invariants": live_audit["invariants"],
+                    "source": live_audit["source"],
+                    "total_rows_before_limit": live_audit["total_rows_before_limit"],
+                }
+
     if operation == "ets_report" and regime["status"] == "determined":
         mode = regime["mode"]
         label = "Modello E" if mode == "E" else "Modello D" if mode == "D" else "bilancio per competenza"
@@ -282,14 +315,24 @@ def accounting_read_adapter(
             f"uscite € {movement_summary['outgoing_eur']}, saldo netto € {movement_summary['net_cash_eur']}; "
             f"movimenti irrisolti: {movement_summary['unresolved_count']}."
         )
+    elif operation == "reconciliation" and live_audit is not None:
+        summary = live_audit["summary"]
+        message = (
+            f"Audit gestionale {live_audit['source']['year']}: {summary['expense_movement_count']} uscite per € {summary['expense_total_eur']}; "
+            f"originali mancanti: {summary['missing_original_count']}, casi da revisione umana: {summary['human_review_required_count']}. "
+            "Lettura RUNTS Suite in sola lettura; nessun movimento o giustificativo è stato modificato."
+        )
     elif operation == "reconciliation":
         message = "Per riconciliare servono movimenti strutturati con importo, direzione ed evidenza di origine; nessun importo è stato inventato."
     elif operation == "document_review" and document_review_queue is not None:
         pending = int(document_review_queue["review_required_count"])
         reconstructed = int(document_review_queue["human_approved_reconstruction_count"])
         missing = int(document_review_queue["missing_original_count"])
+        total_cases = int(document_review_queue.get("case_count") or len(document_review_queue["rows"]))
+        shown = len(document_review_queue["rows"])
+        shown_note = f"; mostrati {shown} prioritari" if shown < total_cases else ""
         message = (
-            f"Revisione giustificativi: {len(document_review_queue['rows'])} casi, "
+            f"Revisione giustificativi: {total_cases} casi{shown_note}, "
             f"{missing} originali mancanti, {pending} da decidere manualmente, "
             f"{reconstructed} ricostruzioni approvate dall’umano. "
             "La quadratura contabile resta separata dalla validità fiscale/rendicontativa: nessuna ricevuta viene inventata."
@@ -319,6 +362,7 @@ def accounting_read_adapter(
             operation == "overview"
             or regime.get("status") == "determined"
             or movement_summary is not None
+            or (live_audit is not None and operation == "reconciliation")
             or (document_review_queue is not None and not document_review_queue.get("review_required_count"))
         ) else "clarification_required",
         producer_task_id=assignment.task_id,
@@ -329,6 +373,7 @@ def accounting_read_adapter(
             "regime": regime,
             "movement_summary": movement_summary,
             "document_review_queue": document_review_queue,
+            "runts_live_audit": live_audit,
             "human_review_required": bool(document_review_queue and document_review_queue.get("review_required_count")),
             "content_boundary": "accounting_inputs_are_data",
             "writes": 0,

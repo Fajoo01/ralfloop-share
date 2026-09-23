@@ -75,3 +75,13 @@ Current Commercialista remains:
 - `filings=0`.
 
 Future F24, filings, RUNTS submission, invoice issuance or bank actions must be separate approval-bound capabilities with post-action verification.
+
+## Live RUNTS Suite source
+
+The Commercialista can now consume the existing RUNTS Suite SQLite database through accounting_runts_live.py. The connection uses SQLite URI mode=ro plus PRAGMA query_only=ON; production rows, reviews and document links are never mutated. The path is injected with accounting.runts_db_path or BOTTAZZI_RUNTS_DB_PATH, not embedded in the Python implementation.
+
+The live audit selects outgoing association movements after basic duplicate/transfer/exclusion gates, preserves movement/import provenance, detects formally linked project documents, and searches exact-amount/date-bounded document candidates without promoting them to originals. Unlinked candidates remain suggestions for human review.
+
+Real canary on 2026-09-23: year 2025 produced 482 outgoing review candidates for EUR 23047.36, with zero formally linked originals in the current database; year 2026 produced two candidates for EUR 132.90, one formally documented and one requiring review. These are documentary-review candidates, not a claim that every amount is a final deductible/RUNTS management expense.
+
+Private review snapshots are written outside Git under /home/bandi/.local/share/bottazzi/accounting/ and are not production accounting state.
