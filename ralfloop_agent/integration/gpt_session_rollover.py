@@ -114,7 +114,9 @@ class Handoff:
     open_problems: list[str] = field(default_factory=list)
     next_action: str = ""
     source_chat: str | None = None
+    source_chat_url: str | None = None
     created_at: str = field(default_factory=_now)
+    updated_at: str | None = None
     schema_version: str = SCHEMA_VERSION
 
     def as_dict(self) -> dict[str, Any]:

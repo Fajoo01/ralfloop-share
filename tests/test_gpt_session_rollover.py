@@ -131,6 +131,22 @@ def test_handoff_round_trip_and_prompt(tmp_path) -> None:
     assert current["source_chat_url"] == "https://chatgpt.com/c/worker"
 
 
+def test_checkpoint_schema_round_trips_runtime_worker_metadata(tmp_path) -> None:
+    store = HandoffStore(tmp_path)
+    store.save(Handoff(goal="x", current_state="y"))
+    store.update_source_chat("worker-target", "https://chatgpt.com/c/worker")
+    payload = store.load_current()
+    payload["updated_at"] = "2026-09-23T11:49:00+00:00"
+
+    handoff = Handoff(**payload)
+    store.save(handoff)
+
+    current = store.load_current()
+    assert current["source_chat"] == "worker-target"
+    assert current["source_chat_url"] == "https://chatgpt.com/c/worker"
+    assert current["updated_at"] == "2026-09-23T11:49:00+00:00"
+
+
 def test_external_conversation_url_is_canonical_and_query_free() -> None:
     assert normalize_chatgpt_conversation_url("https://chatgpt.com/c/abc-123?messageId=x") == "https://chatgpt.com/c/abc-123"
     assert normalize_chatgpt_conversation_url("https://chatgpt.com/c/abc-123/") == "https://chatgpt.com/c/abc-123"
