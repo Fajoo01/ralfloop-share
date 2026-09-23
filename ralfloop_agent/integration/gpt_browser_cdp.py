@@ -29,6 +29,36 @@ def _canonical_chatgpt_conversation_url(value: str) -> str | None:
     return f"https://chatgpt.com/c/{match.group(1)}"
 
 
+def _safe_chatgpt_conversation_context_url(value: str) -> str:
+    try:
+        parsed = urllib.parse.urlparse(str(value or ""))
+    except ValueError as exc:
+        raise CdpError("conversation_url_invalid") from exc
+    host = (parsed.hostname or "").lower()
+    path = parsed.path.rstrip("/")
+    if host != "chatgpt.com":
+        raise CdpError("conversation_url_invalid")
+    if not (re.fullmatch(r"/c/[A-Za-z0-9-]+", path) or re.fullmatch(r"/g/[^/]+/c/[A-Za-z0-9-]+", path)):
+        raise CdpError("conversation_url_invalid")
+    return f"https://chatgpt.com{path}"
+
+
+def _safe_chatgpt_new_chat_url(value: str) -> str:
+    try:
+        parsed = urllib.parse.urlparse(str(value or ""))
+    except ValueError as exc:
+        raise CdpError("new_chat_url_invalid") from exc
+    host = (parsed.hostname or "").lower()
+    path = parsed.path.rstrip("/") or "/"
+    if host != "chatgpt.com":
+        raise CdpError("new_chat_url_invalid")
+    if path == "/":
+        return CHATGPT_ORIGIN
+    if not re.fullmatch(r"/g/[^/]+/project", path):
+        raise CdpError("new_chat_url_invalid")
+    return f"https://chatgpt.com{path}"
+
+
 class CdpError(RuntimeError):
     pass
 
@@ -223,6 +253,7 @@ class ChromeCdp:
               current_response_latency_ms: currentLatencyMs,
               last_response_latency_ms: Math.max(0, Number(telemetry.last_response_latency_ms || 0)),
               consecutive_errors: Math.max(0, Number(telemetry.consecutive_errors || 0)),
+              goal_reached_marker: assistantText.includes('[[BOTTAZZI_GOAL_REACHED]]'),
             };
           };
           if (!window[observerKey]) {
@@ -249,6 +280,7 @@ class ChromeCdp:
             current_response_latency_ms: telemetry.current_response_latency_ms,
             last_response_latency_ms: telemetry.last_response_latency_ms,
             consecutive_errors: telemetry.consecutive_errors,
+            goal_reached_marker: Boolean(telemetry.goal_reached_marker),
             telemetry_observer_active: Boolean(window[observerKey]),
             page_age_minutes: Math.max(0, Math.floor(performance.now() / 60000)),
             interaction_required: !authenticatedHint || !composer || /ci siamo quasi/i.test(document.title || ''),
@@ -460,6 +492,7 @@ class ChromeCdp:
         submit: bool = True,
         close_source: bool = True,
         target_created_hook: Callable[[str], None] | None = None,
+        new_chat_url: str = CHATGPT_ORIGIN,
     ) -> dict[str, Any]:
         previous = [target for target in self.targets() if target.target_type == "page" and target.is_chatgpt]
         if source_target_id is None:
@@ -468,6 +501,7 @@ class ChromeCdp:
             source_target_id = previous[0].target_id
         elif not any(target.target_id == source_target_id for target in previous):
             raise CdpError("handoff_source_not_found")
+        entry_url = _safe_chatgpt_new_chat_url(new_chat_url)
         target_id = self.create_target("about:blank")
         try:
             if target_created_hook is not None:
@@ -478,7 +512,7 @@ class ChromeCdp:
             self._page_call(target.websocket_url, "Network.enable")
             self._page_call(target.websocket_url, "Network.clearBrowserCache")
             self._page_call(target.websocket_url, "Page.enable")
-            self._page_call(target.websocket_url, "Page.navigate", {"url": CHATGPT_ORIGIN})
+            self._page_call(target.websocket_url, "Page.navigate", {"url": entry_url})
             injected = self.inject_prompt(prompt, target_id=target_id, submit=submit)
         except Exception:
             try:
@@ -496,6 +530,7 @@ class ChromeCdp:
             "closed_target_ids": closed,
             "server_chat_deleted": False,
             "cache_cleared": True,
+            "new_chat_entry_url": entry_url,
         }
 
     def conversation_urls(
@@ -598,6 +633,7 @@ class ChromeCdp:
         normalized = _canonical_chatgpt_conversation_url(url)
         if not normalized:
             raise CdpError("conversation_url_invalid")
+        context_url = _safe_chatgpt_conversation_context_url(url)
         target = self._wait_target(target_id)
         navigation_deadline = time.monotonic() + wait_timeout_s
         while time.monotonic() < navigation_deadline and not target.is_chatgpt:
@@ -606,7 +642,7 @@ class ChromeCdp:
         if not target.is_chatgpt or not target.websocket_url:
             raise CdpError("conversation_navigation_target_invalid")
         self._page_call(target.websocket_url, "Page.enable")
-        self._page_call(target.websocket_url, "Page.navigate", {"url": normalized})
+        self._page_call(target.websocket_url, "Page.navigate", {"url": context_url})
         deadline = time.monotonic() + wait_timeout_s
         last_state: dict[str, Any] = {}
         while time.monotonic() < deadline:
@@ -850,10 +886,11 @@ class ChromeCdp:
         normalized = _canonical_chatgpt_conversation_url(conversation_url)
         if not normalized:
             raise CdpError("human_input_target_url_invalid")
+        context_url = _safe_chatgpt_conversation_context_url(conversation_url)
         target = self._wait_target(target_id)
         if not target.websocket_url or not target.is_chatgpt:
             raise CdpError("human_input_target_invalid")
-        config = json.dumps({"conversation_url": normalized}, ensure_ascii=False)
+        config = json.dumps({"conversation_url": normalized, "context_url": context_url}, ensure_ascii=False)
         expression = r'''(() => {
           const config = __CONFIG__;
           const stateKey = '__bottazziHumanInputTargetV2';
@@ -912,17 +949,34 @@ class ChromeCdp:
           const hasPendingDraft = () => {
             try { return Boolean(localStorage.getItem(draftKey)); } catch (_) { return false; }
           };
+          const hideRateLimitUi = () => {
+            const limitRe = /(?:temporarily limited access to (?:your )?conversations|temporaneamente (?:limitato )?l['’]?accesso alle conversazioni|attendere qualche minuto prima di riprovare|wait a few minutes before trying again)/i;
+            for (const el of document.querySelectorAll('[role="alert"],[role="dialog"],[data-testid*="error"]')) {
+              const text = String(el.innerText || el.textContent || '').trim();
+              if (text && limitRe.test(text)) el.style.display = 'none';
+            }
+          };
           const updateHumanUi = () => {
+            hideRateLimitUi();
             const box = document.getElementById(humanBoxId);
             const send = document.getElementById(sendId);
             const status = document.getElementById(statusId);
+            const panel = document.getElementById(panelId);
+            let held = false;
+            try { held = Boolean(localStorage.getItem('__bottazziQueueHoldV1')); } catch (_) {}
             const pending = hasPendingDraft();
             if (box && box.disabled !== pending) box.disabled = pending;
             if (send && send.disabled !== pending) send.disabled = pending;
-            const label = pending ? 'Messaggio in attesa di invio…' : 'Invio umano → chat attiva';
+            const label = held || pending ? 'Siamo in fila · attendi' : 'Invio umano → chat attiva';
             if (status && status.textContent !== label) status.textContent = label;
+            if (panel && panel.dataset.bottazziMode === 'active') panel.style.background = held ? '#6b5200' : 'rgba(30,30,30,.96)';
           };
           const importDraft = () => {
+            const limitRe = /(?:temporarily limited access to (?:your )?conversations|temporaneamente (?:limitato )?l['’]?accesso alle conversazioni|attendere qualche minuto prima di riprovare|wait a few minutes before trying again)/i;
+            try {
+              if (limitRe.test(String(document.body ? document.body.innerText || '' : ''))) localStorage.setItem('__bottazziQueueHoldV1', String(Date.now()));
+              if (localStorage.getItem('__bottazziQueueHoldV1')) { updateHumanUi(); return false; }
+            } catch (_) {}
             let raw = null;
             try { raw = localStorage.getItem(draftKey); } catch (_) { return false; }
             if (!raw) { updateHumanUi(); return false; }
@@ -943,9 +997,13 @@ class ChromeCdp:
             return true;
           };
           const ensureHumanUi = () => {
-            if (!document.body || document.getElementById(panelId)) return;
+            if (!document.body) return;
+            let existing = document.getElementById(panelId);
+            if (existing && existing.dataset.bottazziMode !== 'active') existing.remove();
+            if (document.getElementById(panelId)) return;
             const panel = document.createElement('div');
             panel.id = panelId;
+            panel.dataset.bottazziMode = 'active';
             panel.style.cssText = 'position:fixed;left:50%;bottom:12px;transform:translateX(-50%);z-index:2147483646;width:min(760px,calc(100vw - 32px));padding:8px 10px;border-radius:14px;background:rgba(30,30,30,.96);color:#fff;font:600 13px/1.3 system-ui,sans-serif;box-shadow:0 5px 22px rgba(0,0,0,.32)';
             const status = document.createElement('div');
             status.id = statusId;
@@ -966,7 +1024,7 @@ class ChromeCdp:
               const text = input.value.trim();
               if (!text || hasPendingDraft()) return;
               try {
-                localStorage.setItem(draftKey, JSON.stringify({draft_id:`${Date.now()}-${Math.random()}`, successor_url:config.conversation_url, text, submit:true, created_at:Date.now()}));
+                localStorage.setItem(draftKey, JSON.stringify({draft_id:`${Date.now()}-${Math.random()}`, successor_url:config.context_url, text, submit:true, created_at:Date.now()}));
               } catch (_) { return; }
               input.value = '';
               updateHumanUi();
@@ -1001,7 +1059,7 @@ class ChromeCdp:
             }
           };
           window.name = 'bottazzi-active';
-          try { localStorage.setItem(activeKey, config.conversation_url); } catch (_) {}
+          try { localStorage.setItem(activeKey, config.context_url); } catch (_) {}
           let state = window[stateKey];
           if (!state || typeof state !== 'object') state = {version:2};
           if (!state.onStorage) {
@@ -1017,6 +1075,8 @@ class ChromeCdp:
             state.observer.observe(document.documentElement, {subtree:true, childList:true});
           }
           state.conversation_url = config.conversation_url;
+          state.importDraft = importDraft;
+          state.updateHumanUi = updateHumanUi;
           window[stateKey] = state;
           lockNative();
           importDraft();
@@ -1032,6 +1092,254 @@ class ChromeCdp:
             raise CdpError("human_input_target_install_failed")
         return state
 
+    def set_human_queue_hold(self, target_id: str, held: bool) -> dict[str, Any]:
+        target = self._wait_target(target_id)
+        if not target.websocket_url or not target.is_chatgpt:
+            raise CdpError("human_queue_target_invalid")
+        config = json.dumps({"held": bool(held)})
+        expression = r'''(() => {
+          const config = __CONFIG__;
+          const key = '__bottazziQueueHoldV1';
+          const limitRe = /(?:temporarily limited access to (?:your )?conversations|temporaneamente (?:limitato )?l['’]?accesso alle conversazioni|attendere qualche minuto prima di riprovare|wait a few minutes before trying again)/i;
+          try {
+            if (config.held) localStorage.setItem(key, String(Date.now()));
+            else localStorage.removeItem(key);
+          } catch (_) {}
+          for (const el of document.querySelectorAll('[role="alert"],[role="dialog"],[data-testid*="error"]')) {
+            const text = String(el.innerText || el.textContent || '').trim();
+            if (!text || !limitRe.test(text)) continue;
+            if (config.held) {
+              if (!el.dataset.bottazziOldDisplay) el.dataset.bottazziOldDisplay = el.style.display || '__empty__';
+              el.dataset.bottazziRateLimitHidden = '1';
+              el.style.display = 'none';
+            }
+          }
+          if (!config.held) {
+            for (const el of document.querySelectorAll('[data-bottazzi-rate-limit-hidden="1"]')) {
+              el.style.display = 'none';
+            }
+          }
+          const state = window.__bottazziHumanInputTargetV2;
+          if (state && typeof state.updateHumanUi === 'function') state.updateHumanUi();
+          if (!config.held && state && typeof state.importDraft === 'function') setTimeout(state.importDraft, 0);
+          return JSON.stringify({ok:true, held:Boolean(config.held)});
+        })()'''.replace("__CONFIG__", config)
+        result = self._page_call(target.websocket_url, "Runtime.evaluate", {"expression": expression, "returnByValue": True})
+        raw = (result.get("result") or {}).get("value")
+        try:
+            state = json.loads(raw) if isinstance(raw, str) else {}
+        except json.JSONDecodeError as exc:
+            raise CdpError("human_queue_state_invalid") from exc
+        if not isinstance(state, dict) or not state.get("ok"):
+            raise CdpError("human_queue_state_failed")
+        return state
+
+    def queue_human_message(self, target_id: str, conversation_url: str, text: str) -> dict[str, Any]:
+        normalized = _canonical_chatgpt_conversation_url(conversation_url)
+        if not normalized or not text.strip():
+            raise CdpError("human_queue_message_invalid")
+        context_url = _safe_chatgpt_conversation_context_url(conversation_url)
+        target = self._wait_target(target_id)
+        if not target.websocket_url or not target.is_chatgpt:
+            raise CdpError("human_queue_target_invalid")
+        config = json.dumps({"conversation_url": normalized, "context_url": context_url, "text": text.strip()}, ensure_ascii=False)
+        expression = r'''(() => {
+          const config = __CONFIG__;
+          const draftKey = '__bottazziHumanDraftV2';
+          const activeKey = '__bottazziActiveConversationV2';
+          let existing = null;
+          try { existing = localStorage.getItem(draftKey); } catch (_) {}
+          if (existing) return JSON.stringify({ok:true, queued:false, reason:'queue_busy'});
+          try {
+            localStorage.setItem(activeKey, config.context_url);
+            localStorage.setItem(draftKey, JSON.stringify({
+              draft_id:`${Date.now()}-${Math.random()}`,
+              successor_url:config.context_url,
+              text:config.text,
+              submit:true,
+              created_at:Date.now(),
+            }));
+          } catch (_) { return JSON.stringify({ok:false, reason:'queue_storage_failed'}); }
+          const state = window.__bottazziHumanInputTargetV2;
+          if (state && typeof state.updateHumanUi === 'function') state.updateHumanUi();
+          if (state && typeof state.importDraft === 'function') setTimeout(state.importDraft, 0);
+          return JSON.stringify({ok:true, queued:true});
+        })()'''.replace("__CONFIG__", config)
+        result = self._page_call(target.websocket_url, "Runtime.evaluate", {"expression": expression, "returnByValue": True})
+        raw = (result.get("result") or {}).get("value")
+        try:
+            state = json.loads(raw) if isinstance(raw, str) else {}
+        except json.JSONDecodeError as exc:
+            raise CdpError("human_queue_message_invalid") from exc
+        if not isinstance(state, dict) or not state.get("ok"):
+            raise CdpError(str(state.get("reason") or "human_queue_message_failed"))
+        return state
+
+    def install_tab_identity(self, target_id: str, *, mode: str = "other", countdown_seconds: int | None = None) -> dict[str, Any]:
+        if mode not in {"active", "other", "queue", "closing"}:
+            raise CdpError("tab_identity_mode_invalid")
+        target = self._wait_target(target_id)
+        if not target.websocket_url or not target.is_chatgpt:
+            raise CdpError("tab_identity_target_invalid")
+        config = json.dumps({"mode": mode, "countdown_seconds": countdown_seconds}, ensure_ascii=False)
+        expression = r'''(() => {
+          const config = __CONFIG__;
+          const key = '__bottazziTabIdentityV1';
+          let state = window[key];
+          if (!state || typeof state !== 'object') state = {base_title:'', original_title:'', timer:null, close_at:0};
+          const canonical = value => {
+            try {
+              const u = new URL(String(value || ''), location.origin);
+              const m = u.pathname.match(/^\/(?:g\/[^/]+\/)?c\/([A-Za-z0-9-]+)/);
+              return m ? `${u.origin}/c/${m[1]}` : '';
+            } catch (_) { return ''; }
+          };
+          const strip = value => String(value || '')
+            .replace(/^(?:🟢\s*ATTIVA|⚪\s*ALTRA|🟡\s*IN FILA|🟠\s*CHIUSURA(?:\s*\d+s)?|🔴\s*CHIUSURA(?:\s*\d+s)?)\s*·\s*/iu, '')
+            .replace(/^ChatGPT\s*-\s*/i, '').trim();
+          const compactWord = word => {
+            const value = String(word || '');
+            return value.length > 10 ? `${value.slice(0, 9)}…` : value;
+          };
+          const compactPhrase = (value, maxChars) => {
+            const words = strip(value).split(/\s+/).filter(Boolean).slice(0, 5).map(compactWord);
+            let text = words.join(' ');
+            if (text.length > maxChars) text = `${text.slice(0, Math.max(1, maxChars - 1)).trimEnd()}…`;
+            return text;
+          };
+          const topicFromSidebar = () => {
+            const wanted = canonical(location.href);
+            for (const a of document.querySelectorAll('a[href]')) {
+              if (canonical(a.href) !== wanted) continue;
+              const text = strip(a.innerText || a.textContent || '');
+              if (text && text.length <= 180) return text;
+            }
+            return '';
+          };
+          if (!state.original_title) state.original_title = strip(document.title || '');
+          const derive = () => {
+            const current = state.original_title || 'Chat GPT';
+            const topic = topicFromSidebar();
+            const pathProject = location.pathname.match(/^\/g\/([^/]+)\/c\//);
+            const parts = [];
+            if (pathProject && current && current !== topic) {
+              const project = compactPhrase(current, 16);
+              if (project) parts.push(project);
+            }
+            const shortTopic = compactPhrase(topic || current, 24);
+            if (shortTopic && !parts.includes(shortTopic)) parts.push(shortTopic);
+            return parts.join(' · ').slice(0, 43).trim() || 'Chat GPT';
+          };
+          if (!state.base_title) state.base_title = derive();
+          state.mode = config.mode;
+          if (config.mode === 'closing' && Number(config.countdown_seconds) > 0 && !state.close_at) {
+            state.close_at = Date.now() + Number(config.countdown_seconds) * 1000;
+          }
+          if (config.mode !== 'closing') state.close_at = 0;
+          const render = () => {
+            const found = derive();
+            if (found && found !== 'Chat GPT') state.base_title = found;
+            let prefix = config.mode === 'active' ? '🟢 ATTIVA' : config.mode === 'queue' ? '🟡 IN FILA' : config.mode === 'closing' ? '🟠 CHIUSURA' : '⚪ ALTRA';
+            if (config.mode === 'closing' && state.close_at) {
+              const remaining = Math.max(0, Math.ceil((state.close_at - Date.now()) / 1000));
+              prefix = remaining <= 5 ? `🔴 CHIUSURA ${remaining}s` : `🟠 CHIUSURA ${remaining}s`;
+            }
+            document.title = `${prefix} · ${state.base_title}`;
+          };
+          if (state.timer) clearInterval(state.timer);
+          state.timer = setInterval(render, 750);
+          window[key] = state;
+          render();
+          return JSON.stringify({ok:true, mode:config.mode, base_title:state.base_title, title:document.title});
+        })()'''.replace("__CONFIG__", config)
+        result = self._page_call(target.websocket_url, "Runtime.evaluate", {"expression": expression, "returnByValue": True})
+        raw = (result.get("result") or {}).get("value")
+        try:
+            state = json.loads(raw) if isinstance(raw, str) else {}
+        except json.JSONDecodeError as exc:
+            raise CdpError("tab_identity_invalid") from exc
+        if not isinstance(state, dict) or not state.get("ok"):
+            raise CdpError("tab_identity_failed")
+        return state
+
+    def install_human_input_relay(self, target_id: str, active_conversation_url: str) -> dict[str, Any]:
+        active_identity = _canonical_chatgpt_conversation_url(active_conversation_url)
+        if not active_identity:
+            raise CdpError("human_input_relay_url_invalid")
+        active_url = _safe_chatgpt_conversation_context_url(active_conversation_url)
+        target = self._wait_target(target_id)
+        if not target.websocket_url or not target.is_chatgpt:
+            raise CdpError("human_input_relay_target_invalid")
+        config = json.dumps({"active_url": active_url, "active_identity": active_identity}, ensure_ascii=False)
+        expression = r'''(() => {
+          const config = __CONFIG__;
+          if (window.__bottazziGhostTabV1) return JSON.stringify({ok:true, relay:false, ghost:true});
+          const panelId = 'bottazzi-human-panel';
+          const boxId = 'bottazzi-human-composer';
+          const statusId = 'bottazzi-human-status';
+          const draftKey = '__bottazziHumanDraftV2';
+          const activeKey = '__bottazziActiveConversationV2';
+          const activeState = window.__bottazziHumanInputTargetV2;
+          if (activeState && activeState.observer) activeState.observer.disconnect();
+          if (activeState && activeState.onStorage) window.removeEventListener('storage', activeState.onStorage);
+          if (activeState && activeState.onFocus) window.removeEventListener('focus', activeState.onFocus);
+          try { delete window.__bottazziHumanInputTargetV2; } catch (_) { window.__bottazziHumanInputTargetV2 = null; }
+          if (window.name === 'bottazzi-active') window.name = '';
+          let panel = document.getElementById(panelId);
+          if (panel && panel.dataset.bottazziMode !== 'relay') panel.remove();
+          panel = document.getElementById(panelId);
+          if (!panel && document.body) {
+            panel = document.createElement('div');
+            panel.id = panelId;
+            panel.dataset.bottazziMode = 'relay';
+            panel.style.cssText = 'position:fixed;left:50%;bottom:12px;transform:translateX(-50%);z-index:2147483646;width:min(760px,calc(100vw - 32px));padding:8px 10px;border-radius:14px;background:rgba(30,30,30,.96);color:#fff;font:600 13px/1.3 system-ui,sans-serif;box-shadow:0 5px 22px rgba(0,0,0,.32)';
+            const status = document.createElement('div');
+            status.id = statusId;
+            status.textContent = 'Invio umano → 🟢 chat attiva';
+            status.style.cssText = 'margin:0 2px 6px;opacity:.8;font-size:12px';
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;gap:8px;align-items:flex-end';
+            const input = document.createElement('textarea');
+            input.id = boxId;
+            input.rows = 2;
+            input.placeholder = 'Scrivi a Bot-tazzi…';
+            input.style.cssText = 'flex:1;resize:vertical;max-height:180px;padding:9px 10px;border-radius:10px;border:1px solid rgba(255,255,255,.25);background:#fff;color:#111;font:14px/1.35 system-ui,sans-serif';
+            const send = document.createElement('button');
+            send.type = 'button';
+            send.textContent = 'Invia';
+            send.style.cssText = 'padding:10px 14px;border-radius:10px;border:0;cursor:pointer;font-weight:800';
+            const forward = () => {
+              const text = input.value.trim();
+              if (!text) return;
+              try {
+                localStorage.setItem(activeKey, config.active_url);
+                localStorage.setItem(draftKey, JSON.stringify({draft_id:`${Date.now()}-${Math.random()}`, successor_url:config.active_url, text, submit:true, created_at:Date.now()}));
+              } catch (_) { return; }
+              input.value = '';
+              status.textContent = 'Siamo in fila · attendi';
+              window.open(config.active_url, 'bottazzi-active');
+            };
+            send.addEventListener('click', forward);
+            input.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); forward(); } });
+            row.appendChild(input);
+            row.appendChild(send);
+            panel.appendChild(status);
+            panel.appendChild(row);
+            document.body.appendChild(panel);
+          }
+          try { localStorage.setItem(activeKey, config.active_url); } catch (_) {}
+          return JSON.stringify({ok:true, relay:true, active_url:config.active_url, human_composer:Boolean(document.getElementById(boxId))});
+        })()'''.replace("__CONFIG__", config)
+        result = self._page_call(target.websocket_url, "Runtime.evaluate", {"expression": expression, "returnByValue": True})
+        raw = (result.get("result") or {}).get("value")
+        try:
+            state = json.loads(raw) if isinstance(raw, str) else {}
+        except json.JSONDecodeError as exc:
+            raise CdpError("human_input_relay_invalid") from exc
+        if not isinstance(state, dict) or not state.get("ok"):
+            raise CdpError("human_input_relay_failed")
+        return state
+
     def mark_chatgpt_ghost_tab(
         self,
         target_id: str,
@@ -1043,7 +1351,9 @@ class ChromeCdp:
         target = self._wait_target(target_id)
         if not target.websocket_url or not target.is_chatgpt:
             raise CdpError("ghost_target_invalid")
-        successor = _canonical_chatgpt_conversation_url(successor_url or "")
+        successor = None
+        if successor_url:
+            successor = _safe_chatgpt_conversation_context_url(successor_url)
         close_after_ms = max(5, int(close_after_s)) * 1000
         config = json.dumps({"notice": notice, "successor_url": successor, "close_after_ms": close_after_ms}, ensure_ascii=False)
         expression = r'''(() => {
@@ -1068,7 +1378,7 @@ class ChromeCdp:
           try { delete window.__bottazziHumanInputTargetV2; } catch (_) { window.__bottazziHumanInputTargetV2 = null; }
           window.name = '';
           const stateKey = '__bottazziGhostTabV1';
-          const bannerId = 'bottazzi-ghost-banner';
+          const bannerId = 'bottazzi-human-panel';
           const countdownId = 'bottazzi-ghost-countdown';
           const humanBoxId = 'bottazzi-human-composer';
           const draftKey = '__bottazziHumanDraftV2';
@@ -1099,7 +1409,7 @@ class ChromeCdp:
             if (banner) return;
             banner = document.createElement('div');
             banner.id = bannerId;
-            banner.style.cssText = 'position:fixed;left:50%;top:12px;transform:translateX(-50%);z-index:2147483647;width:min(760px,calc(100vw - 32px));padding:10px 12px;border-radius:12px;background:#5b1a1a;color:#fff;font:600 14px/1.35 system-ui,sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.28)';
+            banner.style.cssText = 'position:fixed;left:50%;bottom:12px;transform:translateX(-50%);z-index:2147483647;width:min(760px,calc(100vw - 32px));padding:10px 12px;border-radius:14px;background:#7a4b00;color:#fff;font:600 14px/1.35 system-ui,sans-serif;box-shadow:0 5px 22px rgba(0,0,0,.32);transition:background .2s ease,box-shadow .2s ease';
             const text = document.createElement('div');
             text.textContent = String(config.notice || 'Chat passata a Bot-tazzi.');
             banner.appendChild(text);
@@ -1144,10 +1454,14 @@ class ChromeCdp:
           };
           const updateCountdown = () => {
             ensureUi();
+            const panel = document.getElementById(bannerId);
             const countdown = document.getElementById(countdownId);
-            if (!countdown) return;
+            if (!countdown || !panel) return;
             const remaining = Math.max(0, Math.ceil((Number(state.close_at || 0) - Date.now()) / 1000));
-            countdown.textContent = remaining > 0 ? `Chiusura automatica tra ${remaining} s` : 'Chiusura automatica…';
+            countdown.textContent = remaining > 0 ? `CHAT IN CHIUSURA · ${remaining} s` : 'CHIUSURA…';
+            const background = remaining <= 5 ? '#b91c1c' : remaining <= 10 ? '#9a3412' : '#7a4b00';
+            panel.style.background = background;
+            panel.style.boxShadow = remaining <= 5 ? '0 0 0 3px rgba(255,255,255,.28),0 7px 28px rgba(0,0,0,.45)' : '0 5px 22px rgba(0,0,0,.32)';
           };
           const requestClose = () => {
             state.close_requested = true;
@@ -1227,6 +1541,12 @@ class ChromeCdp:
         response = self._browser_call("Target.closeTarget", {"targetId": target_id})
         if response.get("success") is False:
             raise CdpError(f"target_close_failed:{target_id}")
+
+    def activate_target(self, target_id: str) -> None:
+        target = self._wait_target(target_id)
+        if target.target_type != "page" or not target.is_chatgpt:
+            raise CdpError("activate_target_invalid")
+        self._browser_call("Target.activateTarget", {"targetId": target_id})
 
     def clear_cache(self) -> int:
         count = 0

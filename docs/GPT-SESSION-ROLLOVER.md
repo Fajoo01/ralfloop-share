@@ -32,7 +32,7 @@ The policy is separate from browser mechanics so it can later be fed by DOM/runt
 
 ## Browser behavior
 
-An automatic handoff creates a new blank tab, clears the dedicated browser HTTP cache through CDP, navigates the new tab to `https://chatgpt.com/`, submits the durable handoff, and confirms/persists the successor before touching the selected worker source. The old source conversation is then archived through the normal ChatGPT UI and kept briefly as a protected ghost tab; unrelated ChatGPT tabs in the dedicated profile are left untouched.
+An automatic handoff creates a new blank tab, clears the dedicated browser HTTP cache through CDP, navigates to the source project's `/project` page when the worker belongs to a project (otherwise `https://chatgpt.com/`), submits the durable handoff, and confirms/persists the successor before touching the selected worker source. The old source conversation is then archived through the normal ChatGPT UI and kept briefly as a protected ghost tab; unrelated ChatGPT tabs in the dedicated profile are left untouched.
 
 Human input always uses the dedicated Bot-tazzi composer injected on the active worker. The native ChatGPT composer remains in the DOM for Bot-tazzi/CDP automation but is removed from normal mouse/tab interaction, so the human and automation never type into the same control. Enter in the Bot-tazzi composer writes a durable same-origin draft, transfers it to the native composer and submits it through the normal ChatGPT send control. While a draft is pending the human composer is locked to prevent overwriting it.
 
@@ -43,6 +43,20 @@ Archiving is deliberately different from deletion: the controller accepts only t
 The legacy manual `rotate --apply` command still rotates all local ChatGPT tabs and should not be used as the automatic shepherd path when unrelated tabs are present.
 
 No rollover path deletes any server-side ChatGPT conversation. Automatic server-side deletion remains disabled.
+
+## Human browser surface and Android companion
+
+Every open ChatGPT conversation tab receives the same Bot-tazzi human composer at the same fixed bottom-center position. The active worker accepts and submits the message; every other live tab exposes an identical relay composer that forwards the draft to the active worker instead of writing into the wrong conversation. Retired ghost tabs reuse that same panel position, change to an amber/red closing state and show a live countdown.
+
+Browser tab titles are rewritten as a compact visual status: `🟢 ATTIVA`, `⚪ ALTRA`, `🟡 IN FILA`, `🟠 CHIUSURA Ns`, and `🔴 CHIUSURA Ns`. The descriptive suffix is derived from project/topic context, individual long words are abbreviated, and the combined label is bounded so the browser tab strip remains readable.
+
+Temporary ChatGPT request/conversation limits are treated as an internal queue condition rather than a user-facing error. Matching limit alerts/dialogs are hidden, the fixed panel changes to `Siamo in fila · attendi`, a pending human draft stays in same-origin browser storage, and the periodic UI sync releases and submits it when the worker becomes ready. The controller continues to respect the cooldown instead of retrying aggressively.
+
+The durable worker state now stores both the canonical conversation identity (`/c/<id>`) and a project-aware context URL (`/g/<project>/c/<id>` when present). New rollover workers start from that project's `/project` page, and reboot recovery, human relays, ghost forwarding and Android companion sends preserve the project-aware path rather than flattening it back to a global chat.
+
+A completed goal is explicitly signalled by `[[BOTTAZZI_GOAL_REACHED]]` only after the worker considers the goal complete. The periodic `goal-check --apply` sends the Tiremm Telegram notification once per conversation and suppresses duplicate notifications. The Android companion also exposes an explicit manual `Goal raggiunto` action for human-confirmed completion.
+
+The Android companion is a thin controller for the authoritative browser on Sibilla, not a second ChatGPT session. It lists open browser conversations, activates one, queues text into the browser-owned human draft path, and marks a goal complete through the broker. ChatGPT cookies/session data never leave Sibilla.
 
 ## CLI
 

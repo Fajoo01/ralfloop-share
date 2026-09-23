@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -15,6 +17,7 @@ from ralfloop_agent.integration.gpt_browser_cdp import CHATGPT_ORIGIN, ChromeCdp
 from ralfloop_agent.integration.gpt_session_rollover import (
     EXTERNAL_UNVALIDATED_TTL_SECONDS,
     ExternalChatAdoptionStore,
+    GoalNotificationStore,
     GptSessionError,
     Handoff,
     HandoffStore,
@@ -23,6 +26,8 @@ from ralfloop_agent.integration.gpt_session_rollover import (
     RolloverPolicy,
     SessionMetrics,
     evaluate_rollover,
+    chatgpt_conversation_context_url,
+    chatgpt_project_new_chat_url,
     normalize_chatgpt_conversation_url,
     select_external_conversation,
     session_metrics_from_ui,
@@ -32,6 +37,31 @@ from ralfloop_agent.integration.gpt_session_rollover import (
 
 def _json(data) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def _notify_goal_reached(store: HandoffStore, conversation_url: str, title: str = "") -> dict:
+    normalized = normalize_chatgpt_conversation_url(conversation_url)
+    if not normalized:
+        raise GptSessionError("goal_notification_conversation_invalid")
+    notifications = GoalNotificationStore(store.root)
+    if notifications.was_sent(normalized):
+        return {"notified": False, "already_notified": True, "conversation_url": normalized}
+    current = store.load_current()
+    goal = str(current.get("goal") or "").strip()
+    label = str(title or "").strip() or "Chat Bot-tazzi"
+    message = f"✅ Bot-tazzi: goal raggiunto\n{label}"
+    if goal:
+        message += f"\nGoal: {goal[:1200]}"
+    message += f"\n{normalized}"
+    notifier = Path(os.getenv("BOTTAZZI_GPT_TELEGRAM_NOTIFY", "/home/bandi/send_tiremm_telegram_notify.sh"))
+    if not notifier.is_file():
+        raise GptSessionError("goal_notification_notifier_missing")
+    try:
+        subprocess.run([str(notifier), message], check=True, timeout=20)
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise GptSessionError(f"goal_notification_send_failed:{type(exc).__name__}") from exc
+    notifications.mark_sent(normalized)
+    return {"notified": True, "already_notified": False, "conversation_url": normalized}
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -144,24 +174,30 @@ def _resolve_stored_source(tabs, store: HandoffStore):
     data = store.load_current()
     stored_source = str(data.get("source_chat") or "")
     stored_url = normalize_chatgpt_conversation_url(str(data.get("source_chat_url") or ""))
+    stored_context = chatgpt_conversation_context_url(
+        str(data.get("source_chat_context_url") or data.get("source_chat_url") or "")
+    )
     if stored_source:
         source = next((tab for tab in tabs if tab.target_id == stored_source), None)
         if source is not None:
             current_url = normalize_chatgpt_conversation_url(source.url)
-            if current_url != stored_url:
-                store.update_source_chat(source.target_id, current_url)
+            current_context = chatgpt_conversation_context_url(source.url)
+            if current_url != stored_url or current_context != stored_context:
+                store.update_source_chat(source.target_id, current_url, current_context)
                 stored_url = current_url
-            return source, {"source_recovered": False, "source_chat_url": stored_url}, None
+                stored_context = current_context
+            return source, {"source_recovered": False, "source_chat_url": stored_url, "source_chat_context_url": stored_context}, None
     if stored_url:
         matches = [tab for tab in tabs if normalize_chatgpt_conversation_url(tab.url) == stored_url]
         if len(matches) == 1:
             source = matches[0]
-            store.update_source_chat(source.target_id, stored_url)
-            return source, {"source_recovered": True, "previous_source_target_id": stored_source or None, "source_target_id": source.target_id, "source_chat_url": stored_url}, None
+            current_context = chatgpt_conversation_context_url(source.url) or stored_context
+            store.update_source_chat(source.target_id, stored_url, current_context)
+            return source, {"source_recovered": True, "previous_source_target_id": stored_source or None, "source_target_id": source.target_id, "source_chat_url": stored_url, "source_chat_context_url": current_context}, None
         if len(matches) > 1:
-            return None, {"source_chat_url": stored_url, "match_count": len(matches)}, "stored_source_url_ambiguous"
+            return None, {"source_chat_url": stored_url, "source_chat_context_url": stored_context, "match_count": len(matches)}, "stored_source_url_ambiguous"
     if stored_source:
-        return None, {"source_target_id": stored_source, "source_chat_url": stored_url}, "stored_source_not_found"
+        return None, {"source_target_id": stored_source, "source_chat_url": stored_url, "source_chat_context_url": stored_context}, "stored_source_not_found"
     return None, {}, None
 
 
@@ -182,18 +218,22 @@ def _recover_stored_source_new_tab(cdp: ChromeCdp, store: HandoffStore, resoluti
     if error != "stored_source_not_found":
         return None, resolution, error
     stored_url = normalize_chatgpt_conversation_url(str(resolution.get("source_chat_url") or ""))
+    stored_context = chatgpt_conversation_context_url(
+        str(resolution.get("source_chat_context_url") or resolution.get("source_chat_url") or "")
+    )
     if not stored_url:
         return None, resolution, error
     target_id = None
     try:
         target_id = cdp.create_chatgpt_target(clear_cache=False, background=True)
-        ui = cdp.navigate_chatgpt_conversation(target_id, stored_url)
+        ui = cdp.navigate_chatgpt_conversation(target_id, stored_context or stored_url)
         if not bool(ui.get("authenticated")) or not bool(ui.get("ready")):
             raise CdpError("stored_source_recovery_target_not_ready")
         refreshed = next((tab for tab in cdp.targets() if tab.target_id == target_id), None)
         if refreshed is None or normalize_chatgpt_conversation_url(refreshed.url) != stored_url:
             raise CdpError("stored_source_recovery_url_mismatch")
-        store.update_source_chat(target_id, stored_url)
+        recovered_context = chatgpt_conversation_context_url(refreshed.url) or stored_context or stored_url
+        store.update_source_chat(target_id, stored_url, recovered_context)
     except (CdpError, GptSessionError, OSError) as exc:
         if target_id:
             try:
@@ -207,6 +247,7 @@ def _recover_stored_source_new_tab(cdp: ChromeCdp, store: HandoffStore, resoluti
         "previous_source_target_id": resolution.get("source_target_id"),
         "source_target_id": target_id,
         "source_chat_url": stored_url,
+        "source_chat_context_url": recovered_context,
     }, None
 
 
@@ -283,12 +324,15 @@ def _install_rollover_ghost(
     successor_target_id: str,
     successor_url: str,
 ) -> dict:
-    human_target = cdp.install_human_input_target(successor_target_id, successor_url)
     tabs = [t for t in cdp.targets() if t.target_type == "page" and t.is_chatgpt]
+    successor = next((tab for tab in tabs if tab.target_id == successor_target_id), None)
+    successor_context = chatgpt_conversation_context_url(successor.url) if successor is not None else None
+    successor_context = successor_context or successor_url
+    human_target = cdp.install_human_input_target(successor_target_id, successor_context)
     source = next((tab for tab in tabs if tab.target_id == source_target_id), None)
     ghost = None
     if source is not None and source.target_id != successor_target_id:
-        ghost = cdp.mark_chatgpt_ghost_tab(source.target_id, successor_url=successor_url)
+        ghost = cdp.mark_chatgpt_ghost_tab(source.target_id, successor_url=successor_context)
     journal.update(phase="source_ghosted", source_ghosted=bool(ghost))
     return {"human_input_target": human_target, "ghost": ghost, "source_ghosted": bool(ghost)}
 
@@ -387,7 +431,7 @@ def _recover_incomplete_mutation(
             journal.clear()
             return {"kind": kind, "outcome": "committed", "phase": phase, "conversation_url": candidate_url, "source_chat_archived": True}
         if target is not None and target_url == candidate_url:
-            store.update_source_chat(target.target_id, candidate_url)
+            store.update_source_chat(target.target_id, candidate_url, target.url)
             journal.update(phase="source_state_done")
             _archive_source_with_journal(cdp, journal, phase, source_target_id, source_url)
             _finalize_adoption_state(adoption, source_url=source_url, candidate_url=candidate_url, now=int(time.time()))
@@ -418,7 +462,7 @@ def _recover_incomplete_mutation(
                 except CdpError as exc:
                     raise GptSessionError(f"mutation_recovery_pending:rollover:{exc}") from exc
                 if int(successor_ui.get("user_turns") or 0) >= 1:
-                    store.update_source_chat(successor.target_id, successor_url)
+                    store.update_source_chat(successor.target_id, successor_url, successor.url)
                     journal.update(phase="source_state_done", successor_url=successor_url)
                     _archive_source_with_journal(cdp, journal, phase, source_target_id, source_url)
                     ghost_state = _install_rollover_ghost(
@@ -578,7 +622,7 @@ def cmd_adopt_external(args: argparse.Namespace) -> int:
             old_source_url = normalize_chatgpt_conversation_url(old_source.url)
             try:
                 cdp.install_human_input_target(foreground.target_id, foreground_url)
-                store.update_source_chat(foreground.target_id, foreground_url)
+                store.update_source_chat(foreground.target_id, foreground_url, foreground.url)
                 ghosted = False
                 if old_source.target_id != foreground.target_id and old_source_url:
                     ghosted = bool(cdp.mark_chatgpt_ghost_tab(old_source.target_id, successor_url=foreground_url).get("ghost"))
@@ -861,6 +905,196 @@ def cmd_adopt_external(args: argparse.Namespace) -> int:
     return 0
 
 
+def _companion_tabs(cdp: ChromeCdp, store: HandoffStore) -> list[dict]:
+    current = store.load_current() if store.current_path.exists() else {}
+    worker_id = str(current.get("source_chat") or "")
+    rows: list[dict] = []
+    for tab in cdp.targets():
+        conversation_url = normalize_chatgpt_conversation_url(tab.url)
+        if tab.target_type != "page" or not tab.is_chatgpt or not conversation_url:
+            continue
+        try:
+            focus = cdp.chatgpt_focus_state(tab.target_id)
+        except CdpError:
+            focus = {}
+        try:
+            ui = cdp.chatgpt_ui_state(tab.target_id)
+        except CdpError:
+            ui = {}
+        rows.append(
+            {
+                "target_id": tab.target_id,
+                "title": tab.title,
+                "url": tab.url,
+                "conversation_url": conversation_url,
+                "project_url": chatgpt_project_new_chat_url(tab.url),
+                "worker": tab.target_id == worker_id,
+                "focused": bool(focus.get("focused")),
+                "ghost": bool(focus.get("ghost")),
+                "busy": bool(ui.get("response_pending")) or bool(ui.get("response_in_progress")),
+            }
+        )
+    return rows
+
+
+def cmd_companion_list(args: argparse.Namespace) -> int:
+    cdp = ChromeCdp(args.endpoint)
+    store = HandoffStore(args.state_dir)
+    _json({"ok": True, "chats": _companion_tabs(cdp, store)})
+    return 0
+
+
+def _companion_target(cdp: ChromeCdp, target_id: str):
+    target = next((t for t in cdp.targets() if t.target_id == target_id and t.target_type == "page" and t.is_chatgpt), None)
+    if target is None or not normalize_chatgpt_conversation_url(target.url):
+        raise GptSessionError("companion_target_not_found")
+    try:
+        focus = cdp.chatgpt_focus_state(target.target_id)
+    except CdpError:
+        focus = {}
+    if focus.get("ghost"):
+        raise GptSessionError("companion_target_retired")
+    return target
+
+
+def cmd_companion_activate(args: argparse.Namespace) -> int:
+    cdp = ChromeCdp(args.endpoint)
+    store = HandoffStore(args.state_dir)
+    target = _companion_target(cdp, args.target_id)
+    if store.current_path.exists():
+        current = store.load_current()
+        current_id = str(current.get("source_chat") or "")
+        if current_id and current_id != target.target_id:
+            current_target = next((t for t in cdp.targets() if t.target_id == current_id), None)
+            if current_target is not None:
+                ui = cdp.chatgpt_ui_state(current_target.target_id)
+                if bool(ui.get("response_pending")) or bool(ui.get("response_in_progress")):
+                    _json({"ok": True, "action": "deferred", "reason": "worker_response_active"})
+                    return 0
+                if int(ui.get("composer_chars") or 0) > 0:
+                    _json({"ok": True, "action": "deferred", "reason": "unsent_composer_text"})
+                    return 0
+    conversation_url = normalize_chatgpt_conversation_url(target.url)
+    cdp.activate_target(target.target_id)
+    cdp.install_human_input_target(target.target_id, target.url)
+    store.update_source_chat(target.target_id, conversation_url, target.url)
+    _json({"ok": True, "action": "activated", "target_id": target.target_id, "conversation_url": conversation_url})
+    return 0
+
+
+def cmd_companion_send(args: argparse.Namespace) -> int:
+    text = sys.stdin.read()
+    if not text.strip():
+        _json({"ok": False, "action": "send_failed", "reason": "empty_message"})
+        return 1
+    if len(text.encode("utf-8")) > 64 * 1024:
+        _json({"ok": False, "action": "send_failed", "reason": "message_too_large"})
+        return 1
+    cdp = ChromeCdp(args.endpoint)
+    store = HandoffStore(args.state_dir)
+    target = _companion_target(cdp, args.target_id)
+    conversation_url = normalize_chatgpt_conversation_url(target.url)
+    cdp.activate_target(target.target_id)
+    cdp.install_human_input_target(target.target_id, target.url)
+    result = cdp.queue_human_message(target.target_id, target.url, text.strip())
+    store.update_source_chat(target.target_id, conversation_url, target.url)
+    action = "queued" if result.get("queued") else "deferred"
+    _json({"ok": True, "action": action, "target_id": target.target_id, "conversation_url": conversation_url, **result})
+    return 0
+
+
+def cmd_sync_ui(args: argparse.Namespace) -> int:
+    cdp = ChromeCdp(args.endpoint)
+    store = HandoffStore(args.state_dir)
+    tabs = [t for t in cdp.targets() if t.target_type == "page" and t.is_chatgpt and normalize_chatgpt_conversation_url(t.url)]
+    if not tabs:
+        _json({"ok": True, "action": "noop", "reason": "no_chatgpt_conversations"})
+        return 0
+    source, _, error = _resolve_stored_source(tabs, store)
+    if error or source is None:
+        _json({"ok": True, "action": "noop", "reason": error or "source_target_not_found"})
+        return 0
+    active_url = normalize_chatgpt_conversation_url(source.url)
+    active_context = chatgpt_conversation_context_url(source.url) or active_url
+    rows: list[dict] = []
+    errors: list[dict] = []
+    for tab in tabs:
+        try:
+            focus = cdp.chatgpt_focus_state(tab.target_id)
+            if bool(focus.get("ghost")):
+                close_at = int(focus.get("ghost_close_at") or 0)
+                remaining = max(1, int((close_at - int(time.time() * 1000) + 999) / 1000)) if close_at else 1
+                cdp.install_tab_identity(tab.target_id, mode="closing", countdown_seconds=remaining)
+                rows.append({"target_id": tab.target_id, "mode": "closing", "remaining_s": remaining})
+                continue
+            if tab.target_id == source.target_id:
+                ui = cdp.chatgpt_ui_state(tab.target_id)
+                queued = bool(ui.get("temporary_access_limited"))
+                cdp.set_human_queue_hold(tab.target_id, queued)
+                cdp.install_human_input_target(tab.target_id, active_context)
+                cdp.install_tab_identity(tab.target_id, mode="queue" if queued else "active")
+                rows.append({"target_id": tab.target_id, "mode": "queue" if queued else "active"})
+            else:
+                cdp.install_human_input_relay(tab.target_id, active_context)
+                cdp.install_tab_identity(tab.target_id, mode="other")
+                rows.append({"target_id": tab.target_id, "mode": "other"})
+        except (CdpError, GptSessionError, OSError) as exc:
+            errors.append({"target_id": tab.target_id, "error": str(exc)})
+    _json({"ok": True, "action": "synced", "source_target_id": source.target_id, "tabs": rows, "errors": errors})
+    return 0
+
+
+def cmd_goal_check(args: argparse.Namespace) -> int:
+    cdp = ChromeCdp(args.endpoint)
+    store = HandoffStore(args.state_dir)
+    tabs = [t for t in cdp.targets() if t.target_type == "page" and t.is_chatgpt]
+    source, _, error = _resolve_stored_source(tabs, store)
+    if error or source is None:
+        _json({"ok": True, "action": "noop", "reason": error or "source_target_not_found"})
+        return 0
+    ui = cdp.chatgpt_ui_state(source.target_id)
+    if not bool(ui.get("goal_reached_marker")):
+        _json({"ok": True, "action": "noop", "reason": "goal_not_reached", "source_target_id": source.target_id})
+        return 0
+    if bool(ui.get("response_pending")) or bool(ui.get("response_in_progress")):
+        _json({"ok": True, "action": "deferred", "reason": "goal_response_active", "source_target_id": source.target_id})
+        return 0
+    if not args.apply:
+        _json({"ok": True, "action": "candidate", "reason": "goal_reached", "source_target_id": source.target_id})
+        return 0
+    try:
+        notification = _notify_goal_reached(store, source.url, source.title)
+    except GptSessionError as exc:
+        _json({"ok": False, "action": "goal_notification_failed", "reason": str(exc), "source_target_id": source.target_id})
+        return 1
+    _json({"ok": True, "action": "goal_complete", "manual": False, "source_target_id": source.target_id, **notification})
+    return 0
+
+
+def cmd_goal_complete(args: argparse.Namespace) -> int:
+    cdp = ChromeCdp(args.endpoint)
+    store = HandoffStore(args.state_dir)
+    tabs = [t for t in cdp.targets() if t.target_type == "page" and t.is_chatgpt]
+    source = None
+    if args.source_target_id:
+        source = next((tab for tab in tabs if tab.target_id == args.source_target_id), None)
+        if source is None:
+            _json({"ok": False, "action": "goal_notification_failed", "reason": "source_target_not_found"})
+            return 1
+    else:
+        source, _, error = _resolve_stored_source(tabs, store)
+        if error or source is None:
+            _json({"ok": False, "action": "goal_notification_failed", "reason": error or "source_target_not_found"})
+            return 1
+    try:
+        notification = _notify_goal_reached(store, source.url, source.title)
+    except GptSessionError as exc:
+        _json({"ok": False, "action": "goal_notification_failed", "reason": str(exc), "source_target_id": source.target_id})
+        return 1
+    _json({"ok": True, "action": "goal_complete", "manual": True, "source_target_id": source.target_id, **notification})
+    return 0
+
+
 def cmd_shepherd(args: argparse.Namespace) -> int:
     cdp = ChromeCdp(args.endpoint)
     store = HandoffStore(args.state_dir)
@@ -974,6 +1208,7 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
             submit=args.submit,
             close_source=False,
             target_created_hook=record_successor,
+            new_chat_url=chatgpt_project_new_chat_url(source.url) or CHATGPT_ORIGIN,
         )
     except (CdpError, GptSessionError, OSError) as exc:
         report["ok"] = False
@@ -1015,7 +1250,7 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
             report["worker_target_id"] = new_target_id
             _json(report)
             return 1
-        store.update_source_chat(new_target_id, new_source_url)
+        store.update_source_chat(new_target_id, new_source_url, current_target.url if current_target is not None else new_source_url)
         journal.update(phase="source_state_done", successor_url=new_source_url)
     except (CdpError, GptSessionError, OSError) as exc:
         report["ok"] = False
@@ -1096,6 +1331,28 @@ def build_parser() -> argparse.ArgumentParser:
     adopt.add_argument("--scan-interval-seconds", type=int, default=30)
     adopt.set_defaults(func=cmd_adopt_external)
 
+    companion_list = sub.add_parser("companion-list")
+    companion_list.set_defaults(func=cmd_companion_list)
+
+    companion_activate = sub.add_parser("companion-activate")
+    companion_activate.add_argument("--target-id", required=True)
+    companion_activate.set_defaults(func=cmd_companion_activate)
+
+    companion_send = sub.add_parser("companion-send")
+    companion_send.add_argument("--target-id", required=True)
+    companion_send.set_defaults(func=cmd_companion_send)
+
+    sync_ui = sub.add_parser("sync-ui")
+    sync_ui.set_defaults(func=cmd_sync_ui)
+
+    goal_check = sub.add_parser("goal-check")
+    goal_check.add_argument("--apply", action="store_true")
+    goal_check.set_defaults(func=cmd_goal_check)
+
+    goal_complete = sub.add_parser("goal-complete")
+    goal_complete.add_argument("--source-target-id", default=None)
+    goal_complete.set_defaults(func=cmd_goal_complete)
+
     shepherd = sub.add_parser("shepherd")
     shepherd.add_argument("--apply", action="store_true")
     shepherd.add_argument("--submit", action="store_true")
@@ -1115,7 +1372,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _requires_mutation_lock(args: argparse.Namespace) -> bool:
-    if args.command in {"checkpoint", "adopt-external", "shepherd"}:
+    if args.command in {"checkpoint", "adopt-external", "companion-activate", "companion-send", "sync-ui", "goal-check", "goal-complete", "shepherd"}:
         return True
     if args.command == "rotate":
         return bool(getattr(args, "apply", False))

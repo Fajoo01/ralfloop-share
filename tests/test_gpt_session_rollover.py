@@ -22,6 +22,8 @@ from tools.bottazzi_gpt_session import (
 
 from ralfloop_agent.integration.gpt_session_rollover import (
     ExternalChatAdoptionStore,
+    GOAL_REACHED_MARKER,
+    GoalNotificationStore,
     GptSessionError,
     Handoff,
     HandoffStore,
@@ -30,6 +32,8 @@ from ralfloop_agent.integration.gpt_session_rollover import (
     RolloverPolicy,
     SessionMetrics,
     evaluate_rollover,
+    chatgpt_conversation_context_url,
+    chatgpt_project_new_chat_url,
     normalize_chatgpt_conversation_url,
     select_external_conversation,
     session_metrics_from_ui,
@@ -136,13 +140,19 @@ def test_handoff_round_trip_and_prompt(tmp_path) -> None:
     assert "continuare il task" in prompt
     assert "non pushare su origin" in prompt
     assert "#45" in prompt
+    assert GOAL_REACHED_MARKER in prompt
 
     payload = json.loads(store.current_path.read_text())
     assert payload["schema_version"] == "bottazzi_gpt_handoff_v1"
-    store.update_source_chat("worker-target", "https://chatgpt.com/c/worker")
+    store.update_source_chat(
+        "worker-target",
+        "https://chatgpt.com/c/worker",
+        "https://chatgpt.com/g/g-p-demo/c/worker",
+    )
     current = store.load_current()
     assert current["source_chat"] == "worker-target"
     assert current["source_chat_url"] == "https://chatgpt.com/c/worker"
+    assert current["source_chat_context_url"] == "https://chatgpt.com/g/g-p-demo/c/worker"
 
 
 def test_checkpoint_schema_round_trips_runtime_worker_metadata(tmp_path) -> None:
@@ -159,6 +169,30 @@ def test_checkpoint_schema_round_trips_runtime_worker_metadata(tmp_path) -> None
     assert current["source_chat"] == "worker-target"
     assert current["source_chat_url"] == "https://chatgpt.com/c/worker"
     assert current["updated_at"] == "2026-09-23T11:49:00+00:00"
+
+
+def test_goal_notification_store_and_sender_are_idempotent(monkeypatch, tmp_path) -> None:
+    handoff = HandoffStore(tmp_path)
+    handoff.save(Handoff(goal="finire il lavoro", current_state="quasi fatto"))
+    notifier = tmp_path / "notify.sh"
+    notifier.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setenv("BOTTAZZI_GPT_TELEGRAM_NOTIFY", str(notifier))
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(gpt_session_tool.subprocess, "run", fake_run)
+    first = gpt_session_tool._notify_goal_reached(handoff, "https://chatgpt.com/c/goal-1", "Titolo chat")
+    second = gpt_session_tool._notify_goal_reached(handoff, "https://chatgpt.com/c/goal-1", "Titolo chat")
+
+    assert first["notified"] is True
+    assert second["already_notified"] is True
+    assert len(calls) == 1
+    assert "goal raggiunto" in calls[0][0][1]
+    assert "finire il lavoro" in calls[0][0][1]
+    assert GoalNotificationStore(tmp_path).was_sent("https://chatgpt.com/c/goal-1") is True
 
 
 def test_gpt_browser_units_recreate_disposable_cache_after_boot() -> None:
@@ -239,6 +273,8 @@ def test_mutation_journal_round_trip_rejects_overwrite_and_clears(tmp_path) -> N
 def test_mutation_lock_policy_covers_all_state_mutators() -> None:
     assert _requires_mutation_lock(SimpleNamespace(command="checkpoint")) is True
     assert _requires_mutation_lock(SimpleNamespace(command="adopt-external", apply=False)) is True
+    assert _requires_mutation_lock(SimpleNamespace(command="goal-check", apply=True)) is True
+    assert _requires_mutation_lock(SimpleNamespace(command="goal-complete", apply=True)) is True
     assert _requires_mutation_lock(SimpleNamespace(command="shepherd", apply=False)) is True
     assert _requires_mutation_lock(SimpleNamespace(command="rotate", apply=False)) is False
     assert _requires_mutation_lock(SimpleNamespace(command="rotate", apply=True)) is True
@@ -249,8 +285,18 @@ def test_external_conversation_url_is_canonical_and_query_free() -> None:
     assert normalize_chatgpt_conversation_url("https://chatgpt.com/c/abc-123?messageId=x") == "https://chatgpt.com/c/abc-123"
     assert normalize_chatgpt_conversation_url("https://chatgpt.com/c/abc-123/") == "https://chatgpt.com/c/abc-123"
     assert normalize_chatgpt_conversation_url("https://chatgpt.com/g/g-p-demo/c/abc-123") == "https://chatgpt.com/c/abc-123"
+    assert chatgpt_conversation_context_url("https://chatgpt.com/g/g-p-demo/c/abc-123?messageId=x") == "https://chatgpt.com/g/g-p-demo/c/abc-123"
+    assert chatgpt_conversation_context_url("https://chatgpt.com/c/abc-123?messageId=x") == "https://chatgpt.com/c/abc-123"
     assert normalize_chatgpt_conversation_url("https://example.com/c/abc-123") is None
+    assert chatgpt_conversation_context_url("https://example.com/g/g-p-demo/c/abc-123") is None
     assert normalize_chatgpt_conversation_url("https://chatgpt.com/g/gpt") is None
+
+
+def test_project_successor_entry_preserves_original_project() -> None:
+    source = "https://chatgpt.com/g/g-p-demo-progetto/c/abc-123"
+    assert chatgpt_project_new_chat_url(source) == "https://chatgpt.com/g/g-p-demo-progetto/project"
+    assert chatgpt_project_new_chat_url("https://chatgpt.com/c/abc-123") is None
+    assert chatgpt_project_new_chat_url("https://example.com/g/g-p-demo/c/abc") is None
 
 
 def test_external_conversation_selection_excludes_seen_open_and_source() -> None:
@@ -525,6 +571,54 @@ def test_incomplete_rollover_recovers_confirmed_successor_and_ghosts_old_source(
     assert cdp.closed == []
     assert result["source_chat_ghosted"] is True
     assert journal.load() is None
+
+
+class FakeGoalCdp:
+    def __init__(self, *, active: bool = False, marked: bool = True) -> None:
+        self.source = BrowserTarget("source", "page", "https://chatgpt.com/c/source", "Goal chat", "ws://source")
+        self.active = active
+        self.marked = marked
+
+    def targets(self):
+        return [self.source]
+
+    def chatgpt_ui_state(self, target_id: str):
+        assert target_id == "source"
+        return {
+            "ready": True,
+            "goal_reached_marker": self.marked,
+            "response_pending": self.active,
+            "response_in_progress": self.active,
+        }
+
+
+def test_goal_check_notifies_only_after_response_is_idle(monkeypatch, tmp_path) -> None:
+    handoff = HandoffStore(tmp_path)
+    handoff.save(Handoff(goal="x", current_state="y"))
+    handoff.update_source_chat("source", "https://chatgpt.com/c/source")
+    fake = FakeGoalCdp(active=True)
+    monkeypatch.setattr(gpt_session_tool, "ChromeCdp", lambda endpoint: fake)
+    calls = []
+    monkeypatch.setattr(
+        gpt_session_tool,
+        "_notify_goal_reached",
+        lambda store, url, title="": calls.append((url, title)) or {"notified": True, "already_notified": False, "conversation_url": url},
+    )
+    args = SimpleNamespace(endpoint="http://127.0.0.1:9238", state_dir=str(tmp_path), apply=True)
+
+    assert gpt_session_tool.cmd_goal_check(args) == 0
+    assert calls == []
+
+    fake.active = False
+    assert gpt_session_tool.cmd_goal_check(args) == 0
+    assert calls == [("https://chatgpt.com/c/source", "Goal chat")]
+
+
+def test_guard_checks_goal_before_rollover_probe() -> None:
+    repo = Path(__file__).resolve().parents[1]
+    guard = (repo / "scripts/bottazzi_gpt_shepherd_guard.sh").read_text(encoding="utf-8")
+    assert "goal-check --apply" in guard
+    assert guard.index("goal-check --apply") < guard.index('shepherd)')
 
 
 class FakeRateLimitedRolloverCdp:
@@ -1180,6 +1274,21 @@ def test_conversation_navigation_waits_for_initial_blank(monkeypatch) -> None:
     assert result["ready"] is True
 
 
+def test_conversation_navigation_preserves_project_context(monkeypatch) -> None:
+    cdp = ChromeCdp("http://127.0.0.1:1")
+    project_url = "https://chatgpt.com/g/g-p-demo/c/abc"
+    target = BrowserTarget("target", "page", project_url, "chat", "ws://target")
+    calls = []
+    monkeypatch.setattr(cdp, "_wait_target", lambda target_id, **kwargs: target)
+    monkeypatch.setattr(cdp, "_page_call", lambda websocket_url, method, params=None: calls.append((method, params or {})) or {})
+    monkeypatch.setattr(cdp, "chatgpt_ui_state", lambda target_id: {"ready": True, "target_id": target_id})
+
+    result = cdp.navigate_chatgpt_conversation("target", project_url, wait_timeout_s=1.0)
+
+    assert result["ready"] is True
+    assert ("Page.navigate", {"url": project_url}) in calls
+
+
 class FakeCdp(ChromeCdp):
     def __init__(self) -> None:
         super().__init__("http://127.0.0.1:1")
@@ -1252,6 +1361,29 @@ def test_inject_prompt_can_submit_with_button() -> None:
 class FailingHandoffCdp(FakeCdp):
     def inject_prompt(self, prompt, *, target_id=None, submit=False, wait_timeout_s=20.0):
         raise CdpError("chatgpt_not_ready:interaction_required")
+
+
+def test_handoff_can_start_inside_original_project() -> None:
+    cdp = FakeInjectCdp()
+    result = cdp.handoff_to_new_chat(
+        "handoff",
+        source_target_id="old",
+        submit=True,
+        close_source=False,
+        new_chat_url="https://chatgpt.com/g/g-p-demo-progetto/project",
+    )
+    assert result["new_chat_entry_url"] == "https://chatgpt.com/g/g-p-demo-progetto/project"
+
+
+def test_handoff_rejects_non_chatgpt_new_chat_url() -> None:
+    cdp = FakeInjectCdp()
+    with pytest.raises(CdpError, match="new_chat_url_invalid"):
+        cdp.handoff_to_new_chat(
+            "handoff",
+            source_target_id="old",
+            close_source=False,
+            new_chat_url="https://example.com/g/g-p-demo/project",
+        )
 
 
 def test_handoff_failure_keeps_old_chatgpt_tab_open() -> None:

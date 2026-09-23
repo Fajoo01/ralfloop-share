@@ -17,6 +17,7 @@ SCHEMA_VERSION = "bottazzi_gpt_handoff_v1"
 EXTERNAL_UNVALIDATED_TTL_SECONDS = 3600
 EXTERNAL_UNVALIDATED_MAX = 64
 SECRET_KEY_RE = re.compile(r"(?i)(authorization|cookie|credential|password|secret|token|storage_state)")
+GOAL_REACHED_MARKER = "[[BOTTAZZI_GOAL_REACHED]]"
 
 
 class GptSessionError(ValueError):
@@ -120,6 +121,7 @@ class Handoff:
     next_action: str = ""
     source_chat: str | None = None
     source_chat_url: str | None = None
+    source_chat_context_url: str | None = None
     created_at: str = field(default_factory=_now)
     updated_at: str | None = None
     schema_version: str = SCHEMA_VERSION
@@ -171,10 +173,20 @@ class HandoffStore:
         _reject_secret_keys(data)
         return data
 
-    def update_source_chat(self, source_chat: str | None, source_chat_url: str | None = None) -> None:
+    def update_source_chat(
+        self,
+        source_chat: str | None,
+        source_chat_url: str | None = None,
+        source_chat_context_url: str | None = None,
+    ) -> None:
         data = self.load_current()
+        canonical = normalize_chatgpt_conversation_url(source_chat_url or "") if source_chat_url else None
+        context = chatgpt_conversation_context_url(source_chat_context_url or source_chat_url or "")
+        if canonical and context and normalize_chatgpt_conversation_url(context) != canonical:
+            raise GptSessionError("source_chat_context_mismatch")
         data["source_chat"] = source_chat
-        data["source_chat_url"] = source_chat_url
+        data["source_chat_url"] = canonical or source_chat_url
+        data["source_chat_context_url"] = context or canonical or source_chat_url
         _reject_secret_keys(data)
         encoded = json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         if len(encoded.encode("utf-8")) > 256 * 1024:
@@ -199,6 +211,7 @@ class HandoffStore:
             "PROBLEMI APERTI\n" + _bullets(data.get("open_problems")),
             f"PROSSIMA AZIONE\n{data.get('next_action', '')}",
             "Prima di mutare lo stato, verifica Git/runtime reale e non ripetere azioni già presenti nelle ricevute.",
+            f"Quando e solo quando il GOAL è realmente completato, termina la risposta finale con una riga contenente esattamente {GOAL_REACHED_MARKER}. Non usare il marker per avanzamenti parziali o semplici checkpoint.",
         ]
         return "\n\n".join(sections).strip() + "\n"
 
@@ -209,6 +222,49 @@ class HandoffStore:
         self.archive_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.root, 0o700)
         os.chmod(self.archive_dir, 0o700)
+
+
+class GoalNotificationStore:
+    schema_version = "bottazzi_gpt_goal_notifications_v1"
+
+    def __init__(self, root: str | os.PathLike[str] | None = None) -> None:
+        self.root = Path(root).expanduser() if root else default_state_dir()
+        self.path = self.root / "goal-notifications.json"
+
+    def load(self) -> dict[str, Any]:
+        if not self.path.exists():
+            return {"schema_version": self.schema_version, "sent": {}}
+        if self.path.is_symlink():
+            raise GptSessionError("goal_notification_symlink_rejected")
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise GptSessionError("goal_notification_invalid") from exc
+        if not isinstance(data, dict) or data.get("schema_version") != self.schema_version:
+            raise GptSessionError("goal_notification_invalid")
+        sent = data.get("sent")
+        if not isinstance(sent, dict):
+            raise GptSessionError("goal_notification_invalid")
+        return data
+
+    def was_sent(self, conversation_url: str) -> bool:
+        normalized = normalize_chatgpt_conversation_url(conversation_url)
+        if not normalized:
+            return False
+        return normalized in (self.load().get("sent") or {})
+
+    def mark_sent(self, conversation_url: str, *, sent_at: str | None = None) -> None:
+        normalized = normalize_chatgpt_conversation_url(conversation_url)
+        if not normalized:
+            raise GptSessionError("goal_notification_conversation_invalid")
+        data = self.load()
+        sent = dict(data.get("sent") or {})
+        sent[normalized] = sent_at or _now()
+        data["sent"] = dict(list(sent.items())[-256:])
+        encoded = json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(self.root, 0o700)
+        _atomic_write(self.path, encoded)
 
 
 class MutationLock:
@@ -324,6 +380,34 @@ def normalize_chatgpt_conversation_url(value: str) -> str | None:
     if not match:
         return None
     return f"https://chatgpt.com/c/{match.group(1)}"
+
+
+def chatgpt_conversation_context_url(value: str) -> str | None:
+    try:
+        parsed = urllib.parse.urlparse(str(value or ""))
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").lower()
+    if host != "chatgpt.com" and not host.endswith(".chatgpt.com"):
+        return None
+    path = parsed.path.rstrip("/")
+    if re.fullmatch(r"/c/[A-Za-z0-9-]+", path) or re.fullmatch(r"/g/[^/]+/c/[A-Za-z0-9-]+", path):
+        return f"https://chatgpt.com{path}"
+    return None
+
+
+def chatgpt_project_new_chat_url(value: str) -> str | None:
+    try:
+        parsed = urllib.parse.urlparse(str(value or ""))
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").lower()
+    if host != "chatgpt.com" and not host.endswith(".chatgpt.com"):
+        return None
+    match = re.fullmatch(r"/g/([^/]+)/c/[A-Za-z0-9-]+", parsed.path.rstrip("/"))
+    if not match:
+        return None
+    return f"https://chatgpt.com/g/{match.group(1)}/project"
 
 
 def select_external_conversation(

@@ -37,6 +37,13 @@ run_json() {
   printf '%s' "$output"
 }
 
+sync_ui="$(run_json sync_ui "$PY" "$TOOL" --endpoint "$ENDPOINT" sync-ui)" || sync_ui=""
+if [[ -n "$sync_ui" ]]; then
+  if ! printf '%s' "$sync_ui" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); raise SystemExit(0 if d.get("ok") else 1)' >/dev/null; then
+    printf 'bottazzi-gpt-shepherd[sync_ui]: controller returned error: %s\n' "$sync_ui" >&2
+  fi
+fi
+
 now=$(date +%s)
 if [[ -f "$SNOOZE_FILE" ]]; then
   read -r snooze_until < "$SNOOZE_FILE" || snooze_until=0
@@ -44,6 +51,18 @@ if [[ -f "$SNOOZE_FILE" ]]; then
     exit 0
   fi
 fi
+
+goal_check="$(run_json goal_check "$PY" "$TOOL" --endpoint "$ENDPOINT" goal-check --apply)" || exit $?
+if ! goal_fields="$(printf '%s' "$goal_check" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); print(1 if d.get("ok") else 0, str(d.get("action") or ""), str(d.get("reason") or ""))')"; then
+  printf 'bottazzi-gpt-shepherd[goal_check]: invalid JSON: %s\n' "$goal_check" >&2
+  exit 70
+fi
+read -r goal_ok goal_action goal_reason <<< "$goal_fields"
+if [[ "$goal_ok" != "1" ]]; then
+  printf 'bottazzi-gpt-shepherd[goal_check]: controller returned error: %s\n' "$goal_check" >&2
+  exit 1
+fi
+[[ "$goal_action" != "goal_complete" ]] || exit 0
 
 probe="$(run_json probe "$PY" "$TOOL" --endpoint "$ENDPOINT" shepherd)" || exit $?
 if ! probe_fields="$(printf '%s' "$probe" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); ui=d.get("ui") or {}; print(1 if d.get("ok") else 0, 1 if d.get("rollover") else 0, 1 if ui.get("ready") else 0, 1 if d.get("defer_latency_rollover") else 0, 1 if ui.get("temporary_access_limited") else 0)')"; then
