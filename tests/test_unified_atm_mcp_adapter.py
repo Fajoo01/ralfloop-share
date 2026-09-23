@@ -68,6 +68,19 @@ def test_location_clarification_preserves_destination_for_followup() -> None:
     assert result["payload"]["destination"]["label"] == "Coop"
 
 
+def test_failed_app_geolocation_asks_for_permission_without_losing_destination() -> None:
+    adapter = ATMMCPReadOnly({
+        "assistant_surface": "assistant_v1",
+        "location_request": {"attempted": True, "error_code": 1},
+    })
+
+    result = adapter.read("Portami alla Coop")
+
+    assert result["status"] == "LOCATION_REQUIRED"
+    assert "Consenti la posizione" in result["response"]
+    assert result["payload"]["destination"]["label"] == "Coop"
+
+
 def test_destination_accepts_ad_preposition() -> None:
     assert _destination("Portami ad Aumai") == "Aumai"
     assert _destination("come vado ad Aumai?") == "Aumai"

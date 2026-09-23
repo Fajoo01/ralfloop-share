@@ -179,10 +179,19 @@ class ATMMCPReadOnly(MeteoMCPReadOnly):
                     source = "telegram_gps_cache"
                 else:
                     app_surface = str(self.context.get("assistant_surface") or "") == "assistant_v1"
+                    location_request = self.context.get("location_request")
+                    app_location_failed = (
+                        app_surface
+                        and isinstance(location_request, Mapping)
+                        and bool(location_request.get("attempted"))
+                    )
                     return {
                         "ok": False,
                         "status": "LOCATION_REQUIRED",
                         "response": (
+                            "Non riesco a leggere il GPS del telefono. Consenti la posizione a Bot-tazzi "
+                            "e riprova; in alternativa scrivimi il punto di partenza."
+                            if app_location_failed else
                             "Mi serve il punto di partenza. Posso usare la posizione del telefono; "
                             "se preferisci, scrivimi la partenza, per esempio: "
                             "come vado da Duomo a Piscina Suzzani?"
