@@ -7,9 +7,10 @@ from pathlib import Path
 import re
 import time
 from typing import Annotated, Any, Callable, Literal
+from urllib.parse import unquote_plus
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -35,6 +36,7 @@ from ralfloop_agent.unified_assistant.runtime import (
     run_unified_telegram,
     unified_route_probe,
 )
+from ralfloop_agent.call_recordings import CallRecordingStore
 from ralfloop_agent.unified_assistant.task_queue import (
     BotTazziTaskQueue,
     TaskCategory,
@@ -119,6 +121,11 @@ def get_unified_route_probe() -> Callable[..., dict[str, Any] | None]:
 
 def get_unified_runner() -> Callable[..., dict[str, Any]]:
     return run_unified_telegram
+
+
+@lru_cache(maxsize=1)
+def get_call_recording_store() -> CallRecordingStore:
+    return CallRecordingStore.from_env()
 
 @lru_cache(maxsize=1)
 def get_motor_client() -> BotTazziMotorJudge:
@@ -433,6 +440,44 @@ def assistant_v1_chat(
         approval_required=False,
         metadata=metadata,
     )
+
+
+@router.get("/call-recordings")
+def assistant_v1_call_recordings(
+    store: Annotated[CallRecordingStore, Depends(get_call_recording_store)],
+    limit: int = 50,
+) -> dict[str, Any]:
+    return {"ok": True, "recordings": store.list(limit=min(max(limit, 1), 200))}
+
+
+@router.post("/call-recordings", status_code=201)
+async def assistant_v1_call_recording_ingest(
+    request: Request,
+    store: Annotated[CallRecordingStore, Depends(get_call_recording_store)],
+) -> dict[str, Any]:
+    raw_length = request.headers.get("content-length", "").strip()
+    if raw_length.isdigit() and int(raw_length) > store.max_bytes:
+        raise HTTPException(status_code=413, detail="recording_too_large")
+    content = await request.body()
+    filename = unquote_plus(request.headers.get("x-bottazzi-filename", "call-recording"))
+    extra = {
+        "transport": request.headers.get("x-bottazzi-transport", "android_share"),
+        "caller": request.headers.get("x-bottazzi-caller", ""),
+        "direction": request.headers.get("x-bottazzi-direction", ""),
+        "call_started_at": request.headers.get("x-bottazzi-call-started-at", ""),
+    }
+    try:
+        recording = store.ingest(
+            content,
+            filename=filename,
+            content_type=request.headers.get("content-type", "application/octet-stream"),
+            extra=extra,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        code = 413 if detail == "recording_too_large" else 400
+        raise HTTPException(status_code=code, detail=detail) from exc
+    return {"ok": True, "recording": recording}
 
 
 @router.get("/tasks")

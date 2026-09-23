@@ -1,0 +1,26 @@
+[Unit]
+Description=Bot-tazzi offline phone-call transcription worker
+After=ralfloop-backend.service
+Wants=ralfloop-backend.service
+
+[Service]
+Type=simple
+User=sibilla-cumana
+Group=sibilla-cumana
+WorkingDirectory=/home/sibilla-cumana/ralfloop_agent_scaffold
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/ralfloop/bottazzi-call-stt.env
+ExecStart=/usr/bin/env python3 scripts/ralf_bottazzi_call_stt_worker.py --interval 15 --limit 4
+Restart=on-failure
+RestartSec=5
+Nice=10
+IOSchedulingClass=idle
+CPUQuota=400%
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/sibilla-cumana/.local/share/bottazzi
+
+[Install]
+WantedBy=multi-user.target

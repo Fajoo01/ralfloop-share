@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from openshell_backend import app_gateway
+from ralfloop_agent.call_recordings import CallRecordingStore
 
 
 def _password_spec(password: str) -> str:
@@ -16,9 +17,10 @@ def _password_spec(password: str) -> str:
 
 
 @pytest.fixture
-def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
     monkeypatch.setenv("BOTTAZZI_APP_PASSWORD_HASH", _password_spec("app-pass"))
     monkeypatch.setenv("BOTTAZZI_APP_SESSION_SECRET", "test-session-secret")
+    monkeypatch.setattr(app_gateway, "CALL_RECORDINGS", CallRecordingStore(tmp_path / "calls"))
     return TestClient(app_gateway.app)
 
 
@@ -119,6 +121,23 @@ def test_task_queue_proxy_uses_authenticated_gateway(client: TestClient, monkeyp
     assert seen["method"] == "GET"
     assert seen["url"].endswith("/assistant/v1/tasks")
 
+
+def test_call_recording_ingest_is_direct_and_idempotent(client: TestClient) -> None:
+    client.post("/login", json={"password": "app-pass"})
+    headers = {
+        "content-type": "audio/mp4",
+        "x-bottazzi-filename": "Chiamata+test.m4a",
+        "x-bottazzi-transport": "android_share",
+    }
+    first = client.post("/assistant/v1/call-recordings", content=b"audio", headers=headers)
+    second = client.post("/assistant/v1/call-recordings", content=b"audio", headers=headers)
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert first.json()["recording"]["duplicate"] is False
+    assert second.json()["recording"]["duplicate"] is True
+    listing = client.get("/assistant/v1/call-recordings")
+    assert listing.status_code == 200
+    assert len(listing.json()["recordings"]) == 1
 
 
 def test_android_shell_has_no_source_hardcoded_backend() -> None:

@@ -7,10 +7,13 @@ import os
 from pathlib import Path
 import time
 from typing import Any
+from urllib.parse import unquote_plus
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 import requests
+
+from ralfloop_agent.call_recordings import CallRecordingStore
 
 APP_NAME = "Bot-tazzi — App"
 UI_PATH = Path(__file__).with_name("bottazzi_ui.html")
@@ -20,6 +23,7 @@ SESSION_TTL = int(os.getenv("BOTTAZZI_APP_SESSION_TTL", "86400"))
 PUBLIC_PATHS = {"/login", "/healthz", "/manifest.webmanifest", "/sw.js", "/icon.svg"}
 
 app = FastAPI(title=APP_NAME, docs_url=None, redoc_url=None, openapi_url=None)
+CALL_RECORDINGS = CallRecordingStore.from_env()
 
 
 def _prefix(request: Request) -> str:
@@ -195,6 +199,40 @@ async def assistant_tasks(request: Request, rest_of_path: str = "") -> Response:
     except requests.RequestException:
         return JSONResponse({"detail": "assistant_backend_unavailable"}, status_code=503)
     return _proxy_response(upstream)
+
+
+@app.api_route("/assistant/v1/call-recordings", methods=["GET", "POST"])
+async def assistant_call_recordings(request: Request) -> Response:
+    if request.method == "GET":
+        try:
+            limit = min(max(int(request.query_params.get("limit", "50")), 1), 200)
+        except ValueError:
+            return JSONResponse({"detail": "invalid_limit"}, status_code=400)
+        return JSONResponse({"ok": True, "recordings": CALL_RECORDINGS.list(limit=limit)})
+
+    raw_length = request.headers.get("content-length", "").strip()
+    if raw_length.isdigit() and int(raw_length) > CALL_RECORDINGS.max_bytes:
+        return JSONResponse({"detail": "recording_too_large"}, status_code=413)
+    content = await request.body()
+    filename = unquote_plus(request.headers.get("x-bottazzi-filename", "call-recording"))
+    extra = {
+        "transport": request.headers.get("x-bottazzi-transport", "android_share"),
+        "caller": request.headers.get("x-bottazzi-caller", ""),
+        "direction": request.headers.get("x-bottazzi-direction", ""),
+        "call_started_at": request.headers.get("x-bottazzi-call-started-at", ""),
+    }
+    try:
+        recording = CALL_RECORDINGS.ingest(
+            content,
+            filename=filename,
+            content_type=request.headers.get("content-type", "application/octet-stream"),
+            extra=extra,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        code = 413 if detail == "recording_too_large" else 400
+        return JSONResponse({"detail": detail}, status_code=code)
+    return JSONResponse({"ok": True, "recording": recording}, status_code=201)
 
 
 @app.post("/assistant/v1/chat")
