@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 SCHEMA_VERSION = "bottazzi_gpt_handoff_v1"
+EXTERNAL_UNVALIDATED_TTL_SECONDS = 3600
+EXTERNAL_UNVALIDATED_MAX = 64
 SECRET_KEY_RE = re.compile(r"(?i)(authorization|cookie|credential|password|secret|token|storage_state)")
 
 
@@ -261,6 +263,7 @@ class ExternalChatAdoptionStore:
                 "last_adopted_conversation": None,
                 "pending_conversation": None,
                 "pending_detected_epoch": 0,
+                "unvalidated_candidates": [],
                 "last_scan_epoch": 0,
             }
         if self.path.is_symlink():
@@ -285,6 +288,27 @@ class ExternalChatAdoptionStore:
         payload["seen_conversations"] = seen[-256:]
         payload["pending_conversation"] = normalize_chatgpt_conversation_url(str(payload.get("pending_conversation") or ""))
         payload["pending_detected_epoch"] = max(0, int(payload.get("pending_detected_epoch") or 0))
+        unvalidated: list[dict[str, Any]] = []
+        unvalidated_keys: set[tuple[str, str]] = set()
+        for value in payload.get("unvalidated_candidates") or []:
+            if not isinstance(value, Mapping):
+                continue
+            candidate = normalize_chatgpt_conversation_url(str(value.get("conversation_url") or ""))
+            anchor = normalize_chatgpt_conversation_url(str(value.get("source_url") or ""))
+            if not candidate or not anchor or candidate == anchor:
+                continue
+            key = (candidate, anchor)
+            if key in unvalidated_keys:
+                continue
+            unvalidated_keys.add(key)
+            unvalidated.append(
+                {
+                    "conversation_url": candidate,
+                    "source_url": anchor,
+                    "detected_epoch": max(0, int(value.get("detected_epoch") or 0)),
+                }
+            )
+        payload["unvalidated_candidates"] = unvalidated[-EXTERNAL_UNVALIDATED_MAX:]
         _reject_secret_keys(payload)
         encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         if len(encoded.encode("utf-8")) > 64 * 1024:

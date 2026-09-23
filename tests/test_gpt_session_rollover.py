@@ -213,6 +213,7 @@ def test_external_adoption_store_round_trip_is_bounded(tmp_path) -> None:
     assert saved["watcher_target_id"] == "watcher"
     assert saved["pending_conversation"] is None
     assert saved["pending_detected_epoch"] == 0
+    assert saved["unvalidated_candidates"] == []
     assert store.path.stat().st_mode & 0o077 == 0
 
 
@@ -324,7 +325,142 @@ def test_source_missing_from_history_does_not_consume_unseen_chat(monkeypatch, t
     saved = adoption.load()
     assert saved["seen_conversations"] == ["https://chatgpt.com/c/old"]
     assert saved["pending_conversation"] is None
+    assert saved["unvalidated_candidates"] == [
+        {
+            "conversation_url": "https://chatgpt.com/c/from-app",
+            "source_url": "https://chatgpt.com/c/source",
+            "detected_epoch": saved["unvalidated_candidates"][0]["detected_epoch"],
+        }
+    ]
+    assert saved["unvalidated_candidates"][0]["detected_epoch"] > 0
     assert fake.navigated == []
+
+
+def test_unvalidated_candidate_survives_rollover_and_validates_against_old_source(monkeypatch, tmp_path) -> None:
+    handoff = HandoffStore(tmp_path)
+    handoff.save(Handoff(goal="x", current_state="y"))
+    handoff.update_source_chat("source-1", "https://chatgpt.com/c/source-1")
+    adoption = ExternalChatAdoptionStore(tmp_path)
+    adoption.save(
+        {
+            "seen_conversations": ["https://chatgpt.com/c/old"],
+            "watcher_target_id": "watcher",
+            "last_adopted_conversation": None,
+            "last_scan_epoch": 0,
+        }
+    )
+
+    source_missing = FakeAdoptionCdp(
+        "source-1",
+        "https://chatgpt.com/c/source-1",
+        ["https://chatgpt.com/c/from-app", "https://chatgpt.com/c/old"],
+        busy=True,
+    )
+    monkeypatch.setattr(gpt_session_tool, "ChromeCdp", lambda endpoint: source_missing)
+    assert gpt_session_tool.cmd_adopt_external(_adoption_args(tmp_path)) == 0
+    staged = adoption.load()
+    assert staged["pending_conversation"] is None
+    assert staged["unvalidated_candidates"][0]["conversation_url"] == "https://chatgpt.com/c/from-app"
+    assert staged["unvalidated_candidates"][0]["source_url"] == "https://chatgpt.com/c/source-1"
+
+    handoff.update_source_chat("source-2", "https://chatgpt.com/c/source-2")
+    after_rollover = FakeAdoptionCdp(
+        "source-2",
+        "https://chatgpt.com/c/source-2",
+        [
+            "https://chatgpt.com/c/source-2",
+            "https://chatgpt.com/c/from-app",
+            "https://chatgpt.com/c/source-1",
+            "https://chatgpt.com/c/old",
+        ],
+    )
+    monkeypatch.setattr(gpt_session_tool, "ChromeCdp", lambda endpoint: after_rollover)
+    assert gpt_session_tool.cmd_adopt_external(_adoption_args(tmp_path)) == 0
+
+    saved = adoption.load()
+    assert after_rollover.navigated == [("source-2", "https://chatgpt.com/c/from-app")]
+    assert saved["last_adopted_conversation"] == "https://chatgpt.com/c/from-app"
+    assert saved["unvalidated_candidates"] == []
+    assert handoff.load_current()["source_chat_url"] == "https://chatgpt.com/c/from-app"
+
+
+def test_unvalidated_late_old_history_entry_is_rejected(monkeypatch, tmp_path) -> None:
+    handoff = HandoffStore(tmp_path)
+    handoff.save(Handoff(goal="x", current_state="y"))
+    handoff.update_source_chat("source-1", "https://chatgpt.com/c/source-1")
+    adoption = ExternalChatAdoptionStore(tmp_path)
+    adoption.save(
+        {
+            "seen_conversations": ["https://chatgpt.com/c/old"],
+            "watcher_target_id": "watcher",
+            "last_adopted_conversation": None,
+            "last_scan_epoch": 0,
+        }
+    )
+
+    source_missing = FakeAdoptionCdp(
+        "source-1",
+        "https://chatgpt.com/c/source-1",
+        ["https://chatgpt.com/c/late-old", "https://chatgpt.com/c/old"],
+    )
+    monkeypatch.setattr(gpt_session_tool, "ChromeCdp", lambda endpoint: source_missing)
+    assert gpt_session_tool.cmd_adopt_external(_adoption_args(tmp_path)) == 0
+
+    handoff.update_source_chat("source-2", "https://chatgpt.com/c/source-2")
+    after_rollover = FakeAdoptionCdp(
+        "source-2",
+        "https://chatgpt.com/c/source-2",
+        [
+            "https://chatgpt.com/c/source-2",
+            "https://chatgpt.com/c/source-1",
+            "https://chatgpt.com/c/late-old",
+            "https://chatgpt.com/c/old",
+        ],
+    )
+    monkeypatch.setattr(gpt_session_tool, "ChromeCdp", lambda endpoint: after_rollover)
+    assert gpt_session_tool.cmd_adopt_external(_adoption_args(tmp_path)) == 0
+
+    saved = adoption.load()
+    assert after_rollover.navigated == []
+    assert "https://chatgpt.com/c/late-old" in saved["seen_conversations"]
+    assert saved["unvalidated_candidates"] == []
+
+
+def test_unvalidated_candidate_is_not_consumed_before_anchor_appears(monkeypatch, tmp_path) -> None:
+    handoff = HandoffStore(tmp_path)
+    handoff.save(Handoff(goal="x", current_state="y"))
+    handoff.update_source_chat("source-1", "https://chatgpt.com/c/source-1")
+    adoption = ExternalChatAdoptionStore(tmp_path)
+    adoption.save(
+        {
+            "seen_conversations": ["https://chatgpt.com/c/old"],
+            "watcher_target_id": "watcher",
+            "last_adopted_conversation": None,
+            "last_scan_epoch": 0,
+        }
+    )
+
+    source_missing = FakeAdoptionCdp(
+        "source-1",
+        "https://chatgpt.com/c/source-1",
+        ["https://chatgpt.com/c/from-app", "https://chatgpt.com/c/old"],
+    )
+    monkeypatch.setattr(gpt_session_tool, "ChromeCdp", lambda endpoint: source_missing)
+    assert gpt_session_tool.cmd_adopt_external(_adoption_args(tmp_path)) == 0
+
+    handoff.update_source_chat("source-2", "https://chatgpt.com/c/source-2")
+    anchor_still_missing = FakeAdoptionCdp(
+        "source-2",
+        "https://chatgpt.com/c/source-2",
+        ["https://chatgpt.com/c/source-2", "https://chatgpt.com/c/from-app", "https://chatgpt.com/c/old"],
+    )
+    monkeypatch.setattr(gpt_session_tool, "ChromeCdp", lambda endpoint: anchor_still_missing)
+    assert gpt_session_tool.cmd_adopt_external(_adoption_args(tmp_path)) == 0
+
+    saved = adoption.load()
+    assert anchor_still_missing.navigated == []
+    assert "https://chatgpt.com/c/from-app" not in saved["seen_conversations"]
+    assert saved["unvalidated_candidates"][0]["conversation_url"] == "https://chatgpt.com/c/from-app"
 
 
 def test_stored_source_recovers_after_cdp_target_change(tmp_path) -> None:

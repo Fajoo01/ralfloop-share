@@ -13,6 +13,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from ralfloop_agent.integration.gpt_browser_cdp import CHATGPT_ORIGIN, ChromeCdp, CdpError
 from ralfloop_agent.integration.gpt_session_rollover import (
+    EXTERNAL_UNVALIDATED_TTL_SECONDS,
     ExternalChatAdoptionStore,
     GptSessionError,
     Handoff,
@@ -246,21 +247,100 @@ def cmd_adopt_external(args: argparse.Namespace) -> int:
         for value in open_urls
         if (normalized := normalize_chatgpt_conversation_url(value))
     }
+    seen_set = {
+        normalized
+        for value in seen_urls
+        if (normalized := normalize_chatgpt_conversation_url(value))
+    }
+    history_index: dict[str, int] = {}
+    for index, url in enumerate(normalized_history):
+        history_index.setdefault(url, index)
     pending = normalize_chatgpt_conversation_url(str(adoption_state.get("pending_conversation") or ""))
     candidate = None
     if pending:
-        if pending in normalized_history and pending not in set(seen_urls) and pending not in normalized_open:
+        if pending in normalized_history and pending not in seen_set and pending not in normalized_open:
             candidate = pending
         else:
             adoption_state["pending_conversation"] = None
             adoption_state["pending_detected_epoch"] = 0
             pending = None
 
+    unvalidated: list[dict[str, object]] = []
+    validated_unvalidated = None
+    for value in adoption_state.get("unvalidated_candidates") or []:
+        if not isinstance(value, dict):
+            continue
+        unvalidated_url = normalize_chatgpt_conversation_url(str(value.get("conversation_url") or ""))
+        anchor_url = normalize_chatgpt_conversation_url(str(value.get("source_url") or ""))
+        detected_epoch = max(0, int(value.get("detected_epoch") or 0))
+        if not unvalidated_url or not anchor_url or unvalidated_url == anchor_url:
+            continue
+        if detected_epoch and now - detected_epoch > EXTERNAL_UNVALIDATED_TTL_SECONDS:
+            if unvalidated_url not in seen_set:
+                seen_urls.append(unvalidated_url)
+                seen_set.add(unvalidated_url)
+            continue
+        if unvalidated_url in seen_set:
+            continue
+        if unvalidated_url in normalized_open:
+            seen_urls.append(unvalidated_url)
+            seen_set.add(unvalidated_url)
+            continue
+        candidate_index = history_index.get(unvalidated_url)
+        anchor_index = history_index.get(anchor_url)
+        if candidate_index is not None and anchor_index is not None:
+            if candidate_index < anchor_index:
+                if candidate is None and validated_unvalidated is None:
+                    validated_unvalidated = unvalidated_url
+                    continue
+                unvalidated.append(
+                    {"conversation_url": unvalidated_url, "source_url": anchor_url, "detected_epoch": detected_epoch}
+                )
+                continue
+            if candidate_index > anchor_index:
+                seen_urls.append(unvalidated_url)
+                seen_set.add(unvalidated_url)
+                continue
+        unvalidated.append(
+            {"conversation_url": unvalidated_url, "source_url": anchor_url, "detected_epoch": detected_epoch}
+        )
+    adoption_state["unvalidated_candidates"] = unvalidated
+    if candidate is None and validated_unvalidated:
+        candidate = validated_unvalidated
+
     if candidate is None:
         if source_url and source_url not in normalized_history:
-            adoption_state.update({"watcher_target_id": watcher_id, "last_scan_epoch": now})
+            tracked = {
+                str(value.get("conversation_url"))
+                for value in unvalidated
+                if isinstance(value, dict) and value.get("conversation_url")
+            }
+            for conversation_url in normalized_history:
+                if conversation_url in seen_set or conversation_url in normalized_open or conversation_url == source_url or conversation_url in tracked:
+                    continue
+                unvalidated.append(
+                    {"conversation_url": conversation_url, "source_url": source_url, "detected_epoch": now}
+                )
+                tracked.add(conversation_url)
+            adoption_state.update(
+                {
+                    "seen_conversations": seen_urls,
+                    "unvalidated_candidates": unvalidated,
+                    "watcher_target_id": watcher_id,
+                    "last_scan_epoch": now,
+                }
+            )
             adoption.save(adoption_state)
-            _json({"ok": True, "action": "deferred", "reason": "source_not_in_history", "source_chat_url": source_url, "watcher_target_id": watcher_id})
+            _json(
+                {
+                    "ok": True,
+                    "action": "deferred",
+                    "reason": "source_not_in_history",
+                    "source_chat_url": source_url,
+                    "unvalidated_count": len(unvalidated),
+                    "watcher_target_id": watcher_id,
+                }
+            )
             return 0
         candidate = select_external_conversation(
             conversation_urls,
@@ -270,11 +350,23 @@ def cmd_adopt_external(args: argparse.Namespace) -> int:
         )
     if candidate is None:
         merged = list(seen_urls)
+        protected_unvalidated = {
+            str(value.get("conversation_url"))
+            for value in unvalidated
+            if isinstance(value, dict) and value.get("conversation_url")
+        }
         for value in conversation_urls:
             normalized = normalize_chatgpt_conversation_url(value)
-            if normalized and normalized not in merged:
+            if normalized and normalized not in protected_unvalidated and normalized not in merged:
                 merged.append(normalized)
-        adoption_state.update({"seen_conversations": merged, "watcher_target_id": watcher_id, "last_scan_epoch": now})
+        adoption_state.update(
+            {
+                "seen_conversations": merged,
+                "unvalidated_candidates": unvalidated,
+                "watcher_target_id": watcher_id,
+                "last_scan_epoch": now,
+            }
+        )
         adoption.save(adoption_state)
         _json({"ok": True, "action": "noop", "reason": "no_external_conversation", "watcher_target_id": watcher_id})
         return 0
