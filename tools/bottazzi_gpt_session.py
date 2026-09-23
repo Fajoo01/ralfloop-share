@@ -553,16 +553,15 @@ def cmd_adopt_external(args: argparse.Namespace) -> int:
     # the worker again.
     foreground_tabs = []
     if hasattr(cdp, "chatgpt_focus_state"):
-        try:
-            for tab in tabs:
-                if not normalize_chatgpt_conversation_url(tab.url):
-                    continue
+        for tab in tabs:
+            if not normalize_chatgpt_conversation_url(tab.url):
+                continue
+            try:
                 focus_state = cdp.chatgpt_focus_state(tab.target_id)
-                if focus_state.get("focused") and not focus_state.get("ghost") and not focus_state.get("handoff_locked"):
-                    foreground_tabs.append(tab)
-        except CdpError as exc:
-            _json({"ok": False, "action": "noop", "reason": str(exc)})
-            return 0
+            except CdpError:
+                continue
+            if focus_state.get("focused") and not focus_state.get("ghost") and not focus_state.get("handoff_locked"):
+                foreground_tabs.append(tab)
     if len(foreground_tabs) == 1 and foreground_tabs[0].target_id != source.target_id:
         foreground = foreground_tabs[0]
         foreground_url = normalize_chatgpt_conversation_url(foreground.url)
