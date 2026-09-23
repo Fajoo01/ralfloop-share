@@ -25,6 +25,28 @@ def test_natural_baffoflix_query_leaves_chat_only():
     assert decision.approval_required is False
 
 
+def test_assistant_v1_probe_routes_baffoflix_to_unified_mcp():
+    from ralfloop_agent.unified_assistant.contracts import AssistantFeatureFlags
+    from ralfloop_agent.unified_assistant.runtime import unified_route_probe
+
+    route = unified_route_probe(
+        "qual è l'indirizzo di BaffoFlix?",
+        {
+            "source": "ralf_terminal",
+            "assistant_surface": "assistant_v1",
+            "session_id": "baffoflix-route-probe",
+        },
+        flags_override=AssistantFeatureFlags(unified_assistant=True),
+    )
+
+    assert route is not None
+    assert route["intent"] == "baffoflix.support"
+    assert route["skills_used"] == ["baffoflix.support"]
+    assert route["mcp_connectors"] == ["jellyfin.identity.mcp.read"]
+    assert route["task_mode"] == "tool_backed_read"
+    assert route["requires_confirmation"] is False
+
+
 def test_baffoflix_queries_route_to_read_support_skill():
     for query in (
         "qual è l'indirizzo di BaffoFlix?",

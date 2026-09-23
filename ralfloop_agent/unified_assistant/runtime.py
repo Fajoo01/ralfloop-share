@@ -99,7 +99,7 @@ _SUPPORTED = re.compile(
     r"volantin[oi]|flyer|locandin[ae]|manifest[oi]|poster|"
     r"come\s+(?:arrivo|vado|posso\s+andare)|"
     r"mezzi\s+(?:per|verso)|percorso\s+(?:atm|con\s+i\s+mezzi)|home\s+assistant|domotica|stato\s+(?:della\s+)?luce|"
-    r"runts|arci|jellyfin|browser|playwright|snapshot\s+(?:browser|pagina)|schede?\s+browser|bandi|bando|grant|finanziament[oi]|contribut[oi]|insegnante|tutor|quiz|esercizio\s+didattico|memoria\s+operativa|firma|firmare|digitalmente|arubasign|p7m|"
+    r"runts|arci|jellyfin|baffo\s*flix|baffoflix|browser|playwright|snapshot\s+(?:browser|pagina)|schede?\s+browser|bandi|bando|grant|finanziament[oi]|contribut[oi]|insegnante|tutor|quiz|esercizio\s+didattico|memoria\s+operativa|firma|firmare|digitalmente|arubasign|p7m|"
     r"commercialista|contabilit[aà]|bilancio\s+ets|rendiconto(?:\s+ets|\s+per\s+cassa)?|prima\s+nota|riconciliazion[ei]|fattur[ae]|ricevut[ae]|f24|iva|scadenz[ae]\s+fiscal[ei])\b",
     re.I,
 )
@@ -454,6 +454,8 @@ def unified_route_probe(
         connectors.append("memory.operational.mcp")
     if "arci.context" in skills:
         connectors.append("arci.read_only.mcp")
+    if "baffoflix.support" in skills:
+        connectors.append("jellyfin.identity.mcp.read")
     if "jellyfin.identify" in skills:
         connectors.append("jellyfin.identity.mcp.read")
     if "education.tutor" in skills:
