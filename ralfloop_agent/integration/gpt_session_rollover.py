@@ -67,8 +67,14 @@ def should_defer_latency_rollover(
     *,
     user_turns: int,
     response_in_progress: bool,
+    response_latency_ms: int,
+    max_defer_ms: int = 180_000,
 ) -> bool:
-    return reasons == ("latency_limit",) and (user_turns <= 1 or response_in_progress)
+    if reasons != ("latency_limit",):
+        return False
+    if response_latency_ms >= max_defer_ms:
+        return False
+    return user_turns <= 1 or response_in_progress
 
 
 def evaluate_rollover(metrics: SessionMetrics, policy: RolloverPolicy | None = None) -> RolloverDecision:

@@ -166,6 +166,7 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
         decision.reasons,
         user_turns=metrics.turns,
         response_in_progress=bool(ui.get("response_in_progress")),
+        response_latency_ms=metrics.last_response_latency_ms,
     )
     report = {
         "ok": True,
