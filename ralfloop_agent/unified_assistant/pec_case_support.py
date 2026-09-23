@@ -14,6 +14,7 @@ class PecReadGateway(Protocol):
 
 _TARI_ASSESSMENT_RE = re.compile(r"^ACCERTAMENTI.*_9R[0-9]+\.pdf$", re.I)
 _TARI_NOTIFICATION_RE = re.compile(r"^PIPLCMILIMG_.*_AR_[0-9]+\.pdf$", re.I)
+_TARI_TRUSTED_SENDER_RE = re.compile(r"@[A-Z0-9.-]*comune\.milano\.it\b", re.I)
 _DIFENSORE_SENDER = "difensore.regionale@pec.consiglio.regione.lombardia.it"
 _DIFENSORE_FORM_MARKER = "modulo richiesta intervento"
 _FORM_NAME_RE = re.compile(r"(?:modulo.*difensore|richiesta.*intervento)", re.I)
@@ -97,6 +98,9 @@ def stage_tari_supporting_documents(
     rows = [item for item in search.get("messages") or () if isinstance(item, Mapping)]
     ranked: list[tuple[int, int, Mapping[str, Any], list[Mapping[str, Any]]]] = []
     for row in rows:
+        sender = str(row.get("sender") or "")
+        if row.get("certified") is not True or not _TARI_TRUSTED_SENDER_RE.search(sender):
+            continue
         pdfs = [item for item in row.get("attachments") or () if isinstance(item, Mapping)]
         assessments = [item for item in pdfs if _TARI_ASSESSMENT_RE.match(str(item.get("filename") or ""))]
         notifications = [item for item in pdfs if _TARI_NOTIFICATION_RE.match(str(item.get("filename") or ""))]
@@ -114,7 +118,10 @@ def stage_tari_supporting_documents(
     packet_digest = hashlib.sha256(
         (message_id + "\0" + "\0".join(sorted(str(item.get("content_hash") or "") for item in selected))).encode("utf-8")
     ).hexdigest()[:16]
-    packet_dir = root / "tari-support" / packet_digest
+    support_root = root / "tari-support"
+    support_root.mkdir(parents=True, exist_ok=True)
+    support_root.chmod(0o750)
+    packet_dir = support_root / packet_digest
     packet_dir.mkdir(parents=True, exist_ok=True)
     packet_dir.chmod(0o750)
     paths: list[str] = []
