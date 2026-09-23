@@ -138,6 +138,17 @@ _PEC_SOURCE_EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}\b"
 _PEC_PROTOCOL_RE = re.compile(r"\bprotocollo(?:\s+numero)?\s+([A-Z0-9.\-_/]+)", re.I)
 
 
+def _pec_existing_draft(protocol: str) -> str:
+    if not protocol or re.fullmatch(r"[A-Z0-9.-]+", protocol, re.I) is None:
+        return ""
+    root = Path(os.getenv("BOTTAZZI_PEC_OUTBOX_ROOT", "/var/lib/ralfloop/pec-outbox")).resolve()
+    path = root / f"DRAFT_reply_{protocol}.txt"
+    try:
+        return path.read_text(encoding="utf-8").strip() if path.is_file() else ""
+    except OSError:
+        return ""
+
+
 def _pec_prepare_values(
     arguments: Mapping[str, Any],
     inputs: Mapping[str, Any],
@@ -176,14 +187,18 @@ def _pec_prepare_values(
     if not str(values.get("body") or "").strip() and source_subject:
         protocol_match = _PEC_PROTOCOL_RE.search(source_body)
         protocol = protocol_match.group(1) if protocol_match else ""
-        practice = "pratica TARI" if "tari" in objective.casefold() else "pratica indicata"
-        protocol_text = f" (protocollo {protocol})" if protocol else ""
-        values["body"] = (
-            "Spett.le Ufficio,\n\n"
-            f"in riscontro alla Vostra PEC «{source_subject}»{protocol_text}, "
-            f"inviamo il presente riscontro relativo alla {practice}.\n\n"
-            "Cordiali saluti"
-        )
+        existing_draft = _pec_existing_draft(protocol) if "difensore" in objective.casefold() else ""
+        if existing_draft:
+            values["body"] = existing_draft
+        else:
+            practice = "pratica TARI" if "tari" in objective.casefold() else "pratica indicata"
+            protocol_text = f" (protocollo {protocol})" if protocol else ""
+            values["body"] = (
+                "Spett.le Ufficio,\n\n"
+                f"in riscontro alla Vostra PEC «{source_subject}»{protocol_text}, "
+                f"inviamo il presente riscontro relativo alla {practice}.\n\n"
+                "Cordiali saluti"
+            )
     return values
 
 

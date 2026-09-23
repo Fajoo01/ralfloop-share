@@ -363,7 +363,8 @@ def test_pec_capability_rag_precedes_generic_home_verbs():
     assert prepare.input_refs == ("user.goal", "artifact.pec_source")
 
 
-def test_pec_prepare_values_autofill_from_read_artifact_preserves_explicit_fields():
+def test_pec_prepare_values_autofill_from_read_artifact_preserves_explicit_fields(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOTTAZZI_PEC_OUTBOX_ROOT", str(tmp_path))
     source = {
         "payload": {
             "messages": [{
@@ -387,6 +388,20 @@ def test_pec_prepare_values_autofill_from_read_artifact_preserves_explicit_field
     assert values["subject"] == "Oggetto scelto dall'utente"
     assert "GAR.2026.0013417" in values["body"]
     assert "pratica TARI" in values["body"]
+
+
+def test_pec_prepare_values_prefers_existing_protocol_bound_draft(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOTTAZZI_PEC_OUTBOX_ROOT", str(tmp_path))
+    detailed = "Spett.le Difensore,\n\nbozza dettagliata già verificata."
+    (tmp_path / "DRAFT_reply_GAR.2026.0013417.txt").write_text(detailed, encoding="utf-8")
+    source = {"payload": {"messages": [{
+        "sender": "difensore.regionale@pec.consiglio.regione.lombardia.it",
+        "subject": "POSTA CERTIFICATA: FAGIOLI FABIO - RICHIESTA DI ADEMPIMENTI PRELIMINARI",
+        "body": "Protocollo numero GAR.2026.0013417 del 27/08/2026.",
+    }]}}
+    values = _pec_prepare_values({}, {"artifact.pec_source": source}, "Invia la PEC al Difensore regionale per la pratica TARI")
+    assert values["body"] == detailed
+
 
 
 def test_difensore_required_document_gate_rejects_blank_or_missing_form(tmp_path):
