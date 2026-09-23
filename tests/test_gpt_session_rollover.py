@@ -14,6 +14,7 @@ import tools.bottazzi_gpt_session as gpt_session_tool
 from tools.bottazzi_gpt_session import (
     _recover_incomplete_mutation,
     _recover_stored_source_home_tab,
+    _recover_stored_source_new_tab,
     _requires_mutation_lock,
     _resolve_stored_source,
 )
@@ -314,29 +315,56 @@ class FakeAdoptionCdp:
         self.history = history
         self.busy = busy
         self.navigated: list[tuple[str, str]] = []
+        self.archived: list[tuple[str, str]] = []
+        self.closed: list[str] = []
+        self.temporary_urls: dict[str, str] = {}
 
     def targets(self):
-        return [
+        targets = [
             BrowserTarget(self.source_target_id, "page", self.source_url, "worker", f"ws://{self.source_target_id}"),
             BrowserTarget("watcher", "page", "https://chatgpt.com/", "watcher", "ws://watcher"),
         ]
+        targets.extend(
+            BrowserTarget(target_id, "page", url, "temp", f"ws://{target_id}")
+            for target_id, url in self.temporary_urls.items()
+            if target_id not in self.closed
+        )
+        return [target for target in targets if target.target_id not in self.closed]
 
     def conversation_urls(self, target_id: str, *, reload: bool = True):
         assert target_id == "watcher"
         return list(self.history)
 
     def chatgpt_ui_state(self, target_id: str):
-        assert target_id == self.source_target_id
+        if target_id != self.source_target_id:
+            return {"authenticated": True, "ready": True, "user_turns": 0}
         return {
+            "authenticated": True,
             "ready": True,
             "response_pending": self.busy,
             "response_in_progress": self.busy,
             "composer_chars": 0,
         }
 
+    def create_chatgpt_target(self, *, clear_cache: bool = False) -> str:
+        target_id = f"archive-temp-{len(self.temporary_urls) + 1}"
+        self.temporary_urls[target_id] = "https://chatgpt.com/"
+        return target_id
+
     def navigate_chatgpt_conversation(self, target_id: str, url: str):
         self.navigated.append((target_id, url))
-        return {"ready": True, "user_turns": 2}
+        if target_id == self.source_target_id:
+            self.source_url = url
+        else:
+            self.temporary_urls[target_id] = url
+        return {"authenticated": True, "ready": True, "user_turns": 2}
+
+    def archive_chatgpt_conversation(self, target_id: str, url: str, *, allow_absent: bool = False):
+        self.archived.append((target_id, url))
+        return {"archived": True, "already_archived": False, "conversation_url": url}
+
+    def close_target(self, target_id: str) -> None:
+        self.closed.append(target_id)
 
 
 def _adoption_args(tmp_path):
@@ -348,12 +376,29 @@ class FakeRecoveryCdp:
         self._targets = list(targets)
         self.ui_by_target = dict(ui_by_target or {})
         self.closed: list[str] = []
+        self.archived: list[tuple[str, str]] = []
 
     def targets(self):
         return [target for target in self._targets if target.target_id not in self.closed]
 
     def chatgpt_ui_state(self, target_id: str):
-        return dict(self.ui_by_target.get(target_id) or {"ready": True, "user_turns": 0})
+        return dict(self.ui_by_target.get(target_id) or {"authenticated": True, "ready": True, "user_turns": 0})
+
+    def create_chatgpt_target(self, *, clear_cache: bool = False) -> str:
+        target_id = f"archive-temp-{len(self._targets)}"
+        self._targets.append(BrowserTarget(target_id, "page", "https://chatgpt.com/", "temp", f"ws://{target_id}"))
+        return target_id
+
+    def navigate_chatgpt_conversation(self, target_id: str, url: str):
+        self._targets = [
+            BrowserTarget(target.target_id, target.target_type, url if target.target_id == target_id else target.url, target.title, target.websocket_url)
+            for target in self._targets
+        ]
+        return {"authenticated": True, "ready": True, "user_turns": 0}
+
+    def archive_chatgpt_conversation(self, target_id: str, url: str, *, allow_absent: bool = False):
+        self.archived.append((target_id, url))
+        return {"archived": True, "already_archived": False, "conversation_url": url}
 
     def close_target(self, target_id: str) -> None:
         self.closed.append(target_id)
@@ -395,6 +440,8 @@ def test_incomplete_adoption_recovers_after_browser_navigation(tmp_path) -> None
     saved = adoption.load()
     assert saved["last_adopted_conversation"] == "https://chatgpt.com/c/from-app"
     assert saved["pending_conversation"] is None
+    assert cdp.archived == [("archive-temp-2", "https://chatgpt.com/c/source")]
+    assert "archive-temp-2" in cdp.closed
     assert journal.load() is None
 
 
@@ -420,6 +467,7 @@ def test_incomplete_rollover_recovers_confirmed_successor_and_closes_old_source(
     current = handoff.load_current()
     assert current["source_chat"] == "successor"
     assert current["source_chat_url"] == "https://chatgpt.com/c/successor"
+    assert cdp.archived == [("source", "https://chatgpt.com/c/source")]
     assert cdp.closed == ["source"]
     assert journal.load() is None
 
@@ -540,7 +588,9 @@ def test_external_candidate_survives_worker_rollover(monkeypatch, tmp_path) -> N
     assert gpt_session_tool.cmd_adopt_external(_adoption_args(tmp_path)) == 0
 
     saved = adoption.load()
-    assert after_rollover.navigated == [("source-2", "https://chatgpt.com/c/from-app")]
+    assert after_rollover.navigated[0] == ("source-2", "https://chatgpt.com/c/from-app")
+    assert after_rollover.archived == [("archive-temp-1", "https://chatgpt.com/c/source-2")]
+    assert "archive-temp-1" in after_rollover.closed
     assert saved["last_adopted_conversation"] == "https://chatgpt.com/c/from-app"
     assert saved["pending_conversation"] is None
     assert saved["pending_detected_epoch"] == 0
@@ -625,7 +675,9 @@ def test_unvalidated_candidate_survives_rollover_and_validates_against_old_sourc
     assert gpt_session_tool.cmd_adopt_external(_adoption_args(tmp_path)) == 0
 
     saved = adoption.load()
-    assert after_rollover.navigated == [("source-2", "https://chatgpt.com/c/from-app")]
+    assert after_rollover.navigated[0] == ("source-2", "https://chatgpt.com/c/from-app")
+    assert after_rollover.archived == [("archive-temp-1", "https://chatgpt.com/c/source-2")]
+    assert "archive-temp-1" in after_rollover.closed
     assert saved["last_adopted_conversation"] == "https://chatgpt.com/c/from-app"
     assert saved["unvalidated_candidates"] == []
     assert handoff.load_current()["source_chat_url"] == "https://chatgpt.com/c/from-app"
@@ -765,6 +817,78 @@ class HomeRecoveryCdp:
         return {"authenticated": True, "ready": True, "url": url}
 
 
+class NewTabRecoveryCdp:
+    def __init__(self, *, ready: bool = True) -> None:
+        self.ready = ready
+        self._targets = [
+            BrowserTarget("unrelated-1", "page", "https://chatgpt.com/c/other-1", "other-1", "ws://other-1"),
+            BrowserTarget("unrelated-2", "page", "https://chatgpt.com/c/other-2", "other-2", "ws://other-2"),
+        ]
+        self.navigated: list[tuple[str, str]] = []
+        self.closed: list[str] = []
+
+    def targets(self):
+        return [target for target in self._targets if target.target_id not in self.closed]
+
+    def create_chatgpt_target(self, *, clear_cache: bool = False) -> str:
+        self._targets.append(BrowserTarget("recovery", "page", "https://chatgpt.com/", "recovery", "ws://recovery"))
+        return "recovery"
+
+    def navigate_chatgpt_conversation(self, target_id: str, url: str):
+        assert target_id == "recovery"
+        self.navigated.append((target_id, url))
+        self._targets = [
+            BrowserTarget(target.target_id, target.target_type, url if target.target_id == target_id else target.url, target.title, target.websocket_url)
+            for target in self._targets
+        ]
+        return {"authenticated": True, "ready": self.ready}
+
+    def close_target(self, target_id: str) -> None:
+        self.closed.append(target_id)
+
+
+def test_stale_source_multi_tab_recovers_in_new_exact_tab_without_hijack(tmp_path) -> None:
+    store = HandoffStore(tmp_path)
+    store.save(Handoff(goal="x", current_state="y"))
+    store.update_source_chat("stale-target", "https://chatgpt.com/c/abc")
+    cdp = NewTabRecoveryCdp()
+    original = [(tab.target_id, tab.url) for tab in cdp.targets()]
+    source, info, error = _resolve_stored_source(cdp.targets(), store)
+    assert source is None and error == "stored_source_not_found"
+
+    source, info, error = _recover_stored_source_new_tab(cdp, store, info, error)
+
+    assert error is None
+    assert source is not None and source.target_id == "recovery"
+    assert info["source_recovered_by_new_tab"] is True
+    assert cdp.navigated == [("recovery", "https://chatgpt.com/c/abc")]
+    assert [(tab.target_id, tab.url) for tab in cdp.targets() if tab.target_id.startswith("unrelated-")] == original
+    assert cdp.closed == []
+    current = store.load_current()
+    assert current["source_chat"] == "recovery"
+    assert current["source_chat_url"] == "https://chatgpt.com/c/abc"
+
+
+def test_stale_source_multi_tab_recovery_failure_closes_only_created_tab(tmp_path) -> None:
+    store = HandoffStore(tmp_path)
+    store.save(Handoff(goal="x", current_state="y"))
+    store.update_source_chat("stale-target", "https://chatgpt.com/c/abc")
+    cdp = NewTabRecoveryCdp(ready=False)
+    source, info, error = _resolve_stored_source(cdp.targets(), store)
+
+    recovered, details, recovery_error = _recover_stored_source_new_tab(cdp, store, info, error)
+
+    assert source is None
+    assert recovered is None
+    assert recovery_error == "stored_source_recovery_failed"
+    assert "stored_source_recovery_target_not_ready" in details["source_recovery_error"]
+    assert cdp.closed == ["recovery"]
+    assert {tab.target_id for tab in cdp.targets()} == {"unrelated-1", "unrelated-2"}
+    current = store.load_current()
+    assert current["source_chat"] == "stale-target"
+    assert current["source_chat_url"] == "https://chatgpt.com/c/abc"
+
+
 def test_stale_source_recovers_by_navigating_single_home_tab(tmp_path) -> None:
     store = HandoffStore(tmp_path)
     store.save(Handoff(goal="x", current_state="y"))
@@ -813,6 +937,61 @@ def test_chatgpt_target_detection() -> None:
     assert BrowserTarget("1", "page", "https://chatgpt.com/c/abc", "x").is_chatgpt
     assert BrowserTarget("2", "page", "https://foo.chatgpt.com/", "x").is_chatgpt
     assert not BrowserTarget("3", "page", "https://example.com/?next=chatgpt.com", "x").is_chatgpt
+
+
+def test_archive_chatgpt_conversation_clicks_only_archive_action(monkeypatch) -> None:
+    cdp = ChromeCdp("http://127.0.0.1:1")
+    target = BrowserTarget("target", "page", "https://chatgpt.com/c/abc", "chat", "ws://target")
+    monkeypatch.setattr(cdp, "_wait_target", lambda target_id, **kwargs: target)
+    monkeypatch.setattr(cdp, "chatgpt_ui_state", lambda target_id: {"authenticated": True, "ready": True})
+    calls: list[str] = []
+
+    def page_call(websocket_url, method, params=None):
+        assert websocket_url == "ws://target"
+        assert method == "Runtime.evaluate"
+        expression = (params or {}).get("expression", "")
+        calls.append(expression)
+        if "menu_opened" in expression:
+            return {"result": {"value": json.dumps({"state": "menu_opened"})}}
+        if "const labels = new Set" in expression:
+            assert "'delete'" not in expression.lower()
+            assert "'elimina'" not in expression.lower()
+            assert "'archive'" in expression.lower()
+            assert "'archivia'" in expression.lower()
+            return {"result": {"value": json.dumps({"clicked": True})}}
+        return {"result": {"value": True}}
+
+    monkeypatch.setattr(cdp, "_page_call", page_call)
+
+    result = cdp.archive_chatgpt_conversation("target", "https://chatgpt.com/c/abc", wait_timeout_s=0.5)
+
+    assert result["archived"] is True
+    assert result["already_archived"] is False
+    assert len(calls) == 3
+
+
+def test_archive_absent_is_fail_closed_unless_retry_is_explicit(monkeypatch) -> None:
+    cdp = ChromeCdp("http://127.0.0.1:1")
+    target = BrowserTarget("target", "page", "https://chatgpt.com/c/abc", "chat", "ws://target")
+    monkeypatch.setattr(cdp, "_wait_target", lambda target_id, **kwargs: target)
+    monkeypatch.setattr(cdp, "chatgpt_ui_state", lambda target_id: {"authenticated": True, "ready": True})
+    monkeypatch.setattr(
+        cdp,
+        "_page_call",
+        lambda websocket_url, method, params=None: {"result": {"value": json.dumps({"state": "absent"})}},
+    )
+
+    with pytest.raises(CdpError, match="conversation_archive_source_not_in_history"):
+        cdp.archive_chatgpt_conversation("target", "https://chatgpt.com/c/abc", wait_timeout_s=0.1)
+
+    result = cdp.archive_chatgpt_conversation(
+        "target",
+        "https://chatgpt.com/c/abc",
+        wait_timeout_s=0.1,
+        allow_absent=True,
+    )
+    assert result["archived"] is True
+    assert result["already_archived"] is True
 
 
 def test_conversation_navigation_waits_for_initial_blank(monkeypatch) -> None:

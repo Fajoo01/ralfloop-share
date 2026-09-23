@@ -624,6 +624,119 @@ class ChromeCdp:
             time.sleep(0.25)
         raise CdpError(f"conversation_navigation_timeout:{normalized}")
 
+    def archive_chatgpt_conversation(
+        self,
+        target_id: str,
+        url: str,
+        *,
+        wait_timeout_s: float = 10.0,
+        allow_absent: bool = False,
+    ) -> dict[str, Any]:
+        normalized = _canonical_chatgpt_conversation_url(url)
+        if not normalized:
+            raise CdpError("conversation_url_invalid")
+        target = self._wait_target(target_id)
+        if _canonical_chatgpt_conversation_url(target.url) != normalized or not target.websocket_url:
+            raise CdpError("conversation_archive_target_mismatch")
+        ui = self.chatgpt_ui_state(target_id)
+        if not ui.get("authenticated") or not ui.get("ready"):
+            raise CdpError("conversation_archive_target_not_ready")
+
+        expression = r'''(() => {
+          const wanted = %s;
+          const normalize = value => {
+            try {
+              const u = new URL(String(value || ''), location.origin);
+              const m = u.pathname.match(/^\/(?:g\/[^/]+\/)?c\/([A-Za-z0-9-]+)/);
+              return m ? `${u.origin}/c/${m[1]}` : '';
+            } catch (_) { return ''; }
+          };
+          const links = [...document.querySelectorAll('#history a[href], nav a[href]')]
+            .filter(a => normalize(a.href));
+          const exact = links.find(a => normalize(a.href) === wanted);
+          if (!exact) {
+            if (links.length) return JSON.stringify({state: 'absent'});
+            const openSidebar = document.querySelector('button[aria-label="Open sidebar"], button[aria-label="Apri barra laterale"]');
+            if (openSidebar) {
+              openSidebar.click();
+              return JSON.stringify({state: 'sidebar_opening'});
+            }
+            return JSON.stringify({state: 'history_unavailable'});
+          }
+          let row = exact.parentElement;
+          while (row && row !== document.body) {
+            const options = row.querySelector('button[data-testid^="history-item-"][data-testid$="-options"]');
+            if (options) {
+              options.click();
+              return JSON.stringify({state: 'menu_opened'});
+            }
+            row = row.parentElement;
+          }
+          return JSON.stringify({state: 'options_missing'});
+        })()''' % json.dumps(normalized)
+        deadline = time.monotonic() + wait_timeout_s
+        state: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            result = self._page_call(target.websocket_url, "Runtime.evaluate", {"expression": expression, "returnByValue": True})
+            raw = (result.get("result") or {}).get("value")
+            try:
+                state = json.loads(raw) if isinstance(raw, str) else {}
+            except json.JSONDecodeError:
+                state = {}
+            if state.get("state") == "absent":
+                if allow_absent:
+                    return {"archived": True, "already_archived": True, "conversation_url": normalized}
+                raise CdpError("conversation_archive_source_not_in_history")
+            if state.get("state") == "menu_opened":
+                break
+            if state.get("state") == "options_missing":
+                raise CdpError("conversation_archive_menu_failed:options_missing")
+            time.sleep(0.1)
+        else:
+            raise CdpError(f"conversation_archive_menu_failed:{state.get('state') or 'invalid'}")
+
+        deadline = time.monotonic() + wait_timeout_s
+        click_expression = r'''(() => {
+          const labels = new Set(['archive', 'archive chat', 'archivia', 'archivia chat']);
+          const items = [...document.querySelectorAll('[role="menuitem"], [role="menuitemradio"], button')];
+          const archive = items.find(el => labels.has((el.innerText || el.textContent || '').trim().toLowerCase()));
+          if (!archive) return JSON.stringify({clicked: false});
+          archive.click();
+          return JSON.stringify({clicked: true});
+        })()'''
+        clicked = False
+        while time.monotonic() < deadline:
+            click_result = self._page_call(target.websocket_url, "Runtime.evaluate", {"expression": click_expression, "returnByValue": True})
+            click_raw = (click_result.get("result") or {}).get("value")
+            try:
+                payload = json.loads(click_raw) if isinstance(click_raw, str) else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if payload.get("clicked"):
+                clicked = True
+                break
+            time.sleep(0.1)
+        if not clicked:
+            raise CdpError("conversation_archive_action_missing")
+
+        verify_expression = r'''(() => {
+          const wanted = %s;
+          const normalize = value => {
+            try {
+              const u = new URL(String(value || ''), location.origin);
+              const m = u.pathname.match(/^\/(?:g\/[^/]+\/)?c\/([A-Za-z0-9-]+)/);
+              return m ? `${u.origin}/c/${m[1]}` : '';
+            } catch (_) { return ''; }
+          };
+          return ![...document.querySelectorAll('#history a[href], nav a[href]')].some(a => normalize(a.href) === wanted);
+        })()''' % json.dumps(normalized)
+        while time.monotonic() < deadline:
+            verify = self._page_call(target.websocket_url, "Runtime.evaluate", {"expression": verify_expression, "returnByValue": True})
+            if (verify.get("result") or {}).get("value") is True:
+                return {"archived": True, "already_archived": False, "conversation_url": normalized}
+            time.sleep(0.1)
+        raise CdpError("conversation_archive_not_confirmed")
+
     def rotate_chatgpt_tab(self, *, close_old: bool = True) -> dict[str, Any]:
         previous = [target for target in self.targets() if target.target_type == "page" and target.is_chatgpt]
         target_id = self.create_target("about:blank")
