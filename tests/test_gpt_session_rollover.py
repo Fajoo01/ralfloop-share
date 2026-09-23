@@ -143,8 +143,8 @@ def test_external_conversation_selection_excludes_seen_open_and_source() -> None
     urls = [
         "https://chatgpt.com/c/seen",
         "https://chatgpt.com/c/open",
-        "https://chatgpt.com/c/source",
         "https://chatgpt.com/c/from-app?messageId=finalAgentTurnStart",
+        "https://chatgpt.com/c/source",
     ]
     assert select_external_conversation(
         urls,
@@ -152,6 +152,27 @@ def test_external_conversation_selection_excludes_seen_open_and_source() -> None
         open_urls=["https://chatgpt.com/c/open"],
         source_url="https://chatgpt.com/c/source",
     ) == "https://chatgpt.com/c/from-app"
+
+
+def test_external_conversation_selection_rejects_older_than_source() -> None:
+    assert select_external_conversation(
+        [
+            "https://chatgpt.com/c/source",
+            "https://chatgpt.com/c/old-source",
+        ],
+        seen_urls=[],
+        open_urls=[],
+        source_url="https://chatgpt.com/c/source",
+    ) is None
+
+
+def test_external_conversation_selection_requires_source_in_history() -> None:
+    assert select_external_conversation(
+        ["https://chatgpt.com/c/from-app"],
+        seen_urls=[],
+        open_urls=[],
+        source_url="https://chatgpt.com/c/source",
+    ) is None
 
 
 def test_external_adoption_store_round_trip_is_bounded(tmp_path) -> None:

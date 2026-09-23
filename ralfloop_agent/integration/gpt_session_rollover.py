@@ -228,9 +228,17 @@ def select_external_conversation(
     seen = {item for value in seen_urls if (item := normalize_chatgpt_conversation_url(value))}
     opened = {item for value in open_urls if (item := normalize_chatgpt_conversation_url(value))}
     source = normalize_chatgpt_conversation_url(source_url or "")
+    ordered: list[str] = []
     for value in conversation_urls:
         candidate = normalize_chatgpt_conversation_url(value)
-        if candidate and candidate not in seen and candidate not in opened and candidate != source:
+        if candidate and candidate not in ordered:
+            ordered.append(candidate)
+    if source:
+        if source not in ordered:
+            return None
+        ordered = ordered[: ordered.index(source)]
+    for candidate in ordered:
+        if candidate not in seen and candidate not in opened and candidate != source:
             return candidate
     return None
 
