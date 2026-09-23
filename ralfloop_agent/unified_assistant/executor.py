@@ -134,7 +134,7 @@ class UnifiedDAGExecutor:
         if assignment.policy in {PolicyClass.CONFIRM_WRITE, PolicyClass.PROTECTED} and assignment.task_id not in approved_tasks:
             # Compose/draft nodes are non-executing preparation. Real write adapters
             # must require explicit approval task binding.
-            if assignment.skill not in {"email.compose", "email.reply", "pec.prepare_send"}:
+            if assignment.skill not in {"email.compose", "email.reply", "pec.prepare_send", "documents.sign"}:
                 raise ValueError("node_approval_required")
         if assignment.policy is PolicyClass.DENY:
             raise ValueError("node_denied")

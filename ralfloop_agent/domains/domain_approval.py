@@ -21,6 +21,7 @@ ALLOWED_ACTIONS = {
     "jellyfin_apply_identity",
     "browser_interact",
     "pec_send",
+    "document_sign",
 }
 FINAL_STATUSES = {
     "rejected", "expired", "stale", "consumed", "cancelled",
@@ -294,6 +295,7 @@ def render_telegram_request(request: DomainApprovalRequest) -> str:
         "repair_apply": "Applicazione patch locale verificata",
         "eyf_browser_apply": "Modifica portale EYF/Support4Youth",
         "browser_interact": "Interazione browser Playwright",
+        "document_sign": "Firma digitale documento",
     }.get(request.action, request.action)
     lines = [
         "RALFLOOP — APPROVAZIONE RICHIESTA",
@@ -377,6 +379,17 @@ def render_telegram_request(request: DomainApprovalRequest) -> str:
             [
                 "",
                 "L'approvazione vale solo per target/ref, payload e snapshot pre-azione indicati dal digest.",
+            ]
+        )
+    if request.action == "document_sign":
+        lines.extend(
+            [
+                "",
+                f"Documento: {str(request.scope.get('source_path') or '')[:1000]}",
+                f"SHA256: {str(request.scope.get('source_sha256') or '')}",
+                f"Firmatario atteso: {str(request.scope.get('expected_signer') or '')[:300]}",
+                "PIN/password/OTP: inserimento esclusivamente nell'app di firma; non vengono memorizzati da Bot-tazzi.",
+                "Questa approval non autorizza alcun invio PEC/email.",
             ]
         )
     if request.action == "runts_practice_reply":
