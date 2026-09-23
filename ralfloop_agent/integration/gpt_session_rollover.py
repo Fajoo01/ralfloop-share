@@ -259,6 +259,8 @@ class ExternalChatAdoptionStore:
                 "seen_conversations": [],
                 "watcher_target_id": None,
                 "last_adopted_conversation": None,
+                "pending_conversation": None,
+                "pending_detected_epoch": 0,
                 "last_scan_epoch": 0,
             }
         if self.path.is_symlink():
@@ -281,6 +283,8 @@ class ExternalChatAdoptionStore:
             if normalized and normalized not in seen:
                 seen.append(normalized)
         payload["seen_conversations"] = seen[-256:]
+        payload["pending_conversation"] = normalize_chatgpt_conversation_url(str(payload.get("pending_conversation") or ""))
+        payload["pending_detected_epoch"] = max(0, int(payload.get("pending_detected_epoch") or 0))
         _reject_secret_keys(payload)
         encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         if len(encoded.encode("utf-8")) > 64 * 1024:

@@ -236,12 +236,38 @@ def cmd_adopt_external(args: argparse.Namespace) -> int:
         return 0
 
     open_urls = [tab.url for tab in tabs if tab.target_id != watcher_id]
-    candidate = select_external_conversation(
-        conversation_urls,
-        seen_urls=seen_urls,
-        open_urls=open_urls,
-        source_url=source.url,
-    )
+    normalized_history = [
+        normalized
+        for value in conversation_urls
+        if (normalized := normalize_chatgpt_conversation_url(value))
+    ]
+    normalized_open = {
+        normalized
+        for value in open_urls
+        if (normalized := normalize_chatgpt_conversation_url(value))
+    }
+    pending = normalize_chatgpt_conversation_url(str(adoption_state.get("pending_conversation") or ""))
+    candidate = None
+    if pending:
+        if pending in normalized_history and pending not in set(seen_urls) and pending not in normalized_open:
+            candidate = pending
+        else:
+            adoption_state["pending_conversation"] = None
+            adoption_state["pending_detected_epoch"] = 0
+            pending = None
+
+    if candidate is None:
+        if source_url and source_url not in normalized_history:
+            adoption_state.update({"watcher_target_id": watcher_id, "last_scan_epoch": now})
+            adoption.save(adoption_state)
+            _json({"ok": True, "action": "deferred", "reason": "source_not_in_history", "source_chat_url": source_url, "watcher_target_id": watcher_id})
+            return 0
+        candidate = select_external_conversation(
+            conversation_urls,
+            seen_urls=seen_urls,
+            open_urls=open_urls,
+            source_url=source.url,
+        )
     if candidate is None:
         merged = list(seen_urls)
         for value in conversation_urls:
@@ -252,6 +278,17 @@ def cmd_adopt_external(args: argparse.Namespace) -> int:
         adoption.save(adoption_state)
         _json({"ok": True, "action": "noop", "reason": "no_external_conversation", "watcher_target_id": watcher_id})
         return 0
+
+    previous_pending = normalize_chatgpt_conversation_url(str(adoption_state.get("pending_conversation") or ""))
+    adoption_state.update(
+        {
+            "pending_conversation": candidate,
+            "pending_detected_epoch": int(adoption_state.get("pending_detected_epoch") or 0) if previous_pending == candidate else now,
+            "watcher_target_id": watcher_id,
+            "last_scan_epoch": now,
+        }
+    )
+    adoption.save(adoption_state)
 
     try:
         ui = cdp.chatgpt_ui_state(source.target_id)
@@ -295,6 +332,8 @@ def cmd_adopt_external(args: argparse.Namespace) -> int:
             "seen_conversations": updated_seen,
             "watcher_target_id": watcher_id,
             "last_adopted_conversation": candidate,
+            "pending_conversation": None,
+            "pending_detected_epoch": 0,
             "last_scan_epoch": now,
         }
     )

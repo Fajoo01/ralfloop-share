@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 import websocket
 
 from ralfloop_agent.integration.gpt_browser_cdp import BrowserTarget, CdpError, ChromeCdp
+import tools.bottazzi_gpt_session as gpt_session_tool
 from tools.bottazzi_gpt_session import _resolve_stored_source
 
 from ralfloop_agent.integration.gpt_session_rollover import (
@@ -209,7 +211,120 @@ def test_external_adoption_store_round_trip_is_bounded(tmp_path) -> None:
     saved = store.load()
     assert saved["seen_conversations"] == ["https://chatgpt.com/c/one"]
     assert saved["watcher_target_id"] == "watcher"
+    assert saved["pending_conversation"] is None
+    assert saved["pending_detected_epoch"] == 0
     assert store.path.stat().st_mode & 0o077 == 0
+
+
+class FakeAdoptionCdp:
+    def __init__(self, source_target_id: str, source_url: str, history: list[str], *, busy: bool = False) -> None:
+        self.source_target_id = source_target_id
+        self.source_url = source_url
+        self.history = history
+        self.busy = busy
+        self.navigated: list[tuple[str, str]] = []
+
+    def targets(self):
+        return [
+            BrowserTarget(self.source_target_id, "page", self.source_url, "worker", f"ws://{self.source_target_id}"),
+            BrowserTarget("watcher", "page", "https://chatgpt.com/", "watcher", "ws://watcher"),
+        ]
+
+    def conversation_urls(self, target_id: str, *, reload: bool = True):
+        assert target_id == "watcher"
+        return list(self.history)
+
+    def chatgpt_ui_state(self, target_id: str):
+        assert target_id == self.source_target_id
+        return {
+            "ready": True,
+            "response_pending": self.busy,
+            "response_in_progress": self.busy,
+            "composer_chars": 0,
+        }
+
+    def navigate_chatgpt_conversation(self, target_id: str, url: str):
+        self.navigated.append((target_id, url))
+        return {"ready": True, "user_turns": 2}
+
+
+def _adoption_args(tmp_path):
+    return SimpleNamespace(endpoint="http://127.0.0.1:9238", state_dir=str(tmp_path), scan_interval_seconds=0, apply=True)
+
+
+def test_external_candidate_survives_worker_rollover(monkeypatch, tmp_path) -> None:
+    handoff = HandoffStore(tmp_path)
+    handoff.save(Handoff(goal="x", current_state="y"))
+    handoff.update_source_chat("source-1", "https://chatgpt.com/c/source-1")
+    adoption = ExternalChatAdoptionStore(tmp_path)
+    adoption.save(
+        {
+            "seen_conversations": ["https://chatgpt.com/c/source-1"],
+            "watcher_target_id": "watcher",
+            "last_adopted_conversation": None,
+            "last_scan_epoch": 0,
+        }
+    )
+
+    busy = FakeAdoptionCdp(
+        "source-1",
+        "https://chatgpt.com/c/source-1",
+        ["https://chatgpt.com/c/from-app", "https://chatgpt.com/c/source-1"],
+        busy=True,
+    )
+    monkeypatch.setattr(gpt_session_tool, "ChromeCdp", lambda endpoint: busy)
+    assert gpt_session_tool.cmd_adopt_external(_adoption_args(tmp_path)) == 0
+    pending = adoption.load()
+    assert pending["pending_conversation"] == "https://chatgpt.com/c/from-app"
+    assert pending["last_adopted_conversation"] is None
+
+    handoff.update_source_chat("source-2", "https://chatgpt.com/c/source-2")
+    after_rollover = FakeAdoptionCdp(
+        "source-2",
+        "https://chatgpt.com/c/source-2",
+        [
+            "https://chatgpt.com/c/source-2",
+            "https://chatgpt.com/c/from-app",
+            "https://chatgpt.com/c/source-1",
+        ],
+    )
+    monkeypatch.setattr(gpt_session_tool, "ChromeCdp", lambda endpoint: after_rollover)
+    assert gpt_session_tool.cmd_adopt_external(_adoption_args(tmp_path)) == 0
+
+    saved = adoption.load()
+    assert after_rollover.navigated == [("source-2", "https://chatgpt.com/c/from-app")]
+    assert saved["last_adopted_conversation"] == "https://chatgpt.com/c/from-app"
+    assert saved["pending_conversation"] is None
+    assert saved["pending_detected_epoch"] == 0
+    assert handoff.load_current()["source_chat_url"] == "https://chatgpt.com/c/from-app"
+
+
+def test_source_missing_from_history_does_not_consume_unseen_chat(monkeypatch, tmp_path) -> None:
+    handoff = HandoffStore(tmp_path)
+    handoff.save(Handoff(goal="x", current_state="y"))
+    handoff.update_source_chat("source", "https://chatgpt.com/c/source")
+    adoption = ExternalChatAdoptionStore(tmp_path)
+    adoption.save(
+        {
+            "seen_conversations": ["https://chatgpt.com/c/old"],
+            "watcher_target_id": "watcher",
+            "last_adopted_conversation": None,
+            "last_scan_epoch": 0,
+        }
+    )
+    fake = FakeAdoptionCdp(
+        "source",
+        "https://chatgpt.com/c/source",
+        ["https://chatgpt.com/c/from-app", "https://chatgpt.com/c/old"],
+    )
+    monkeypatch.setattr(gpt_session_tool, "ChromeCdp", lambda endpoint: fake)
+
+    assert gpt_session_tool.cmd_adopt_external(_adoption_args(tmp_path)) == 0
+
+    saved = adoption.load()
+    assert saved["seen_conversations"] == ["https://chatgpt.com/c/old"]
+    assert saved["pending_conversation"] is None
+    assert fake.navigated == []
 
 
 def test_stored_source_recovers_after_cdp_target_change(tmp_path) -> None:
