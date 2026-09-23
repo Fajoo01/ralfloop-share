@@ -218,8 +218,24 @@ class UnifiedRegistryFacade:
         bandi_socket = Path(os.getenv("RALF_BANDI_MCP_SOCKET", "/run/ralf-bandi-mcp/mcp.sock"))
         pec_socket = Path(os.getenv("RALF_PEC_MCP_SOCKET", "/run/ralf-pec-mcp/mcp.sock"))
         pec_write_socket = Path(os.getenv("RALF_PEC_WRITE_MCP_SOCKET", "/run/ralf-pec-write-mcp/mcp.sock"))
+        arubasign_path = Path(os.getenv("BOTTAZZI_ARUBASIGN_PATH", "/home/bandi/Scaricati/ArubaSign-latest-LINUX/app/lin-x64/ArubaSign"))
+        openssl_path = Path(os.getenv("BOTTAZZI_OPENSSL_PATH", "/usr/bin/openssl"))
         browser_socket = Path("/run/ralf-browser-playwright-mcp/mcp.sock")
         rows = [UnifiedToolSpec(
+            id="document.sign.arubasign",
+            capabilities=("document.sign.prepare", "document.sign.handoff", "document.sign.verify"),
+            input_schema="exact local source path + SHA256-bound approval request; secrets excluded",
+            output_schema="approval request, user-interaction handoff, or cryptographically verified P7M artifact",
+            classification=PolicyClass.CONFIRM_WRITE,
+            side_effect_class="approval_bound_user_interactive_signature",
+            availability=(
+                "available" if _observable_path_exists(arubasign_path) and _observable_path_exists(openssl_path)
+                else "constrained:arubasign_or_openssl_unavailable"
+            ),
+            health="ArubaSign executable + OpenSSL CMS verifier; graphical session checked at handoff",
+            verification_method="source hash binding + CMS integrity + extracted-content SHA256 + expected signer; PIN/password/OTP user-only",
+            source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "digital_signing.py"),
+        ), UnifiedToolSpec(
             id="pec.read.mcp",
             capabilities=(
                 "pec_discover_messages",

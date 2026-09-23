@@ -41,6 +41,11 @@ _RELATIONAL_RE = re.compile(r"\b(?:rsc|abc|relazional[ei]|formula\s+loop)\b", re
 _INFRA_RE = re.compile(r"\b(?:agentcpm|servizi[oa]?|spazio\s+libero|disco|server|amule)\b", re.I)
 _CODE_RE = re.compile(r"\b(?:codice|repository|repo|bug|debug|test|stacktrace)\b", re.I)
 _DOCUMENT_RE = re.compile(r"\b(?:pdf|document[oi]|allegat[oi]|estrai)\b", re.I)
+_SIGN_RE = re.compile(r"\b(?:firma(?:re|to|ta)?|firmalo|firmala|firmare|firma\s+digitale|digitalmente|arubasign|p7m)\b", re.I)
+_SIGN_PATH_RE = re.compile(r"(?P<path>/(?:[^\s\"']|\\ )+\.(?:pdf|docx|odt|p7m))\b", re.I)
+_SIGN_APPROVAL_ID_RE = re.compile(r"\b(apr_[A-Z2-9]{8})\b", re.I)
+_SIGN_VERIFY_RE = re.compile(r"\b(?:verifica|controlla)\b.*\b(?:firma|firmat[oa]|p7m)\b", re.I)
+_SIGN_HANDOFF_RE = re.compile(r"\b(?:apri|avvia|continua|procedi)\b.*\b(?:firma|arubasign)\b", re.I)
 _RESEARCH_RE = re.compile(r"\b(?:ricerca|cerca\s+sul\s+web|fonti|deep\s+research)\b", re.I)
 _NORMATIVE_ADMIN_TOPIC_RE = re.compile(
     r"\b(?:aps|ets|runts|terzo\s+settore|codice\s+del\s+terzo\s+settore|"
@@ -466,6 +471,25 @@ class UnifiedPlanner:
             return self._single(
                 goal, "browser", "browser.interact", PolicyClass.CONFIRM_WRITE,
                 arguments=_browser_interact_args(goal),
+            )
+        if _SIGN_RE.search(goal):
+            path_match = _SIGN_PATH_RE.search(goal)
+            approval_match = _SIGN_APPROVAL_ID_RE.search(goal)
+            arguments: dict[str, object] = {
+                "operation": (
+                    "verify" if _SIGN_VERIFY_RE.search(goal)
+                    else "handoff" if _SIGN_HANDOFF_RE.search(goal)
+                    else "prepare"
+                )
+            }
+            if path_match:
+                key = "signed_path" if str(arguments["operation"]) == "verify" else "source_path"
+                arguments[key] = path_match.group("path").replace("\\ ", " ")
+            if approval_match:
+                arguments["approval_request_id"] = approval_match.group(1).upper().replace("APR_", "apr_")
+            return self._single(
+                goal, "documents", "documents.sign", PolicyClass.CONFIRM_WRITE,
+                arguments=arguments,
             )
         if _NORMATIVE_ADMIN_TOPIC_RE.search(goal) and _NORMATIVE_INFO_RE.search(goal):
             return self._single(

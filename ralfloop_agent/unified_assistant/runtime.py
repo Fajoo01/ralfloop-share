@@ -44,6 +44,7 @@ from .bandi_mcp_adapter import BandiMCPContext
 from .pec_mcp_adapter import PecMCPContext
 from .pec_case_support import required_document_gate, stage_tari_supporting_documents
 from .pec_write_mcp_adapter import PecWriteMCPContext
+from .digital_signing import ArubaSignApprovalWorkflow, DigitalSigningError
 from .meteo_mcp_adapter import MeteoMCPReadOnly
 from .planner import UnifiedPlanner
 from .capability_rag_router import CapabilityRAGRouter
@@ -90,7 +91,7 @@ _SUPPORTED = re.compile(
     r"volantin[oi]|flyer|locandin[ae]|manifest[oi]|poster|"
     r"come\s+(?:arrivo|vado|posso\s+andare)|"
     r"mezzi\s+(?:per|verso)|percorso\s+(?:atm|con\s+i\s+mezzi)|home\s+assistant|domotica|stato\s+(?:della\s+)?luce|"
-    r"runts|arci|jellyfin|browser|playwright|snapshot\s+(?:browser|pagina)|schede?\s+browser|bandi|bando|grant|finanziament[oi]|contribut[oi]|insegnante|tutor|quiz|esercizio\s+didattico|memoria\s+operativa)\b",
+    r"runts|arci|jellyfin|browser|playwright|snapshot\s+(?:browser|pagina)|schede?\s+browser|bandi|bando|grant|finanziament[oi]|contribut[oi]|insegnante|tutor|quiz|esercizio\s+didattico|memoria\s+operativa|firma|firmare|digitalmente|arubasign|p7m)\b",
     re.I,
 )
 
@@ -337,6 +338,8 @@ def unified_route_probe(
         connectors.append("pec.read.mcp")
     if "pec.prepare_send" in skills or "pec.send_approved" in skills:
         connectors.append("pec.write.mcp")
+    if "documents.sign" in skills:
+        connectors.append("document.sign.arubasign")
     if any(skill.startswith("bandi.") for skill in skills):
         connectors.append("bandi.research.mcp")
     if "research.deep" in skills:
@@ -443,6 +446,9 @@ def run_unified_telegram(
     bandi_gateway_factory = BandiMCPContext.from_environment
     pec_gateway_factory = PecMCPContext.from_environment
     pec_write_gateway_factory = PecWriteMCPContext.from_environment
+    signing_policy = DomainApprovalPolicy.from_env()
+    signing_store = DomainApprovalStore(policy=signing_policy)
+    signing_workflow = ArubaSignApprovalWorkflow.from_environment(signing_store)
     home_workflow = None
     if flags.home_assistant_read_live or flags.home_assistant_live:
         try:
@@ -853,6 +859,101 @@ def run_unified_telegram(
             },
         )
 
+    def document_sign_adapter(assignment, _inputs):
+        operation = str(assignment.arguments.get("operation") or "prepare").strip().casefold()
+        try:
+            if operation == "prepare":
+                source_path = str(assignment.arguments.get("source_path") or "").strip()
+                if not source_path:
+                    result = {
+                        "ok": True,
+                        "status": "clarification_required",
+                        "message": "Serve il percorso esatto del documento da firmare; nessuna approval è stata creata.",
+                        "writes": 0,
+                        "sends": 0,
+                    }
+                else:
+                    result = signing_workflow.prepare(
+                        source_path,
+                        requested_by=str(context.get("requested_by") or "bot-tazzi"),
+                    )
+                    if result.get("status") == "approval_required":
+                        result["message"] = (
+                            "Firma digitale pronta per approvazione: "
+                            f"{result.get('source_path')}. Request {result.get('approval_request_id')} "
+                            f"digest {result.get('scope_digest_short')}. "
+                            "L'approvazione vale solo per questo hash. PIN/password/OTP saranno inseriti "
+                            "direttamente in ArubaSign e non sono gestiti da Bot-tazzi."
+                        )
+            elif operation == "handoff":
+                approval_id = str(assignment.arguments.get("approval_request_id") or "").strip()
+                if not approval_id:
+                    result = {
+                        "ok": True, "status": "clarification_required",
+                        "message": "Serve l'approval_request_id della firma approvata.",
+                        "writes": 0, "sends": 0,
+                    }
+                else:
+                    result = signing_workflow.handoff_approved(approval_id)
+                    if result.get("status") == "user_interaction_required":
+                        result["status"] = "clarification_required"
+                        result["message"] = (
+                            "ArubaSign richiede interazione utente per PIN/password/OTP. "
+                            + ("L'applicazione è stata aperta sul documento approvato." if result.get("launched") else "Nessuna sessione grafica è disponibile su Sibilla: il documento resta approvato ma non è stato firmato.")
+                        )
+            elif operation == "verify":
+                approval_id = str(assignment.arguments.get("approval_request_id") or "").strip()
+                if not approval_id:
+                    result = {
+                        "ok": True, "status": "clarification_required",
+                        "message": "Serve l'approval_request_id della firma da verificare.",
+                        "writes": 0, "sends": 0,
+                    }
+                else:
+                    result = signing_workflow.verify_approved_result(
+                        approval_id,
+                        str(assignment.arguments.get("signed_path") or "") or None,
+                    )
+                    if result.get("verified"):
+                        result["status"] = "completed"
+                        result["message"] = (
+                            "Firma digitale verificata: integrità CMS valida, contenuto identico al documento "
+                            "approvato e firmatario atteso corrispondente."
+                        )
+                    elif result.get("status") == "signed_artifact_not_found":
+                        result["status"] = "clarification_required"
+                        result["message"] = "Il file .p7m firmato non è ancora disponibile; nessuna firma è stata simulata."
+                    else:
+                        result["status"] = "unavailable"
+                        result["message"] = "Il file firmato non supera la verifica crittografica/hash/identità."
+            else:
+                result = {
+                    "ok": False, "status": "unavailable",
+                    "message": "Operazione di firma non riconosciuta.",
+                    "writes": 0, "sends": 0,
+                }
+        except (DigitalSigningError, OSError, ValueError) as exc:
+            result = {
+                "ok": False,
+                "status": "unavailable",
+                "message": f"Firma digitale non disponibile: {str(exc)}.",
+                "writes": 0,
+                "sends": 0,
+            }
+        return StructuredArtifact.create(
+            artifact_type="digital_signature",
+            status=str(result.get("status") or "unavailable"),
+            producer_task_id=assignment.task_id,
+            payload={
+                **result,
+                "content_boundary": "signature_approval_does_not_authorize_send",
+                "pin_otp_user_only": True,
+                "send_authorized": False,
+                "writes": int(result.get("writes") or 0),
+                "sends": int(result.get("sends") or 0),
+            },
+        )
+
     def bandi_adapter(assignment, _inputs):
         objective = assignment.objective
         source = _inputs.get("artifact.grant_source_email")
@@ -906,6 +1007,7 @@ def run_unified_telegram(
         "bandi.eligibility": bandi_adapter,
         "pec.read": pec_adapter,
         "pec.prepare_send": pec_prepare_adapter,
+        "documents.sign": document_sign_adapter,
         "email.search": email_search_adapter,
         "fastweb.portal.read": fastweb_portal_adapter,
         "fastweb.compare": fastweb_compare_adapter,
@@ -1199,6 +1301,15 @@ def run_unified_telegram(
             "approval_required",
         },
         "pending_confirmation_id": result.data.get("pending_id"),
+        "approval_request_id": result.data.get("approval_request_id"),
+        "scope_digest_short": result.data.get("scope_digest_short"),
+        "source_sha256": result.data.get("source_sha256"),
+        "signed_path": result.data.get("signed_path"),
+        "signature_verified": result.data.get("signature_verified"),
+        "pin_otp_user_only": result.data.get("pin_otp_user_only"),
+        "send_authorized": result.data.get("send_authorized"),
+        "writes": int(result.data.get("writes") or 0),
+        "sends": int(result.data.get("sends") or 0),
         "metadata": {"status": result.status, **result.data},
         "artifacts": artifacts,
         "audit_summary": [f"unified_assistant::{result.status}"],

@@ -357,10 +357,25 @@ class UnifiedAssistantCore:
                     execution.status == "completed"
                     and status not in {"clarification_required", "unavailable", "blocked"}
                 )
+            extra: dict[str, Any] = {}
+            if assignment.skill == "documents.sign":
+                extra = {
+                    "approval_request_id": payload.get("approval_request_id"),
+                    "scope_digest_short": payload.get("scope_digest_short"),
+                    "source_path": payload.get("source_path"),
+                    "source_sha256": payload.get("source_sha256"),
+                    "signed_path": payload.get("signed_path"),
+                    "signature_verified": bool(payload.get("verified")),
+                    "pin_otp_user_only": True,
+                    "send_authorized": False,
+                    "writes": int(payload.get("writes") or 0),
+                    "sends": int(payload.get("sends") or 0),
+                }
             return self._result(
                 status, message, plan=plan.model_dump(mode="json"),
                 execution=execution.model_dump(mode="json"),
                 tools_executed=tool_executed, selected_skill=assignment.skill,
+                **extra,
             )
         if assignment.policy is not PolicyClass.READ:
             return self._result(

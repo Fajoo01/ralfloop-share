@@ -264,7 +264,8 @@
       "description": "Document extraction and structured evidence.",
       "supported_skills": [
         "documents.extract",
-        "documents.visual_retrieve"
+        "documents.visual_retrieve",
+        "documents.sign"
       ],
       "allowed_memory_namespaces": [
         "tiremm"
@@ -1105,6 +1106,24 @@
       "classification": "READ",
       "workflow": "ralfloop_agent.model_tools.worker",
       "verification_method": "output schema + source artifact",
+      "status": "ready"
+    },
+    {
+      "id": "documents.sign",
+      "domains": [
+        "documents"
+      ],
+      "required_arguments": [
+        "source_path"
+      ],
+      "required_capabilities": [
+        "document.sign.prepare",
+        "document.sign.handoff",
+        "document.sign.verify"
+      ],
+      "classification": "CONFIRM_WRITE",
+      "workflow": "ralfloop_agent.unified_assistant.digital_signing.ArubaSignApprovalWorkflow",
+      "verification_method": "exact source SHA256 + approval scope + CMS integrity + extracted-content hash + expected signer; PIN/OTP user-only",
       "status": "ready"
     },
     {
