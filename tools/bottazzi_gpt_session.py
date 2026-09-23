@@ -161,7 +161,7 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
         return 0
     prompt = HandoffStore(args.state_dir).render_prompt()
     try:
-        handoff = cdp.handoff_to_new_chat(prompt, submit=args.submit)
+        handoff = cdp.handoff_to_new_chat(prompt, source_target_id=tabs[-1].target_id, submit=args.submit)
     except CdpError as exc:
         report["ok"] = False
         report["blocked"] = str(exc)

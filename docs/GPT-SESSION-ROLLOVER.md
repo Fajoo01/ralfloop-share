@@ -71,3 +71,7 @@ The periodic units are `bottazzi-gpt-session-shepherd.service` and `bottazzi-gpt
 Sibilla already exposes a bandi-owned X display on `:1`. `bottazzi-gpt-browser-login.service` runs the same dedicated profile and CDP port 9238 headed on that display, without copying cookies from any other browser. Use it only to complete the one-time ChatGPT login; then return to `bottazzi-gpt-browser.service`. Authentication remains under the dedicated profile while `/tmp/bottazzi-gpt-browser-cache` stays disposable.
 
 The shepherd treats a visible anonymous composer as interaction-required rather than authenticated-ready, and a submitted handoff is only confirmed after the ChatGPT DOM shows a new user turn. Authentication redirects therefore fail closed and never justify closing the old local chat tab.
+
+Authentication readiness is confirmed by a boolean same-origin `/api/auth/session` check; the controller never reads or persists account identity, cookies, tokens or storage state.
+
+Production intentionally runs Chrome headed on the private bandi VNC display `:1`. On this host, Chrome headless reproducibly fell into the ChatGPT “Ci siamo quasi…” challenge and `/api/auth/session` returned unauthenticated with the same profile; headed mode preserves the authenticated session while keeping the dedicated profile/cache isolation unchanged.

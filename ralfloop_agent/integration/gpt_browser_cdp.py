@@ -118,6 +118,33 @@ class ChromeCdp:
             raise CdpError("chatgpt_ui_state_invalid") from exc
         if not isinstance(state, dict):
             raise CdpError("chatgpt_ui_state_invalid")
+        auth_result = self._page_call(
+            target.websocket_url,
+            "Runtime.evaluate",
+            {
+                "expression": (
+                    "fetch(\"/api/auth/session\",{credentials:\"same-origin\"})"
+                    ".then(r=>r.ok?r.json():null)"
+                    ".then(s=>JSON.stringify({authenticated:Boolean(s&&s.user)}))"
+                    ".catch(()=>JSON.stringify({authenticated:false}))"
+                ),
+                "returnByValue": True,
+                "awaitPromise": True,
+            },
+        )
+        auth_raw = (auth_result.get("result") or {}).get("value")
+        try:
+            auth_state = json.loads(auth_raw) if isinstance(auth_raw, str) else {}
+        except json.JSONDecodeError:
+            auth_state = {}
+        authenticated = bool(auth_state.get("authenticated")) if isinstance(auth_state, dict) else False
+        state["authenticated"] = authenticated
+        state["ready"] = bool(state.get("composer_ready")) and authenticated
+        state["interaction_required"] = (
+            not authenticated
+            or not bool(state.get("composer_ready"))
+            or "ci siamo quasi" in str(state.get("title") or "").lower()
+        )
         state["target_id"] = target.target_id
         return state
 
@@ -213,8 +240,20 @@ class ChromeCdp:
                 raise CdpError("submit_not_confirmed")
         return {"target_id": target.target_id, "injected": True, "submitted": submit_confirmed, "submit_confirmed": submit_confirmed}
 
-    def handoff_to_new_chat(self, prompt: str, *, submit: bool = True) -> dict[str, Any]:
+    def handoff_to_new_chat(
+        self,
+        prompt: str,
+        *,
+        source_target_id: str | None = None,
+        submit: bool = True,
+    ) -> dict[str, Any]:
         previous = [target for target in self.targets() if target.target_type == "page" and target.is_chatgpt]
+        if source_target_id is None:
+            if len(previous) != 1:
+                raise CdpError("handoff_source_ambiguous")
+            source_target_id = previous[0].target_id
+        elif not any(target.target_id == source_target_id for target in previous):
+            raise CdpError("handoff_source_not_found")
         target_id = self.create_target("about:blank")
         target = self._wait_target(target_id)
         if not target.websocket_url:
@@ -229,10 +268,9 @@ class ChromeCdp:
             self.close_target(target_id)
             raise
         closed: list[str] = []
-        for old in previous:
-            if old.target_id != target_id:
-                self.close_target(old.target_id)
-                closed.append(old.target_id)
+        if source_target_id != target_id:
+            self.close_target(source_target_id)
+            closed.append(source_target_id)
         return {
             **injected,
             "new_target_id": target_id,

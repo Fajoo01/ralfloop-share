@@ -164,3 +164,25 @@ def test_inject_prompt_rejects_auth_redirect() -> None:
     cdp = RedirectingInjectCdp()
     with pytest.raises(CdpError, match="submit_interaction_required"):
         cdp.inject_prompt("handoff", target_id="new", submit=True)
+
+class MultiTabHandoffCdp(FakeInjectCdp):
+    def targets(self):
+        return [
+            BrowserTarget("old", "page", "https://chatgpt.com/c/old", "old", "ws://old"),
+            BrowserTarget("other", "page", "https://chatgpt.com/c/other", "other", "ws://other"),
+            BrowserTarget(self.new_id, "page", "about:blank", "blank", "ws://new"),
+        ]
+
+
+def test_handoff_closes_only_selected_source_tab() -> None:
+    cdp = MultiTabHandoffCdp()
+    result = cdp.handoff_to_new_chat("handoff", source_target_id="old", submit=True)
+    assert result["closed_target_ids"] == ["old"]
+    assert cdp.closed == ["old"]
+
+
+def test_handoff_requires_source_when_multiple_chatgpt_tabs() -> None:
+    cdp = MultiTabHandoffCdp()
+    with pytest.raises(CdpError, match="handoff_source_ambiguous"):
+        cdp.handoff_to_new_chat("handoff", submit=True)
+    assert cdp.closed == []
