@@ -468,9 +468,13 @@ class SharedTeacherInferenceEngine:
                 else OllamaCpuTeacherFallback
             )
         self._fallback = fallback_factory() if fallback_factory is not None else None
+        self._prefer_grounded_cpu = os.getenv("RALF_TEACHER_CPU_FAST_LANE", "0") == "1"
         self._backend: Any | None = None
         self._last_activity = 0.0
         self._lock = threading.Lock()
+
+    def _fallback_preferred(self, user_prompt: str) -> bool:
+        return self._prefer_grounded_cpu and self._fallback_allowed(user_prompt)
 
     def _ensure_backend_locked(self) -> None:
         if self._backend is not None:
@@ -510,6 +514,14 @@ class SharedTeacherInferenceEngine:
 
     def infer(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
         with self._lock:
+            if self._fallback_preferred(user_prompt):
+                try:
+                    result = self._fallback.infer(system_prompt, user_prompt)
+                except Exception:
+                    pass
+                else:
+                    self._last_activity = time.monotonic()
+                    return result
             try:
                 self._ensure_backend_locked()
                 result = self._backend(system_prompt, user_prompt)
@@ -521,6 +533,25 @@ class SharedTeacherInferenceEngine:
 
     def stream(self, system_prompt: str, user_prompt: str) -> Iterator[dict[str, Any]]:
         with self._lock:
+            if self._fallback_preferred(user_prompt):
+                fallback = self._fallback
+                try:
+                    fallback_stream = getattr(fallback, "stream", None)
+                    if callable(fallback_stream):
+                        events = list(fallback_stream(system_prompt, user_prompt))
+                    else:
+                        result = fallback.infer(system_prompt, user_prompt)
+                        events = [
+                            {"type": "delta", "text": str(result.get("response") or "")},
+                            {"type": "done", "result": result, "metadata": {"fallback": "cpu"}, "model_path": "cpu_fallback"},
+                        ]
+                except Exception:
+                    pass
+                else:
+                    for event in events:
+                        yield event
+                    self._last_activity = time.monotonic()
+                    return
             try:
                 self._ensure_backend_locked()
                 streamer = getattr(self._backend, "stream", None)

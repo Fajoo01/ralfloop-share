@@ -15,6 +15,7 @@ Environment=RALF_TEACHER_CPU_FALLBACK=1
 Environment=RALF_TEACHER_CPU_FALLBACK_URL=http://127.0.0.1:11434
 Environment=RALF_TEACHER_CPU_FALLBACK_MODEL=gemma3:4b
 Environment=RALF_TEACHER_CPU_FALLBACK_TIMEOUT=75
+Environment=RALF_TEACHER_CPU_FAST_LANE=1
 
 RuntimeDirectory=ralf-teacher-inference
 RuntimeDirectoryMode=0750

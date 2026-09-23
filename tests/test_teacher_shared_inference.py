@@ -143,6 +143,54 @@ def test_shared_engine_stream_uses_cpu_fallback_after_gpu_failure():
     engine.close()
 
 
+def test_shared_engine_prefers_grounded_cpu_fast_lane(monkeypatch):
+    monkeypatch.setenv("RALF_TEACHER_CPU_FAST_LANE", "1")
+    FakeSharedBackend.instances.clear()
+    engine = SharedTeacherInferenceEngine(
+        backend_factory=FakeSharedBackend,
+        fallback_factory=FakeCpuFallback,
+    )
+    result = engine.infer("system", _guarded_prompt())
+    assert result["response"] == "fallback grounded"
+    assert result["_inference_path"] == "test_cpu"
+    assert FakeSharedBackend.instances == []
+    assert engine._fallback.calls == 1
+    engine.close()
+
+
+def test_shared_engine_fast_lane_failure_falls_through_to_primary(monkeypatch):
+    class BrokenCpuFallback(FakeCpuFallback):
+        def infer(self, system_prompt, user_prompt):
+            self.calls += 1
+            raise RuntimeError("cpu_unavailable")
+
+    monkeypatch.setenv("RALF_TEACHER_CPU_FAST_LANE", "1")
+    FakeSharedBackend.instances.clear()
+    engine = SharedTeacherInferenceEngine(
+        backend_factory=FakeSharedBackend,
+        fallback_factory=BrokenCpuFallback,
+    )
+    result = engine.infer("system", _guarded_prompt())
+    assert result["response"] == _guarded_prompt()
+    assert len(FakeSharedBackend.instances) == 1
+    assert engine._fallback.calls == 1
+    engine.close()
+
+
+def test_shared_engine_stream_prefers_grounded_cpu_fast_lane(monkeypatch):
+    monkeypatch.setenv("RALF_TEACHER_CPU_FAST_LANE", "1")
+    FakeSharedBackend.instances.clear()
+    engine = SharedTeacherInferenceEngine(
+        backend_factory=FakeSharedBackend,
+        fallback_factory=FakeCpuFallback,
+    )
+    events = list(engine.stream("system", _guarded_prompt()))
+    assert [event["type"] for event in events] == ["delta", "done"]
+    assert events[-1]["model_path"] == "cpu_fallback"
+    assert FakeSharedBackend.instances == []
+    engine.close()
+
+
 def test_ollama_cpu_fallback_is_loopback_cpu_only_and_schema_bound(monkeypatch):
     captured = {}
 
@@ -461,3 +509,4 @@ def test_teacher_inference_unit_declares_grounded_cpu_fallback():
     assert "RALF_TEACHER_CPU_FALLBACK=1" in unit
     assert "RALF_TEACHER_CPU_FALLBACK_MODEL=gemma3:4b" in unit
     assert "RALF_TEACHER_CPU_FALLBACK_URL=http://127.0.0.1:11434" in unit
+    assert "RALF_TEACHER_CPU_FAST_LANE=1" in unit
