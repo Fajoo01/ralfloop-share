@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -8,7 +11,12 @@ import websocket
 
 from ralfloop_agent.integration.gpt_browser_cdp import BrowserTarget, CdpError, ChromeCdp
 import tools.bottazzi_gpt_session as gpt_session_tool
-from tools.bottazzi_gpt_session import _recover_incomplete_mutation, _requires_mutation_lock, _resolve_stored_source
+from tools.bottazzi_gpt_session import (
+    _recover_incomplete_mutation,
+    _recover_stored_source_home_tab,
+    _requires_mutation_lock,
+    _resolve_stored_source,
+)
 
 from ralfloop_agent.integration.gpt_session_rollover import (
     ExternalChatAdoptionStore,
@@ -149,6 +157,48 @@ def test_checkpoint_schema_round_trips_runtime_worker_metadata(tmp_path) -> None
     assert current["source_chat"] == "worker-target"
     assert current["source_chat_url"] == "https://chatgpt.com/c/worker"
     assert current["updated_at"] == "2026-09-23T11:49:00+00:00"
+
+
+def test_gpt_browser_units_recreate_disposable_cache_after_boot() -> None:
+    repo = Path(__file__).resolve().parents[1]
+    for relative in (
+        "deploy/systemd/bottazzi-gpt-browser.service",
+        "deploy/systemd/bottazzi-gpt-browser-login.service",
+    ):
+        unit = (repo / relative).read_text(encoding="utf-8")
+        assert "RuntimeDirectory=bottazzi-gpt-browser-cache" in unit
+        assert "RuntimeDirectoryMode=0700" in unit
+        assert "Environment=TMPDIR=/run/bottazzi-gpt-browser-cache" in unit
+        assert "Environment=BOTTAZZI_GPT_CACHE_DIR=/run/bottazzi-gpt-browser-cache" in unit
+        assert "ReadWritePaths=/home/bandi/.local/share/bottazzi-gpt-browser /run/bottazzi-gpt-browser-cache" in unit
+        assert "/tmp/bottazzi-gpt-browser-cache" not in unit
+    script = (repo / "scripts/bottazzi_gpt_browser.sh").read_text(encoding="utf-8")
+    assert "${BOTTAZZI_GPT_CACHE_DIR:-/run/bottazzi-gpt-browser-cache}" in script
+
+
+def test_gpt_browser_script_reopens_persisted_worker_url(tmp_path) -> None:
+    repo = Path(__file__).resolve().parents[1]
+    fake_chrome = tmp_path / "fake-chrome.sh"
+    args_file = tmp_path / "args.txt"
+    fake_chrome.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$BOTTAZZI_TEST_ARGS"\n', encoding="utf-8")
+    fake_chrome.chmod(0o755)
+    state_file = tmp_path / "current.json"
+    state_file.write_text(json.dumps({"source_chat_url": "https://chatgpt.com/c/restart-worker"}), encoding="utf-8")
+    env = dict(os.environ)
+    env.update(
+        {
+            "BOTTAZZI_GPT_CHROME_BIN": str(fake_chrome),
+            "BOTTAZZI_GPT_PROFILE_DIR": str(tmp_path / "profile"),
+            "BOTTAZZI_GPT_CACHE_DIR": str(tmp_path / "cache"),
+            "BOTTAZZI_GPT_CONFIG_DIR": str(tmp_path / "config"),
+            "BOTTAZZI_GPT_STATE_FILE": str(state_file),
+            "BOTTAZZI_GPT_HEADLESS": "0",
+            "BOTTAZZI_TEST_ARGS": str(args_file),
+        }
+    )
+    subprocess.run([str(repo / "scripts/bottazzi_gpt_browser.sh")], check=True, env=env)
+    args = args_file.read_text(encoding="utf-8").splitlines()
+    assert args[-1] == "https://chatgpt.com/c/restart-worker"
 
 
 def test_mutation_lock_is_nonblocking_and_exclusive(tmp_path) -> None:
@@ -693,6 +743,62 @@ def test_stored_source_url_recovery_fails_closed_when_duplicated(tmp_path) -> No
     assert source is None
     assert error == "stored_source_url_ambiguous"
     assert info["match_count"] == 2
+    assert store.load_current()["source_chat"] == "stale-target"
+
+
+class HomeRecoveryCdp:
+    def __init__(self, url: str) -> None:
+        self.tab = BrowserTarget("fresh-target", "page", url, "worker", "ws://fresh")
+        self.navigated: list[tuple[str, str]] = []
+
+    def targets(self):
+        return [self.tab]
+
+    def chatgpt_ui_state(self, target_id: str):
+        assert target_id == self.tab.target_id
+        return {"authenticated": True, "ready": True}
+
+    def navigate_chatgpt_conversation(self, target_id: str, url: str):
+        assert target_id == self.tab.target_id
+        self.navigated.append((target_id, url))
+        self.tab = BrowserTarget(target_id, "page", url, "worker", "ws://fresh")
+        return {"authenticated": True, "ready": True, "url": url}
+
+
+def test_stale_source_recovers_by_navigating_single_home_tab(tmp_path) -> None:
+    store = HandoffStore(tmp_path)
+    store.save(Handoff(goal="x", current_state="y"))
+    store.update_source_chat("stale-target", "https://chatgpt.com/c/abc")
+    cdp = HomeRecoveryCdp("https://chatgpt.com/")
+    tabs = cdp.targets()
+    source, info, error = _resolve_stored_source(tabs, store)
+    assert source is None and error == "stored_source_not_found"
+
+    source, info, error = _recover_stored_source_home_tab(cdp, tabs, store, info, error)
+
+    assert error is None
+    assert source is not None and source.target_id == "fresh-target"
+    assert cdp.navigated == [("fresh-target", "https://chatgpt.com/c/abc")]
+    assert info["source_recovered_by_navigation"] is True
+    current = store.load_current()
+    assert current["source_chat"] == "fresh-target"
+    assert current["source_chat_url"] == "https://chatgpt.com/c/abc"
+
+
+def test_stale_source_home_recovery_does_not_hijack_other_conversation(tmp_path) -> None:
+    store = HandoffStore(tmp_path)
+    store.save(Handoff(goal="x", current_state="y"))
+    store.update_source_chat("stale-target", "https://chatgpt.com/c/abc")
+    cdp = HomeRecoveryCdp("https://chatgpt.com/c/other")
+    tabs = cdp.targets()
+    source, info, error = _resolve_stored_source(tabs, store)
+
+    recovered, _, recovery_error = _recover_stored_source_home_tab(cdp, tabs, store, info, error)
+
+    assert source is None
+    assert recovered is None
+    assert recovery_error == "stored_source_not_found"
+    assert cdp.navigated == []
     assert store.load_current()["source_chat"] == "stale-target"
 
 

@@ -8,7 +8,7 @@ Keep ChatGPT web sessions responsive by rotating long/heavy chats while keeping 
 
 - dedicated Chrome profile: `/home/bandi/.local/share/bottazzi-gpt-browser/profile`
 - dedicated Chrome config: `/home/bandi/.local/share/bottazzi-gpt-browser/config`
-- disposable cache: `/tmp/bottazzi-gpt-browser-cache`
+- disposable cache: `/run/bottazzi-gpt-browser-cache` (systemd `RuntimeDirectory`, recreated automatically after boot)
 - CDP endpoint: `http://127.0.0.1:9238`
 - systemd unit: `bottazzi-gpt-browser.service`
 
@@ -68,7 +68,7 @@ Latency/error telemetry is page-local and non-secret. A lightweight `MutationObs
 
 `shepherd` evaluates the rollover policy from those live metrics and reports total response latency separately from `response_idle_ms`, a page-local heartbeat derived from assistant DOM progress and native ChatGPT tool-card activity. Latency-only rollover is progress-based rather than wall-clock based. If a response remains pending but the active-generation indicator has disappeared, `--max-stall-ms` (default 60 s) bounds missing progress. If ChatGPT still reports an active response, visible assistant/tool heartbeat keeps it alive regardless of total duration; only ten minutes of continuous no-progress idle (`--max-active-stall-ms`, default 600 s) makes latency-only rollover eligible. Completed slow responses can also rotate normally. Turn, age and error reasons are not weakened by this guard. With `--apply --submit`, the controller opens a new ChatGPT tab, waits until the fresh page is fully loaded and settled past the server-rendered composer race, injects the durable handoff, confirms a real new user turn, persists the successor `source_chat`, and only then closes the selected source. If submit or successor persistence fails, the source stays open; a temporary successor tab may be closed locally without deleting its server-side conversation.
 
-The successful successor target is persisted in `current.json` as `source_chat`. On later timer runs this identifies the worker even if unrelated ChatGPT tabs are open. If there are multiple tabs and the stored worker cannot be found, the shepherd fails closed instead of guessing. `--source-target-id` exists for explicit smoke/recovery operations.
+The successful successor target is persisted in `current.json` as `source_chat`. On later timer runs this identifies the worker even if unrelated ChatGPT tabs are open. After a browser/host restart the old CDP target ID is expected to disappear: if the canonical `source_chat_url` is already open, the target ID is repaired; if the dedicated browser has exactly one authenticated ready ChatGPT home tab, the shepherd may navigate that home tab back to the saved canonical worker URL and persist the fresh target ID. A single tab already showing a different conversation is never hijacked, and multiple/ambiguous tabs still fail closed. `--source-target-id` exists for explicit smoke/recovery operations.
 
 The periodic units are `bottazzi-gpt-session-shepherd.service` and `bottazzi-gpt-session-shepherd.timer`. The production timer probes every 15 seconds after the one-time account login has been verified, so a 30-second latency/error threshold is observed promptly without a tight polling loop.
 
@@ -88,7 +88,7 @@ Adoption is deferred while the worker has an active/pending response, unsent com
 
 ## One-time interactive login mode
 
-Sibilla already exposes a bandi-owned X display on `:1`. `bottazzi-gpt-browser-login.service` runs the same dedicated profile and CDP port 9238 headed on that display, without copying cookies from any other browser. Use it only to complete the one-time ChatGPT login; then return to `bottazzi-gpt-browser.service`. Authentication remains under the dedicated profile while `/tmp/bottazzi-gpt-browser-cache` stays disposable.
+Sibilla already exposes a bandi-owned X display on `:1`. `bottazzi-gpt-browser-login.service` runs the same dedicated profile and CDP port 9238 headed on that display, without copying cookies from any other browser. Use it only to complete the one-time ChatGPT login; then return to `bottazzi-gpt-browser.service`. Authentication remains under the dedicated profile while `/run/bottazzi-gpt-browser-cache` stays disposable and is recreated by systemd after reboot.
 
 The shepherd treats a visible anonymous composer as interaction-required rather than authenticated-ready, and a submitted handoff is only confirmed after the ChatGPT DOM shows a new user turn. Authentication redirects therefore fail closed and never justify closing the old local chat tab.
 

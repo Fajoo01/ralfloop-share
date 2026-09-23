@@ -161,8 +161,30 @@ def _resolve_stored_source(tabs, store: HandoffStore):
         if len(matches) > 1:
             return None, {"source_chat_url": stored_url, "match_count": len(matches)}, "stored_source_url_ambiguous"
     if stored_source:
-        return None, {"source_target_id": stored_source}, "stored_source_not_found"
+        return None, {"source_target_id": stored_source, "source_chat_url": stored_url}, "stored_source_not_found"
     return None, {}, None
+
+
+def _recover_stored_source_home_tab(cdp: ChromeCdp, tabs, store: HandoffStore, resolution: dict, error: str | None):
+    if error != "stored_source_not_found" or len(tabs) != 1:
+        return None, resolution, error
+    stored_url = normalize_chatgpt_conversation_url(str(resolution.get("source_chat_url") or ""))
+    candidate = tabs[0]
+    if not stored_url or normalize_chatgpt_conversation_url(candidate.url):
+        return None, resolution, error
+    ui = cdp.chatgpt_ui_state(candidate.target_id)
+    if not bool(ui.get("authenticated")) or not bool(ui.get("ready")):
+        return None, resolution, error
+    cdp.navigate_chatgpt_conversation(candidate.target_id, stored_url)
+    store.update_source_chat(candidate.target_id, stored_url)
+    refreshed = next((tab for tab in cdp.targets() if tab.target_id == candidate.target_id), candidate)
+    return refreshed, {
+        "source_recovered": True,
+        "source_recovered_by_navigation": True,
+        "previous_source_target_id": resolution.get("source_target_id"),
+        "source_target_id": candidate.target_id,
+        "source_chat_url": stored_url,
+    }, None
 
 
 def _finalize_adoption_state(
@@ -322,7 +344,13 @@ def cmd_adopt_external(args: argparse.Namespace) -> int:
 
     try:
         source, source_resolution, source_error = _resolve_stored_source(tabs, store)
-    except GptSessionError as exc:
+        if source_error:
+            recovered_source, source_resolution, source_error = _recover_stored_source_home_tab(
+                cdp, tabs, store, source_resolution, source_error
+            )
+            if recovered_source is not None:
+                source = recovered_source
+    except (CdpError, GptSessionError) as exc:
         _json({"ok": False, "action": "noop", "reason": str(exc)})
         return 0
     if source_error:
@@ -616,7 +644,13 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
     else:
         try:
             source, source_resolution, source_error = _resolve_stored_source(tabs, store)
-        except GptSessionError as exc:
+            if source_error:
+                recovered_source, source_resolution, source_error = _recover_stored_source_home_tab(
+                    cdp, tabs, store, source_resolution, source_error
+                )
+                if recovered_source is not None:
+                    source = recovered_source
+        except (CdpError, GptSessionError) as exc:
             _json({"ok": False, "action": "noop", "reason": str(exc)})
             return 0
         if source_error:
