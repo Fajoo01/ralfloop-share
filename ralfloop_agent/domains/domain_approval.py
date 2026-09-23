@@ -19,6 +19,7 @@ ALLOWED_ACTIONS = {
     "mailchimp_campaign_create", "mailchimp_campaign_send", "mailchimp_member_subscribe",
     "runts_practice_reply",
     "jellyfin_apply_identity",
+    "baffoflix_password_recovery",
     "browser_interact",
     "pec_send",
     "document_sign",
@@ -296,6 +297,7 @@ def render_telegram_request(request: DomainApprovalRequest) -> str:
         "eyf_browser_apply": "Modifica portale EYF/Support4Youth",
         "browser_interact": "Interazione browser Playwright",
         "document_sign": "Firma digitale documento",
+        "baffoflix_password_recovery": "Recupero password BaffoFlix",
     }.get(request.action, request.action)
     lines = [
         "RALFLOOP — APPROVAZIONE RICHIESTA",
@@ -316,6 +318,15 @@ def render_telegram_request(request: DomainApprovalRequest) -> str:
             lines.append(f"Preheader: {preheader[:300]}")
         if title:
             lines.append(f"Titolo interno: {title[:300]}")
+    if request.action == "baffoflix_password_recovery":
+        username = str(request.scope.get("username") or "")
+        requester = str(request.scope.get("requester_telegram_user_id") or "")
+        lines.extend([
+            "",
+            f"Account BaffoFlix: {username[:240]}",
+            f"Richiedente Telegram ID: {requester[:40]}",
+            "Il richiedente non può approvare questa operazione: l'approvazione è riservata all'amministratore configurato.",
+        ])
 
     canary = request.scope.get("canary_plan") or {}
     if canary:

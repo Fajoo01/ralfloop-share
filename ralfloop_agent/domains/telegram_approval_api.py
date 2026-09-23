@@ -23,7 +23,33 @@ MCP_AUTO_EXECUTE_ACTIONS = {
     "mailchimp_member_subscribe",
     "whatsapp_send",
     "whatsapp_reply",
+    "baffoflix_password_recovery",
 }
+
+
+def _call_baffoflix_password_recovery(username: str) -> dict[str, Any]:
+    from src.mcp_transport import MCPClientSession, UnixMCPTransport
+
+    socket_path = os.getenv("RALF_JELLYFIN_MCP_SOCKET", "/run/ralf-jellyfin-mcp/mcp.sock")
+    with MCPClientSession(
+        UnixMCPTransport(socket_path, connect_timeout=0.8),
+        timeout=20.0,
+        client_name="bottazzi-baffoflix-approved-recovery",
+    ) as client:
+        names = {item.name for item in client.list_tools()}
+        if "baffoflix_start_password_recovery" not in names:
+            raise RuntimeError("baffoflix_recovery_tool_not_discovered")
+        result = client.call_tool(
+            "baffoflix_start_password_recovery",
+            {"username": username, "confirm": True},
+        )
+    structured = result.get("structuredContent")
+    if not isinstance(structured, dict):
+        raise RuntimeError("baffoflix_recovery_malformed")
+    payload = dict(structured)
+    if result.get("isError") or payload.get("ok") is False:
+        raise RuntimeError(str(payload.get("status") or "baffoflix_recovery_failed"))
+    return payload
 
 
 def _execute_approved_mcp_request(
@@ -39,6 +65,55 @@ def _execute_approved_mcp_request(
     scope = dict(row.get("scope") or {})
     if action not in MCP_AUTO_EXECUTE_ACTIONS:
         return {"status": "not_auto_executable", "request_id": request_id, "action": action}
+
+    if action == "baffoflix_password_recovery":
+        username = str(scope.get("username") or "").strip()
+        if not username:
+            return {"status": "scope_invalid", "request_id": request_id, "action": action}
+        claim = store.claim_execution(request_id, action=action)
+        if not claim.get("claimed"):
+            return {
+                "status": str(claim.get("status") or "execution_claim_failed"),
+                "request_id": request_id,
+                "action": action,
+                "retry_allowed": False,
+            }
+        try:
+            provider = _call_baffoflix_password_recovery(username)
+            if str(provider.get("status") or "") != "STARTED":
+                raise RuntimeError("baffoflix_recovery_not_started")
+            result = {
+                "status": "executed",
+                "request_id": request_id,
+                "action": action,
+                "username": username,
+                "provider_status": "STARTED",
+                "pin_file_exposed": False,
+                "retry_allowed": False,
+            }
+        except Exception as exc:
+            result = {
+                "status": "EXECUTION_UNCERTAIN",
+                "request_id": request_id,
+                "action": action,
+                "retry_allowed": False,
+                "error_type": type(exc).__name__,
+            }
+            store.finish_claimed_execution(
+                request_id, action=action, success=False, result=result,
+            )
+            return result
+        finalized = store.finish_claimed_execution(
+            request_id, action=action, success=True, result=result,
+        )
+        if finalized.get("status") != "consumed":
+            return {
+                "status": "EXECUTION_UNCERTAIN",
+                "request_id": request_id,
+                "action": action,
+                "retry_allowed": False,
+            }
+        return result
 
     if action.startswith("mailchimp_"):
         from src.mailchimp import MailchimpApprovedMCPWorkflow

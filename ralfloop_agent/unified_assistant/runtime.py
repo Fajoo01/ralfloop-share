@@ -7,8 +7,9 @@ import re
 from typing import Any, Mapping
 
 from ralfloop_agent.cli.session_store import SessionStore, SessionStoreError
-from ralfloop_agent.domains.domain_approval import DomainApprovalPolicy
+from ralfloop_agent.domains.domain_approval import DomainApprovalPolicy, scope_digest
 from ralfloop_agent.domains.domain_approval_store import DomainApprovalStore
+from ralfloop_agent.domains.storage import append_jsonl
 
 from .contracts import AssistantFeatureFlags, PolicyClass
 from .conversation import (
@@ -496,6 +497,10 @@ def run_unified_telegram(
     *,
     flags_override: AssistantFeatureFlags | None = None,
 ) -> dict[str, Any]:
+    baffoflix_recovery = _stage_baffoflix_password_recovery(text, context)
+    if baffoflix_recovery is not None:
+        return baffoflix_recovery
+
     if _is_explicit_runts_approval(text, context):
         return _execute_explicit_runts_approval(
             text,
@@ -2088,6 +2093,210 @@ def _ensure_session(store: SessionStore, session_id: str) -> None:
         "context_enabled": True, "metadata": {},
     }
     store.save(record)
+
+
+_BAFFOFLIX_RECOVERY_ACTION = "baffoflix_password_recovery"
+
+
+def _baffoflix_password_recovery_intent(text: str) -> bool:
+    folded = " ".join(str(text or "").split())
+    return bool(
+        re.search(r"\bbaffo[\s-]*flix\b", folded, re.I)
+        and re.search(r"\b(?:password|credenzial[ei]|login|accesso)\b", folded, re.I)
+        and re.search(r"\b(?:dimenticat\w*|pers\w*|recuper\w*|reset\w*|reimpost\w*)\b", folded, re.I)
+    )
+
+
+def _baffoflix_exact_username(text: str) -> str:
+    quoted = re.search(
+        r"\b(?:account|utente|username)\s*(?:[:=]\s*)?[\"']([^\"']{1,64})[\"']",
+        str(text or ""), re.I,
+    )
+    if quoted:
+        return quoted.group(1).strip()
+    plain = re.search(
+        r"\b(?:account|utente|username)\s*(?:[:=]\s*)?([A-Za-z0-9][A-Za-z0-9._-]{0,63})\b",
+        str(text or ""), re.I,
+    )
+    return plain.group(1).strip() if plain else ""
+
+
+def _baffoflix_recovery_response(
+    status: str,
+    message: str,
+    *,
+    approval_request_id: str | None = None,
+    duplicate: bool = False,
+) -> dict[str, Any]:
+    return {
+        "ok": status not in {"unavailable", "denied"},
+        "status": status,
+        "capability": _BAFFOFLIX_RECOVERY_ACTION,
+        "response": message,
+        "final_answer": message,
+        "approval_required": False,
+        "pending_confirmation_id": None,
+        "metadata": {
+            "approval_request_id": approval_request_id,
+            "approval_delivery": "administrator" if approval_request_id else None,
+            "provider_writes": 0,
+            "writes": 0,
+            "side_effects": 0,
+            "duplicate": bool(duplicate),
+        },
+        "artifacts": [],
+        "audit_summary": [
+            "BAFFOFLIX_RECOVERY_ADMIN_APPROVAL_REQUESTED"
+            if approval_request_id else "BAFFOFLIX_RECOVERY_NO_WRITE"
+        ],
+    }
+
+
+def _stage_baffoflix_password_recovery(
+    text: str, context: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    direct_intent = _baffoflix_password_recovery_intent(text)
+    username_reply = bool(re.search(
+        r"^\s*(?:account|utente|username)\b", str(text or ""), re.I
+    ))
+    if not direct_intent and not username_reply:
+        return None
+
+    source = str(context.get("source") or "")
+    telegram_user_id = int(context.get("telegram_user_id") or 0)
+    telegram_chat_id = int(context.get("telegram_chat_id") or 0)
+    telegram_message_id = int(context.get("telegram_message_id") or 0)
+    if (
+        not source.startswith("telegram_")
+        or telegram_user_id <= 0
+        or telegram_chat_id <= 0
+        or telegram_message_id <= 0
+    ):
+        return _baffoflix_recovery_response(
+            "denied",
+            "Per il recupero BaffoFlix usa Bot-tazzi da Telegram autenticato; nessuna richiesta è stata creata.",
+        )
+
+    conversation_store = None
+    conversation_adapter = None
+    conversation = None
+    if username_reply and not direct_intent:
+        conversation_store = SessionStore(os.getenv(
+            "RALFLOOP_UNIFIED_SESSION_DIR",
+            str(Path.home() / ".local" / "state" / "ralf" / "unified-sessions"),
+        ))
+        session_id = _session_id(context)
+        _ensure_session(conversation_store, session_id)
+        conversation_adapter = SessionConversationAdapter(conversation_store)
+        conversation = conversation_adapter.load(session_id)
+        pending = conversation.state.pending.clarification
+        if (
+            pending is None
+            or pending.action != "baffoflix_password_recovery_username"
+            or int(pending.payload.get("requester_telegram_user_id") or 0) != telegram_user_id
+        ):
+            return None
+
+    username = _baffoflix_exact_username(text)
+    if not username:
+        if direct_intent:
+            conversation_store = SessionStore(os.getenv(
+                "RALFLOOP_UNIFIED_SESSION_DIR",
+                str(Path.home() / ".local" / "state" / "ralf" / "unified-sessions"),
+            ))
+            session_id = _session_id(context)
+            _ensure_session(conversation_store, session_id)
+            conversation_adapter = SessionConversationAdapter(conversation_store)
+            conversation = conversation_adapter.load(session_id)
+            conversation.stage(
+                domain="clarification",
+                action="baffoflix_password_recovery_username",
+                policy=PolicyClass.READ,
+                payload={"requester_telegram_user_id": telegram_user_id},
+                displayed_text="Serve il nome esatto dell'account BaffoFlix.",
+            )
+            conversation_adapter.save(session_id, conversation)
+        return _baffoflix_recovery_response(
+            "clarification_required",
+            "Dimmi il nome esatto dell'account BaffoFlix, per esempio: account Maria. La conferma arriverà all'amministratore, non a te.",
+        )
+
+    policy = DomainApprovalPolicy.from_env()
+    if not policy.enabled or not policy.allowed_user_ids or not policy.allowed_chat_ids:
+        return _baffoflix_recovery_response(
+            "unavailable",
+            "Il recupero BaffoFlix non può essere inoltrato all'amministratore in questo momento; nessun account è stato modificato.",
+        )
+
+    scope = {
+        "action": _BAFFOFLIX_RECOVERY_ACTION,
+        "version": 1,
+        "username": username,
+        "requester_telegram_user_id": telegram_user_id,
+        "requester_telegram_chat_id": telegram_chat_id,
+        "requester_telegram_message_id": telegram_message_id,
+        "request_source": source,
+    }
+    expected_digest = scope_digest(scope)
+    store = DomainApprovalStore(policy=policy)
+    existing = next((
+        row for row in store.list_pending()
+        if str(row.get("action") or "") == _BAFFOFLIX_RECOVERY_ACTION
+        and str(row.get("scope_digest") or "") == expected_digest
+    ), None)
+    if existing is not None:
+        request_id = str(existing.get("request_id") or "")
+        if conversation is not None and conversation_adapter is not None:
+            conversation.clear("clarification")
+            conversation_adapter.save(session_id, conversation)
+        return _baffoflix_recovery_response(
+            "approval_requested",
+            f"La richiesta di recupero per l'account BaffoFlix {username} è già stata inviata all'amministratore. Non devi approvare nulla qui.",
+            approval_request_id=request_id or None,
+            duplicate=True,
+        )
+
+    created = store.create_request(
+        action=_BAFFOFLIX_RECOVERY_ACTION,
+        bando_id="baffoflix.support",
+        version="1",
+        scope=scope,
+        requested_by=f"telegram:{telegram_user_id}",
+    )
+    request = created.get("request") if isinstance(created, Mapping) else None
+    if not isinstance(request, Mapping):
+        return _baffoflix_recovery_response(
+            "unavailable",
+            "Non sono riuscito a creare la richiesta amministrativa BaffoFlix; nessun account è stato modificato.",
+        )
+
+    request_id = str(request.get("request_id") or "")
+    outbox = Path(os.getenv(
+        "RALFLOOP_TELEGRAM_APPROVAL_OUTBOX",
+        "logs/domain_approval_outbox.jsonl",
+    ))
+    try:
+        append_jsonl(outbox, {
+            "status": "queued",
+            "request_id": request_id,
+            "api_url": policy.api_url,
+            "message": str(request.get("telegram_message") or ""),
+        })
+    except OSError:
+        store.cancel(request_id)
+        return _baffoflix_recovery_response(
+            "unavailable",
+            "Non sono riuscito a consegnare la richiesta BaffoFlix all'amministratore; nessun account è stato modificato.",
+        )
+
+    if conversation is not None and conversation_adapter is not None:
+        conversation.clear("clarification")
+        conversation_adapter.save(session_id, conversation)
+    return _baffoflix_recovery_response(
+        "approval_requested",
+        f"Richiesta di recupero per l'account BaffoFlix {username} inviata all'amministratore. Non devi approvare nulla qui.",
+        approval_request_id=request_id,
+    )
 
 
 def _is_positive_confirmation(text: str) -> bool:
