@@ -12,6 +12,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from ralfloop_agent.integration.gpt_browser_cdp import ChromeCdp, CdpError
 from ralfloop_agent.integration.gpt_session_rollover import (
+    GptSessionError,
     Handoff,
     HandoffStore,
     RolloverPolicy,
@@ -180,16 +181,47 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
         return 0
     prompt = store.render_prompt()
     try:
-        handoff = cdp.handoff_to_new_chat(prompt, source_target_id=source.target_id, submit=args.submit)
+        handoff = cdp.handoff_to_new_chat(
+            prompt,
+            source_target_id=source.target_id,
+            submit=args.submit,
+            close_source=False,
+        )
     except CdpError as exc:
         report["ok"] = False
         report["blocked"] = str(exc)
         _json(report)
         return 0
-    store.update_source_chat(str(handoff.get("new_target_id") or "") or None)
+    new_target_id = str(handoff.get("new_target_id") or "")
+    if not new_target_id:
+        report["ok"] = False
+        report["blocked"] = "handoff_target_missing"
+        _json(report)
+        return 0
+    try:
+        store.update_source_chat(new_target_id)
+    except (GptSessionError, OSError) as exc:
+        try:
+            cdp.close_target(new_target_id)
+        except CdpError:
+            pass
+        report["ok"] = False
+        report["blocked"] = f"handoff_persist_failed:{type(exc).__name__}"
+        report["source_preserved"] = True
+        _json(report)
+        return 0
+    closed: list[str] = []
+    if source.target_id != new_target_id:
+        try:
+            cdp.close_target(source.target_id)
+        except CdpError as exc:
+            report["source_close_error"] = str(exc)
+        else:
+            closed.append(source.target_id)
+    handoff["closed_target_ids"] = closed
     report["applied"] = True
     report["handoff"] = handoff
-    report["worker_target_id"] = handoff.get("new_target_id")
+    report["worker_target_id"] = new_target_id
     _json(report)
     return 0
 

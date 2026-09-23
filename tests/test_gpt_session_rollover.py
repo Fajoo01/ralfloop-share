@@ -223,6 +223,19 @@ def test_handoff_closes_only_selected_source_tab() -> None:
     assert cdp.closed == ["old"]
 
 
+def test_handoff_can_defer_source_close_until_state_is_persisted() -> None:
+    cdp = MultiTabHandoffCdp()
+    result = cdp.handoff_to_new_chat(
+        "handoff",
+        source_target_id="old",
+        submit=True,
+        close_source=False,
+    )
+    assert result["new_target_id"] == "new"
+    assert result["closed_target_ids"] == []
+    assert cdp.closed == []
+
+
 def test_handoff_requires_source_when_multiple_chatgpt_tabs() -> None:
     cdp = MultiTabHandoffCdp()
     with pytest.raises(CdpError, match="handoff_source_ambiguous"):

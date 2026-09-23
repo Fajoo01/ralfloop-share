@@ -400,6 +400,7 @@ class ChromeCdp:
         *,
         source_target_id: str | None = None,
         submit: bool = True,
+        close_source: bool = True,
     ) -> dict[str, Any]:
         previous = [target for target in self.targets() if target.target_type == "page" and target.is_chatgpt]
         if source_target_id is None:
@@ -422,7 +423,7 @@ class ChromeCdp:
             self.close_target(target_id)
             raise
         closed: list[str] = []
-        if source_target_id != target_id:
+        if close_source and source_target_id != target_id:
             self.close_target(source_target_id)
             closed.append(source_target_id)
         return {
