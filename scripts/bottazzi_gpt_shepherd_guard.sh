@@ -8,6 +8,7 @@ ENDPOINT="http://127.0.0.1:9238"
 SNOOZE_FILE="/run/user/1001/bottazzi-gpt-rollover-snooze-until"
 COUNTDOWN_SECONDS=30
 SNOOZE_SECONDS=600
+RATE_LIMIT_SNOOZE_SECONDS=300
 
 now=$(date +%s)
 if [[ -f "$SNOOZE_FILE" ]]; then
@@ -17,17 +18,25 @@ if [[ -f "$SNOOZE_FILE" ]]; then
   fi
 fi
 
-adoption="$($PY "$TOOL" --endpoint "$ENDPOINT" adopt-external --apply --scan-interval-seconds 30 2>/dev/null || true)"
-if [[ -n "$adoption" ]]; then
-  read -r adoption_action adoption_reason < <(printf '%s' "$adoption" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); print(str(d.get("action") or ""), str(d.get("reason") or ""))' 2>/dev/null || echo 'noop parse_failed')
-  [[ "$adoption_action" != "adopted" ]] || exit 0
-  [[ "$adoption_reason" != "unsent_composer_text" ]] || exit 0
-fi
-
 probe="$($PY "$TOOL" --endpoint "$ENDPOINT" shepherd 2>/dev/null || true)"
 [[ -n "$probe" ]] || exit 0
 
-read -r rollover ready defer_latency < <(printf '%s' "$probe" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); ui=d.get("ui") or {}; print(1 if d.get("rollover") else 0, 1 if ui.get("ready") else 0, 1 if d.get("defer_latency_rollover") else 0)' 2>/dev/null || echo '0 0 0')
+read -r rollover ready defer_latency temporary_access_limited < <(printf '%s' "$probe" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); ui=d.get("ui") or {}; print(1 if d.get("rollover") else 0, 1 if ui.get("ready") else 0, 1 if d.get("defer_latency_rollover") else 0, 1 if ui.get("temporary_access_limited") else 0)' 2>/dev/null || echo '0 0 0 0')
+if [[ "$temporary_access_limited" == "1" ]]; then
+  printf '%s\n' "$(( now + RATE_LIMIT_SNOOZE_SECONDS ))" > "$SNOOZE_FILE"
+  exit 0
+fi
+
+adoption="$($PY "$TOOL" --endpoint "$ENDPOINT" adopt-external --apply --scan-interval-seconds 30 2>/dev/null || true)"
+if [[ -n "$adoption" ]]; then
+  read -r adoption_action adoption_reason < <(printf '%s' "$adoption" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); print(str(d.get("action") or ""), str(d.get("reason") or ""))' 2>/dev/null || echo 'noop parse_failed')
+  if [[ "$adoption_reason" == "temporary_access_limited" ]]; then
+    printf '%s\n' "$(( now + RATE_LIMIT_SNOOZE_SECONDS ))" > "$SNOOZE_FILE"
+    exit 0
+  fi
+  [[ "$adoption_action" != "adopted" ]] || exit 0
+  [[ "$adoption_reason" != "unsent_composer_text" ]] || exit 0
+fi
 [[ "$rollover" == "1" && "$ready" == "1" ]] || exit 0
 # A handoff's first response may legitimately take time, and an actively
 # streaming response should not be killed merely because total latency crossed

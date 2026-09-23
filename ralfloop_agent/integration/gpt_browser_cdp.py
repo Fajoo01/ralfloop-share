@@ -112,6 +112,9 @@ class ChromeCdp:
           const telemetryKey = '__bottazziGptTelemetryV2';
           const observerKey = '__bottazziGptTelemetryObserverV2';
           const responseErrorRe = /(?:something went wrong|error generating|network error|there was an error|si è verificato un errore|errore (?:di rete|durante|nella|nel)|riprova|try again)/i;
+          const temporaryAccessLimitRe = /(?:temporarily limited access to (?:your )?conversations|temporaneamente (?:limitato )?l['’]?accesso alle conversazioni|attendere qualche minuto prima di riprovare|wait a few minutes before trying again)/i;
+          const pageText = String(document.body ? document.body.innerText || '' : '');
+          const temporaryAccessLimited = temporaryAccessLimitRe.test(pageText);
           const sampleTelemetry = () => {
             const nowMs = performance.now();
             const userTurns = document.querySelectorAll('[data-message-author-role="user"]').length;
@@ -254,6 +257,7 @@ class ChromeCdp:
             document_ready_state: document.readyState,
             page_age_ms: pageAgeMs,
             page_settled: pageSettled,
+            temporary_access_limited: temporaryAccessLimited,
           });
         })()"""
         result = self._page_call(
@@ -289,9 +293,11 @@ class ChromeCdp:
             auth_state = {}
         authenticated = bool(auth_state.get("authenticated")) if isinstance(auth_state, dict) else False
         state["authenticated"] = authenticated
-        state["ready"] = bool(state.get("composer_ready")) and authenticated and bool(state.get("page_settled"))
+        access_limited = bool(state.get("temporary_access_limited"))
+        state["ready"] = bool(state.get("composer_ready")) and authenticated and bool(state.get("page_settled")) and not access_limited
         state["interaction_required"] = (
-            not authenticated
+            access_limited
+            or not authenticated
             or not bool(state.get("composer_ready"))
             or "ci siamo quasi" in str(state.get("title") or "").lower()
         )
@@ -526,6 +532,8 @@ class ChromeCdp:
             except CdpError:
                 time.sleep(0.25)
                 continue
+            if state.get("temporary_access_limited"):
+                raise CdpError("temporary_access_limited")
             if not state.get("authenticated"):
                 time.sleep(0.25)
                 continue
