@@ -276,6 +276,32 @@ def test_assistant_v1_extended_gate_does_not_expand_other_surfaces() -> None:
     assert route is None
 
 
+def test_assistant_v1_natural_mobility_routes_to_atm_mcp() -> None:
+    route = assistant_v1_api.unified_route_probe(
+        "Devo andare da Sonia",
+        {"source": "ralf_terminal", "assistant_surface": "assistant_v1"},
+        flags_override=AssistantFeatureFlags(unified_assistant=True),
+    )
+
+    assert route is not None
+    assert route["intent"] == "atm.route"
+    assert route["skills_used"] == ["atm.route"]
+    assert route["mcp_connectors"] == ["atm.route.mcp"]
+    assert route["task_mode"] == "tool_backed_read"
+
+
+def test_assistant_v1_natural_mobility_without_destination_enters_atm_branch() -> None:
+    route = assistant_v1_api.unified_route_probe(
+        "Devo andare",
+        {"source": "ralf_terminal", "assistant_surface": "assistant_v1"},
+        flags_override=AssistantFeatureFlags(unified_assistant=True),
+    )
+
+    assert route is not None
+    assert route["intent"] == "atm.route"
+    assert route["mcp_connectors"] == ["atm.route.mcp"]
+
+
 def test_local_chat_cannot_claim_external_execution() -> None:
     provider = FakeProvider("Ho inviato la mail.")
     payload = _client(
@@ -353,6 +379,9 @@ def test_bottazzi_ui_is_served_by_assistant_v1_router() -> None:
     assert "Assistente autonomo" in response.text
     assert "/assistant/v1/chat" in response.text
     assert "localStorage" in response.text
+    assert "navigator.geolocation" in response.text
+    assert "browser_geolocation" in response.text
+    assert "maximumAge:30000" in response.text
     assert "openai.com" not in response.text.casefold()
 
 

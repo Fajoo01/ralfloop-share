@@ -11,6 +11,12 @@ def test_imperative_single_destination_is_not_origin():
     assert _destination("Portami da Zelig") == "Zelig"
 
 
+def test_natural_mobility_destination_is_extracted():
+    assert _destination("Devo andare da Sonia") == "Sonia"
+    assert _destination("Voglio andare al Duomo") == "Duomo"
+    assert _destination("Vorrei arrivare in Centrale") == "Centrale"
+
+
 def test_explicit_origin_destination_remains_named_route():
     assert _named_route("Portami da casa a Sonia") == ("casa", "Sonia")
 

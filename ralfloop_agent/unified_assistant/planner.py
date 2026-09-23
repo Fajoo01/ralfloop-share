@@ -150,6 +150,7 @@ _ARCI_MUTATION_RE = re.compile(
 _ATM_RE = re.compile(
     r"\b(?:atm|giromilano|mezzi\s+pubblici|trasporto\s+pubblico)\b"
     r"|\bcome\s+(?:arrivo|vado|posso\s+andare)\b"
+    r"|\b(?:devo|voglio|vorrei)\s+(?:andare|arrivare)(?:\s+(?:da|dal|dalla|dallo|dai|dagli|dalle|a|ad|al|alla|allo|ai|agli|alle|all['’]|in)\b|\s*$)"
     r"|\bportami\s+(?:a|al|alla|all['’]|in)\b"
     r"|\bmezzi\s+(?:per|verso)\b"
     r"|\bpercorso\s+(?:atm|con\s+i\s+mezzi)\b",

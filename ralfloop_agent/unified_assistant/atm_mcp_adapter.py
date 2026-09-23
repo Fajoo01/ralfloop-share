@@ -23,6 +23,12 @@ _TRAILING_TRANSPORT_QUALIFIER_RE = re.compile(
 
 _DESTINATION_PATTERNS = (
     re.compile(
+        r"\b(?:devo|voglio|vorrei)\s+(?:andare|arrivare)\s+"
+        r"(?:da|dal|dalla|dallo|dai|dagli|dalle|a|ad|al|alla|allo|ai|agli|alle|all['’]|in)\s+"
+        r"(?P<destination>.+?)\s*[?!.]*$",
+        re.I,
+    ),
+    re.compile(
         r"\bcome\s+(?:arrivo|vado|posso\s+andare)\s+"
         r"(?:a|ad|al|alla|all['’]|in)\s+(?P<destination>.+?)\s*[?!.]*$",
         re.I,
@@ -172,13 +178,17 @@ class ATMMCPReadOnly(MeteoMCPReadOnly):
                     }
                     source = "telegram_gps_cache"
                 else:
+                    app_surface = str(self.context.get("assistant_surface") or "") == "assistant_v1"
                     return {
                         "ok": False,
                         "status": "LOCATION_REQUIRED",
                         "response": (
-                            "Mandami la posizione GPS su Telegram oppure "
-                            "specifica anche la partenza, per esempio: "
+                            "Mi serve il punto di partenza. Posso usare la posizione del telefono; "
+                            "se preferisci, scrivimi la partenza, per esempio: "
                             "come vado da Duomo a Piscina Suzzani?"
+                            if app_surface else
+                            "Mandami la posizione GPS su Telegram oppure specifica anche la partenza, "
+                            "per esempio: come vado da Duomo a Piscina Suzzani?"
                         ),
                         "tool": "atm_route",
                         "payload": {},
