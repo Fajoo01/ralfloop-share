@@ -7,10 +7,12 @@ Wants=ralfloop-backend.service
 Type=simple
 User=sibilla-cumana
 Group=sibilla-cumana
-WorkingDirectory=/home/sibilla-cumana/ralfloop_agent_scaffold
+WorkingDirectory=/home/sibilla-cumana/ralfloop-production/bottazzi-call-current
 Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/home/sibilla-cumana/ralfloop-production/bottazzi-call-current
+Environment=BOTTAZZI_CALL_RECORDINGS_DIR=/var/lib/ralfloop-bottazzi-call-recordings
 EnvironmentFile=-/etc/ralfloop/bottazzi-call-stt.env
-ExecStart=/usr/bin/env python3 scripts/ralf_bottazzi_call_stt_worker.py --interval 15 --limit 4
+ExecStart=/usr/bin/env python3 /home/sibilla-cumana/ralfloop-production/bottazzi-call-current/scripts/ralf_bottazzi_call_stt_worker.py --interval 15 --limit 4
 Restart=on-failure
 RestartSec=5
 Nice=10
@@ -20,7 +22,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/sibilla-cumana/.local/share/bottazzi
+StateDirectory=ralfloop-bottazzi-call-recordings
+ReadWritePaths=/var/lib/ralfloop-bottazzi-call-recordings
 
 [Install]
 WantedBy=multi-user.target
