@@ -4,13 +4,20 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from openshell_backend import assistant_v1_api
-from ralfloop_agent.unified_assistant.task_queue import BotTazziTaskQueue
+from ralfloop_agent.unified_assistant.task_queue import (
+    BotTazziTaskQueue,
+    DeterministicJedPriorityClassifier,
+)
 
 
 def client(tmp_path: Path) -> TestClient:
     app = FastAPI()
     app.include_router(assistant_v1_api.router)
-    queue = BotTazziTaskQueue(tmp_path / "queue.sqlite3", clock=lambda: 1_000_000)
+    queue = BotTazziTaskQueue(
+        tmp_path / "queue.sqlite3",
+        classifier=DeterministicJedPriorityClassifier(),
+        clock=lambda: 1_000_000,
+    )
     app.dependency_overrides[assistant_v1_api.get_task_queue] = lambda: queue
     return TestClient(app)
 
@@ -28,7 +35,7 @@ def test_task_api_create_list_pin_and_next(tmp_path: Path) -> None:
     ).json()["task"]
 
     snapshot = api.get("/assistant/v1/tasks").json()
-    assert snapshot["classifier"] == "JED"
+    assert snapshot["classifier"] == "JEV"
     assert snapshot["tasks"][0]["task"]["task_id"] == money["task_id"]
 
     pinned = api.post(

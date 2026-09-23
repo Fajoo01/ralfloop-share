@@ -528,7 +528,7 @@ def assistant_v1_status() -> dict[str, Any]:
         "ui_path": "/assistant/v1",
         "routes": ["unified", "local_chat", "deep_chat", "task_queue"],
         "model_policy": "small_first",
-        "task_queue_classifier": "JED",
+        "task_queue_classifier": "JEV",
         "task_queue_priority_domains": ["money", "love", "family"],
         "task_queue_human_override": "pinned_slot_authoritative",
         "fast_model_configured": bool(fast_base_url and fast_model),

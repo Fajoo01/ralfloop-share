@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
+import requests
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -162,8 +163,197 @@ class DeterministicJedPriorityClassifier:
         )
 
 
+class JevPriorityClassifier:
+    """Bot-tazzi JEV typed-option classifier for task-priority domains.
+
+    It reuses the local JEV/SemIf decision shape already used by Judge Lab:
+    fixed candidate options, one grammar-constrained token, no free-form model
+    output and no side-effect authority. If the local scorer is unavailable,
+    queue creation stays available through the deterministic fallback and the
+    source is made explicit.
+    """
+
+    _SYSTEM = (
+        "Classifica il compito scegliendo esattamente una delle opzioni fornite. "
+        "Rispondi soltanto con la lettera maiuscola dell'opzione, senza spiegazioni."
+    )
+    _LETTERS = "ABCD"
+    _OPTIONS = (
+        (
+            TaskCategory.MONEY,
+            "SOLDI: denaro, pagamenti, tasse, bilanci, lavoro retribuito, "
+            "investimenti, debiti, rimborsi o scadenze economiche.",
+        ),
+        (
+            TaskCategory.LOVE,
+            "AMORE: relazione sentimentale, partner, appuntamenti, coppia o "
+            "legame romantico.",
+        ),
+        (
+            TaskCategory.FAMILY,
+            "FAMIGLIA: madre, padre, sorelle, fratelli, figli, genitori o altri "
+            "familiari.",
+        ),
+        (
+            TaskCategory.GENERAL,
+            "GENERALE: nessuna delle categorie SOLDI, AMORE o FAMIGLIA è il tema "
+            "principale del compito.",
+        ),
+    )
+
+    def __init__(
+        self,
+        *,
+        base_url: str | None = None,
+        timeout_sec: float | None = None,
+        session: requests.Session | None = None,
+        fallback: PriorityClassifier | None = None,
+    ) -> None:
+        self.base_url = (
+            base_url
+            or os.getenv("BOTTAZZI_JEV_URL", "").strip()
+            or os.getenv("BOTTAZZI_TYPED_SHADOW_URL", "").strip()
+            or "http://127.0.0.1:19110"
+        ).rstrip("/")
+        if not (
+            self.base_url.startswith("http://127.0.0.1:")
+            or self.base_url.startswith("http://localhost:")
+        ):
+            raise ValueError("jev_url_must_be_loopback")
+        configured_timeout = timeout_sec
+        if configured_timeout is None:
+            try:
+                configured_timeout = float(
+                    os.getenv("BOTTAZZI_JEV_TIMEOUT_SEC", "15.0")
+                )
+            except ValueError:
+                configured_timeout = 15.0
+        if configured_timeout <= 0 or configured_timeout > 30:
+            raise ValueError("jev_timeout_invalid")
+        self.timeout_sec = configured_timeout
+        self.session = session or requests.Session()
+        self.fallback = fallback or DeterministicJedPriorityClassifier()
+
+    def classify(
+        self,
+        text: str,
+        *,
+        category_hint: TaskCategory | str | None = None,
+    ) -> PriorityDecision:
+        if category_hint is not None:
+            hinted = self.fallback.classify(text, category_hint=category_hint)
+            return hinted.model_copy(update={"source": "human_category_hint"})
+        try:
+            category, confidence, probabilities = self._semantic_score(text)
+        except Exception:
+            fallback = self.fallback.classify(text)
+            return fallback.model_copy(
+                update={
+                    "source": "jev_unavailable_fallback",
+                    "reasons": ("jev_unavailable",) + fallback.reasons,
+                }
+            )
+        compact_probs = ",".join(
+            f"{category_key.value}:{probabilities.get(category_key, 0.0):.3f}"
+            for category_key, _ in self._OPTIONS
+        )
+        return PriorityDecision(
+            category=category,
+            score=DeterministicJedPriorityClassifier._BASE_SCORE[category],
+            confidence=confidence,
+            source="jev_typed_local",
+            reasons=(f"jev_domain:{category.value}", f"jev_probs:{compact_probs}"),
+        )
+
+    def _semantic_score(
+        self,
+        text: str,
+    ) -> tuple[TaskCategory, float, dict[TaskCategory, float]]:
+        clean_text = text.strip()
+        if not clean_text:
+            raise ValueError("jev_task_text_required")
+        options = [
+            {"letter": self._LETTERS[index], "description": description}
+            for index, (_, description) in enumerate(self._OPTIONS)
+        ]
+        messages = [
+            {"role": "system", "content": self._SYSTEM},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "evidence": {"task": clean_text},
+                        "criterion": (
+                            "Qual è il dominio personale principale del compito? "
+                            "Se non è chiaramente SOLDI, AMORE o FAMIGLIA, scegli GENERALE."
+                        ),
+                        "options": options,
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            },
+        ]
+        template_response = self.session.post(
+            f"{self.base_url}/apply-template",
+            json={"messages": messages},
+            timeout=self.timeout_sec,
+        )
+        template_response.raise_for_status()
+        template_body = template_response.json()
+        prompt = template_body.get("prompt")
+        if not isinstance(prompt, str) or not prompt:
+            raise ValueError("jev_template_missing")
+        grammar = "root ::= " + " | ".join(
+            json.dumps(letter) for letter in self._LETTERS
+        )
+        response = self.session.post(
+            f"{self.base_url}/completion",
+            json={
+                "prompt": prompt,
+                "n_predict": 1,
+                "temperature": 1.0,
+                "top_k": 0,
+                "top_p": 1.0,
+                "min_p": 0.0,
+                "typical_p": 1.0,
+                "n_probs": 16,
+                "min_keep": 4,
+                "post_sampling_probs": True,
+                "grammar": grammar,
+                "cache_prompt": False,
+            },
+            timeout=self.timeout_sec,
+        )
+        response.raise_for_status()
+        body = response.json()
+        selected_letter = str(body.get("content") or "").strip()[:1]
+        rows = body.get("completion_probabilities")
+        top_probs = rows[0].get("top_probs") if isinstance(rows, list) and rows else []
+        by_letter = {
+            str(item.get("token", "")).strip(): float(item.get("prob", 0.0))
+            for item in top_probs
+            if isinstance(item, dict)
+            and str(item.get("token", "")).strip() in self._LETTERS
+        }
+        if selected_letter not in self._LETTERS:
+            if not by_letter:
+                raise ValueError("jev_option_missing")
+            selected_letter = max(by_letter, key=by_letter.get)
+        index = self._LETTERS.index(selected_letter)
+        category = self._OPTIONS[index][0]
+        probabilities = {
+            self._OPTIONS[i][0]: by_letter.get(letter, 0.0)
+            for i, letter in enumerate(self._LETTERS)
+        }
+        confidence = by_letter.get(selected_letter, 0.0)
+        if confidence <= 0.0:
+            confidence = 0.5
+        return category, min(1.0, confidence), probabilities
+
+
 class BotTazziTaskQueue:
-    """Persistent task queue with JED auto-priority and human-pinned slots."""
+    """Persistent task queue with JEV auto-priority and human-pinned slots."""
 
     def __init__(
         self,
@@ -174,7 +364,7 @@ class BotTazziTaskQueue:
     ) -> None:
         self.db_path = Path(db_path).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.classifier = classifier or DeterministicJedPriorityClassifier()
+        self.classifier = classifier or JevPriorityClassifier()
         self._clock = clock
         self._ensure_schema()
 
@@ -346,7 +536,7 @@ class BotTazziTaskQueue:
         queue = self.list_queue()
         next_entry = next((entry for entry in queue if entry.runnable), None)
         return {
-            "classifier": "JED",
+            "classifier": "JEV",
             "classifier_backend": type(self.classifier).__name__,
             "priority_domains": [
                 TaskCategory.MONEY.value,
@@ -531,6 +721,7 @@ __all__ = [
     "BotTask",
     "BotTazziTaskQueue",
     "DeterministicJedPriorityClassifier",
+    "JevPriorityClassifier",
     "PriorityClassifier",
     "PriorityDecision",
     "QueueEntry",

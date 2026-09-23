@@ -2,13 +2,19 @@ from pathlib import Path
 
 from ralfloop_agent.unified_assistant.task_queue import (
     BotTazziTaskQueue,
+    DeterministicJedPriorityClassifier,
+    JevPriorityClassifier,
     TaskCategory,
     TaskState,
 )
 
 
 def queue(tmp_path: Path) -> BotTazziTaskQueue:
-    return BotTazziTaskQueue(tmp_path / "queue.sqlite3", clock=lambda: 1_000_000)
+    return BotTazziTaskQueue(
+        tmp_path / "queue.sqlite3",
+        classifier=DeterministicJedPriorityClassifier(),
+        clock=lambda: 1_000_000,
+    )
 
 
 def test_money_love_family_have_priority_over_general(tmp_path: Path) -> None:
@@ -97,11 +103,19 @@ def test_unpin_returns_task_to_jed_order(tmp_path: Path) -> None:
 
 def test_persistence_round_trip(tmp_path: Path) -> None:
     path = tmp_path / "queue.sqlite3"
-    first = BotTazziTaskQueue(path, clock=lambda: 1_000_000)
+    first = BotTazziTaskQueue(
+        path,
+        classifier=DeterministicJedPriorityClassifier(),
+        clock=lambda: 1_000_000,
+    )
     task = first.create_task("Sistema il conto bancario")
     first.pin(task.task_id, 1)
 
-    second = BotTazziTaskQueue(path, clock=lambda: 1_000_100)
+    second = BotTazziTaskQueue(
+        path,
+        classifier=DeterministicJedPriorityClassifier(),
+        clock=lambda: 1_000_100,
+    )
     loaded = second.get_task(task.task_id)
 
     assert loaded.category is TaskCategory.MONEY
@@ -126,3 +140,77 @@ def test_human_pin_conflict_is_reported_not_reordered(tmp_path: Path) -> None:
         "candidate_auto_priority": 85,
         "reason": "higher_auto_priority_below_human_pin",
     }]
+
+
+class _FakeJevResponse:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        return self.payload
+
+
+class _FakeJevSession:
+    def __init__(self, selected: str = "B") -> None:
+        self.selected = selected
+        self.calls: list[tuple[str, dict]] = []
+
+    def post(self, url: str, *, json: dict, timeout: float):
+        self.calls.append((url, json))
+        if url.endswith("/apply-template"):
+            return _FakeJevResponse({"prompt": "typed-prompt"})
+        probs = {"A": 0.02, "B": 0.94, "C": 0.02, "D": 0.02}
+        return _FakeJevResponse({
+            "content": self.selected,
+            "completion_probabilities": [{
+                "top_probs": [
+                    {"token": letter, "prob": prob}
+                    for letter, prob in probs.items()
+                ]
+            }],
+        })
+
+
+def test_jev_classifier_uses_typed_local_options() -> None:
+    session = _FakeJevSession("B")
+    classifier = JevPriorityClassifier(
+        base_url="http://127.0.0.1:19110",
+        session=session,
+    )
+
+    decision = classifier.classify("Organizza un appuntamento romantico")
+
+    assert decision.category is TaskCategory.LOVE
+    assert decision.score == 85
+    assert decision.source == "jev_typed_local"
+    assert decision.confidence == 0.94
+    assert [url.rsplit("/", 1)[-1] for url, _ in session.calls] == [
+        "apply-template",
+        "completion",
+    ]
+    completion = session.calls[1][1]
+    assert completion["n_predict"] == 1
+    assert completion["post_sampling_probs"] is True
+    assert completion["grammar"] == 'root ::= "A" | "B" | "C" | "D"'
+
+
+class _BrokenJevSession:
+    def post(self, *args, **kwargs):
+        raise OSError("offline")
+
+
+def test_jev_classifier_fallback_is_explicit_when_runtime_unavailable() -> None:
+    classifier = JevPriorityClassifier(
+        base_url="http://127.0.0.1:19110",
+        session=_BrokenJevSession(),
+    )
+
+    decision = classifier.classify("Controlla il pagamento TARI")
+
+    assert decision.category is TaskCategory.MONEY
+    assert decision.score == 85
+    assert decision.source == "jev_unavailable_fallback"
+    assert decision.reasons[0] == "jev_unavailable"
