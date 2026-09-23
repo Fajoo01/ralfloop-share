@@ -262,7 +262,7 @@ def _archive_source_with_journal(
     source_target_id: str,
     source_url: str,
 ) -> dict:
-    archive_may_have_started = phase in {"archive_started", "source_archived", "source_closed", "committed"}
+    archive_may_have_started = phase in {"archive_started", "source_archived", "source_ghosted", "source_closed", "committed"}
     started_hook = None if archive_may_have_started else lambda: journal.update(phase="archive_started")
     result = _archive_source_conversation(
         cdp,
@@ -273,6 +273,30 @@ def _archive_source_with_journal(
     )
     journal.update(phase="source_archived")
     return result
+
+
+def _install_rollover_ghost(
+    cdp: ChromeCdp,
+    journal: MutationJournalStore,
+    *,
+    source_target_id: str,
+    successor_target_id: str,
+    successor_url: str,
+) -> dict:
+    human_target = cdp.install_human_input_target(successor_target_id, successor_url)
+    tabs = [t for t in cdp.targets() if t.target_type == "page" and t.is_chatgpt]
+    source = next((tab for tab in tabs if tab.target_id == source_target_id), None)
+    ghost = None
+    if source is not None and source.target_id != successor_target_id:
+        ghost = cdp.mark_chatgpt_ghost_tab(source.target_id, successor_url=successor_url)
+    journal.update(phase="source_ghosted", source_ghosted=bool(ghost))
+    return {"human_input_target": human_target, "ghost": ghost, "source_ghosted": bool(ghost)}
+
+
+def _unlock_rollover_source(cdp: ChromeCdp, source_target_id: str) -> None:
+    tabs = [t for t in cdp.targets() if t.target_type == "page" and t.is_chatgpt]
+    if any(tab.target_id == source_target_id for tab in tabs):
+        cdp.unlock_human_input_after_failed_handoff(source_target_id)
 
 
 def _finalize_adoption_state(
@@ -375,34 +399,60 @@ def _recover_incomplete_mutation(
                     store.update_source_chat(successor.target_id, successor_url)
                     journal.update(phase="source_state_done", successor_url=successor_url)
                     _archive_source_with_journal(cdp, journal, phase, source_target_id, source_url)
-                    if source_tab is not None and source_tab.target_id != successor.target_id:
-                        cdp.close_target(source_tab.target_id)
-                    journal.update(phase="source_closed")
+                    ghost_state = _install_rollover_ghost(
+                        cdp,
+                        journal,
+                        source_target_id=source_target_id,
+                        successor_target_id=successor.target_id,
+                        successor_url=successor_url,
+                    )
+                    journal.update(phase="committed")
                     journal.clear()
-                    return {"kind": kind, "outcome": "committed", "phase": phase, "source_chat_url": successor_url, "source_chat_archived": True}
+                    return {
+                        "kind": kind,
+                        "outcome": "committed",
+                        "phase": phase,
+                        "source_chat_url": successor_url,
+                        "source_chat_archived": True,
+                        "source_chat_ghosted": bool(ghost_state.get("source_ghosted")),
+                    }
             cdp.close_target(successor.target_id)
             current = store.load_current()
             current_url = normalize_chatgpt_conversation_url(str(current.get("source_chat_url") or ""))
             if current_url == source_url:
+                _unlock_rollover_source(cdp, source_target_id)
                 journal.clear()
                 return {"kind": kind, "outcome": "rolled_back", "phase": phase}
             raise GptSessionError("mutation_recovery_required:rollover:unconfirmed_successor")
-        if phase in {"source_state_done", "archive_started", "source_archived", "source_closed", "committed"} and current_url and current_url != source_url:
+        if phase in {"source_state_done", "archive_started", "source_archived", "source_ghosted", "source_closed", "committed"} and current_url and current_url != source_url:
             resolved, _, error = _resolve_stored_source(tabs, store)
             if error:
                 raise GptSessionError(f"mutation_recovery_required:rollover:{error}")
             if resolved is not None and normalize_chatgpt_conversation_url(resolved.url) == current_url:
                 _archive_source_with_journal(cdp, journal, phase, source_target_id, source_url)
-                if source_tab is not None and source_tab.target_id != resolved.target_id:
-                    cdp.close_target(source_tab.target_id)
-                journal.update(phase="source_closed")
+                ghost_state = _install_rollover_ghost(
+                    cdp,
+                    journal,
+                    source_target_id=source_target_id,
+                    successor_target_id=resolved.target_id,
+                    successor_url=current_url,
+                )
+                journal.update(phase="committed")
                 journal.clear()
-                return {"kind": kind, "outcome": "committed", "phase": phase, "source_chat_url": current_url, "source_chat_archived": True}
+                return {
+                    "kind": kind,
+                    "outcome": "committed",
+                    "phase": phase,
+                    "source_chat_url": current_url,
+                    "source_chat_archived": True,
+                    "source_chat_ghosted": bool(ghost_state.get("source_ghosted")),
+                }
         if current_url == source_url:
             resolved, _, error = _resolve_stored_source(tabs, store)
             if error:
                 raise GptSessionError(f"mutation_recovery_required:rollover:{error}")
             if resolved is not None and normalize_chatgpt_conversation_url(resolved.url) == source_url:
+                _unlock_rollover_source(cdp, source_target_id)
                 journal.clear()
                 return {"kind": kind, "outcome": "rolled_back", "phase": phase}
         raise GptSessionError("mutation_recovery_required:rollover:ambiguous_state")
@@ -820,6 +870,8 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
     journal = MutationJournalStore(args.state_dir)
     try:
         journal.begin("rollover", source_target_id=source.target_id, source_url=source_url)
+        cdp.lock_human_input_during_handoff(source.target_id)
+        journal.update(phase="source_human_locked")
 
         def record_successor(target_id: str) -> None:
             journal.update(phase="target_created", successor_target_id=target_id)
@@ -888,27 +940,32 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
         report["worker_target_id"] = new_target_id
         _json(report)
         return 1
-    closed: list[str] = []
-    if source.target_id != new_target_id:
-        try:
-            cdp.close_target(source.target_id)
-        except CdpError as exc:
-            report["ok"] = False
-            report["source_close_error"] = str(exc)
-            report["recovery_required"] = True
-            report["worker_target_id"] = new_target_id
-            _json(report)
-            return 1
-        else:
-            closed.append(source.target_id)
-    journal.update(phase="source_closed")
+    try:
+        ghost_state = _install_rollover_ghost(
+            cdp,
+            journal,
+            source_target_id=source.target_id,
+            successor_target_id=new_target_id,
+            successor_url=new_source_url,
+        )
+    except (CdpError, GptSessionError, OSError) as exc:
+        report["ok"] = False
+        report["blocked"] = f"handoff_ghost_incomplete:{exc}"
+        report["recovery_required"] = True
+        report["worker_target_id"] = new_target_id
+        _json(report)
+        return 1
     journal.update(phase="committed")
     journal.clear()
-    handoff["closed_target_ids"] = closed
+    handoff["closed_target_ids"] = []
     handoff["source_chat_archived"] = True
+    handoff["source_chat_ghosted"] = bool(ghost_state.get("source_ghosted"))
+    handoff["human_input_target"] = bool(ghost_state.get("human_input_target"))
     report["applied"] = True
     report["handoff"] = handoff
     report["source_chat_archived"] = True
+    report["source_chat_ghosted"] = bool(ghost_state.get("source_ghosted"))
+    report["human_input_target"] = bool(ghost_state.get("human_input_target"))
     report["worker_target_id"] = new_target_id
     _json(report)
     return 0

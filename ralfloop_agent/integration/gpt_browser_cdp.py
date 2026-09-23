@@ -741,6 +741,283 @@ class ChromeCdp:
             time.sleep(0.1)
         raise CdpError("conversation_archive_not_confirmed")
 
+    def lock_human_input_during_handoff(self, target_id: str) -> dict[str, Any]:
+        target = self._wait_target(target_id)
+        if not target.websocket_url or not target.is_chatgpt:
+            raise CdpError("handoff_lock_target_invalid")
+        expression = r'''(() => {
+          const stateKey = '__bottazziHandoffLockV1';
+          const overlayId = 'bottazzi-handoff-lock';
+          if (window[stateKey]) return JSON.stringify({ok:true, locked:true, already:true});
+          const native = document.querySelector('#prompt-textarea') || document.querySelector('textarea') || document.querySelector('[contenteditable="true"]');
+          const state = {native, pointerEvents:null, tabIndex:null, opacity:null, handlers:[]};
+          if (native) {
+            state.pointerEvents = native.style.pointerEvents;
+            state.tabIndex = native.getAttribute('tabindex');
+            state.opacity = native.style.opacity;
+            native.blur();
+            native.style.pointerEvents = 'none';
+            native.style.opacity = '0.35';
+            native.tabIndex = -1;
+          }
+          const block = event => {
+            const overlay = document.getElementById(overlayId);
+            if (overlay && overlay.contains(event.target)) return;
+            event.preventDefault();
+            event.stopImmediatePropagation();
+          };
+          for (const type of ['keydown','beforeinput','paste','drop']) {
+            document.addEventListener(type, block, true);
+            state.handlers.push([type, block]);
+          }
+          let overlay = document.getElementById(overlayId);
+          if (!overlay && document.body) {
+            overlay = document.createElement('div');
+            overlay.id = overlayId;
+            overlay.textContent = 'Passaggio a una nuova chat in corso. La tastiera qui è temporaneamente bloccata per non perdere quello che scrivi.';
+            overlay.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:2147483647;width:min(760px,calc(100vw - 32px));padding:12px 14px;border-radius:12px;background:#5b1a1a;color:#fff;font:700 14px/1.35 system-ui,sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.28)';
+            document.body.appendChild(overlay);
+          }
+          window[stateKey] = state;
+          return JSON.stringify({ok:true, locked:true, native_found:Boolean(native), overlay:Boolean(overlay)});
+        })()'''
+        result = self._page_call(target.websocket_url, "Runtime.evaluate", {"expression": expression, "returnByValue": True})
+        raw = (result.get("result") or {}).get("value")
+        try:
+            state = json.loads(raw) if isinstance(raw, str) else {}
+        except json.JSONDecodeError as exc:
+            raise CdpError("handoff_lock_invalid") from exc
+        if not isinstance(state, dict) or not state.get("ok"):
+            raise CdpError("handoff_lock_failed")
+        return state
+
+    def unlock_human_input_after_failed_handoff(self, target_id: str) -> dict[str, Any]:
+        target = self._wait_target(target_id)
+        if not target.websocket_url or not target.is_chatgpt:
+            raise CdpError("handoff_unlock_target_invalid")
+        expression = r'''(() => {
+          const stateKey = '__bottazziHandoffLockV1';
+          const overlayId = 'bottazzi-handoff-lock';
+          const state = window[stateKey];
+          if (state && Array.isArray(state.handlers)) {
+            for (const item of state.handlers) {
+              if (Array.isArray(item) && item.length === 2) document.removeEventListener(item[0], item[1], true);
+            }
+          }
+          if (state && state.native) {
+            state.native.style.pointerEvents = state.pointerEvents || '';
+            state.native.style.opacity = state.opacity || '';
+            if (state.tabIndex === null) state.native.removeAttribute('tabindex');
+            else state.native.setAttribute('tabindex', state.tabIndex);
+          }
+          const overlay = document.getElementById(overlayId);
+          if (overlay) overlay.remove();
+          try { delete window[stateKey]; } catch (_) { window[stateKey] = null; }
+          return JSON.stringify({ok:true, locked:false});
+        })()'''
+        result = self._page_call(target.websocket_url, "Runtime.evaluate", {"expression": expression, "returnByValue": True})
+        raw = (result.get("result") or {}).get("value")
+        try:
+            state = json.loads(raw) if isinstance(raw, str) else {}
+        except json.JSONDecodeError as exc:
+            raise CdpError("handoff_unlock_invalid") from exc
+        if not isinstance(state, dict) or not state.get("ok"):
+            raise CdpError("handoff_unlock_failed")
+        return state
+
+    def install_human_input_target(self, target_id: str, conversation_url: str) -> dict[str, Any]:
+        normalized = _canonical_chatgpt_conversation_url(conversation_url)
+        if not normalized:
+            raise CdpError("human_input_target_url_invalid")
+        target = self._wait_target(target_id)
+        if not target.websocket_url or not target.is_chatgpt:
+            raise CdpError("human_input_target_invalid")
+        config = json.dumps({"conversation_url": normalized}, ensure_ascii=False)
+        expression = r'''(() => {
+          const config = __CONFIG__;
+          const stateKey = '__bottazziHumanInputTargetV1';
+          const draftKey = '__bottazziHumanDraftV1';
+          const canonical = value => {
+            try {
+              const u = new URL(String(value || ''), location.origin);
+              const m = u.pathname.match(/^\/(?:g\/[^/]+\/)?c\/([A-Za-z0-9-]+)/);
+              return m ? `${u.origin}/c/${m[1]}` : '';
+            } catch (_) { return ''; }
+          };
+          const findComposer = () => document.querySelector('#prompt-textarea') || document.querySelector('textarea') || document.querySelector('[contenteditable="true"]');
+          const importDraft = () => {
+            let raw = null;
+            try { raw = localStorage.getItem(draftKey); } catch (_) { return false; }
+            if (!raw) return false;
+            let payload = null;
+            try { payload = JSON.parse(raw); } catch (_) { return false; }
+            if (!payload || canonical(payload.successor_url) !== config.conversation_url || canonical(location.href) !== config.conversation_url) return false;
+            const text = String(payload.text || '');
+            if (!text) return false;
+            const composer = findComposer();
+            if (!composer) return false;
+            composer.focus();
+            if (composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement) {
+              const proto = composer instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+              const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+              setter.call(composer, text);
+              composer.dispatchEvent(new Event('input', {bubbles:true}));
+            } else {
+              const sel = window.getSelection();
+              const range = document.createRange();
+              range.selectNodeContents(composer);
+              sel.removeAllRanges();
+              sel.addRange(range);
+              document.execCommand('insertText', false, text);
+              composer.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText', data:text}));
+            }
+            try { localStorage.removeItem(draftKey); } catch (_) {}
+            return true;
+          };
+          window.name = 'bottazzi-active';
+          if (!window[stateKey]) {
+            const onStorage = event => { if (event.key === draftKey) setTimeout(importDraft, 0); };
+            window.addEventListener('storage', onStorage);
+            window.addEventListener('focus', () => setTimeout(importDraft, 0));
+            const observer = new MutationObserver(() => importDraft());
+            observer.observe(document.documentElement, {subtree:true, childList:true});
+            window[stateKey] = {version:1, observer, onStorage};
+          }
+          window[stateKey].conversation_url = config.conversation_url;
+          importDraft();
+          return JSON.stringify({ok:true, human_input_target:true, conversation_url:config.conversation_url, window_name:window.name});
+        })()'''.replace("__CONFIG__", config)
+        result = self._page_call(target.websocket_url, "Runtime.evaluate", {"expression": expression, "returnByValue": True})
+        raw = (result.get("result") or {}).get("value")
+        try:
+            state = json.loads(raw) if isinstance(raw, str) else {}
+        except json.JSONDecodeError as exc:
+            raise CdpError("human_input_target_install_invalid") from exc
+        if not isinstance(state, dict) or not state.get("ok"):
+            raise CdpError("human_input_target_install_failed")
+        return state
+
+    def mark_chatgpt_ghost_tab(
+        self,
+        target_id: str,
+        *,
+        successor_url: str | None = None,
+        notice: str = "Questa chat è passata a Bot-tazzi. Il campo normale è riservato al bot; usa il campo umano per continuare nella chat attiva.",
+    ) -> dict[str, Any]:
+        target = self._wait_target(target_id)
+        if not target.websocket_url or not target.is_chatgpt:
+            raise CdpError("ghost_target_invalid")
+        successor = _canonical_chatgpt_conversation_url(successor_url or "")
+        config = json.dumps({"notice": notice, "successor_url": successor}, ensure_ascii=False)
+        expression = r'''(() => {
+          const config = __CONFIG__;
+          const handoffStateKey = '__bottazziHandoffLockV1';
+          const handoffOverlayId = 'bottazzi-handoff-lock';
+          const handoffState = window[handoffStateKey];
+          if (handoffState && Array.isArray(handoffState.handlers)) {
+            for (const item of handoffState.handlers) {
+              if (Array.isArray(item) && item.length === 2) document.removeEventListener(item[0], item[1], true);
+            }
+          }
+          const handoffOverlay = document.getElementById(handoffOverlayId);
+          if (handoffOverlay) handoffOverlay.remove();
+          try { delete window[handoffStateKey]; } catch (_) { window[handoffStateKey] = null; }
+          window.name = '';
+          const stateKey = '__bottazziGhostTabV1';
+          const bannerId = 'bottazzi-ghost-banner';
+          const humanBoxId = 'bottazzi-human-composer';
+          const draftKey = '__bottazziHumanDraftV1';
+          const nativeSelectors = ['#prompt-textarea', 'textarea', '[contenteditable="true"]'];
+          const visible = el => {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            const s = getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+          };
+          const findNativeComposer = () => {
+            for (const selector of nativeSelectors) {
+              const el = [...document.querySelectorAll(selector)].find(visible);
+              if (el && el.id !== humanBoxId) return el;
+            }
+            return null;
+          };
+          const ensureUi = () => {
+            if (!document.body) return;
+            let banner = document.getElementById(bannerId);
+            if (banner) return;
+            banner = document.createElement('div');
+            banner.id = bannerId;
+            banner.style.cssText = 'position:fixed;left:50%;top:12px;transform:translateX(-50%);z-index:2147483647;width:min(760px,calc(100vw - 32px));padding:10px 12px;border-radius:12px;background:#5b1a1a;color:#fff;font:600 14px/1.35 system-ui,sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.28)';
+            const text = document.createElement('div');
+            text.textContent = String(config.notice || 'Chat passata a Bot-tazzi.');
+            banner.appendChild(text);
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;gap:8px;margin-top:8px';
+            const input = document.createElement('textarea');
+            input.id = humanBoxId;
+            input.rows = 2;
+            input.placeholder = 'Scrivi qui per continuare nella chat attiva';
+            input.style.cssText = 'flex:1;resize:vertical;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,.35);background:white;color:#111;font:14px system-ui,sans-serif';
+            const send = document.createElement('button');
+            send.type = 'button';
+            send.textContent = 'Continua';
+            send.style.cssText = 'padding:8px 12px;border-radius:8px;border:0;cursor:pointer;font-weight:700';
+            const forward = () => {
+              const textValue = input.value.trim();
+              if (!config.successor_url || !textValue) return;
+              try {
+                localStorage.setItem(draftKey, JSON.stringify({successor_url:config.successor_url, text:textValue, created_at:Date.now()}));
+              } catch (_) { return; }
+              input.value = '';
+              window.open(config.successor_url, 'bottazzi-active');
+            };
+            send.addEventListener('click', forward);
+            input.addEventListener('keydown', event => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                forward();
+              }
+            });
+            row.appendChild(input);
+            row.appendChild(send);
+            banner.appendChild(row);
+            document.body.appendChild(banner);
+          };
+          const lockNative = () => {
+            ensureUi();
+            const composer = findNativeComposer();
+            if (composer) {
+              composer.setAttribute('data-bottazzi-ghost-native', '1');
+              composer.style.pointerEvents = 'none';
+              composer.style.opacity = '0.35';
+              composer.tabIndex = -1;
+              composer.blur();
+              const form = composer.closest('form');
+              if (form) form.querySelectorAll('button').forEach(button => {
+                button.style.pointerEvents = 'none';
+                button.tabIndex = -1;
+              });
+            }
+          };
+          if (!window[stateKey]) {
+            const observer = new MutationObserver(lockNative);
+            observer.observe(document.documentElement, {subtree:true, childList:true});
+            window[stateKey] = {version:1, observer};
+          }
+          window[stateKey].config = config;
+          lockNative();
+          return JSON.stringify({ok:true, ghost:true, successor_url:config.successor_url || null, human_composer:Boolean(document.getElementById(humanBoxId))});
+        })()'''.replace("__CONFIG__", config)
+        result = self._page_call(target.websocket_url, "Runtime.evaluate", {"expression": expression, "returnByValue": True})
+        raw = (result.get("result") or {}).get("value")
+        try:
+            state = json.loads(raw) if isinstance(raw, str) else {}
+        except json.JSONDecodeError as exc:
+            raise CdpError("ghost_install_invalid") from exc
+        if not isinstance(state, dict) or not state.get("ok"):
+            raise CdpError("ghost_install_failed")
+        return state
+
     def rotate_chatgpt_tab(self, *, close_old: bool = True) -> dict[str, Any]:
         previous = [target for target in self.targets() if target.target_type == "page" and target.is_chatgpt]
         target_id = self.create_target("about:blank")

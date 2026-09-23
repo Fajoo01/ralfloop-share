@@ -390,6 +390,10 @@ class FakeRecoveryCdp:
         self.ui_by_target = dict(ui_by_target or {})
         self.closed: list[str] = []
         self.archived: list[tuple[str, str]] = []
+        self.human_input_targets: list[tuple[str, str]] = []
+        self.ghosted: list[tuple[str, str | None]] = []
+        self.locked: list[str] = []
+        self.unlocked: list[str] = []
 
     def targets(self):
         return [target for target in self._targets if target.target_id not in self.closed]
@@ -421,6 +425,22 @@ class FakeRecoveryCdp:
             archive_started_hook()
         self.archived.append((target_id, url))
         return {"archived": True, "already_archived": False, "conversation_url": url}
+
+    def lock_human_input_during_handoff(self, target_id: str):
+        self.locked.append(target_id)
+        return {"ok": True, "locked": True}
+
+    def unlock_human_input_after_failed_handoff(self, target_id: str):
+        self.unlocked.append(target_id)
+        return {"ok": True, "locked": False}
+
+    def install_human_input_target(self, target_id: str, conversation_url: str):
+        self.human_input_targets.append((target_id, conversation_url))
+        return {"ok": True, "human_input_target": True, "conversation_url": conversation_url}
+
+    def mark_chatgpt_ghost_tab(self, target_id: str, *, successor_url: str | None = None, notice: str = ""):
+        self.ghosted.append((target_id, successor_url))
+        return {"ok": True, "ghost": True, "successor_url": successor_url}
 
     def close_target(self, target_id: str) -> None:
         self.closed.append(target_id)
@@ -467,7 +487,7 @@ def test_incomplete_adoption_recovers_after_browser_navigation(tmp_path) -> None
     assert journal.load() is None
 
 
-def test_incomplete_rollover_recovers_confirmed_successor_and_closes_old_source(tmp_path) -> None:
+def test_incomplete_rollover_recovers_confirmed_successor_and_ghosts_old_source(tmp_path) -> None:
     handoff = HandoffStore(tmp_path)
     handoff.save(Handoff(goal="x", current_state="y"))
     handoff.update_source_chat("source", "https://chatgpt.com/c/source")
@@ -490,13 +510,28 @@ def test_incomplete_rollover_recovers_confirmed_successor_and_closes_old_source(
     assert current["source_chat"] == "successor"
     assert current["source_chat_url"] == "https://chatgpt.com/c/successor"
     assert cdp.archived == [("source", "https://chatgpt.com/c/source")]
-    assert cdp.closed == ["source"]
+    assert cdp.human_input_targets == [("successor", "https://chatgpt.com/c/successor")]
+    assert cdp.ghosted == [("source", "https://chatgpt.com/c/successor")]
+    assert cdp.closed == []
+    assert result["source_chat_ghosted"] is True
     assert journal.load() is None
 
 
 class FakeRateLimitedRolloverCdp:
     def __init__(self) -> None:
         self.source = BrowserTarget("source", "page", "https://chatgpt.com/c/source", "worker", "ws://source")
+        self.locked = False
+        self.unlocked = False
+
+    def lock_human_input_during_handoff(self, target_id: str):
+        assert target_id == "source"
+        self.locked = True
+        return {"ok": True, "locked": True}
+
+    def unlock_human_input_after_failed_handoff(self, target_id: str):
+        assert target_id == "source"
+        self.unlocked = True
+        return {"ok": True, "locked": False}
 
     def targets(self):
         return [self.source]
@@ -543,6 +578,8 @@ def test_rollover_rate_limit_rolls_back_journal_and_remains_operational(monkeypa
     )
 
     assert gpt_session_tool.cmd_shepherd(args) == 0
+    assert fake.locked is True
+    assert fake.unlocked is True
     assert MutationJournalStore(tmp_path).load() is None
     assert handoff.load_current()["source_chat_url"] == "https://chatgpt.com/c/source"
 
