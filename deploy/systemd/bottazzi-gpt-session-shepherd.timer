@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Bot-tazzi GPT session shepherd periodically
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=bottazzi-gpt-session-shepherd.service
+
+[Install]
+WantedBy=timers.target

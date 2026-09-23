@@ -29,14 +29,19 @@ def cmd_status(args: argparse.Namespace) -> int:
     try:
         health = cdp.health()
         targets = cdp.targets()
+        tabs = [t for t in targets if t.target_type == "page" and t.is_chatgpt]
         browser = {
             "ok": True,
             "browser": health.get("Browser"),
             "endpoint": args.endpoint,
             "chatgpt_tabs": [
-                {"id": t.target_id, "title": t.title, "url": t.url}
-                for t in targets
-                if t.target_type == "page" and t.is_chatgpt
+                {
+                    "id": t.target_id,
+                    "title": t.title,
+                    "url": t.url,
+                    "ui": cdp.chatgpt_ui_state(t.target_id),
+                }
+                for t in tabs
             ],
         }
     except CdpError as exc:
@@ -117,6 +122,56 @@ def cmd_rotate(args: argparse.Namespace) -> int:
     return 0
 
 
+
+def cmd_shepherd(args: argparse.Namespace) -> int:
+    cdp = ChromeCdp(args.endpoint)
+    tabs = [t for t in cdp.targets() if t.target_type == "page" and t.is_chatgpt]
+    if not tabs:
+        _json({"ok": False, "action": "noop", "reason": "chatgpt_tab_not_found"})
+        return 0
+    ui = cdp.chatgpt_ui_state(tabs[-1].target_id)
+    metrics = SessionMetrics(
+        turns=int(ui.get("user_turns") or 0),
+        age_minutes=int(ui.get("page_age_minutes") or 0),
+    )
+    policy = RolloverPolicy(
+        max_turns=args.max_turns,
+        max_age_minutes=args.max_age_minutes,
+        max_consecutive_errors=args.max_errors,
+        max_response_latency_ms=args.max_latency_ms,
+    )
+    decision = evaluate_rollover(metrics, policy)
+    report = {
+        "ok": True,
+        "ui": ui,
+        "rollover": decision.rollover,
+        "reasons": list(decision.reasons),
+        "applied": False,
+    }
+    if not decision.rollover:
+        _json(report)
+        return 0
+    if not ui.get("ready"):
+        report["blocked"] = "interaction_required" if ui.get("interaction_required") else "composer_not_ready"
+        _json(report)
+        return 0
+    if not args.apply:
+        report["dry_run"] = True
+        _json(report)
+        return 0
+    prompt = HandoffStore(args.state_dir).render_prompt()
+    try:
+        handoff = cdp.handoff_to_new_chat(prompt, submit=args.submit)
+    except CdpError as exc:
+        report["ok"] = False
+        report["blocked"] = str(exc)
+        _json(report)
+        return 0
+    report["applied"] = True
+    report["handoff"] = handoff
+    _json(report)
+    return 0
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Bot-tazzi dedicated GPT browser/session controller")
     parser.add_argument("--endpoint", default="http://127.0.0.1:9238")
@@ -145,6 +200,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     render = sub.add_parser("render")
     render.set_defaults(func=cmd_render)
+
+    shepherd = sub.add_parser("shepherd")
+    shepherd.add_argument("--apply", action="store_true")
+    shepherd.add_argument("--submit", action="store_true")
+    shepherd.add_argument("--max-turns", type=int, default=36)
+    shepherd.add_argument("--max-age-minutes", type=int, default=120)
+    shepherd.add_argument("--max-errors", type=int, default=2)
+    shepherd.add_argument("--max-latency-ms", type=int, default=30000)
+    shepherd.set_defaults(func=cmd_shepherd)
 
     rotate = sub.add_parser("rotate")
     rotate.add_argument("--apply", action="store_true", help="actually close local ChatGPT tabs and rotate")

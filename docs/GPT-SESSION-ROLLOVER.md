@@ -57,3 +57,15 @@ Do not commit or copy the profile directory, cookies or storage-state files to G
 ## Safety rule
 
 Git/runtime state is authoritative. A new GPT chat must consume the handoff only after verifying the real branch, commit, running services and externally executed actions. This prevents a new chat from repeating already completed mutations.
+
+## Session shepherd
+
+`status` now probes the live ChatGPT DOM and reports whether the composer is ready, the current user/assistant turn counts, page age, and whether interactive login/challenge handling is required.
+
+`shepherd` evaluates the rollover policy from those live metrics. With `--apply --submit`, it opens a new ChatGPT tab, clears only disposable browser cache, injects the durable handoff, submits it, and only then closes the old local ChatGPT tab. If the new composer is not ready, the old tab stays open and the rollover is blocked safely.
+
+The periodic units are `bottazzi-gpt-session-shepherd.service` and `bottazzi-gpt-session-shepherd.timer`. They are intended to run once per minute after the one-time account login has been verified.
+
+## One-time interactive login mode
+
+Sibilla already exposes a bandi-owned X display on `:1`. `bottazzi-gpt-browser-login.service` runs the same dedicated profile and CDP port 9238 headed on that display, without copying cookies from any other browser. Use it only to complete the one-time ChatGPT login; then return to `bottazzi-gpt-browser.service`. Authentication remains under the dedicated profile while `/tmp/bottazzi-gpt-browser-cache` stays disposable.

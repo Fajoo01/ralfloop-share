@@ -66,6 +66,162 @@ class ChromeCdp:
             )
         return out
 
+    def chatgpt_ui_state(self, target_id: str | None = None) -> dict[str, Any]:
+        pages = [target for target in self.targets() if target.target_type == "page" and target.is_chatgpt]
+        if target_id is not None:
+            pages = [target for target in pages if target.target_id == target_id]
+        if not pages:
+            return {"ready": False, "reason": "chatgpt_tab_not_found", "user_turns": 0, "assistant_turns": 0}
+        target = pages[-1]
+        if not target.websocket_url:
+            raise CdpError("chatgpt_target_missing_websocket")
+        expression = r"""(() => {
+          const visible = (el) => {
+            if (!el) return false;
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && !el.disabled;
+          };
+          const selectors = ['#prompt-textarea', 'textarea', '[contenteditable="true"]'];
+          let composer = null;
+          for (const selector of selectors) {
+            composer = Array.from(document.querySelectorAll(selector)).find(visible) || null;
+            if (composer) break;
+          }
+          const text = (document.body && document.body.innerText || '').slice(0, 4000);
+          const loginHint = /(?:log in|sign in|accedi|continua con)/i.test(text);
+          return JSON.stringify({
+            ready: Boolean(composer),
+            title: document.title || '',
+            url: location.href,
+            user_turns: document.querySelectorAll('[data-message-author-role="user"]').length,
+            assistant_turns: document.querySelectorAll('[data-message-author-role="assistant"]').length,
+            page_age_minutes: Math.max(0, Math.floor(performance.now() / 60000)),
+            interaction_required: !composer && (loginHint || /ci siamo quasi/i.test(document.title || '')),
+            composer_kind: composer ? (composer.id || composer.tagName || '').toLowerCase() : null,
+          });
+        })()"""
+        result = self._page_call(
+            target.websocket_url,
+            "Runtime.evaluate",
+            {"expression": expression, "returnByValue": True},
+        )
+        raw = (result.get("result") or {}).get("value")
+        try:
+            state = json.loads(raw) if isinstance(raw, str) else {}
+        except json.JSONDecodeError as exc:
+            raise CdpError("chatgpt_ui_state_invalid") from exc
+        if not isinstance(state, dict):
+            raise CdpError("chatgpt_ui_state_invalid")
+        state["target_id"] = target.target_id
+        return state
+
+    def inject_prompt(
+        self,
+        prompt: str,
+        *,
+        target_id: str | None = None,
+        submit: bool = False,
+        wait_timeout_s: float = 20.0,
+    ) -> dict[str, Any]:
+        if not prompt.strip():
+            raise CdpError("empty_prompt")
+        deadline = time.monotonic() + wait_timeout_s
+        state: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            state = self.chatgpt_ui_state(target_id)
+            if state.get("ready"):
+                break
+            time.sleep(0.25)
+        if not state.get("ready"):
+            reason = "interaction_required" if state.get("interaction_required") else "composer_not_ready"
+            raise CdpError(f"chatgpt_not_ready:{reason}")
+
+        target = self._wait_target(str(state["target_id"]))
+        if not target.websocket_url:
+            raise CdpError("chatgpt_target_missing_websocket")
+        prompt_json = json.dumps(prompt, ensure_ascii=False)
+        expression = f"""(() => {{
+          const visible = (el) => {{
+            if (!el) return false;
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && !el.disabled;
+          }};
+          const selectors = ['#prompt-textarea', 'textarea', '[contenteditable="true"]'];
+          let el = null;
+          for (const selector of selectors) {{
+            el = Array.from(document.querySelectorAll(selector)).find(visible) || null;
+            if (el) break;
+          }}
+          if (!el) return JSON.stringify({{ok:false, reason:'composer_not_found'}});
+          const text = {prompt_json};
+          el.focus();
+          if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {{
+            const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+            const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+            setter.call(el, text);
+            el.dispatchEvent(new Event('input', {{bubbles:true}}));
+          }} else {{
+            el.textContent = '';
+            const selection = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            range.collapse(true);
+            selection.removeAllRanges();
+            selection.addRange(range);
+            document.execCommand('insertText', false, text);
+            el.dispatchEvent(new InputEvent('input', {{bubbles:true, inputType:'insertText', data:text}}));
+          }}
+          return JSON.stringify({{ok:true}});
+        }})()"""
+        result = self._page_call(
+            target.websocket_url,
+            "Runtime.evaluate",
+            {"expression": expression, "returnByValue": True},
+        )
+        raw = (result.get("result") or {}).get("value")
+        try:
+            injected = json.loads(raw) if isinstance(raw, str) else {}
+        except json.JSONDecodeError as exc:
+            raise CdpError("prompt_injection_invalid") from exc
+        if not isinstance(injected, dict) or not injected.get("ok"):
+            reason = injected.get("reason", "unknown") if isinstance(injected, dict) else "unknown"
+            raise CdpError(f"prompt_injection_failed:{reason}")
+        if submit:
+            common = {"key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13, "nativeVirtualKeyCode": 13}
+            self._page_call(target.websocket_url, "Input.dispatchKeyEvent", {"type": "keyDown", **common})
+            self._page_call(target.websocket_url, "Input.dispatchKeyEvent", {"type": "keyUp", **common})
+        return {"target_id": target.target_id, "injected": True, "submitted": submit}
+
+    def handoff_to_new_chat(self, prompt: str, *, submit: bool = True) -> dict[str, Any]:
+        previous = [target for target in self.targets() if target.target_type == "page" and target.is_chatgpt]
+        target_id = self.create_target("about:blank")
+        target = self._wait_target(target_id)
+        if not target.websocket_url:
+            raise CdpError("new_target_missing_websocket")
+        self._page_call(target.websocket_url, "Network.enable")
+        self._page_call(target.websocket_url, "Network.clearBrowserCache")
+        self._page_call(target.websocket_url, "Page.enable")
+        self._page_call(target.websocket_url, "Page.navigate", {"url": CHATGPT_ORIGIN})
+        try:
+            injected = self.inject_prompt(prompt, target_id=target_id, submit=submit)
+        except Exception:
+            self.close_target(target_id)
+            raise
+        closed: list[str] = []
+        for old in previous:
+            if old.target_id != target_id:
+                self.close_target(old.target_id)
+                closed.append(old.target_id)
+        return {
+            **injected,
+            "new_target_id": target_id,
+            "closed_target_ids": closed,
+            "server_chat_deleted": False,
+            "cache_cleared": True,
+        }
+
     def rotate_chatgpt_tab(self, *, close_old: bool = True) -> dict[str, Any]:
         previous = [target for target in self.targets() if target.target_type == "page" and target.is_chatgpt]
         target_id = self.create_target("about:blank")

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from ralfloop_agent.integration.gpt_browser_cdp import BrowserTarget, ChromeCdp
+from ralfloop_agent.integration.gpt_browser_cdp import BrowserTarget, CdpError, ChromeCdp
 from ralfloop_agent.integration.gpt_session_rollover import (
     GptSessionError,
     Handoff,
@@ -114,3 +114,36 @@ def test_rotate_closes_only_old_chatgpt_and_clears_cache() -> None:
     assert result["server_chat_deleted"] is False
     assert ("ws://new", "Network.clearBrowserCache") in cdp.calls
     assert ("ws://new", "Page.navigate") in cdp.calls
+
+class FakeInjectCdp(FakeCdp):
+    def chatgpt_ui_state(self, target_id=None):
+        return {"ready": True, "target_id": target_id or self.new_id}
+
+    def _wait_target(self, target_id, *, attempts=20):
+        return BrowserTarget(target_id, "page", "https://chatgpt.com/", "new", "ws://new")
+
+    def _page_call(self, websocket_url, method, params=None):
+        self.calls.append((websocket_url, method))
+        if method == "Runtime.evaluate":
+            return {"result": {"value": json.dumps({"ok": True})}}
+        return {}
+
+
+def test_inject_prompt_can_submit_with_enter() -> None:
+    cdp = FakeInjectCdp()
+    result = cdp.inject_prompt("handoff", target_id="new", submit=True)
+    assert result["injected"] is True
+    assert result["submitted"] is True
+    assert [method for _, method in cdp.calls].count("Input.dispatchKeyEvent") == 2
+
+
+class FailingHandoffCdp(FakeCdp):
+    def inject_prompt(self, prompt, *, target_id=None, submit=False, wait_timeout_s=20.0):
+        raise CdpError("chatgpt_not_ready:interaction_required")
+
+
+def test_handoff_failure_keeps_old_chatgpt_tab_open() -> None:
+    cdp = FailingHandoffCdp()
+    with pytest.raises(CdpError, match="interaction_required"):
+        cdp.handoff_to_new_chat("handoff")
+    assert cdp.closed == ["new"]

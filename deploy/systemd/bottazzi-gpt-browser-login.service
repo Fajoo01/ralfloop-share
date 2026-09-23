@@ -1,0 +1,29 @@
+[Unit]
+Description=Bot-tazzi dedicated ChatGPT Chrome login mode
+After=network-online.target
+Wants=network-online.target
+Conflicts=bottazzi-gpt-browser.service
+
+[Service]
+Type=simple
+User=bandi
+Group=ralf-mcp
+Environment=HOME=/home/bandi
+Environment=DISPLAY=:1
+Environment=XDG_CONFIG_HOME=/home/bandi/.local/share/bottazzi-gpt-browser/config
+Environment=CHROME_CONFIG_HOME=/home/bandi/.local/share/bottazzi-gpt-browser/config
+Environment=TMPDIR=/tmp/bottazzi-gpt-browser-cache
+Environment=BOTTAZZI_GPT_PROFILE_DIR=/home/bandi/.local/share/bottazzi-gpt-browser/profile
+Environment=BOTTAZZI_GPT_CACHE_DIR=/tmp/bottazzi-gpt-browser-cache
+Environment=BOTTAZZI_GPT_CONFIG_DIR=/home/bandi/.local/share/bottazzi-gpt-browser/config
+Environment=BOTTAZZI_GPT_CDP_PORT=9238
+Environment=BOTTAZZI_GPT_HEADLESS=0
+ExecStart=/home/bandi/.local/share/bottazzi-gpt-browser/bottazzi_gpt_browser.sh
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=false
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/bandi/.local/share/bottazzi-gpt-browser /tmp/bottazzi-gpt-browser-cache
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
