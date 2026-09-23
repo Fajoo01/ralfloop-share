@@ -1,14 +1,16 @@
 [Unit]
-Description=Bot-tazzi GPT session shepherd
+Description=Bot-tazzi GPT session shepherd with user countdown
 After=bottazzi-gpt-browser.service network-online.target
 
 [Service]
 Type=oneshot
 User=bandi
 Group=ralf-mcp
-WorkingDirectory=/home/bandi/ralfloop-bottazzi-gpt-rollover-20260923
-Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python tools/bottazzi_gpt_session.py --endpoint http://127.0.0.1:9238 shepherd --apply --submit
+Environment=HOME=/home/bandi
+Environment=DISPLAY=:1
+Environment=XAUTHORITY=/home/bandi/.Xauthority
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus
+ExecStart=/home/bandi/.local/share/bottazzi-gpt-browser/bottazzi_gpt_shepherd_guard.sh
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
