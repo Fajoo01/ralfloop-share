@@ -446,6 +446,8 @@ def test_stage_tari_supporting_documents_verifies_hashes_and_is_idempotent(tmp_p
             if name == "pec_search_messages":
                 return {"messages": [{
                     "native_id": "imap.test.235",
+                    "sender": "servizidiriscossione@postacert.comune.milano.it",
+                    "certified": True,
                     "received_at": "2026-08-26T13:45:59Z",
                     "attachments": attachments,
                 }]}
@@ -468,6 +470,24 @@ def test_stage_tari_supporting_documents_verifies_hashes_and_is_idempotent(tmp_p
     )
     assert second["paths"] == first["paths"]
     assert second["local_staging_writes"] == 0
+
+    class UntrustedGateway(Gateway):
+        def call(self, name, arguments):
+            if name == "pec_search_messages":
+                return {"messages": [{
+                    "native_id": "imap.test.evil",
+                    "sender": "attacker@example.test",
+                    "certified": True,
+                    "received_at": "2026-09-23T00:00:00Z",
+                    "attachments": attachments,
+                }]}
+            return super().call(name, arguments)
+
+    rejected = stage_tari_supporting_documents(
+        UntrustedGateway(), "Difensore regionale pratica TARI", outbox_root=tmp_path,
+    )
+    assert rejected["status"] == "supporting_documents_not_found"
+    assert rejected["paths"] == []
 
 
 def test_arci_grant_reply_reads_source_email_before_bando_and_never_skips_provenance():
