@@ -476,9 +476,28 @@ class UnifiedPlanner:
                 },
             )
         if _PEC_RE.search(goal) and _PEC_WRITE_RE.search(goal) and "runts" not in goal.casefold():
-            return self._single(
-                goal, "pec", "pec.prepare_send", PolicyClass.CONFIRM_WRITE,
-                arguments=_pec_write_args(goal),
+            write_args = _pec_write_args(goal)
+            required = {"recipient", "subject", "body"}
+            if required.issubset(write_args):
+                return self._single(
+                    goal, "pec", "pec.prepare_send", PolicyClass.CONFIRM_WRITE,
+                    arguments=write_args,
+                )
+            source = self._assignment(
+                domain="pec", skill="pec.read", objective=goal,
+                input_refs=("user.goal",), output_ref="artifact.pec_source",
+                policy=PolicyClass.READ,
+            )
+            prepare = self._assignment(
+                domain="pec", skill="pec.prepare_send", objective=goal,
+                input_refs=("user.goal", source.output_ref),
+                output_ref="artifact.pec_write_request",
+                depends_on=(source.task_id,), policy=PolicyClass.CONFIRM_WRITE,
+                arguments=write_args,
+            )
+            return AssistantPlan(
+                intent="pec.prepare_send", domains=("pec",),
+                assignments=(source, prepare),
             )
         if self.capability_router is not None:
             proposal = self.capability_router.route(goal)
