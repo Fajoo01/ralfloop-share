@@ -21,6 +21,7 @@ from ralfloop_agent.unified_assistant.memory import MemoryRouter
 from ralfloop_agent.unified_assistant.planner import UnifiedPlanner
 from ralfloop_agent.unified_assistant.capability_rag_router import CapabilityRAGRouter
 from ralfloop_agent.unified_assistant.registry import UnifiedRegistryFacade
+from ralfloop_agent.unified_assistant.runtime import _pec_prepare_values
 from ralfloop_agent.unified_assistant.skill_adapters import research_deep_adapter
 
 
@@ -347,9 +348,40 @@ def test_pec_capability_rag_precedes_generic_home_verbs():
 
     assert plan.intent == "pec.prepare_send"
     assert plan.domains == ("pec",)
-    assert plan.assignments[0].skill == "pec.prepare_send"
-    assert plan.assignments[0].domain == "pec"
-    assert plan.assignments[0].policy is PolicyClass.CONFIRM_WRITE
+    assert [item.skill for item in plan.assignments] == ["pec.read", "pec.prepare_send"]
+    source, prepare = plan.assignments
+    assert source.domain == "pec"
+    assert source.policy is PolicyClass.READ
+    assert prepare.domain == "pec"
+    assert prepare.policy is PolicyClass.CONFIRM_WRITE
+    assert prepare.depends_on == (source.task_id,)
+    assert prepare.input_refs == ("user.goal", "artifact.pec_source")
+
+
+def test_pec_prepare_values_autofill_from_read_artifact_preserves_explicit_fields():
+    source = {
+        "payload": {
+            "messages": [{
+                "sender": (
+                    "\"Per conto di: difensore.regionale@pec.consiglio.regione.lombardia.it\" "
+                    "<posta-certificata@sicurezzapostale.it>"
+                ),
+                "subject": "POSTA CERTIFICATA: FAGIOLI FABIO - RICHIESTA DI ADEMPIMENTI PRELIMINARI",
+                "body": "Protocollo numero GAR.2026.0013417 del 27/08/2026.",
+            }],
+        },
+    }
+
+    values = _pec_prepare_values(
+        {"subject": "Oggetto scelto dall'utente"},
+        {"artifact.pec_source": source},
+        "Invia la PEC al Difensore regionale e porta a termine la pratica TARI",
+    )
+
+    assert values["recipient"] == "difensore.regionale@pec.consiglio.regione.lombardia.it"
+    assert values["subject"] == "Oggetto scelto dall'utente"
+    assert "GAR.2026.0013417" in values["body"]
+    assert "pratica TARI" in values["body"]
 
 
 def test_arci_grant_reply_reads_source_email_before_bando_and_never_skips_provenance():
@@ -647,6 +679,14 @@ def test_pec_prepare_dag_surfaces_missing_fields_instead_of_completed(monkeypatc
     monkeypatch.setenv("RALF_PEC_WRITE_MCP_SOCKET", str(socket))
     core, _, _, _ = build_core()
 
+    def read_empty(assignment, _inputs):
+        return StructuredArtifact.create(
+            artifact_type="pec_read",
+            status="completed",
+            producer_task_id=assignment.task_id,
+            payload={"messages": [], "writes": 0, "sends": 0},
+        )
+
     def needs_fields(assignment, _inputs):
         return StructuredArtifact.create(
             artifact_type="pec_write_request",
@@ -663,7 +703,7 @@ def test_pec_prepare_dag_surfaces_missing_fields_instead_of_completed(monkeypatc
 
     core.dag_executor = UnifiedDAGExecutor(
         core.planner.registry,
-        {"pec.prepare_send": needs_fields},
+        {"pec.read": read_empty, "pec.prepare_send": needs_fields},
     )
     result = core.handle("Invia la PEC al Difensore regionale e porta a termine la pratica TARI")
 

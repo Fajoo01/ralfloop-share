@@ -132,6 +132,59 @@ def _assistant_v1_grounded_admin_request(text: str, context: Mapping[str, Any]) 
     )
 
 
+_PEC_SOURCE_EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}\b", re.I)
+_PEC_PROTOCOL_RE = re.compile(r"\bprotocollo(?:\s+numero)?\s+([A-Z0-9.\-_/]+)", re.I)
+
+
+def _pec_prepare_values(
+    arguments: Mapping[str, Any],
+    inputs: Mapping[str, Any],
+    objective: str,
+) -> dict[str, Any]:
+    """Fill missing PEC draft fields only from the upstream read artifact."""
+    values = dict(arguments)
+    source = inputs.get("artifact.pec_source")
+    if not isinstance(source, Mapping):
+        return values
+    payload = source.get("payload")
+    if not isinstance(payload, Mapping):
+        return values
+    messages = payload.get("messages") or ()
+    first = next((item for item in messages if isinstance(item, Mapping)), None)
+    if first is None:
+        return values
+
+    sender = str(first.get("sender") or "")
+    source_subject = " ".join(str(first.get("subject") or "").split())
+    source_body = str(first.get("body") or "")
+
+    if not str(values.get("recipient") or "").strip():
+        addresses = [match.group(0) for match in _PEC_SOURCE_EMAIL_RE.finditer(sender)]
+        recipient = next(
+            (item for item in addresses if item.casefold() != "tiremminnanz@pec.it"),
+            "",
+        )
+        if recipient:
+            values["recipient"] = recipient
+
+    if not str(values.get("subject") or "").strip() and source_subject:
+        clean_subject = re.sub(r"^POSTA\s+CERTIFICATA:\s*", "", source_subject, flags=re.I)
+        values["subject"] = f"Riscontro: {clean_subject or source_subject}"
+
+    if not str(values.get("body") or "").strip() and source_subject:
+        protocol_match = _PEC_PROTOCOL_RE.search(source_body)
+        protocol = protocol_match.group(1) if protocol_match else ""
+        practice = "pratica TARI" if "tari" in objective.casefold() else "pratica indicata"
+        protocol_text = f" (protocollo {protocol})" if protocol else ""
+        values["body"] = (
+            "Spett.le Ufficio,\n\n"
+            f"in riscontro alla Vostra PEC «{source_subject}»{protocol_text}, "
+            f"inviamo il presente riscontro relativo alla {practice}.\n\n"
+            "Cordiali saluti"
+        )
+    return values
+
+
 def is_unified_telegram_request(text: str, context: Mapping[str, Any]) -> bool:
     flags = AssistantFeatureFlags.from_env()
     source = str(context.get("source") or "")
@@ -739,7 +792,11 @@ def run_unified_telegram(
         )
 
     def pec_prepare_adapter(assignment, _inputs):
-        args = dict(assignment.arguments)
+        args = _pec_prepare_values(
+            assignment.arguments,
+            _inputs,
+            assignment.objective,
+        )
         with pec_write_gateway_factory() as gateway:
             result = gateway.prepare(
                 recipient=str(args.get("recipient") or "") or None,
@@ -754,6 +811,12 @@ def run_unified_telegram(
             producer_task_id=assignment.task_id,
             payload={
                 **result,
+                "draft": {
+                    "recipient": str(args.get("recipient") or ""),
+                    "subject": str(args.get("subject") or ""),
+                    "body": str(args.get("body") or ""),
+                    "attachment_paths": [str(x) for x in args.get("attachment_paths") or ()],
+                },
                 "content_boundary": "pec_draft_not_sent",
                 "writer_separate_from_reader": True,
                 "writes": int(result.get("writes") or 0),

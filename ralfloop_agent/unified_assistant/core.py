@@ -185,6 +185,47 @@ class UnifiedAssistantCore:
                     inputs.update(self.dag_input_provider(text))
                 execution = self.dag_executor.execute(plan, inputs=inputs)
                 artifact_rows = execution.artifacts
+                pec_write = next(
+                    (item for item in reversed(artifact_rows) if item.artifact_type == "pec_write_request"),
+                    None,
+                )
+                if pec_write is not None:
+                    payload = dict(pec_write.payload)
+                    draft = payload.get("draft") if isinstance(payload.get("draft"), Mapping) else {}
+                    artifact_status = str(pec_write.status)
+                    if artifact_status == "approval_required":
+                        recipient = str(draft.get("recipient") or payload.get("recipient") or "")
+                        subject = str(draft.get("subject") or payload.get("subject") or "")
+                        body = str(draft.get("body") or "")
+                        message = (
+                            "Bozza PEC pronta:\n"
+                            f"A: {recipient}\n"
+                            f"Oggetto: {subject}\n\n"
+                            f"{body}\n\n"
+                            "Serve approvazione esplicita prima dell'invio. Nessuna PEC è stata inviata."
+                        )
+                        return self._result(
+                            "approval_required", message,
+                            plan=plan.model_dump(mode="json"),
+                            execution=execution.model_dump(mode="json"),
+                            tools_executed=execution.status == "completed",
+                            selected_skill="pec.prepare_send",
+                            writes=int(payload.get("writes") or 0),
+                            sends=int(payload.get("sends") or 0),
+                        )
+                    if artifact_status == "draft_fields_required":
+                        missing = ", ".join(str(item) for item in payload.get("missing") or ())
+                        return self._result(
+                            "clarification_required",
+                            "Mancano i campi della bozza PEC: "
+                            f"{missing or 'destinatario, oggetto e testo'}. Nessuna PEC è stata inviata.",
+                            plan=plan.model_dump(mode="json"),
+                            execution=execution.model_dump(mode="json"),
+                            tools_executed=execution.status == "completed",
+                            selected_skill="pec.prepare_send",
+                            writes=0,
+                            sends=0,
+                        )
                 preview = next(
                     (str(item.payload.get("message") or "") for item in reversed(artifact_rows)
                      if item.artifact_type in {"email_draft", "whatsapp_draft", "fastweb_comparison"}),

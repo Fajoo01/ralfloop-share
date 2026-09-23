@@ -68,6 +68,29 @@ def test_app_internet_agent_stays_gateway_bounded(client: TestClient, monkeypatc
     assert seen["context"]["app_internet_agent"] is True
 
 
+def test_task_queue_proxy_uses_authenticated_gateway(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    client.post("/login", json={"password": "app-pass"})
+    seen = {}
+
+    class FakeResponse:
+        status_code = 200
+        content = b"{\"count\":0,\"tasks\":[]}"
+        headers = {"content-type": "application/json"}
+        ok = True
+
+    def fake_request(method, url, *, params, data, headers, timeout):
+        seen.update(method=method, url=url, params=params, data=data, headers=headers, timeout=timeout)
+        return FakeResponse()
+
+    monkeypatch.setattr(app_gateway.requests, "request", fake_request)
+    response = client.get("/assistant/v1/tasks")
+    assert response.status_code == 200
+    assert response.json()["count"] == 0
+    assert seen["method"] == "GET"
+    assert seen["url"].endswith("/assistant/v1/tasks")
+
+
+
 def test_android_shell_has_no_source_hardcoded_backend() -> None:
     root = Path(__file__).resolve().parents[1] / "android" / "bottazzi-app"
     gradle = (root / "app" / "build.gradle").read_text(encoding="utf-8")
