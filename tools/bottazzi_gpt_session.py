@@ -555,6 +555,7 @@ def cmd_adopt_external(args: argparse.Namespace) -> int:
                 adoption_state.update({
                     "seen_conversations": seen,
                     "last_adopted_conversation": foreground_url,
+                    "watcher_target_id": None if str(adoption_state.get("watcher_target_id") or "") == foreground.target_id else adoption_state.get("watcher_target_id"),
                     "pending_conversation": None if normalize_chatgpt_conversation_url(str(adoption_state.get("pending_conversation") or "")) == foreground_url else adoption_state.get("pending_conversation"),
                     "pending_detected_epoch": 0 if normalize_chatgpt_conversation_url(str(adoption_state.get("pending_conversation") or "")) == foreground_url else int(adoption_state.get("pending_detected_epoch") or 0),
                 })
@@ -567,6 +568,9 @@ def cmd_adopt_external(args: argparse.Namespace) -> int:
 
     now = int(time.time())
     watcher_id = str(adoption_state.get("watcher_target_id") or "")
+    if watcher_id and watcher_id == source.target_id:
+        adoption_state["watcher_target_id"] = None
+        watcher_id = ""
     watcher = next((tab for tab in tabs if tab.target_id == watcher_id), None) if watcher_id else None
     last_scan = int(adoption_state.get("last_scan_epoch") or 0)
     if had_state and watcher is not None and now - last_scan < max(0, args.scan_interval_seconds):

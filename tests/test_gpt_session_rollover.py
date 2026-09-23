@@ -322,6 +322,8 @@ class FakeAdoptionCdp:
         self.archived: list[tuple[str, str]] = []
         self.closed: list[str] = []
         self.temporary_urls: dict[str, str] = {}
+        self.conversation_calls: list[tuple[str, bool]] = []
+        self.created_targets: list[tuple[str, bool]] = []
 
     def targets(self):
         targets = [
@@ -336,7 +338,8 @@ class FakeAdoptionCdp:
         return [target for target in targets if target.target_id not in self.closed]
 
     def conversation_urls(self, target_id: str, *, reload: bool = True):
-        assert target_id == "watcher"
+        self.conversation_calls.append((target_id, reload))
+        assert target_id != self.source_target_id
         return list(self.history)
 
     def chatgpt_ui_state(self, target_id: str):
@@ -353,6 +356,7 @@ class FakeAdoptionCdp:
     def create_chatgpt_target(self, *, clear_cache: bool = False, background: bool = False) -> str:
         target_id = f"archive-temp-{len(self.temporary_urls) + 1}"
         self.temporary_urls[target_id] = "https://chatgpt.com/"
+        self.created_targets.append((target_id, background))
         return target_id
 
     def navigate_chatgpt_conversation(self, target_id: str, url: str):
@@ -605,6 +609,34 @@ def test_incomplete_rollover_rolls_back_unconfirmed_successor(tmp_path) -> None:
     assert cdp.closed == ["successor"]
     assert handoff.load_current()["source_chat_url"] == "https://chatgpt.com/c/source"
     assert journal.load() is None
+
+
+def test_external_adoption_replaces_watcher_when_it_matches_active_worker(monkeypatch, tmp_path) -> None:
+    handoff = HandoffStore(tmp_path)
+    handoff.save(Handoff(goal="x", current_state="y"))
+    handoff.update_source_chat("source", "https://chatgpt.com/c/source")
+    adoption = ExternalChatAdoptionStore(tmp_path)
+    adoption.save(
+        {
+            "seen_conversations": ["https://chatgpt.com/c/source"],
+            "watcher_target_id": "source",
+            "last_adopted_conversation": None,
+            "last_scan_epoch": 0,
+        }
+    )
+    fake = FakeAdoptionCdp(
+        "source",
+        "https://chatgpt.com/c/source",
+        ["https://chatgpt.com/c/source"],
+    )
+    monkeypatch.setattr(gpt_session_tool, "ChromeCdp", lambda endpoint: fake)
+
+    assert gpt_session_tool.cmd_adopt_external(_adoption_args(tmp_path)) == 0
+
+    saved = adoption.load()
+    assert saved["watcher_target_id"] != "source"
+    assert fake.created_targets == [(saved["watcher_target_id"], True)]
+    assert fake.conversation_calls == [(saved["watcher_target_id"], False)]
 
 
 def test_external_candidate_survives_worker_rollover(monkeypatch, tmp_path) -> None:
