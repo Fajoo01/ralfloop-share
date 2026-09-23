@@ -893,6 +893,9 @@ class ChromeCdp:
         config = json.dumps({"conversation_url": normalized, "context_url": context_url}, ensure_ascii=False)
         expression = r'''(() => {
           const config = __CONFIG__;
+          const relayState = window.__bottazziHumanRelayV1;
+          if (relayState && relayState.observer) relayState.observer.disconnect();
+          try { delete window.__bottazziHumanRelayV1; } catch (_) { window.__bottazziHumanRelayV1 = null; }
           const stateKey = '__bottazziHumanInputTargetV2';
           const draftKey = '__bottazziHumanDraftV2';
           const activeKey = '__bottazziActiveConversationV2';
@@ -1279,6 +1282,14 @@ class ChromeCdp:
           const statusId = 'bottazzi-human-status';
           const draftKey = '__bottazziHumanDraftV2';
           const activeKey = '__bottazziActiveConversationV2';
+          const relayKey = '__bottazziHumanRelayV1';
+          const limitRe = /(?:temporarily limited access to (?:your )?conversations|temporaneamente (?:limitato )?l['’]?accesso alle conversazioni|attendere qualche minuto prima di riprovare|wait a few minutes before trying again)/i;
+          const hideRateLimitUi = () => {
+            for (const el of document.querySelectorAll('[role="alert"],[role="dialog"],[data-testid*="error"]')) {
+              const text = String(el.innerText || el.textContent || '').trim();
+              if (text && limitRe.test(text)) el.style.display = 'none';
+            }
+          };
           const activeState = window.__bottazziHumanInputTargetV2;
           if (activeState && activeState.observer) activeState.observer.disconnect();
           if (activeState && activeState.onStorage) window.removeEventListener('storage', activeState.onStorage);
@@ -1327,6 +1338,13 @@ class ChromeCdp:
             panel.appendChild(row);
             document.body.appendChild(panel);
           }
+          let relayState = window[relayKey];
+          if (!relayState || typeof relayState !== 'object') relayState = {};
+          if (relayState.observer) relayState.observer.disconnect();
+          relayState.observer = new MutationObserver(hideRateLimitUi);
+          relayState.observer.observe(document.documentElement, {subtree:true, childList:true});
+          window[relayKey] = relayState;
+          hideRateLimitUi();
           try { localStorage.setItem(activeKey, config.active_url); } catch (_) {}
           return JSON.stringify({ok:true, relay:true, active_url:config.active_url, human_composer:Boolean(document.getElementById(boxId))});
         })()'''.replace("__CONFIG__", config)
