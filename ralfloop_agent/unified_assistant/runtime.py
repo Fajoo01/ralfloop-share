@@ -52,8 +52,9 @@ from .recipient import GoogleWorkspaceRecipientResolver
 from .registry import DEFAULT_HOME_ENTITIES, UnifiedRegistryFacade
 from .skill_adapters import bandi_eligibility_adapter, bandi_read_adapter, research_deep_adapter
 from .safe_mcp_read_adapters import (
-    arci_context_adapter, education_tutor_adapter, jellyfin_identify_adapter,
-    bandi_discovery_adapter, knowledge_retrieve_adapter, runts_context_adapter,
+    arci_context_adapter, baffoflix_support_adapter, education_tutor_adapter,
+    jellyfin_identify_adapter, bandi_discovery_adapter, knowledge_retrieve_adapter,
+    runts_context_adapter,
 )
 from .accounting import accounting_read_adapter
 from .whatsapp_compose import EmailBackedWhatsAppDraftPipeline, UnifiedWhatsAppComposeService
@@ -1151,6 +1152,7 @@ def run_unified_telegram(
         "knowledge.retrieve": knowledge_retrieve_adapter,
         "runts.context": runts_context_adapter,
         "arci.context": arci_context_adapter,
+        "baffoflix.support": baffoflix_support_adapter,
         "jellyfin.identify": jellyfin_identify_adapter,
         "education.tutor": education_tutor_adapter,
         "bandi.discovery": bandi_discovery_adapter,

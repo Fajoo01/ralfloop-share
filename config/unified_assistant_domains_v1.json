@@ -681,10 +681,15 @@
       "aliases": [
         "jellyfin media",
         "film non identificati",
-        "libreria jellyfin"
+        "libreria jellyfin",
+        "baffoflix",
+        "baffo flix",
+        "accesso baffoflix",
+        "password baffoflix"
       ],
-      "description": "Jellyfin identity and library evidence; mutations remain protected and separately verified.",
+      "description": "Jellyfin identity, library and BaffoFlix support evidence; mutations remain protected and separately verified.",
       "supported_skills": [
+        "baffoflix.support",
         "jellyfin.identify",
         "jellyfin.apply_identity"
       ],
@@ -699,6 +704,7 @@
         "post-action verification"
       ],
       "specialist_capabilities": [
+        "baffoflix.support.read",
         "jellyfin.identity.list",
         "jellyfin.identity.search",
         "jellyfin.identity.apply"
@@ -1382,6 +1388,23 @@
       "classification": "READ",
       "workflow": "MCP:/run/ralf-arci-mcp/mcp.sock",
       "verification_method": "strict MCP read tools + provider evidence",
+      "status": "ready"
+    },
+    {
+      "id": "baffoflix.support",
+      "domains": [
+        "jellyfin",
+        "media"
+      ],
+      "required_arguments": [
+        "query"
+      ],
+      "required_capabilities": [
+        "baffoflix.support.read"
+      ],
+      "classification": "READ",
+      "workflow": "MCP:/run/ralf-jellyfin-mcp/mcp.sock",
+      "verification_method": "public access readback; zero mutation",
       "status": "ready"
     },
     {

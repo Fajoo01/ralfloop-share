@@ -512,9 +512,12 @@ class UnifiedRegistryFacade:
             ),
             UnifiedToolSpec(
                 id="jellyfin.identity.mcp.read",
-                capabilities=("jellyfin.identity.list", "jellyfin.identity.search", "jellyfin.identity.get"),
-                input_schema="Jellyfin semantic identity queries",
-                output_schema="candidate identities with observed library evidence",
+                capabilities=(
+                    "baffoflix.support.read", "jellyfin.identity.list",
+                    "jellyfin.identity.search", "jellyfin.identity.get",
+                ),
+                input_schema="Jellyfin semantic identity queries and BaffoFlix public support reads",
+                output_schema="candidate identities or public BaffoFlix access evidence",
                 classification=PolicyClass.READ, side_effect_class="none",
                 availability=(
                     "available" if _observable_path_exists(Path("/run/ralf-jellyfin-mcp/mcp.sock"))

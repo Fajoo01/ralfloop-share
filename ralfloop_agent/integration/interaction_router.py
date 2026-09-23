@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from src.router import route_task
 from ralfloop_agent.unified_assistant.email_search import is_email_search_request
@@ -17,6 +18,14 @@ class InteractionDecision:
 
 def classify_interaction(user_goal: str) -> InteractionDecision:
     route = route_task(user_goal)
+    if re.search(r"\bbaffo\s*flix\b|\bbaffoflix\b", user_goal, re.I):
+        return InteractionDecision(
+            "agent",
+            "baffoflix.support",
+            route.mode,
+            False,
+            "deterministic_baffoflix_support_route",
+        )
     if is_email_search_request(user_goal):
         return InteractionDecision(
             "agent",

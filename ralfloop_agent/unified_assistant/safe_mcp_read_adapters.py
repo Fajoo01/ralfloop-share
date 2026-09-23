@@ -199,6 +199,67 @@ def arci_context_adapter(
     )
 
 
+def baffoflix_support_adapter(
+    assignment: PlanAssignment, _inputs: Mapping[str, Any]
+) -> StructuredArtifact:
+    result = _call("jellyfin", "baffoflix_get_access_info", {})
+    if not isinstance(result, Mapping) or result.get("ok") is False:
+        return StructuredArtifact.create(
+            artifact_type="baffoflix_support", status="unavailable",
+            producer_task_id=assignment.task_id,
+            payload={
+                "message": "BaffoFlix non è raggiungibile in questo momento; nessun account è stato modificato.",
+                "content_boundary": "baffoflix_support_read_only",
+                "side_effects": 0,
+            },
+        )
+    landing = _safe_text(result.get("landing_url"), 300)
+    server = _safe_text(result.get("server_url"), 300)
+    health = result.get("public_health") if isinstance(result.get("public_health"), Mapping) else {}
+    password_intent = bool(re.search(
+        r"\b(?:password|credenzial[ei]|accesso|login)\b.*\b(?:dimenticat[aoe]?|pers[aoe]?|recuper|reset)|"
+        r"\b(?:dimenticat[aoe]?|pers[aoe]?|recuper|reset)\b.*\b(?:password|credenzial[ei]|accesso|login)\b",
+        assignment.objective,
+        re.I,
+    ))
+    if password_intent:
+        message = (
+            "Posso gestire il recupero BaffoFlix. Serve lo username esatto dell'account. "
+            "Non modifico password in questa fase; dopo l'identificazione posso avviare il recupero "
+            "oppure usare Quick Connect se l'account è già collegato a un'identità verificata."
+        )
+    else:
+        parts = ["Accesso BaffoFlix:"]
+        if landing:
+            parts.append(landing)
+        if server:
+            parts.append(server)
+        if health.get("server_name"):
+            parts.append(f"server {health.get('server_name')}")
+        message = " ".join(parts)
+    facts = ({
+        "landing_url": landing or None,
+        "server_url": server or None,
+        "server_name": _safe_text(health.get("server_name"), 80) or None,
+        "version": _safe_text(health.get("version"), 40) or None,
+        "content_role": "data",
+    },)
+    return StructuredArtifact.create(
+        artifact_type="baffoflix_support", status="completed",
+        producer_task_id=assignment.task_id, facts=facts,
+        evidence_refs=("jellyfin:baffoflix_get_access_info",),
+        payload={
+            "message": message,
+            "support_intent": "password_recovery" if password_intent else "access_info",
+            "landing_url": landing or None,
+            "server_url": server or None,
+            "content_boundary": "baffoflix_support_read_only",
+            "side_effects": 0,
+            "writes": 0,
+        },
+    )
+
+
 def jellyfin_identify_adapter(
     assignment: PlanAssignment, _inputs: Mapping[str, Any]
 ) -> StructuredArtifact:
@@ -284,7 +345,7 @@ def knowledge_retrieve_adapter(
     )
 
 __all__ = [
-    "arci_context_adapter", "bandi_discovery_adapter", "education_tutor_adapter",
-    "jellyfin_identify_adapter", "knowledge_retrieve_adapter",
+    "arci_context_adapter", "baffoflix_support_adapter", "bandi_discovery_adapter",
+    "education_tutor_adapter", "jellyfin_identify_adapter", "knowledge_retrieve_adapter",
     "runts_context_adapter",
 ]
