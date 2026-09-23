@@ -65,16 +65,20 @@ class RolloverDecision:
 def should_defer_latency_rollover(
     reasons: tuple[str, ...],
     *,
-    user_turns: int,
+    response_pending: bool,
     response_in_progress: bool,
-    response_latency_ms: int,
-    max_defer_ms: int = 180_000,
+    response_idle_ms: int,
+    max_idle_ms: int = 60_000,
+    max_active_idle_ms: int = 600_000,
 ) -> bool:
     if reasons != ("latency_limit",):
         return False
-    if response_latency_ms >= max_defer_ms:
+    if not response_pending:
         return False
-    return user_turns <= 1 or response_in_progress
+    idle_ms = max(0, response_idle_ms)
+    if response_in_progress:
+        return idle_ms < max_active_idle_ms
+    return idle_ms < max_idle_ms
 
 
 def evaluate_rollover(metrics: SessionMetrics, policy: RolloverPolicy | None = None) -> RolloverDecision:

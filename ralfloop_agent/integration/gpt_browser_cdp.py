@@ -94,8 +94,8 @@ class ChromeCdp:
           const authenticatedHint = loginControls.length === 0;
           const pageAgeMs = Math.max(0, Math.floor(performance.now()));
           const pageSettled = document.readyState === 'complete' && pageAgeMs >= 3000;
-          const telemetryKey = '__bottazziGptTelemetryV1';
-          const observerKey = '__bottazziGptTelemetryObserverV1';
+          const telemetryKey = '__bottazziGptTelemetryV2';
+          const observerKey = '__bottazziGptTelemetryObserverV2';
           const responseErrorRe = /(?:something went wrong|error generating|network error|there was an error|si è verificato un errore|errore (?:di rete|durante|nella|nel)|riprova|try again)/i;
           const sampleTelemetry = () => {
             const nowMs = performance.now();
@@ -115,17 +115,38 @@ class ChromeCdp:
               .some((el) => responseErrorRe.test((el.innerText || el.textContent || '').trim()));
             const lastAssistant = assistantNodes.length ? assistantNodes[assistantNodes.length - 1] : null;
             const lastAssistantError = Boolean(lastAssistant && responseErrorRe.test((lastAssistant.innerText || lastAssistant.textContent || '').trim()));
+            const assistantText = lastAssistant ? (lastAssistant.innerText || lastAssistant.textContent || '') : '';
+            let assistantHash = 2166136261;
+            const hashStep = Math.max(1, Math.floor(assistantText.length / 128));
+            for (let i = 0; i < assistantText.length; i += hashStep) {
+              assistantHash ^= assistantText.charCodeAt(i);
+              assistantHash = Math.imul(assistantHash, 16777619);
+            }
+            const assistantProgressSignature = [assistantTurns, assistantText.length, lastAssistant ? lastAssistant.querySelectorAll('*').length : 0, assistantHash >>> 0].join(':');
+            const toolIcons = Array.from(document.querySelectorAll('[data-testid="cot-v5-native-tool-icon"]'));
+            let toolHash = 2166136261;
+            for (const icon of toolIcons.slice(-32)) {
+              const row = icon.closest('.group');
+              const label = row ? ((row.querySelector('button[aria-label]') || {}).getAttribute?.('aria-label') || '') : '';
+              for (let i = 0; i < label.length; i += Math.max(1, Math.floor(label.length / 32))) {
+                toolHash ^= label.charCodeAt(i);
+                toolHash = Math.imul(toolHash, 16777619);
+              }
+            }
+            const progressSignature = [assistantProgressSignature, toolIcons.length, toolHash >>> 0].join(':');
             let telemetry = window[telemetryKey];
-            const resetTelemetry = !telemetry || typeof telemetry !== 'object' || telemetry.version !== 1 || telemetry.url !== location.href || userTurns < Number(telemetry.last_user_turns || 0) || assistantTurns < Number(telemetry.last_assistant_turns || 0);
+            const resetTelemetry = !telemetry || typeof telemetry !== 'object' || telemetry.version !== 2 || telemetry.url !== location.href || userTurns < Number(telemetry.last_user_turns || 0) || assistantTurns < Number(telemetry.last_assistant_turns || 0);
             if (resetTelemetry) {
               telemetry = {
-                version: 1,
+                version: 2,
                 url: location.href,
                 last_user_turns: userTurns,
                 last_assistant_turns: assistantTurns,
                 pending_started_ms: responseInProgress ? nowMs : null,
                 pending_assistant_turns_start: responseInProgress ? Math.max(0, assistantTurns - 1) : assistantTurns,
                 generation_seen: responseInProgress,
+                last_progress_ms: nowMs,
+                last_progress_signature: progressSignature,
                 last_response_latency_ms: 0,
                 consecutive_errors: 0,
                 last_error_user_turns: responseInProgress ? Math.max(0, userTurns - 1) : userTurns,
@@ -136,10 +157,16 @@ class ChromeCdp:
                 telemetry.pending_started_ms = nowMs;
                 telemetry.pending_assistant_turns_start = assistantTurns;
                 telemetry.generation_seen = responseInProgress;
+                telemetry.last_progress_ms = nowMs;
+                telemetry.last_progress_signature = progressSignature;
               }
               if (telemetry.pending_started_ms !== null && responseInProgress) {
                 telemetry.generation_seen = true;
               }
+              if (telemetry.pending_started_ms !== null && progressSignature !== telemetry.last_progress_signature) {
+                telemetry.last_progress_ms = nowMs;
+              }
+              telemetry.last_progress_signature = progressSignature;
               const assistantAdvanced = assistantTurns > Number(telemetry.pending_assistant_turns_start || 0);
               const currentError = alertError || (lastAssistantError && assistantAdvanced);
               if (currentError && userTurns > Number(telemetry.last_error_user_turns || 0)) {
@@ -165,10 +192,16 @@ class ChromeCdp:
             const currentLatencyMs = telemetry.pending_started_ms === null
               ? 0
               : Math.max(0, Math.floor(nowMs - Number(telemetry.pending_started_ms || nowMs)));
+            const responseIdleMs = telemetry.pending_started_ms === null
+              ? 0
+              : Math.max(0, Math.floor(nowMs - Number(telemetry.last_progress_ms || telemetry.pending_started_ms || nowMs)));
             return {
               user_turns: userTurns,
               assistant_turns: assistantTurns,
               response_in_progress: responseInProgress,
+              response_pending: telemetry.pending_started_ms !== null,
+              response_idle_ms: responseIdleMs,
+              tool_activity_count: toolIcons.length,
               current_response_latency_ms: currentLatencyMs,
               last_response_latency_ms: Math.max(0, Number(telemetry.last_response_latency_ms || 0)),
               consecutive_errors: Math.max(0, Number(telemetry.consecutive_errors || 0)),
@@ -192,6 +225,9 @@ class ChromeCdp:
             user_turns: telemetry.user_turns,
             assistant_turns: telemetry.assistant_turns,
             response_in_progress: telemetry.response_in_progress,
+            response_pending: telemetry.response_pending,
+            response_idle_ms: telemetry.response_idle_ms,
+            tool_activity_count: telemetry.tool_activity_count,
             current_response_latency_ms: telemetry.current_response_latency_ms,
             last_response_latency_ms: telemetry.last_response_latency_ms,
             consecutive_errors: telemetry.consecutive_errors,

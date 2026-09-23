@@ -164,9 +164,11 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
     decision = evaluate_rollover(metrics, policy)
     defer_latency_rollover = should_defer_latency_rollover(
         decision.reasons,
-        user_turns=metrics.turns,
+        response_pending=bool(ui.get("response_pending")),
         response_in_progress=bool(ui.get("response_in_progress")),
-        response_latency_ms=metrics.last_response_latency_ms,
+        response_idle_ms=int(ui.get("response_idle_ms") or 0),
+        max_idle_ms=args.max_stall_ms,
+        max_active_idle_ms=args.max_active_stall_ms,
     )
     report = {
         "ok": True,
@@ -177,6 +179,10 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
         "applied": False,
     }
     if not decision.rollover:
+        _json(report)
+        return 0
+    if defer_latency_rollover:
+        report["blocked"] = "latency_deferred"
         _json(report)
         return 0
     if not ui.get("ready"):
@@ -270,6 +276,8 @@ def build_parser() -> argparse.ArgumentParser:
     shepherd.add_argument("--max-age-minutes", type=int, default=120)
     shepherd.add_argument("--max-errors", type=int, default=2)
     shepherd.add_argument("--max-latency-ms", type=int, default=30000)
+    shepherd.add_argument("--max-stall-ms", type=int, default=60000)
+    shepherd.add_argument("--max-active-stall-ms", type=int, default=600000)
     shepherd.set_defaults(func=cmd_shepherd)
 
     rotate = sub.add_parser("rotate")

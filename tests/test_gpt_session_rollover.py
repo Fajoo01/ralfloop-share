@@ -70,13 +70,14 @@ def test_live_ui_consecutive_errors_trigger_rollover() -> None:
     assert decision.reasons == ("error_limit",)
 
 
-def test_latency_only_rollover_defers_fresh_or_streaming_worker() -> None:
+def test_latency_only_rollover_defers_active_response_until_hard_stall() -> None:
     reasons = ("latency_limit",)
-    assert should_defer_latency_rollover(reasons, user_turns=1, response_in_progress=False, response_latency_ms=90_000) is True
-    assert should_defer_latency_rollover(reasons, user_turns=7, response_in_progress=True, response_latency_ms=90_000) is True
-    assert should_defer_latency_rollover(reasons, user_turns=7, response_in_progress=False, response_latency_ms=90_000) is False
-    assert should_defer_latency_rollover(reasons, user_turns=1, response_in_progress=True, response_latency_ms=180_000) is False
-    assert should_defer_latency_rollover(("error_limit", "latency_limit"), user_turns=1, response_in_progress=True, response_latency_ms=90_000) is False
+    assert should_defer_latency_rollover(reasons, response_pending=True, response_in_progress=True, response_idle_ms=599_999) is True
+    assert should_defer_latency_rollover(reasons, response_pending=True, response_in_progress=True, response_idle_ms=600_000) is False
+    assert should_defer_latency_rollover(reasons, response_pending=True, response_in_progress=False, response_idle_ms=59_999) is True
+    assert should_defer_latency_rollover(reasons, response_pending=True, response_in_progress=False, response_idle_ms=60_000) is False
+    assert should_defer_latency_rollover(reasons, response_pending=False, response_in_progress=False, response_idle_ms=0) is False
+    assert should_defer_latency_rollover(("error_limit", "latency_limit"), response_pending=True, response_in_progress=True, response_idle_ms=1_000) is False
 
 
 def test_handoff_round_trip_and_prompt(tmp_path) -> None:
