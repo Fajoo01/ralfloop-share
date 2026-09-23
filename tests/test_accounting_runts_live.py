@@ -21,6 +21,15 @@ def build_db(path):
             nome_categoria TEXT,
             tipo TEXT
         );
+        CREATE TABLE imports (
+            import_id INTEGER PRIMARY KEY,
+            filename TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            import_timestamp TEXT NOT NULL,
+            hash_file TEXT,
+            parser_usato TEXT,
+            account_id INTEGER
+        );
         CREATE TABLE movement_reviews (
             movement_id INTEGER PRIMARY KEY,
             decisione TEXT,
@@ -86,6 +95,14 @@ def build_db(path):
         INSERT INTO categories VALUES
             (5,'Materiale didattico','uscita'),
             (6,'Trasferimenti','trasferimento');
+        INSERT INTO imports(import_id,filename,source_type,import_timestamp,hash_file,parser_usato,account_id) VALUES
+            (101,'a.csv','bank','2025-01-01T00:00:01','h101','fixture',1),
+            (102,'b.csv','bank','2025-01-01T00:00:02','h102','fixture',1),
+            (103,'c.csv','bank','2025-01-01T00:00:03','h103','fixture',1),
+            (104,'d.csv','bank','2025-01-01T00:00:04','h104','fixture',1),
+            (105,'e.csv','bank','2025-01-01T00:00:05','h105','fixture',1),
+            (106,'f.csv','bank','2025-01-01T00:00:06','h106','fixture',1),
+            (107,'g.csv','bank','2025-01-01T00:00:07','h107','fixture',9);
         INSERT INTO movements (
             movement_id,import_id,account_id,data_movimento,descrizione_originale,
             importo_signed,contropartita,category_id,project_id,internal_category_id,
@@ -232,6 +249,72 @@ def test_amazon_order_is_strong_context_evidence_but_not_fiscal_document(tmp_pat
     assert row["external_evidence"][0]["fiscal_document"] is False
     assert result["summary"]["amazon_order_match_count"] == 1
     assert result["summary"]["ready_for_human_confirmation_count"] == 1
+
+
+def test_paypal_add_to_balance_pair_is_transfer_candidate_until_human_confirms(tmp_path):
+    db = tmp_path / "runts_suite.db"
+    build_db(db)
+    conn = sqlite3.connect(db)
+    conn.execute("INSERT INTO accounts VALUES (2,'PayPal',1,0)")
+    conn.executemany(
+        "INSERT INTO imports(import_id,filename,source_type,import_timestamp,hash_file,parser_usato,account_id) VALUES(?,?,?,?,?,?,?)",
+        [
+            (108,'bank.xlsx','xlsx','2026-01-01T00:00:01','bankhash','fixture',1),
+            (109,'paypal.CSV','csv','2026-01-01T00:00:02','paypalhash','fixture',2),
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO movements(movement_id,import_id,account_id,data_movimento,descrizione_originale,importo_signed,contropartita,category_id,project_id,internal_category_id,is_transfer,is_duplicate,movement_kind,notes,stato_validazione) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [
+            (8,108,1,'2025-07-13','Pagamenti paesi UE DEL 10/07/25 IN ITALIA C/O PAYPAL *ADD TO BAL CARTA N. 1006',-50,'',5,None,None,0,0,None,None,'da_rivedere'),
+            (9,109,2,'2025-07-10','Versamento generico con carta',50,'fabio@example.invalid',None,None,None,0,0,None,None,'importato_pdf'),
+        ],
+    )
+    conn.commit(); conn.close()
+    result = audit_runts_missing_documents(db, year=2025)
+    row = next(item for item in result["rows"] if item["movement_id"] == "8")
+    assert row["paypal_balance_transfer_candidate_count"] == 1
+    assert row["ready_for_human_confirmation"] is True
+    assert row["suggested_human_decision"] == "confirm_internal_transfer"
+    assert row["external_evidence"][0]["kind"] == "paypal_balance_transfer_pair"
+    assert row["external_evidence"][0]["fiscal_document"] is False
+    assert result["summary"]["paypal_balance_transfer_pair_count"] == 1
+    confirmed = audit_runts_missing_documents(db, year=2025, human_decisions={"8":"confirm_internal_transfer"})
+    confirmed_row = next(item for item in confirmed["rows"] if item["movement_id"] == "8")
+    assert confirmed_row["accounting_status"] == "HUMAN_CONFIRMED_INTERNAL_TRANSFER"
+    assert confirmed_row["external_eligibility"] == "EXCLUDED_INTERNAL_TRANSFER"
+    assert confirmed_row["human_review_required"] is False
+
+
+def test_replayed_identical_import_is_represented_once_without_assigning_owner(tmp_path):
+    db = tmp_path / "runts_suite.db"
+    build_db(db)
+    conn = sqlite3.connect(db)
+    conn.execute("INSERT INTO accounts VALUES (2,'Replay account',1,0)")
+    conn.executemany(
+        "INSERT INTO imports(import_id,filename,source_type,import_timestamp,hash_file,parser_usato,account_id) VALUES(?,?,?,?,?,?,?)",
+        [
+            (108,'same-a.pdf','pdf','2026-01-01T00:00:01','samehash','fixture',1),
+            (109,'same-b.pdf','pdf','2026-01-01T00:00:02','samehash','fixture',2),
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO movements(movement_id,import_id,account_id,data_movimento,descrizione_originale,importo_signed,contropartita,category_id,project_id,internal_category_id,is_transfer,is_duplicate,movement_kind,notes,stato_validazione) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [
+            (8,108,1,'2025-08-01','Prelievo Con Bonifico',-70,'',5,None,None,0,0,None,None,'da_rivedere'),
+            (9,109,2,'2025-08-01','Prelievo Con Bonifico',-70,'',5,None,None,0,0,None,None,'da_rivedere'),
+        ],
+    )
+    conn.commit(); conn.close()
+    result = audit_runts_missing_documents(db, year=2025)
+    assert result["summary"]["raw_expense_movement_count"] == 5
+    assert result["summary"]["source_duplicate_suppressed_count"] == 1
+    assert result["summary"]["expense_movement_count"] == 4
+    replay = next(row for row in result["rows"] if row["source_duplicate_import_ids"])
+    assert replay["source_duplicate_import_ids"] == [108,109]
+    assert replay["source_duplicate_account_ids"] == [1,2]
+    assert replay["source_duplicate_owner_unverified"] is True
+    assert replay["ready_for_human_confirmation"] is False
 
 
 def test_commercialista_adapter_consumes_external_evidence_snapshot(tmp_path):

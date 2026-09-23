@@ -21,6 +21,16 @@ _PAYPAL_AMOUNT_MERCHANT_RE = re.compile(
 _PAYPAL_TX_RE = re.compile(r"codice\s+transazione:\s*([A-Z0-9]{8,32})", re.I)
 _PAYPAL_CARD_RE = re.compile(r"ultime\s+cifre\s+sono\s+(\d{4})", re.I)
 _TOKEN_RE = re.compile(r"[a-z0-9]+", re.I)
+_BANK_CRO_RE = re.compile(r"\bCro:\s*([A-Z0-9]{8,80})", re.I)
+_BANK_BILL_RE = re.compile(r"\b(?:Bolletta\s+Nr\.?|N\.DOCUMENTO)\s*[:.]?\s*([A-Z0-9-]{6,80})", re.I)
+_BANK_DIRECT_DEBIT_RE = re.compile(r"\bADDEBITO\s+DIRETTO\s+CORE\b", re.I)
+_BANK_SDD_UTILITY_RE = re.compile(r"\bPAGAMENTO\s+UTENZA(?:\s+TELEFONICA)?\b.*\b(?:CORE\s+RCUR|SDD)\b", re.I)
+_BANK_CARD_MERCHANT_RE = re.compile(r"\bPagamenti\s+paesi\s+UE\s+DEL\s+\d{2}/\d{2}/\d{2}\b.*\bC/O\s+.+?\s+CARTA\s+N\.", re.I)
+_BANK_F24_RE = re.compile(r"\b(?:DELEGA\s+F24|ADD\.DELEGA\s+F24)\b", re.I)
+_BANK_CBILL_RE = re.compile(r"\bCBILL\b", re.I)
+_BANK_FEE_RE = re.compile(r"^\s*(?:COMPETENZE\s+SPESE|COMMISSIONI(?:\s+BANCARIE)?|CANONE\s+CONTO)\s*$", re.I)
+_BANK_TRANSFER_RE = re.compile(r"\b(?:ADDEBITO\s+BONIFICO|DISPOSIZIONE\s+DI\s+BONIFICO|Bonifico\s+Disposto)\b", re.I)
+_BANK_PURPOSE_RE = re.compile(r"\b(?:FATTURA|RICEVUTA|NOTA|RIMBORSO|AFFITTO|PRESTITO|TESSER|SUPPORTO|INTERVALLO|LEZION|COMPENSO)\w*\b", re.I)
 
 
 def _q2(value: Any) -> Decimal:
@@ -58,6 +68,75 @@ def merchant_similarity(left: str, right: str) -> float:
     if a <= b or b <= a:
         return 1.0
     return len(a & b) / len(a | b)
+
+
+def extract_bank_native_reference(movement: Mapping[str, Any]) -> dict[str, Any] | None:
+    description = str(movement.get("description") or movement.get("descrizione_originale") or "").strip()
+    movement_id = str(movement.get("movement_id") or "").strip()
+    if not description or not movement_id:
+        return None
+    kind = None
+    confidence = 0
+    document_reference = None
+    if _BANK_F24_RE.search(description):
+        kind, confidence = "bank_f24_reference", 95
+    elif _BANK_CBILL_RE.search(description):
+        kind, confidence = "bank_cbill_reference", 92
+        match = _BANK_BILL_RE.search(description)
+        document_reference = match.group(1) if match else None
+    elif _BANK_DIRECT_DEBIT_RE.search(description):
+        kind, confidence = "bank_direct_debit_reference", 90
+        match = _BANK_BILL_RE.search(description)
+        document_reference = match.group(1) if match else None
+    elif _BANK_SDD_UTILITY_RE.search(description):
+        kind, confidence = "bank_sdd_utility_reference", 92
+    elif _BANK_CARD_MERCHANT_RE.search(description) and "PAYPAL *ADD TO BAL" not in description.upper():
+        kind, confidence = "bank_card_merchant_reference", 90
+    elif _BANK_FEE_RE.fullmatch(description):
+        kind, confidence = "bank_fee_statement_reference", 95
+    elif _BANK_TRANSFER_RE.search(description):
+        cro = _BANK_CRO_RE.search(description)
+        purpose = _BANK_PURPOSE_RE.search(description)
+        if cro and purpose:
+            kind, confidence = "bank_transfer_reference", 92
+        elif cro:
+            kind, confidence = "bank_transfer_reference", 82
+        else:
+            return None
+    else:
+        return None
+    native = _BANK_CRO_RE.search(description)
+    native_reference = native.group(1) if native else document_reference
+    fingerprint = hashlib.sha256(description.encode("utf-8")).hexdigest()
+    return {
+        "kind": kind,
+        "confidence": confidence,
+        "provenance_ref": f"runts:movement:{movement_id}:bank_native_reference",
+        "native_reference_hash": hashlib.sha256(str(native_reference or fingerprint).encode("utf-8")).hexdigest(),
+        "document_reference": document_reference,
+        "content_hash": fingerprint,
+        "fiscal_document": False,
+        "content_role": "payment_and_context_evidence",
+    }
+
+
+def enrich_rows_with_bank_native(rows: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for raw in rows:
+        row = dict(raw)
+        evidence = extract_bank_native_reference(row)
+        existing = list(row.get("external_evidence") or ())
+        if evidence is not None:
+            existing.append(evidence)
+            row["bank_native_match_status"] = "UNIQUE_MOVEMENT_REFERENCE"
+            if int(evidence["confidence"]) >= 90:
+                row["ready_for_human_confirmation"] = True
+            row["reconstruction_evidence_score"] = max(
+                int(row.get("reconstruction_evidence_score") or 0), int(evidence["confidence"])
+            )
+        row["external_evidence"] = existing
+        output.append(row)
+    return output
 
 
 def parse_paypal_receipt(message: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -301,7 +380,9 @@ def enrich_rows_with_paypal(
 __all__ = [
     "collect_paypal_receipts",
     "enforce_unique_external_evidence",
+    "enrich_rows_with_bank_native",
     "enrich_rows_with_paypal",
+    "extract_bank_native_reference",
     "load_evidence_snapshot",
     "match_paypal_receipt",
     "merchant_similarity",

@@ -39,6 +39,7 @@ Human decisions for a missing original:
 
 - `approve_reconstruction`: keep/post the source-backed accounting reconstruction;
 - `approve_nonreportable`: keep the economic movement but explicitly exclude it from external reporting use;
+- `confirm_internal_transfer`: confirm a source-backed transfer pair and keep it outside expense reporting;
 - `reject`: do not post the proposed reconstruction.
 
 `approve_reconstruction` **never** changes `original_document_status=MISSING` and never creates a receipt/invoice. It also does not imply VAT deductibility, tax deductibility, grant eligibility or RUNTS documentary sufficiency. Those require a separate rule check against the applicable regime/source.
@@ -47,7 +48,7 @@ A missing-document case without primary payment evidence cannot be approved as a
 
 ## Human gate
 
-Pending cases become ordinary Tiremm Admin `ActionProposal(action="propose_update")` objects. They carry exact evidence IDs and `requires_approval=True`. The proposal exposes only three bounded decisions: approve reconstruction, approve as non-reportable, or reject.
+Pending cases become ordinary Tiremm Admin `ActionProposal(action="propose_update")` objects. They carry exact evidence IDs and `requires_approval=True`. The proposal exposes four bounded decisions: approve reconstruction, approve as non-reportable, confirm a source-backed internal transfer, or reject.
 
 This means Bot-tazzi may search for a plausible explanation and propose it, but the human remains the decision-maker and the evidence trail is retained.
 
@@ -94,4 +95,8 @@ PayPal receipt parsing extracts amount, merchant, message date, transaction id a
 
 Existing `amazon_orders` are also reused read-only. An Amazon order is considered strong contextual evidence only for Amazon-labelled movements with exact amount and a bounded date distance. It never becomes an invoice or receipt automatically.
 
-Real 2025 canary on 2026-09-23: 121 PayPal receipt emails were collected from the authenticated Tiremm Gmail mailbox. The enriched 2025 RUNTS audit found 107 unique PayPal-to-movement matches; 10 of those movements also have a unique matching Amazon order. The resulting hash-bound human-confirmation batch contains 107 movements totalling EUR 3022.22. The batch is non-executable, `writes=0`, and preserves `original_document_status=MISSING`; human approval is still required and does not imply tax, VAT, grant or RUNTS documentary eligibility.
+Bank-native evidence is also parsed deterministically from the existing statement row: F24, CBILL/document references, SDD/direct debits, CRO-bearing transfers with a meaningful causal, merchant/card rows and bank fees. These references can make a case ready for human bookkeeping confirmation but remain `fiscal_document=false`.
+
+Exact replayed imports with the same source hash are represented once in the documentary review queue. This does not delete production movements and does not decide which account owns the source; conflicting account ownership remains explicit. PayPal `ADD TO BAL` debits are paired with exact opposite PayPal CSV credits when possible and proposed as `confirm_internal_transfer`, never excluded automatically.
+
+Real 2025 canary on 2026-09-23: 121 PayPal receipt emails were collected from the authenticated Tiremm Gmail mailbox. The raw documentary candidate set is 482 rows / EUR 23047.36; 18 replayed source rows are neutralised in the review projection, leaving 464 unique-source cases / EUR 20836.36. The audit finds 107 unique PayPal email matches, 10 Amazon order matches, 79 PayPal balance-transfer pairs and 64 bank-native references. A hash-bound non-executing batch contains 250 cases / EUR 17128.58 ready for human decision: 171 suggested `approve_reconstruction` and 79 suggested `confirm_internal_transfer`. The remaining evidence-unresolved queue is 214 cases. `writes=0`; originals remain missing unless a real original is linked, and no tax/VAT/grant/RUNTS eligibility is inferred.

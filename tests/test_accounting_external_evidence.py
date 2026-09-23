@@ -95,6 +95,39 @@ def test_enrichment_marks_case_ready_for_human_confirmation_without_approving_it
     assert row["external_evidence"][0]["fiscal_document"] is False
 
 
+def test_bank_native_references_are_strong_payment_context_not_fiscal_documents():
+    from ralfloop_agent.unified_assistant.accounting_external_evidence import extract_bank_native_reference
+    f24 = extract_bank_native_reference({"movement_id":"2393","description":"ADDEBITO DELEGA F24 - HB-NET 068 97826900157 ADD.DELEGA F24 HB-NET"})
+    assert f24["kind"] == "bank_f24_reference" and f24["confidence"] == 95
+    assert f24["fiscal_document"] is False and f24["native_reference_hash"]
+    cbill = extract_bank_native_reference({"movement_id":"2422","description":"PAGAMENTO UTENZA PAG.TO CBILL DI EURO 149,00 BILLER: A0EDT N.DOCUMENTO 002000006790540345"})
+    assert cbill["kind"] == "bank_cbill_reference" and cbill["document_reference"] == "002000006790540345"
+    transfer = extract_bank_native_reference({"movement_id":"2408","description":"ADDEBITO BONIFICO DA HOME BANKING john north Cro: 0000028226873811480160001600IT FATTURA N 2 2025 LEZIONI DI INGLESE"})
+    assert transfer["kind"] == "bank_transfer_reference" and transfer["confidence"] == 92
+    fee = extract_bank_native_reference({"movement_id":"2447","description":"COMPETENZE SPESE"})
+    assert fee["kind"] == "bank_fee_statement_reference" and fee["confidence"] == 95
+    assert fee["fiscal_document"] is False
+    sdd = extract_bank_native_reference({"movement_id":"2500","description":"PAGAMENTO UTENZA TELEFONICA CORE RCUR Prg.Car.: 250240490021197 FASTWEB SPA - ADDEBITO FASTWEB 2025- M003048569 SDD 11662640"})
+    assert sdd["kind"] == "bank_sdd_utility_reference" and sdd["confidence"] == 92
+    card = extract_bank_native_reference({"movement_id":"2465","description":"Pagamenti paesi UE DEL 07/03/25 IN ITALIA A MILANO Valuta EUR Paese Italia C/O JustEatItaly CARTA N. 483847******1006 - CIRCUITO VISA"})
+    assert card["kind"] == "bank_card_merchant_reference" and card["confidence"] == 90
+    topup = extract_bank_native_reference({"movement_id":"2504","description":"Pagamenti paesi UE DEL 20/01/25 IN ITALIA C/O PAYPAL *ADD TO BAL CARTA N. 483847******1006 - CIRCUITO VISA"})
+    assert topup is None
+    assert extract_bank_native_reference({"movement_id":"1","description":"Prelievo Con Bonifico"}) is None
+
+
+def test_bank_native_enrichment_marks_only_strong_references_ready_for_human_confirmation():
+    from ralfloop_agent.unified_assistant.accounting_external_evidence import enrich_rows_with_bank_native
+    rows = enrich_rows_with_bank_native([
+        {"movement_id":"1","description":"ADDEBITO DIRETTO CORE RCUR HERA S.P.A.","ready_for_human_confirmation":False,"reconstruction_evidence_score":20,"external_evidence":[]},
+        {"movement_id":"2","description":"Prelievo Con Bonifico","ready_for_human_confirmation":False,"reconstruction_evidence_score":20,"external_evidence":[]},
+    ])
+    assert rows[0]["ready_for_human_confirmation"] is True
+    assert rows[0]["external_evidence"][0]["kind"] == "bank_direct_debit_reference"
+    assert rows[0]["external_evidence"][0]["fiscal_document"] is False
+    assert rows[1]["ready_for_human_confirmation"] is False
+
+
 class FakeGateway:
     def __init__(self):
         self.search_calls = 0

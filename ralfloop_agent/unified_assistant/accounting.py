@@ -292,6 +292,9 @@ def accounting_read_adapter(
                     "blocked_count": 0,
                     "human_approved_reconstruction_count": live_summary["human_approved_reconstruction_count"],
                     "ready_for_human_confirmation_count": live_summary.get("ready_for_human_confirmation_count", 0),
+                    "unresolved_evidence_count": live_summary.get("unresolved_evidence_count", 0),
+                    "source_duplicate_suppressed_count": live_summary.get("source_duplicate_suppressed_count", 0),
+                    "raw_case_count": live_summary.get("raw_expense_movement_count", live_summary["expense_movement_count"]),
                     "missing_original_count": live_summary["missing_original_count"],
                     "rows": live_audit["rows"],
                     "invariants": live_audit["invariants"],
@@ -338,14 +341,19 @@ def accounting_read_adapter(
         pending = int(document_review_queue["review_required_count"])
         reconstructed = int(document_review_queue["human_approved_reconstruction_count"])
         ready = int(document_review_queue.get("ready_for_human_confirmation_count") or 0)
+        unresolved = int(document_review_queue.get("unresolved_evidence_count") or max(0, pending - ready))
+        suppressed = int(document_review_queue.get("source_duplicate_suppressed_count") or 0)
+        raw_cases = int(document_review_queue.get("raw_case_count") or document_review_queue.get("case_count") or 0)
         missing = int(document_review_queue["missing_original_count"])
         total_cases = int(document_review_queue.get("case_count") or len(document_review_queue["rows"]))
         shown = len(document_review_queue["rows"])
         shown_note = f"; mostrati {shown} prioritari" if shown < total_cases else ""
+        replay_note = f"; {suppressed} replay di sorgente neutralizzati su {raw_cases} righe grezze" if suppressed else ""
         message = (
-            f"Revisione giustificativi: {total_cases} casi{shown_note}, "
-            f"{missing} originali mancanti, {ready} già corredati da prove forti e pronti per conferma umana, "
-            f"{pending} ancora formalmente da decidere, {reconstructed} ricostruzioni già approvate dall’umano. "
+            f"Revisione giustificativi: {total_cases} casi unici{shown_note}{replay_note}. "
+            f"Originali mancanti: {missing}; {ready} casi hanno già prove forti e sono pronti per conferma umana, "
+            f"{unresolved} richiedono ancora ricerca/verifica. Decisioni umane ancora aperte: {pending}; "
+            f"ricostruzioni già approvate: {reconstructed}. "
             "La quadratura contabile resta separata dalla validità fiscale/rendicontativa: nessuna ricevuta viene inventata."
         )
     elif operation == "document_review":

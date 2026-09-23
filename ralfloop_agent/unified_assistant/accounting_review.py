@@ -11,6 +11,7 @@ from .accounting import parse_eur
 _ALLOWED_HUMAN_DECISIONS = {
     "approve_reconstruction",
     "approve_nonreportable",
+    "confirm_internal_transfer",
     "reject",
 }
 
@@ -83,6 +84,13 @@ def review_missing_document_case(case: Mapping[str, Any]) -> dict[str, Any]:
             accounting_status = "HUMAN_APPROVED_NONREPORTABLE"
             bookkeeping_postable = True
             human_review_required = False
+    elif original_document_status == "MISSING" and human_decision == "confirm_internal_transfer":
+        if not payment_refs or not context_refs:
+            accounting_status = "BLOCKED_TRANSFER_EVIDENCE_REQUIRED"
+        else:
+            accounting_status = "HUMAN_CONFIRMED_INTERNAL_TRANSFER"
+            bookkeeping_postable = False
+            human_review_required = False
     elif human_decision == "reject":
         accounting_status = "REJECTED_BY_HUMAN"
         bookkeeping_postable = False
@@ -92,6 +100,8 @@ def review_missing_document_case(case: Mapping[str, Any]) -> dict[str, Any]:
         external_eligibility = "REQUIRES_RULE_CHECK"
     elif accounting_status == "HUMAN_APPROVED_NONREPORTABLE":
         external_eligibility = "EXCLUDED_BY_HUMAN_DECISION"
+    elif accounting_status == "HUMAN_CONFIRMED_INTERNAL_TRANSFER":
+        external_eligibility = "EXCLUDED_INTERNAL_TRANSFER"
     else:
         external_eligibility = "REQUIRES_SEPARATE_RULE_CHECK"
 
@@ -165,6 +175,7 @@ def build_human_review_proposal(review: Mapping[str, Any], *, evidence_ids: tupl
             "allowed_decisions": [
                 "approve_reconstruction",
                 "approve_nonreportable",
+                "confirm_internal_transfer",
                 "reject",
             ],
             "tax_or_grant_eligibility_not_implied": True,
@@ -206,7 +217,7 @@ def build_human_confirmation_batch(rows: list[Mapping[str, Any]], *, year: int) 
             "amount_eur": str(amount),
             "counterparty": row.get("counterparty"),
             "description": row.get("description"),
-            "suggested_decision": "approve_reconstruction",
+            "suggested_decision": str(row.get("suggested_human_decision") or "approve_reconstruction"),
             "original_document_status": "MISSING",
             "external_evidence": evidence,
         })
@@ -224,7 +235,7 @@ def build_human_confirmation_batch(rows: list[Mapping[str, Any]], *, year: int) 
         "evidence_refs": list(dict.fromkeys(refs)),
         "requires_human_approval": True,
         "executable": False,
-        "allowed_batch_decisions": ["approve_reconstruction", "approve_nonreportable", "reject"],
+        "allowed_batch_decisions": ["approve_reconstruction", "approve_nonreportable", "confirm_internal_transfer", "reject"],
         "item_exclusions_allowed": True,
         "invented_documents": 0,
         "tax_or_grant_eligibility_not_implied": True,
