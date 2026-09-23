@@ -17,6 +17,7 @@ from ralfloop_agent.integration.gpt_session_rollover import (
     RolloverPolicy,
     SessionMetrics,
     evaluate_rollover,
+    session_metrics_from_ui,
 )
 
 
@@ -151,10 +152,7 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
                 return 0
             source = tabs[0]
     ui = cdp.chatgpt_ui_state(source.target_id)
-    metrics = SessionMetrics(
-        turns=int(ui.get("user_turns") or 0),
-        age_minutes=int(ui.get("page_age_minutes") or 0),
-    )
+    metrics = session_metrics_from_ui(ui)
     policy = RolloverPolicy(
         max_turns=args.max_turns,
         max_age_minutes=args.max_age_minutes,

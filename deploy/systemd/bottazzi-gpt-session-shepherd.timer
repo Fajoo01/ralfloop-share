@@ -3,8 +3,8 @@ Description=Run Bot-tazzi GPT session shepherd periodically
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=1min
-AccuracySec=10s
+OnUnitActiveSec=15s
+AccuracySec=2s
 Unit=bottazzi-gpt-session-shepherd.service
 
 [Install]

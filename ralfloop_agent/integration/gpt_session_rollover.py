@@ -7,7 +7,7 @@ import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 SCHEMA_VERSION = "bottazzi_gpt_handoff_v1"
 SECRET_KEY_RE = re.compile(r"(?i)(authorization|cookie|credential|password|secret|token|storage_state)")
@@ -43,6 +43,17 @@ class SessionMetrics:
     last_response_latency_ms: int = 0
     phase_boundary: bool = False
     manual: bool = False
+
+
+def session_metrics_from_ui(ui: Mapping[str, Any]) -> SessionMetrics:
+    last_latency = int(ui.get("last_response_latency_ms") or 0)
+    current_latency = int(ui.get("current_response_latency_ms") or 0)
+    return SessionMetrics(
+        turns=int(ui.get("user_turns") or 0),
+        age_minutes=int(ui.get("page_age_minutes") or 0),
+        consecutive_errors=int(ui.get("consecutive_errors") or 0),
+        last_response_latency_ms=max(last_latency, current_latency),
+    )
 
 
 @dataclass(frozen=True)

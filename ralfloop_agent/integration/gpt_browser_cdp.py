@@ -94,6 +94,94 @@ class ChromeCdp:
           const authenticatedHint = loginControls.length === 0;
           const pageAgeMs = Math.max(0, Math.floor(performance.now()));
           const pageSettled = document.readyState === 'complete' && pageAgeMs >= 3000;
+          const telemetryKey = '__bottazziGptTelemetryV1';
+          const observerKey = '__bottazziGptTelemetryObserverV1';
+          const responseErrorRe = /(?:something went wrong|error generating|network error|there was an error|si è verificato un errore|errore (?:di rete|durante|nella|nel)|riprova|try again)/i;
+          const sampleTelemetry = () => {
+            const nowMs = performance.now();
+            const userTurns = document.querySelectorAll('[data-message-author-role="user"]').length;
+            const assistantNodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+            const assistantTurns = assistantNodes.length;
+            const stopSelectors = [
+              'button[data-testid="stop-button"]',
+              'button[aria-label*="Stop"]',
+              'button[aria-label*="stop"]',
+              'button[aria-label*="Interrompi"]',
+              'button[aria-label*="interrompi"]',
+            ];
+            const responseInProgress = stopSelectors.some((selector) => Array.from(document.querySelectorAll(selector)).some(visible));
+            const alertError = Array.from(document.querySelectorAll('[role="alert"], [data-testid*="error"]'))
+              .filter(visible)
+              .some((el) => responseErrorRe.test((el.innerText || el.textContent || '').trim()));
+            const lastAssistant = assistantNodes.length ? assistantNodes[assistantNodes.length - 1] : null;
+            const lastAssistantError = Boolean(lastAssistant && responseErrorRe.test((lastAssistant.innerText || lastAssistant.textContent || '').trim()));
+            let telemetry = window[telemetryKey];
+            const resetTelemetry = !telemetry || typeof telemetry !== 'object' || telemetry.version !== 1 || telemetry.url !== location.href || userTurns < Number(telemetry.last_user_turns || 0) || assistantTurns < Number(telemetry.last_assistant_turns || 0);
+            if (resetTelemetry) {
+              telemetry = {
+                version: 1,
+                url: location.href,
+                last_user_turns: userTurns,
+                last_assistant_turns: assistantTurns,
+                pending_started_ms: responseInProgress ? nowMs : null,
+                pending_assistant_turns_start: responseInProgress ? Math.max(0, assistantTurns - 1) : assistantTurns,
+                generation_seen: responseInProgress,
+                last_response_latency_ms: 0,
+                consecutive_errors: 0,
+                last_error_user_turns: responseInProgress ? Math.max(0, userTurns - 1) : userTurns,
+              };
+              window[telemetryKey] = telemetry;
+            } else {
+              if (userTurns > Number(telemetry.last_user_turns || 0)) {
+                telemetry.pending_started_ms = nowMs;
+                telemetry.pending_assistant_turns_start = assistantTurns;
+                telemetry.generation_seen = responseInProgress;
+              }
+              if (telemetry.pending_started_ms !== null && responseInProgress) {
+                telemetry.generation_seen = true;
+              }
+              const assistantAdvanced = assistantTurns > Number(telemetry.pending_assistant_turns_start || 0);
+              const currentError = alertError || (lastAssistantError && assistantAdvanced);
+              if (currentError && userTurns > Number(telemetry.last_error_user_turns || 0)) {
+                telemetry.consecutive_errors = Number(telemetry.consecutive_errors || 0) + 1;
+                telemetry.last_error_user_turns = userTurns;
+                telemetry.pending_started_ms = null;
+                telemetry.generation_seen = false;
+              } else if (telemetry.pending_started_ms !== null && assistantAdvanced) {
+                const elapsedMs = Math.max(0, Math.floor(nowMs - Number(telemetry.pending_started_ms || nowMs)));
+                const streamedComplete = Boolean(telemetry.generation_seen) && !responseInProgress;
+                const fastComplete = !responseInProgress && elapsedMs >= 2000;
+                if (streamedComplete || fastComplete) {
+                  telemetry.last_response_latency_ms = elapsedMs;
+                  telemetry.pending_started_ms = null;
+                  telemetry.generation_seen = false;
+                  telemetry.consecutive_errors = 0;
+                }
+              }
+              telemetry.last_user_turns = userTurns;
+              telemetry.last_assistant_turns = assistantTurns;
+              telemetry.url = location.href;
+            }
+            const currentLatencyMs = telemetry.pending_started_ms === null
+              ? 0
+              : Math.max(0, Math.floor(nowMs - Number(telemetry.pending_started_ms || nowMs)));
+            return {
+              user_turns: userTurns,
+              assistant_turns: assistantTurns,
+              response_in_progress: responseInProgress,
+              current_response_latency_ms: currentLatencyMs,
+              last_response_latency_ms: Math.max(0, Number(telemetry.last_response_latency_ms || 0)),
+              consecutive_errors: Math.max(0, Number(telemetry.consecutive_errors || 0)),
+            };
+          };
+          if (!window[observerKey]) {
+            const observer = new MutationObserver(() => {
+              try { sampleTelemetry(); } catch (_error) { }
+            });
+            observer.observe(document.documentElement, {subtree: true, childList: true, characterData: true});
+            window[observerKey] = observer;
+          }
+          const telemetry = sampleTelemetry();
           return JSON.stringify({
             ready: Boolean(composer) && authenticatedHint && pageSettled,
             composer_ready: Boolean(composer),
@@ -101,8 +189,13 @@ class ChromeCdp:
             login_controls: loginControls.length,
             title: document.title || '',
             url: location.href,
-            user_turns: document.querySelectorAll('[data-message-author-role="user"]').length,
-            assistant_turns: document.querySelectorAll('[data-message-author-role="assistant"]').length,
+            user_turns: telemetry.user_turns,
+            assistant_turns: telemetry.assistant_turns,
+            response_in_progress: telemetry.response_in_progress,
+            current_response_latency_ms: telemetry.current_response_latency_ms,
+            last_response_latency_ms: telemetry.last_response_latency_ms,
+            consecutive_errors: telemetry.consecutive_errors,
+            telemetry_observer_active: Boolean(window[observerKey]),
             page_age_minutes: Math.max(0, Math.floor(performance.now() / 60000)),
             interaction_required: !authenticatedHint || !composer || /ci siamo quasi/i.test(document.title || ''),
             composer_kind: composer ? (composer.id || composer.tagName || '').toLowerCase() : null,

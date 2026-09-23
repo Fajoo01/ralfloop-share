@@ -14,5 +14,6 @@ ExecStart=/home/bandi/.local/share/bottazzi-gpt-browser/bottazzi_gpt_shepherd_gu
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
+ReadWritePaths=/home/bandi/.local/state/bottazzi/gpt-session /run/user/1001
 PrivateTmp=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

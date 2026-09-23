@@ -62,13 +62,15 @@ Git/runtime state is authoritative. A new GPT chat must consume the handoff only
 
 ## Session shepherd
 
-`status` now probes the live ChatGPT DOM and reports whether the composer is ready, the current user/assistant turn counts, page age, and whether interactive login/challenge handling is required.
+`status` now probes the live ChatGPT DOM and reports whether the composer is ready, the current user/assistant turn counts, page age, live response latency, consecutive visible response errors, and whether interactive login/challenge handling is required.
 
-`shepherd` evaluates the rollover policy from those live metrics. With `--apply --submit`, it opens a new ChatGPT tab, waits until the fresh page is fully loaded and settled past the server-rendered composer race, injects text through trusted CDP input, submits through the hydrated send button, and only closes the selected source after the DOM shows a real increment in user turns. If submit is not confirmed, the temporary target is closed and the source stays open.
+Latency/error telemetry is page-local and non-secret. A lightweight `MutationObserver` is installed only in an inspected worker page and keeps state in the page `window`: a new user turn starts the response clock, the current clock remains live while a response is pending, a completed assistant response stores the last latency and resets the consecutive-error count, while a visible ChatGPT response/network error can increment the error streak at most once per user turn. No prompt or response text is persisted by this telemetry.
+
+`shepherd` evaluates the rollover policy from those live metrics. It uses the larger of current pending latency and last completed latency, so an actively stalled response or a just-completed slow response can trigger the latency gate. With `--apply --submit`, it opens a new ChatGPT tab, waits until the fresh page is fully loaded and settled past the server-rendered composer race, injects text through trusted CDP input, submits through the hydrated send button, and only closes the selected source after the DOM shows a real increment in user turns. If submit is not confirmed, the temporary target is closed and the source stays open.
 
 The successful successor target is persisted in `current.json` as `source_chat`. On later timer runs this identifies the worker even if unrelated ChatGPT tabs are open. If there are multiple tabs and the stored worker cannot be found, the shepherd fails closed instead of guessing. `--source-target-id` exists for explicit smoke/recovery operations.
 
-The periodic units are `bottazzi-gpt-session-shepherd.service` and `bottazzi-gpt-session-shepherd.timer`. They run once per minute after the one-time account login has been verified.
+The periodic units are `bottazzi-gpt-session-shepherd.service` and `bottazzi-gpt-session-shepherd.timer`. The production timer probes every 15 seconds after the one-time account login has been verified, so a 30-second latency/error threshold is observed promptly without a tight polling loop.
 
 ## One-time interactive login mode
 

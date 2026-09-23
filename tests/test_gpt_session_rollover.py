@@ -12,6 +12,7 @@ from ralfloop_agent.integration.gpt_session_rollover import (
     RolloverPolicy,
     SessionMetrics,
     evaluate_rollover,
+    session_metrics_from_ui,
 )
 
 
@@ -33,6 +34,39 @@ def test_policy_can_be_tuned() -> None:
     )
     assert decision.rollover is True
     assert decision.reasons == ("age_limit",)
+
+
+def test_live_ui_metrics_use_current_or_last_latency() -> None:
+    metrics = session_metrics_from_ui(
+        {
+            "user_turns": 7,
+            "page_age_minutes": 12,
+            "consecutive_errors": 1,
+            "last_response_latency_ms": 9000,
+            "current_response_latency_ms": 31000,
+        }
+    )
+    assert metrics.turns == 7
+    assert metrics.age_minutes == 12
+    assert metrics.consecutive_errors == 1
+    assert metrics.last_response_latency_ms == 31000
+    decision = evaluate_rollover(metrics)
+    assert decision.reasons == ("latency_limit",)
+
+
+def test_live_ui_consecutive_errors_trigger_rollover() -> None:
+    metrics = session_metrics_from_ui(
+        {
+            "user_turns": 3,
+            "page_age_minutes": 2,
+            "consecutive_errors": 2,
+            "last_response_latency_ms": 0,
+            "current_response_latency_ms": 0,
+        }
+    )
+    decision = evaluate_rollover(metrics)
+    assert decision.rollover is True
+    assert decision.reasons == ("error_limit",)
 
 
 def test_handoff_round_trip_and_prompt(tmp_path) -> None:
