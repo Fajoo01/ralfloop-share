@@ -512,6 +512,59 @@ def cmd_adopt_external(args: argparse.Namespace) -> int:
             return 0
         source = tabs[0]
 
+    # A human-selected conversation in the headed browser is authoritative for
+    # interactive input. Background watcher/recovery tabs never have focus, and
+    # ghost tabs are explicitly excluded so clicking an old ghost cannot make it
+    # the worker again.
+    foreground_tabs = []
+    if hasattr(cdp, "chatgpt_focus_state"):
+        try:
+            for tab in tabs:
+                if not normalize_chatgpt_conversation_url(tab.url):
+                    continue
+                focus_state = cdp.chatgpt_focus_state(tab.target_id)
+                if focus_state.get("focused") and not focus_state.get("ghost") and not focus_state.get("handoff_locked"):
+                    foreground_tabs.append(tab)
+        except CdpError as exc:
+            _json({"ok": False, "action": "noop", "reason": str(exc)})
+            return 0
+    if len(foreground_tabs) == 1 and foreground_tabs[0].target_id != source.target_id:
+        foreground = foreground_tabs[0]
+        foreground_url = normalize_chatgpt_conversation_url(foreground.url)
+        try:
+            foreground_ui = cdp.chatgpt_ui_state(foreground.target_id)
+        except CdpError as exc:
+            _json({"ok": False, "action": "noop", "reason": str(exc)})
+            return 0
+        if foreground_url and foreground_ui.get("authenticated"):
+            if not args.apply:
+                _json({"ok": True, "action": "candidate", "reason": "foreground_chat", "conversation_url": foreground_url, "source_target_id": source.target_id})
+                return 0
+            old_source = source
+            old_source_url = normalize_chatgpt_conversation_url(old_source.url)
+            try:
+                cdp.install_human_input_target(foreground.target_id, foreground_url)
+                store.update_source_chat(foreground.target_id, foreground_url)
+                ghosted = False
+                if old_source.target_id != foreground.target_id and old_source_url:
+                    ghosted = bool(cdp.mark_chatgpt_ghost_tab(old_source.target_id, successor_url=foreground_url).get("ghost"))
+                source = foreground
+                seen = list(adoption_state.get("seen_conversations") or [])
+                if foreground_url not in seen:
+                    seen.append(foreground_url)
+                adoption_state.update({
+                    "seen_conversations": seen,
+                    "last_adopted_conversation": foreground_url,
+                    "pending_conversation": None if normalize_chatgpt_conversation_url(str(adoption_state.get("pending_conversation") or "")) == foreground_url else adoption_state.get("pending_conversation"),
+                    "pending_detected_epoch": 0 if normalize_chatgpt_conversation_url(str(adoption_state.get("pending_conversation") or "")) == foreground_url else int(adoption_state.get("pending_detected_epoch") or 0),
+                })
+                adoption.save(adoption_state)
+            except (CdpError, GptSessionError, OSError) as exc:
+                _json({"ok": False, "action": "deferred", "reason": f"foreground_adoption_failed:{exc}", "conversation_url": foreground_url})
+                return 1
+            _json({"ok": True, "action": "adopted", "reason": "foreground_chat", "conversation_url": foreground_url, "source_target_id": foreground.target_id, "previous_source_target_id": old_source.target_id, "previous_source_ghosted": ghosted})
+            return 0
+
     now = int(time.time())
     watcher_id = str(adoption_state.get("watcher_target_id") or "")
     watcher = next((tab for tab in tabs if tab.target_id == watcher_id), None) if watcher_id else None

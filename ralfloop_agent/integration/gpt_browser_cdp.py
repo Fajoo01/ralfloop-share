@@ -741,6 +741,26 @@ class ChromeCdp:
             time.sleep(0.1)
         raise CdpError("conversation_archive_not_confirmed")
 
+    def chatgpt_focus_state(self, target_id: str) -> dict[str, Any]:
+        target = self._wait_target(target_id)
+        if not target.websocket_url or not target.is_chatgpt:
+            raise CdpError("focus_target_invalid")
+        expression = r'''(() => JSON.stringify({
+          focused: document.hasFocus() && document.visibilityState === 'visible',
+          visible: document.visibilityState === 'visible',
+          ghost: Boolean(window.__bottazziGhostTabV1),
+          handoff_locked: Boolean(window.__bottazziHandoffLockV1),
+        }))()'''
+        result = self._page_call(target.websocket_url, "Runtime.evaluate", {"expression": expression, "returnByValue": True})
+        raw = (result.get("result") or {}).get("value")
+        try:
+            state = json.loads(raw) if isinstance(raw, str) else {}
+        except json.JSONDecodeError as exc:
+            raise CdpError("focus_state_invalid") from exc
+        if not isinstance(state, dict):
+            raise CdpError("focus_state_invalid")
+        return state
+
     def lock_human_input_during_handoff(self, target_id: str) -> dict[str, Any]:
         target = self._wait_target(target_id)
         if not target.websocket_url or not target.is_chatgpt:

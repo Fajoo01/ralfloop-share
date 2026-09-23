@@ -82,7 +82,7 @@ The guard no longer suppresses controller stderr or silently converts malformed/
 
 ## External/app chat adoption
 
-The periodic shepherd also runs `adopt-external --apply` before evaluating rollover. A dedicated watcher tab refreshes the authenticated ChatGPT sidebar at most every 30 seconds and detects account-synced conversations created by another client, including the mobile app.
+The periodic shepherd also runs `adopt-external --apply` before evaluating rollover. A dedicated watcher tab refreshes the authenticated ChatGPT sidebar at most every 30 seconds and detects account-synced conversations created by another client, including the mobile app. In the headed browser, a focused non-ghost ChatGPT conversation is treated as an explicit human selection and is promoted immediately to the active worker; the previous source becomes a protected ghost instead of remaining a stale worker. Background watcher/recovery tabs and old ghost tabs are excluded from this focus-based promotion.
 
 The first scan is baseline-only: conversations already visible in the sidebar are marked as seen and are never adopted retroactively. A later conversation is eligible only when it is new to the watcher, is not already open in the dedicated browser, and is not the current worker conversation. When eligible, the existing worker tab is navigated to that conversation so its target ID remains the durable `source_chat` and the normal rollover policy continues to apply.
 To reject late-rendered old history entries, a candidate must also appear before the current worker inside the history list; if the worker is absent from that list, adoption fails closed.
