@@ -359,7 +359,16 @@ class FakeAdoptionCdp:
             self.temporary_urls[target_id] = url
         return {"authenticated": True, "ready": True, "user_turns": 2}
 
-    def archive_chatgpt_conversation(self, target_id: str, url: str, *, allow_absent: bool = False):
+    def archive_chatgpt_conversation(
+        self,
+        target_id: str,
+        url: str,
+        *,
+        allow_absent: bool = False,
+        archive_started_hook=None,
+    ):
+        if archive_started_hook is not None:
+            archive_started_hook()
         self.archived.append((target_id, url))
         return {"archived": True, "already_archived": False, "conversation_url": url}
 
@@ -396,7 +405,16 @@ class FakeRecoveryCdp:
         ]
         return {"authenticated": True, "ready": True, "user_turns": 0}
 
-    def archive_chatgpt_conversation(self, target_id: str, url: str, *, allow_absent: bool = False):
+    def archive_chatgpt_conversation(
+        self,
+        target_id: str,
+        url: str,
+        *,
+        allow_absent: bool = False,
+        archive_started_hook=None,
+    ):
+        if archive_started_hook is not None:
+            archive_started_hook()
         self.archived.append((target_id, url))
         return {"archived": True, "already_archived": False, "conversation_url": url}
 
@@ -945,6 +963,7 @@ def test_archive_chatgpt_conversation_clicks_only_archive_action(monkeypatch) ->
     monkeypatch.setattr(cdp, "_wait_target", lambda target_id, **kwargs: target)
     monkeypatch.setattr(cdp, "chatgpt_ui_state", lambda target_id: {"authenticated": True, "ready": True})
     calls: list[str] = []
+    events: list[str] = []
 
     def page_call(websocket_url, method, params=None):
         assert websocket_url == "ws://target"
@@ -952,21 +971,30 @@ def test_archive_chatgpt_conversation_clicks_only_archive_action(monkeypatch) ->
         expression = (params or {}).get("expression", "")
         calls.append(expression)
         if "menu_opened" in expression:
+            events.append("menu")
             return {"result": {"value": json.dumps({"state": "menu_opened"})}}
         if "const labels = new Set" in expression:
+            events.append("click")
             assert "'delete'" not in expression.lower()
             assert "'elimina'" not in expression.lower()
             assert "'archive'" in expression.lower()
             assert "'archivia'" in expression.lower()
             return {"result": {"value": json.dumps({"clicked": True})}}
+        events.append("verify")
         return {"result": {"value": True}}
 
     monkeypatch.setattr(cdp, "_page_call", page_call)
 
-    result = cdp.archive_chatgpt_conversation("target", "https://chatgpt.com/c/abc", wait_timeout_s=0.5)
+    result = cdp.archive_chatgpt_conversation(
+        "target",
+        "https://chatgpt.com/c/abc",
+        wait_timeout_s=0.5,
+        archive_started_hook=lambda: events.append("started"),
+    )
 
     assert result["archived"] is True
     assert result["already_archived"] is False
+    assert events == ["menu", "started", "click", "verify"]
     assert len(calls) == 3
 
 
@@ -981,17 +1009,26 @@ def test_archive_absent_is_fail_closed_unless_retry_is_explicit(monkeypatch) -> 
         lambda websocket_url, method, params=None: {"result": {"value": json.dumps({"state": "absent"})}},
     )
 
+    started: list[str] = []
     with pytest.raises(CdpError, match="conversation_archive_source_not_in_history"):
-        cdp.archive_chatgpt_conversation("target", "https://chatgpt.com/c/abc", wait_timeout_s=0.1)
+        cdp.archive_chatgpt_conversation(
+            "target",
+            "https://chatgpt.com/c/abc",
+            wait_timeout_s=0.1,
+            archive_started_hook=lambda: started.append("started"),
+        )
+    assert started == []
 
     result = cdp.archive_chatgpt_conversation(
         "target",
         "https://chatgpt.com/c/abc",
         wait_timeout_s=0.1,
         allow_absent=True,
+        archive_started_hook=lambda: started.append("started"),
     )
     assert result["archived"] is True
     assert result["already_archived"] is True
+    assert started == []
 
 
 def test_conversation_navigation_waits_for_initial_blank(monkeypatch) -> None:

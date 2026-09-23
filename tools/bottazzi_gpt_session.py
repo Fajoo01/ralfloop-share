@@ -225,6 +225,7 @@ def _archive_source_conversation(
     source_url: str,
     *,
     allow_already_archived: bool = False,
+    archive_started_hook=None,
 ) -> dict:
     normalized = normalize_chatgpt_conversation_url(source_url)
     if not normalized:
@@ -246,7 +247,12 @@ def _archive_source_conversation(
             target_id = temporary_target_id
         else:
             target_id = target.target_id
-        result = cdp.archive_chatgpt_conversation(target_id, normalized, allow_absent=allow_already_archived)
+        result = cdp.archive_chatgpt_conversation(
+            target_id,
+            normalized,
+            allow_absent=allow_already_archived,
+            archive_started_hook=archive_started_hook,
+        )
         if not bool(result.get("archived")):
             raise CdpError("conversation_archive_not_confirmed")
         return result
@@ -266,13 +272,13 @@ def _archive_source_with_journal(
     source_url: str,
 ) -> dict:
     archive_may_have_started = phase in {"archive_started", "source_archived", "source_closed", "committed"}
-    if not archive_may_have_started:
-        journal.update(phase="archive_started")
+    started_hook = None if archive_may_have_started else lambda: journal.update(phase="archive_started")
     result = _archive_source_conversation(
         cdp,
         source_target_id,
         source_url,
         allow_already_archived=archive_may_have_started,
+        archive_started_hook=started_hook,
     )
     journal.update(phase="source_archived")
     return result

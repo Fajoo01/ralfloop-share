@@ -631,6 +631,7 @@ class ChromeCdp:
         *,
         wait_timeout_s: float = 10.0,
         allow_absent: bool = False,
+        archive_started_hook: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         normalized = _canonical_chatgpt_conversation_url(url)
         if not normalized:
@@ -694,6 +695,9 @@ class ChromeCdp:
             time.sleep(0.1)
         else:
             raise CdpError(f"conversation_archive_menu_failed:{state.get('state') or 'invalid'}")
+
+        if archive_started_hook is not None:
+            archive_started_hook()
 
         deadline = time.monotonic() + wait_timeout_s
         click_expression = r'''(() => {
