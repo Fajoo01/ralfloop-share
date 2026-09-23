@@ -33,6 +33,7 @@ LEAF_READ_SKILLS = frozenset(
         "education.tutor",
         "bandi.research",
         "browser.inspect",
+        "accounting.read",
     }
 )
 
@@ -129,6 +130,12 @@ CAPABILITY_HINTS: dict[str, tuple[str, ...]] = {
     "education.tutor": ("insegnante", "tutor", "spiegami", "quiz", "esercizio didattico"),
     "bandi.research": ("bandi aperti", "bandi disponibili", "opportunita finanziamento", "contributi aps", "finanziamenti tiremm", "grant opportunities"),
     "browser.inspect": ("browser", "playwright", "snapshot browser", "snapshot pagina", "ispeziona pagina web", "leggi pagina web", "schede browser", "tab browser"),
+    "accounting.read": (
+        "commercialista", "contabilita", "contabilità", "bilancio", "bilancio ets",
+        "rendiconto", "rendiconto ets", "rendiconto per cassa", "modello d", "modello e",
+        "prima nota", "riconciliazione", "fattura", "fatture", "ricevute",
+        "f24", "iva", "scadenze fiscali",
+    ),
 }
 
 # One shared lexical/phrase hit is noise; domain-bearing queries in this

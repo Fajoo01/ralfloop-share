@@ -538,6 +538,42 @@
       ]
     },
     {
+      "id": "accounting",
+      "aliases": [
+        "commercialista",
+        "contabilita",
+        "contabilità",
+        "fiscale",
+        "rendiconto ets",
+        "bilancio ets"
+      ],
+      "description": "Evidence-first accounting and ETS reporting analysis with deterministic rules; no tax filing, F24 or payment execution.",
+      "supported_skills": [
+        "accounting.read"
+      ],
+      "allowed_memory_namespaces": [
+        "tiremm"
+      ],
+      "context_builder": "ralfloop_agent.unified_assistant.accounting.accounting_read_adapter",
+      "policy": "READ analysis only; external fiscal filings and payments require separate approval-bound capabilities",
+      "validators": [
+        "verified input provenance",
+        "Decimal arithmetic",
+        "versioned ETS rulebook",
+        "no inferred tax status",
+        "writes=0",
+        "sends=0"
+      ],
+      "specialist_capabilities": [
+        "accounting.inspect"
+      ],
+      "status": "ready",
+      "source_refs": [
+        "ralfloop_agent/unified_assistant/accounting.py",
+        "config/accounting_ets_rules_v1.json"
+      ]
+    },
+    {
       "id": "pec",
       "aliases": [
         "pec",
@@ -1211,6 +1247,23 @@
       "classification": "AUTO_WRITE",
       "workflow": "ralfloop_agent.unified_assistant.editorial_mcp_adapter.EditorialMCPContext.request",
       "verification_method": "strict MCP discovery + source provenance + marketing/media preflight + local artifact output",
+      "status": "ready"
+    },
+    {
+      "id": "accounting.read",
+      "domains": [
+        "accounting",
+        "tiremm"
+      ],
+      "required_arguments": [
+        "objective"
+      ],
+      "required_capabilities": [
+        "accounting.inspect"
+      ],
+      "classification": "READ",
+      "workflow": "ralfloop_agent.unified_assistant.accounting.accounting_read_adapter",
+      "verification_method": "deterministic Decimal arithmetic + versioned ETS rulebook + explicit missing-input gates + zero external writes",
       "status": "ready"
     },
     {

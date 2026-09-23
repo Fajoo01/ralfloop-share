@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "as_of": "2026-09-23",
+  "jurisdiction": "IT",
+  "scope": "ETS accounting report form selection and RUNTS statutory filing window",
+  "rules": {
+    "model_e": {
+      "max_annual_entries_eur": 60000,
+      "available_for_financial_years_closing_on_or_after": "2026-03-21",
+      "excluded_if_social_enterprise": true,
+      "excluded_if_mainly_commercial": true,
+      "source": "https://www.lavoro.gov.it/notizie/pagine/codice-del-terzo-settore-chiarimenti-utilizzo-del-rendiconto"
+    },
+    "model_d": {
+      "max_annual_entries_eur": 300000,
+      "requires_no_legal_personality": true,
+      "excluded_if_social_enterprise": true,
+      "excluded_if_mainly_commercial": true,
+      "source": "https://www.lavoro.gov.it/documenti-e-norme/normativa/circolare-n-6-del-090824-legge104-2024-effetti-ordinamento-contabile"
+    },
+    "runts_deposit": {
+      "days_after_financial_year_close": 180,
+      "source": "https://www.lavoro.gov.it/notizie/pagine/enti-del-terzo-settore-deposito-di-bilanci-rendiconti-chiusi-al-31-dicembre-2024"
+    }
+  },
+  "guardrails": [
+    "Do not infer legal personality, commercial prevalence, social-enterprise status or annual entries.",
+    "Do not treat a statutory day count as a final operational deadline without checking holidays and current official instructions.",
+    "Tax returns, F24, payments and external filings are outside this read-only rulebook."
+  ]
+}

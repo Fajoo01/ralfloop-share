@@ -55,6 +55,7 @@ from .safe_mcp_read_adapters import (
     arci_context_adapter, education_tutor_adapter, jellyfin_identify_adapter,
     bandi_discovery_adapter, knowledge_retrieve_adapter, runts_context_adapter,
 )
+from .accounting import accounting_read_adapter
 from .whatsapp_compose import EmailBackedWhatsAppDraftPipeline, UnifiedWhatsAppComposeService
 from .whatsapp_mcp_adapter import WhatsAppMCPReadOnly
 from .whatsapp_send import (
@@ -91,7 +92,8 @@ _SUPPORTED = re.compile(
     r"volantin[oi]|flyer|locandin[ae]|manifest[oi]|poster|"
     r"come\s+(?:arrivo|vado|posso\s+andare)|"
     r"mezzi\s+(?:per|verso)|percorso\s+(?:atm|con\s+i\s+mezzi)|home\s+assistant|domotica|stato\s+(?:della\s+)?luce|"
-    r"runts|arci|jellyfin|browser|playwright|snapshot\s+(?:browser|pagina)|schede?\s+browser|bandi|bando|grant|finanziament[oi]|contribut[oi]|insegnante|tutor|quiz|esercizio\s+didattico|memoria\s+operativa|firma|firmare|digitalmente|arubasign|p7m)\b",
+    r"runts|arci|jellyfin|browser|playwright|snapshot\s+(?:browser|pagina)|schede?\s+browser|bandi|bando|grant|finanziament[oi]|contribut[oi]|insegnante|tutor|quiz|esercizio\s+didattico|memoria\s+operativa|firma|firmare|digitalmente|arubasign|p7m|"
+    r"commercialista|contabilit[aà]|bilancio\s+ets|rendiconto(?:\s+ets|\s+per\s+cassa)?|prima\s+nota|riconciliazion[ei]|fattur[ae]|ricevut[ae]|f24|iva|scadenz[ae]\s+fiscal[ei])\b",
     re.I,
 )
 
@@ -369,6 +371,8 @@ def unified_route_probe(
         connectors.append("teacher.student.mcp")
     if "browser.inspect" in skills:
         connectors.append("browser.playwright.read_only")
+    if "accounting.read" in skills:
+        connectors.append("accounting.local.read")
     if any(skill in {"home.read", "home.control"} for skill in skills):
         home_provider = os.getenv("RALFLOOP_HOME_PROVIDER", "home_assistant").strip().casefold()
         connectors.append("tuya.home.mcp" if home_provider == "tuya_mcp" else "home_assistant.adapter")
@@ -1064,6 +1068,7 @@ def run_unified_telegram(
         "bandi.discovery": bandi_discovery_adapter,
         "research.deep": research_deep_adapter,
         "browser.inspect": browser_inspect_adapter,
+        "accounting.read": accounting_read_adapter,
     })
     core.dag_input_provider = lambda _goal: {
         "memory.tiremm": {

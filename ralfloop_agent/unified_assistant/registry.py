@@ -550,6 +550,22 @@ class UnifiedRegistryFacade:
                 source_registry=str(PROJECT_ROOT / "scripts" / "ralf_teacher_mcp_server.py"),
             ),
             UnifiedToolSpec(
+                id="accounting.local.read",
+                capabilities=("accounting.inspect",),
+                input_schema="Accounting READ objective plus optional verified profile/movements",
+                output_schema="Accounting structured artifact with ETS regime, reconciliation and provenance",
+                classification=PolicyClass.READ,
+                side_effect_class="none",
+                availability=(
+                    "available"
+                    if _observable_path_exists(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "accounting.py")
+                    else "constrained:engine_missing"
+                ),
+                health="local deterministic accounting engine + versioned ETS rulebook",
+                verification_method="Decimal arithmetic + explicit missing-input gates + writes=0/sends=0/payments=0/filings=0",
+                source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "accounting.py"),
+            ),
+            UnifiedToolSpec(
                 id="visual.memory.local",
                 capabilities=("visual_document_retrieval",),
                 input_schema="document artifact + query",
