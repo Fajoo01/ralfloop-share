@@ -6,9 +6,17 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Protocol
 
-from .agenda_ingress import AgendaIntake
+import requests
+
+from .agenda import AgendaResult
+
+
+class CallAgendaIntake(Protocol):
+    def ingest_call_transcript(
+        self, *, call_id: str, contact: str, timestamp: datetime, transcript: str
+    ) -> AgendaResult | None: ...
 
 
 @dataclass(frozen=True)
@@ -34,6 +42,51 @@ def _parse_timestamp(value: Any, fallback: datetime) -> datetime:
     return parsed
 
 
+class CallAgendaHttpIntake:
+    """Deliver call transcripts to the local Assistant Agenda API without sharing DB ownership."""
+
+    def __init__(
+        self,
+        endpoint: str,
+        *,
+        timeout_sec: float = 10.0,
+        session: requests.Session | None = None,
+    ) -> None:
+        self.endpoint = endpoint.strip()
+        if not self.endpoint.startswith(("http://127.0.0.1:", "http://localhost:")):
+            raise ValueError("call_agenda_endpoint_must_be_loopback")
+        self.timeout_sec = max(1.0, float(timeout_sec))
+        self.session = session or requests.Session()
+
+    @classmethod
+    def from_env(cls) -> "CallAgendaHttpIntake":
+        endpoint = os.getenv(
+            "BOTTAZZI_CALL_AGENDA_URL",
+            "http://127.0.0.1:19090/assistant/v1/agenda/ingest",
+        ).strip()
+        timeout_sec = float(os.getenv("BOTTAZZI_CALL_AGENDA_TIMEOUT_SEC", "10"))
+        return cls(endpoint, timeout_sec=timeout_sec)
+
+    def ingest_call_transcript(
+        self, *, call_id: str, contact: str, timestamp: datetime, transcript: str
+    ) -> AgendaResult | None:
+        response = self.session.post(
+            self.endpoint,
+            json={
+                "channel": "phone_call",
+                "sender": contact,
+                "native_id": call_id,
+                "timestamp": timestamp.isoformat(),
+                "original_text": transcript,
+            },
+            timeout=self.timeout_sec,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        agenda = payload.get("agenda") if isinstance(payload, Mapping) else None
+        return AgendaResult.model_validate(agenda) if agenda else None
+
+
 class CallAgendaTrigger:
     """Feed ready local call transcripts into Agenda once per transcript hash."""
 
@@ -41,7 +94,7 @@ class CallAgendaTrigger:
         self,
         *,
         recordings_root: str | Path,
-        agenda_intake: AgendaIntake,
+        agenda_intake: CallAgendaIntake,
         state_path: str | Path,
         now=None,
     ) -> None:
@@ -159,7 +212,7 @@ class CallAgendaTrigger:
         except FileNotFoundError:
             return {"schema_version": "call_agenda_trigger_v1", "processed": {}}
         except (OSError, json.JSONDecodeError) as exc:
-            raise ValueEError("call_agenda_trigger_state_invalid") from exc
+            raise ValueError("call_agenda_trigger_state_invalid") from exc
         if not isinstance(value, dict):
             raise ValueError("call_agenda_trigger_state_invalid")
         return value
@@ -174,4 +227,9 @@ class CallAgendaTrigger:
         os.replace(temporary, self.state_path)
 
 
-__all__ = ["CallAgendaTrigger", "CallAgendaTriggerResult"]
+__all__ = [
+    "CallAgendaHttpIntake",
+    "CallAgendaIntake",
+    "CallAgendaTrigger",
+    "CallAgendaTriggerResult",
+]

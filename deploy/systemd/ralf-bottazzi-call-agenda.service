@@ -1,0 +1,30 @@
+[Unit]
+Description=Bot-tazzi phone-call transcript to Agenda bridge
+After=network.target ralfloop-backend.service ralf-bottazzi-call-stt.service
+Wants=ralfloop-backend.service ralf-bottazzi-call-stt.service
+
+[Service]
+Type=simple
+User=sibilla-cumana
+Group=sibilla-cumana
+WorkingDirectory=/home/sibilla-cumana/ralfloop-production/current
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/home/sibilla-cumana/ralfloop-production/current
+Environment=BOTTAZZI_CALL_RECORDINGS_DIR=/var/lib/ralfloop-bottazzi-call-recordings
+Environment=BOTTAZZI_CALL_AGENDA_STATE=/var/lib/ralfloop-bottazzi-call-agenda/state.json
+Environment=BOTTAZZI_CALL_AGENDA_URL=http://127.0.0.1:19090/assistant/v1/agenda/ingest
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_bottazzi_call_agenda_trigger.py --interval 10
+Restart=on-failure
+RestartSec=5
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+StateDirectory=ralfloop-bottazzi-call-agenda
+ReadOnlyPaths=/var/lib/ralfloop-bottazzi-call-recordings
+ReadWritePaths=/var/lib/ralfloop-bottazzi-call-agenda
+
+[Install]
+WantedBy=multi-user.target

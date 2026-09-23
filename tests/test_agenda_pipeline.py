@@ -4,6 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from ralfloop_agent.unified_assistant.agenda import (
     AgendaKind,
     AgendaPipeline,
@@ -11,7 +13,10 @@ from ralfloop_agent.unified_assistant.agenda import (
     AgendaStore,
     LocalIcsCalendarProvider,
 )
-from ralfloop_agent.unified_assistant.call_agenda_trigger import CallAgendaTrigger
+from ralfloop_agent.unified_assistant.call_agenda_trigger import (
+    CallAgendaHttpIntake,
+    CallAgendaTrigger,
+)
 from ralfloop_agent.unified_assistant.memory_service import MemoryService
 from ralfloop_agent.unified_assistant.task_queue import BotTazziTaskQueue, JevPriorityClassifier
 
@@ -194,6 +199,67 @@ def test_single_call_transcript_can_create_both_appointment_and_task(tmp_path: P
         assert len(sources) == 1
         assert sources[0]["native_id"] == "call-real-shape"
         assert sources[0]["original_text"] == source.original_text
+
+
+def test_call_http_intake_is_loopback_only_and_preserves_payload(tmp_path: Path) -> None:
+    pipeline, _, _, _ = _pipeline(tmp_path)
+    expected = pipeline.process(_source("phone_call", "call-http-result", "Ricordami di chiamare Marco"))
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ok": True, "agenda": expected.model_dump(mode="json")}
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = []
+
+        def post(self, url, *, json, timeout):
+            self.calls.append((url, json, timeout))
+            return FakeResponse()
+
+    session = FakeSession()
+    intake = CallAgendaHttpIntake(
+        "http://127.0.0.1:19090/assistant/v1/agenda/ingest",
+        timeout_sec=3,
+        session=session,
+    )
+    timestamp = datetime(2026, 9, 23, 8, 0, tzinfo=ROME)
+    result = intake.ingest_call_transcript(
+        call_id="call-http-1",
+        contact="+393331234567",
+        timestamp=timestamp,
+        transcript="Ricordami di chiamare Marco",
+    )
+
+    assert result == expected
+    assert session.calls == [(
+        "http://127.0.0.1:19090/assistant/v1/agenda/ingest",
+        {
+            "channel": "phone_call",
+            "sender": "+393331234567",
+            "native_id": "call-http-1",
+            "timestamp": timestamp.isoformat(),
+            "original_text": "Ricordami di chiamare Marco",
+        },
+        3.0,
+    )]
+    with pytest.raises(ValueError, match="loopback"):
+        CallAgendaHttpIntake("https://example.com/assistant/v1/agenda/ingest")
+
+
+def test_call_agenda_trigger_rejects_corrupt_state(tmp_path: Path) -> None:
+    state = tmp_path / "state.json"
+    state.write_text("{broken", encoding="utf-8")
+    trigger = CallAgendaTrigger(
+        recordings_root=tmp_path / "recordings",
+        agenda_intake=SimpleNamespace(),
+        state_path=state,
+    )
+    with pytest.raises(ValueError, match="call_agenda_trigger_state_invalid"):
+        trigger.poll()
 
 
 def test_ready_call_transcript_bridge_preserves_call_provenance_and_is_idempotent(tmp_path: Path) -> None:
