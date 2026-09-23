@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 
-ROOT="/home/bandi/ralfloop-bottazzi-gpt-rollover-20260923"
+ROOT="/home/bandi/.local/share/bottazzi-gpt-browser/runtime-current"
 PY="/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python"
 TOOL="$ROOT/tools/bottazzi_gpt_session.py"
 ENDPOINT="http://127.0.0.1:9238"
