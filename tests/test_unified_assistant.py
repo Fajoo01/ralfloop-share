@@ -79,6 +79,33 @@ class FakeApprovalExecutor:
         }
 
 
+class FakeATMRead:
+    def __init__(self):
+        self.calls = []
+
+    def read(self, request):
+        self.calls.append(request)
+        if len(self.calls) == 1:
+            return {
+                "ok": False,
+                "status": "LOCATION_REQUIRED",
+                "response": "Mi serve il punto di partenza.",
+                "tool": "atm_route",
+                "payload": {"destination": {"label": "Coop"}},
+                "read_operations": [],
+                "location_source": None,
+            }
+        return {
+            "ok": True,
+            "status": "OK",
+            "response": "Percorso ATM per Coop.",
+            "tool": "atm_realtime_waits",
+            "payload": {"destination": {"label": "Coop"}, "route_mode": "test"},
+            "read_operations": ["atm_realtime_waits"],
+            "location_source": "browser_geolocation",
+        }
+
+
 class FakeHomeBackend:
     def __init__(self, states):
         self.states = dict(states)
@@ -98,7 +125,7 @@ class FakeHomeBackend:
         return {"ok": True}
 
 
-def build_core(*, email_live=True, home=False, conversation=None, home_workflow=None):
+def build_core(*, email_live=True, home=False, conversation=None, home_workflow=None, atm_read=None):
     registry = UnifiedRegistryFacade()
     memory = MemoryItem(
         id="tiremm.fact",
@@ -128,8 +155,25 @@ def build_core(*, email_live=True, home=False, conversation=None, home_workflow=
         recipient_resolver=FakeRecipientResolver(),
         approval_executor=approvals,
         home_workflow=home_workflow,
+        atm_read=atm_read,
     )
     return core, manager, pipeline, approvals
+
+
+def test_atm_location_followup_reuses_previous_destination():
+    atm = FakeATMRead()
+    core, manager, _, _ = build_core(atm_read=atm)
+
+    first = core.handle("Portami alla Coop")
+    second = core.handle("Sì usa il GPS")
+
+    assert first.status == "clarification_required"
+    assert manager.state.last_intent == "atm.route"
+    assert manager.last_entity("general_assistant") == "Coop"
+    assert second.status == "completed"
+    assert second.data["selected_skill"] == "atm.route"
+    assert second.data["tool_selected"] == "atm.route.mcp"
+    assert atm.calls == ["Portami alla Coop", "Portami a Coop"]
 
 
 def test_email_compose_stages_exact_draft_without_send():

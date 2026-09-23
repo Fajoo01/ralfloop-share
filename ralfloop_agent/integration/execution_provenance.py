@@ -25,6 +25,11 @@ EXECUTION_CLAIM_PATTERNS = (
     re.compile(r"\bnon\s+ho\s+(?:modificato|cancellato|spostato|scritto)\b"),
     re.compile(r"\b(?:i|we)\s+(?:ran|executed|scanned|checked)\b"),
     re.compile(r"\b(?:the\s+)?scan\s+(?:shows|found|indicates)\b"),
+    re.compile(
+        r"\b(?:il|la|lo|l['’])\s+(?:cancello|porta|luce|neon|serranda|tapparella|"
+        r"climatizzatore|termostato|switch|dispositivo)\b.{0,48}\b(?:è|e)\s+stat[oa]\s+"
+        r"(?:apert[oa]|chius[oa]|acces[oa]|spent[oa]|attivat[oa]|disattivat[oa])\b"
+    ),
 )
 
 

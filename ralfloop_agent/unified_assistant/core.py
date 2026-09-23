@@ -82,6 +82,12 @@ class ApprovalBoundExecutor(Protocol):
     def execute(self, pending: PendingAction) -> dict[str, Any]: ...
 
 
+_ATM_LOCATION_FOLLOWUP_RE = re.compile(
+    r"\b(?:gps|posizione|geolocalizzazione|localizzazione|qui|qua)\b",
+    re.I,
+)
+
+
 @dataclass(frozen=True)
 class UnifiedAssistantResult:
     status: str
@@ -174,6 +180,16 @@ class UnifiedAssistantCore:
             return self._revise_email(text)
         if _is_email_revision(text) and self.conversation.state.pending.whatsapp:
             return self._revise_whatsapp(text)
+
+        if (
+            self.conversation.state.last_intent == "atm.route"
+            and _ATM_LOCATION_FOLLOWUP_RE.search(text)
+        ):
+            destination = self.conversation.last_entity("general_assistant")
+            if destination:
+                continuation = f"Portami a {destination}"
+                plan = self.planner.validate(self.planner.plan(continuation))
+                return self._read_atm(continuation, plan.model_dump(mode="json"))
 
         plan = self.planner.validate(self.planner.plan(text))
         if plan.intent == "assistant.reject":
@@ -733,6 +749,13 @@ class UnifiedAssistantCore:
             )
         else:
             target = "ATM"
+
+        if target and target != "ATM":
+            self.conversation.remember(
+                intent="atm.route",
+                domain="general_assistant",
+                entities=(target,),
+            )
 
         self._audit(
             domain="general_assistant",

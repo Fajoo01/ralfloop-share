@@ -59,6 +59,15 @@ def test_atm_adapter_uses_bounded_realtime_timeout() -> None:
     assert adapter.socket_timeout_s == 4.0
 
 
+def test_location_clarification_preserves_destination_for_followup() -> None:
+    adapter = ATMMCPReadOnly({"assistant_surface": "assistant_v1"})
+
+    result = adapter.read("Portami alla Coop")
+
+    assert result["status"] == "LOCATION_REQUIRED"
+    assert result["payload"]["destination"]["label"] == "Coop"
+
+
 def test_destination_accepts_ad_preposition() -> None:
     assert _destination("Portami ad Aumai") == "Aumai"
     assert _destination("come vado ad Aumai?") == "Aumai"

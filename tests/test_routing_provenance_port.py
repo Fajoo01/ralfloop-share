@@ -179,6 +179,14 @@ def test_fast_chat_without_tools_cannot_claim_execution() -> None:
     assert metadata["result_ids"] == []
 
 
+def test_fast_chat_without_tools_cannot_claim_passive_device_action() -> None:
+    provenance = empty_execution_provenance()
+    text, blocked = guard_execution_claims("Il cancello è stato aperto.", provenance)
+
+    assert blocked is True
+    assert "nessuno strumento" in text
+
+
 def test_real_result_envelope_can_cite_execution() -> None:
     evidence = Evidence(command="df -h", path="/tmp", exit_code=0, stdout="real-output", stderr="")
     provenance = provenance_from_results((("result-1", evidence),))

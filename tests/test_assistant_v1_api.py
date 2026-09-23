@@ -381,6 +381,8 @@ def test_bottazzi_ui_is_served_by_assistant_v1_router() -> None:
     assert "localStorage" in response.text
     assert "navigator.geolocation" in response.text
     assert "browser_geolocation" in response.text
+    assert "LOC_FOLLOWUP_RE" in response.text
+    assert "location_request" in response.text
     assert "maximumAge:30000" in response.text
     assert "openai.com" not in response.text.casefold()
 

@@ -191,7 +191,7 @@ class ATMMCPReadOnly(MeteoMCPReadOnly):
                             "per esempio: come vado da Duomo a Piscina Suzzani?"
                         ),
                         "tool": "atm_route",
-                        "payload": {},
+                        "payload": {"destination": {"label": destination}},
                         "read_operations": [],
                         "location_source": None,
                     }
