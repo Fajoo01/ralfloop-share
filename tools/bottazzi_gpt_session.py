@@ -135,6 +135,34 @@ def cmd_rotate(args: argparse.Namespace) -> int:
 
 
 
+def _resolve_stored_source(tabs, store: HandoffStore):
+    if not store.current_path.exists():
+        return None, {}, None
+    data = store.load_current()
+    stored_source = str(data.get("source_chat") or "")
+    stored_url = normalize_chatgpt_conversation_url(str(data.get("source_chat_url") or ""))
+    if stored_source:
+        source = next((tab for tab in tabs if tab.target_id == stored_source), None)
+        if source is not None:
+            current_url = normalize_chatgpt_conversation_url(source.url)
+            if current_url != stored_url:
+                store.update_source_chat(source.target_id, current_url)
+                stored_url = current_url
+            return source, {"source_recovered": False, "source_chat_url": stored_url}, None
+    if stored_url:
+        matches = [tab for tab in tabs if normalize_chatgpt_conversation_url(tab.url) == stored_url]
+        if len(matches) == 1:
+            source = matches[0]
+            store.update_source_chat(source.target_id, stored_url)
+            return source, {"source_recovered": True, "previous_source_target_id": stored_source or None, "source_target_id": source.target_id, "source_chat_url": stored_url}, None
+        if len(matches) > 1:
+            return None, {"source_chat_url": stored_url, "match_count": len(matches)}, "stored_source_url_ambiguous"
+    if stored_source:
+        return None, {"source_target_id": stored_source}, "stored_source_not_found"
+    return None, {}, None
+
+
+
 def cmd_adopt_external(args: argparse.Namespace) -> int:
     cdp = ChromeCdp(args.endpoint)
     store = HandoffStore(args.state_dir)
@@ -150,14 +178,14 @@ def cmd_adopt_external(args: argparse.Namespace) -> int:
         _json({"ok": False, "action": "noop", "reason": "chatgpt_tab_not_found"})
         return 0
 
-    stored_source = ""
-    if store.current_path.exists():
-        try:
-            stored_source = str(store.load_current().get("source_chat") or "")
-        except GptSessionError as exc:
-            _json({"ok": False, "action": "noop", "reason": str(exc)})
-            return 0
-    source = next((tab for tab in tabs if tab.target_id == stored_source), None) if stored_source else None
+    try:
+        source, source_resolution, source_error = _resolve_stored_source(tabs, store)
+    except GptSessionError as exc:
+        _json({"ok": False, "action": "noop", "reason": str(exc)})
+        return 0
+    if source_error:
+        _json({"ok": False, "action": "noop", "reason": source_error, "chatgpt_tab_count": len(tabs), **source_resolution})
+        return 0
     if source is None:
         if len(tabs) != 1:
             _json({"ok": False, "action": "noop", "reason": "chatgpt_source_ambiguous", "chatgpt_tab_count": len(tabs)})
@@ -253,6 +281,11 @@ def cmd_adopt_external(args: argparse.Namespace) -> int:
     except CdpError as exc:
         _json({"ok": False, "action": "deferred", "reason": str(exc), "conversation_url": candidate})
         return 0
+    try:
+        store.update_source_chat(source.target_id, candidate)
+    except (GptSessionError, OSError) as exc:
+        _json({"ok": False, "action": "adopted", "reason": f"source_identity_persist_failed:{type(exc).__name__}", "conversation_url": candidate, "source_target_id": source.target_id, "server_chat_deleted": False})
+        return 0
     updated_seen = list(seen_urls)
     for value in (source_url, candidate):
         if value and value not in updated_seen:
@@ -293,14 +326,14 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
             _json({"ok": False, "action": "noop", "reason": "source_target_not_found", "source_target_id": args.source_target_id})
             return 0
     else:
-        stored_source = ""
-        if store.current_path.exists():
-            stored_source = str(store.load_current().get("source_chat") or "")
-        if stored_source:
-            source = next((tab for tab in tabs if tab.target_id == stored_source), None)
-            if source is None and len(tabs) > 1:
-                _json({"ok": False, "action": "noop", "reason": "stored_source_not_found", "source_target_id": stored_source, "chatgpt_tab_count": len(tabs)})
-                return 0
+        try:
+            source, source_resolution, source_error = _resolve_stored_source(tabs, store)
+        except GptSessionError as exc:
+            _json({"ok": False, "action": "noop", "reason": str(exc)})
+            return 0
+        if source_error:
+            _json({"ok": False, "action": "noop", "reason": source_error, "chatgpt_tab_count": len(tabs), **source_resolution})
+            return 0
         if source is None:
             if len(tabs) != 1:
                 _json({"ok": False, "action": "noop", "reason": "chatgpt_source_ambiguous", "chatgpt_tab_count": len(tabs)})
@@ -365,8 +398,15 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
         report["blocked"] = "handoff_target_missing"
         _json(report)
         return 0
+    new_source_url = None
     try:
-        store.update_source_chat(new_target_id)
+        current_target = next((tab for tab in cdp.targets() if tab.target_id == new_target_id), None)
+        if current_target is not None:
+            new_source_url = normalize_chatgpt_conversation_url(current_target.url)
+    except CdpError:
+        pass
+    try:
+        store.update_source_chat(new_target_id, new_source_url)
     except (GptSessionError, OSError) as exc:
         try:
             cdp.close_target(new_target_id)

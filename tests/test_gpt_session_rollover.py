@@ -6,6 +6,8 @@ import pytest
 import websocket
 
 from ralfloop_agent.integration.gpt_browser_cdp import BrowserTarget, CdpError, ChromeCdp
+from tools.bottazzi_gpt_session import _resolve_stored_source
+
 from ralfloop_agent.integration.gpt_session_rollover import (
     ExternalChatAdoptionStore,
     GptSessionError,
@@ -123,8 +125,10 @@ def test_handoff_round_trip_and_prompt(tmp_path) -> None:
 
     payload = json.loads(store.current_path.read_text())
     assert payload["schema_version"] == "bottazzi_gpt_handoff_v1"
-    store.update_source_chat("worker-target")
-    assert store.load_current()["source_chat"] == "worker-target"
+    store.update_source_chat("worker-target", "https://chatgpt.com/c/worker")
+    current = store.load_current()
+    assert current["source_chat"] == "worker-target"
+    assert current["source_chat_url"] == "https://chatgpt.com/c/worker"
 
 
 def test_external_conversation_url_is_canonical_and_query_free() -> None:
@@ -169,6 +173,42 @@ def test_external_adoption_store_round_trip_is_bounded(tmp_path) -> None:
     assert saved["seen_conversations"] == ["https://chatgpt.com/c/one"]
     assert saved["watcher_target_id"] == "watcher"
     assert store.path.stat().st_mode & 0o077 == 0
+
+
+def test_stored_source_recovers_after_cdp_target_change(tmp_path) -> None:
+    store = HandoffStore(tmp_path)
+    store.save(Handoff(goal="x", current_state="y"))
+    store.update_source_chat("stale-target", "https://chatgpt.com/c/abc")
+    tabs = [
+        BrowserTarget("other", "page", "https://chatgpt.com/c/other", "other", "ws://other"),
+        BrowserTarget("fresh-target", "page", "https://chatgpt.com/g/g-p-demo/c/abc", "worker", "ws://fresh"),
+    ]
+
+    source, info, error = _resolve_stored_source(tabs, store)
+
+    assert error is None
+    assert source is not None and source.target_id == "fresh-target"
+    assert info["source_recovered"] is True
+    current = store.load_current()
+    assert current["source_chat"] == "fresh-target"
+    assert current["source_chat_url"] == "https://chatgpt.com/c/abc"
+
+
+def test_stored_source_url_recovery_fails_closed_when_duplicated(tmp_path) -> None:
+    store = HandoffStore(tmp_path)
+    store.save(Handoff(goal="x", current_state="y"))
+    store.update_source_chat("stale-target", "https://chatgpt.com/c/abc")
+    tabs = [
+        BrowserTarget("one", "page", "https://chatgpt.com/c/abc", "one", "ws://one"),
+        BrowserTarget("two", "page", "https://chatgpt.com/g/g-p-demo/c/abc", "two", "ws://two"),
+    ]
+
+    source, info, error = _resolve_stored_source(tabs, store)
+
+    assert source is None
+    assert error == "stored_source_url_ambiguous"
+    assert info["match_count"] == 2
+    assert store.load_current()["source_chat"] == "stale-target"
 
 
 def test_handoff_rejects_secret_named_fields(tmp_path) -> None:

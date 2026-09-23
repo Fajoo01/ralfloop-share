@@ -77,6 +77,7 @@ The periodic units are `bottazzi-gpt-session-shepherd.service` and `bottazzi-gpt
 The periodic shepherd also runs `adopt-external --apply` before evaluating rollover. A dedicated watcher tab refreshes the authenticated ChatGPT sidebar at most every 30 seconds and detects account-synced conversations created by another client, including the mobile app.
 
 The first scan is baseline-only: conversations already visible in the sidebar are marked as seen and are never adopted retroactively. A later conversation is eligible only when it is new to the watcher, is not already open in the dedicated browser, and is not the current worker conversation. When eligible, the existing worker tab is navigated to that conversation so its target ID remains the durable `source_chat` and the normal rollover policy continues to apply.
+The handoff also stores the canonical worker conversation URL. If Chrome restarts and changes the CDP target ID, a unique tab with that URL repairs the stored source target automatically; duplicate matches fail closed.
 
 Adoption is deferred while the worker has an active/pending response, unsent composer text, or is not ready. The watcher never sends a message, never copies authentication material, and never deletes a server-side conversation. Its durable state stores only canonical conversation URLs, the watcher target ID, timestamps, and the last adopted conversation; prompt/response text is not persisted.
 

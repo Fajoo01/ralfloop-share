@@ -164,9 +164,10 @@ class HandoffStore:
         _reject_secret_keys(data)
         return data
 
-    def update_source_chat(self, source_chat: str | None) -> None:
+    def update_source_chat(self, source_chat: str | None, source_chat_url: str | None = None) -> None:
         data = self.load_current()
         data["source_chat"] = source_chat
+        data["source_chat_url"] = source_chat_url
         _reject_secret_keys(data)
         encoded = json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         if len(encoded.encode("utf-8")) > 256 * 1024:
