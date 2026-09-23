@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Bot-tazzi GPT Login
+Comment=One-time login for the dedicated ChatGPT browser profile
+Exec=/home/bandi/.local/share/bottazzi-gpt-browser/bottazzi_gpt_login.sh
+Terminal=true
+Categories=Utility;
