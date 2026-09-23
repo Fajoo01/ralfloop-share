@@ -13,6 +13,7 @@ from ralfloop_agent.integration.gpt_session_rollover import (
     SessionMetrics,
     evaluate_rollover,
     session_metrics_from_ui,
+    should_defer_latency_rollover,
 )
 
 
@@ -67,6 +68,14 @@ def test_live_ui_consecutive_errors_trigger_rollover() -> None:
     decision = evaluate_rollover(metrics)
     assert decision.rollover is True
     assert decision.reasons == ("error_limit",)
+
+
+def test_latency_only_rollover_defers_fresh_or_streaming_worker() -> None:
+    reasons = ("latency_limit",)
+    assert should_defer_latency_rollover(reasons, user_turns=1, response_in_progress=False) is True
+    assert should_defer_latency_rollover(reasons, user_turns=7, response_in_progress=True) is True
+    assert should_defer_latency_rollover(reasons, user_turns=7, response_in_progress=False) is False
+    assert should_defer_latency_rollover(("error_limit", "latency_limit"), user_turns=1, response_in_progress=True) is False
 
 
 def test_handoff_round_trip_and_prompt(tmp_path) -> None:

@@ -19,6 +19,7 @@ from ralfloop_agent.integration.gpt_session_rollover import (
     SessionMetrics,
     evaluate_rollover,
     session_metrics_from_ui,
+    should_defer_latency_rollover,
 )
 
 
@@ -161,11 +162,17 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
         max_response_latency_ms=args.max_latency_ms,
     )
     decision = evaluate_rollover(metrics, policy)
+    defer_latency_rollover = should_defer_latency_rollover(
+        decision.reasons,
+        user_turns=metrics.turns,
+        response_in_progress=bool(ui.get("response_in_progress")),
+    )
     report = {
         "ok": True,
         "ui": ui,
         "rollover": decision.rollover,
         "reasons": list(decision.reasons),
+        "defer_latency_rollover": defer_latency_rollover,
         "applied": False,
     }
     if not decision.rollover:

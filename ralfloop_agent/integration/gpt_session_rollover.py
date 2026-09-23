@@ -62,6 +62,15 @@ class RolloverDecision:
     reasons: tuple[str, ...] = ()
 
 
+def should_defer_latency_rollover(
+    reasons: tuple[str, ...],
+    *,
+    user_turns: int,
+    response_in_progress: bool,
+) -> bool:
+    return reasons == ("latency_limit",) and (user_turns <= 1 or response_in_progress)
+
+
 def evaluate_rollover(metrics: SessionMetrics, policy: RolloverPolicy | None = None) -> RolloverDecision:
     policy = policy or RolloverPolicy()
     reasons: list[str] = []
