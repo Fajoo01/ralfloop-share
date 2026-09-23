@@ -1187,7 +1187,7 @@ class ChromeCdp:
         config = json.dumps({"mode": mode, "countdown_seconds": countdown_seconds}, ensure_ascii=False)
         expression = r'''(() => {
           const config = __CONFIG__;
-          const key = '__bottazziTabIdentityV1';
+          const key = '__bottazziTabIdentityV2';
           let state = window[key];
           if (!state || typeof state !== 'object') state = {base_title:'', original_title:'', timer:null, close_at:0};
           const canonical = value => {
@@ -1225,16 +1225,22 @@ class ChromeCdp:
             return '';
           };
           if (!state.original_title) state.original_title = strip(document.title || '');
+          const projectFromPath = () => {
+            const match = location.pathname.match(/^\/g\/([^/]+)(?:\/c\/|\/project|$)/);
+            if (!match) return '';
+            let slug = '';
+            try { slug = decodeURIComponent(match[1]); } catch (_) { slug = match[1]; }
+            slug = slug.replace(/^g-p-[A-Za-z0-9]+-?/i, '').replace(/[-_]+/g, ' ').trim();
+            return compactPhrase(slug, 16);
+          };
           const derive = () => {
             const current = state.original_title || 'Chat GPT';
             const topic = topicFromSidebar();
-            const pathProject = location.pathname.match(/^\/g\/([^/]+)\/c\//);
+            const project = projectFromPath();
             const parts = [];
-            if (pathProject && current && current !== topic) {
-              const project = compactPhrase(current, 16);
-              if (project) parts.push(project);
-            }
-            const shortTopic = compactPhrase(topic || current, 24);
+            if (project) parts.push(project);
+            const fallback = project ? '' : current;
+            const shortTopic = compactPhrase(topic || fallback, 24);
             if (shortTopic && !parts.includes(shortTopic)) parts.push(shortTopic);
             return parts.join(' · ').slice(0, 43).trim() || 'Chat GPT';
           };
