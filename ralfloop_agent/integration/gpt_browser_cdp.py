@@ -100,7 +100,7 @@ class ChromeCdp:
           const selectors = ['#prompt-textarea', 'textarea', '[contenteditable="true"]'];
           let composer = null;
           for (const selector of selectors) {
-            composer = Array.from(document.querySelectorAll(selector)).find(visible) || null;
+            composer = Array.from(document.querySelectorAll(selector)).find(el => visible(el) && el.id !== 'bottazzi-human-composer') || null;
             if (composer) break;
           }
           const loginControls = Array.from(document.querySelectorAll('button,a'))
@@ -339,7 +339,7 @@ class ChromeCdp:
           const selectors = ['#prompt-textarea', 'textarea', '[contenteditable="true"]'];
           let el = null;
           for (const selector of selectors) {
-            el = Array.from(document.querySelectorAll(selector)).find(visible) || null;
+            el = Array.from(document.querySelectorAll(selector)).find(node => visible(node) && node.id !== 'bottazzi-human-composer') || null;
             if (el) break;
           }
           if (!el) return JSON.stringify({ok:false, reason:'composer_not_found'});
@@ -749,6 +749,7 @@ class ChromeCdp:
           focused: document.hasFocus() && document.visibilityState === 'visible',
           visible: document.visibilityState === 'visible',
           ghost: Boolean(window.__bottazziGhostTabV1),
+          ghost_close_at: Number((window.__bottazziGhostTabV1 || {}).close_at || 0),
           handoff_locked: Boolean(window.__bottazziHandoffLockV1),
         }))()'''
         result = self._page_call(target.websocket_url, "Runtime.evaluate", {"expression": expression, "returnByValue": True})
@@ -769,7 +770,7 @@ class ChromeCdp:
           const stateKey = '__bottazziHandoffLockV1';
           const overlayId = 'bottazzi-handoff-lock';
           if (window[stateKey]) return JSON.stringify({ok:true, locked:true, already:true});
-          const native = document.querySelector('#prompt-textarea') || document.querySelector('textarea') || document.querySelector('[contenteditable="true"]');
+          const native = document.querySelector('#prompt-textarea') || [...document.querySelectorAll('textarea,[contenteditable="true"]')].find(el => el.id !== 'bottazzi-human-composer') || null;
           const state = {native, pointerEvents:null, tabIndex:null, opacity:null, handlers:[]};
           if (native) {
             state.pointerEvents = native.style.pointerEvents;
@@ -855,8 +856,13 @@ class ChromeCdp:
         config = json.dumps({"conversation_url": normalized}, ensure_ascii=False)
         expression = r'''(() => {
           const config = __CONFIG__;
-          const stateKey = '__bottazziHumanInputTargetV1';
-          const draftKey = '__bottazziHumanDraftV1';
+          const stateKey = '__bottazziHumanInputTargetV2';
+          const draftKey = '__bottazziHumanDraftV2';
+          const activeKey = '__bottazziActiveConversationV2';
+          const panelId = 'bottazzi-human-panel';
+          const humanBoxId = 'bottazzi-human-composer';
+          const sendId = 'bottazzi-human-send';
+          const statusId = 'bottazzi-human-status';
           const canonical = value => {
             try {
               const u = new URL(String(value || ''), location.origin);
@@ -864,23 +870,33 @@ class ChromeCdp:
               return m ? `${u.origin}/c/${m[1]}` : '';
             } catch (_) { return ''; }
           };
-          const findComposer = () => document.querySelector('#prompt-textarea') || document.querySelector('textarea') || document.querySelector('[contenteditable="true"]');
-          const importDraft = () => {
-            let raw = null;
-            try { raw = localStorage.getItem(draftKey); } catch (_) { return false; }
-            if (!raw) return false;
-            let payload = null;
-            try { payload = JSON.parse(raw); } catch (_) { return false; }
-            if (!payload || canonical(payload.successor_url) !== config.conversation_url || canonical(location.href) !== config.conversation_url) return false;
-            const text = String(payload.text || '');
-            if (!text) return false;
-            const composer = findComposer();
-            if (!composer) return false;
+          const visible = el => {
+            if (!el || el.disabled) return false;
+            const r = el.getBoundingClientRect();
+            const s = getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+          };
+          const findComposer = () => {
+            for (const selector of ['#prompt-textarea', 'textarea', '[contenteditable="true"]']) {
+              const el = [...document.querySelectorAll(selector)].find(node => node.id !== humanBoxId && visible(node));
+              if (el) return el;
+            }
+            return null;
+          };
+          const findSend = () => {
+            for (const selector of ['button[data-testid="send-button"]','button[aria-label*="Send"]','button[aria-label*="send"]','button[aria-label*="Invia"]','button[aria-label*="invia"]']) {
+              const el = [...document.querySelectorAll(selector)].find(visible);
+              if (el) return el;
+            }
+            return null;
+          };
+          const setNativeText = (composer, text) => {
             composer.focus();
             if (composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement) {
               const proto = composer instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-              const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
-              setter.call(composer, text);
+              const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+              if (!descriptor || !descriptor.set) return false;
+              descriptor.set.call(composer, text);
               composer.dispatchEvent(new Event('input', {bubbles:true}));
             } else {
               const sel = window.getSelection();
@@ -891,21 +907,120 @@ class ChromeCdp:
               document.execCommand('insertText', false, text);
               composer.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText', data:text}));
             }
-            try { localStorage.removeItem(draftKey); } catch (_) {}
             return true;
           };
+          const hasPendingDraft = () => {
+            try { return Boolean(localStorage.getItem(draftKey)); } catch (_) { return false; }
+          };
+          const updateHumanUi = () => {
+            const box = document.getElementById(humanBoxId);
+            const send = document.getElementById(sendId);
+            const status = document.getElementById(statusId);
+            const pending = hasPendingDraft();
+            if (box && box.disabled !== pending) box.disabled = pending;
+            if (send && send.disabled !== pending) send.disabled = pending;
+            const label = pending ? 'Messaggio in attesa di invio…' : 'Invio umano → chat attiva';
+            if (status && status.textContent !== label) status.textContent = label;
+          };
+          const importDraft = () => {
+            let raw = null;
+            try { raw = localStorage.getItem(draftKey); } catch (_) { return false; }
+            if (!raw) { updateHumanUi(); return false; }
+            let payload = null;
+            try { payload = JSON.parse(raw); } catch (_) { return false; }
+            if (!payload || canonical(payload.successor_url) !== config.conversation_url || canonical(location.href) !== config.conversation_url) return false;
+            const text = String(payload.text || '');
+            if (!text) return false;
+            const composer = findComposer();
+            if (!composer || !setNativeText(composer, text)) return false;
+            if (payload.submit !== false) {
+              const send = findSend();
+              if (!send) return false;
+              send.click();
+            }
+            try { localStorage.removeItem(draftKey); } catch (_) {}
+            updateHumanUi();
+            return true;
+          };
+          const ensureHumanUi = () => {
+            if (!document.body || document.getElementById(panelId)) return;
+            const panel = document.createElement('div');
+            panel.id = panelId;
+            panel.style.cssText = 'position:fixed;left:50%;bottom:12px;transform:translateX(-50%);z-index:2147483646;width:min(760px,calc(100vw - 32px));padding:8px 10px;border-radius:14px;background:rgba(30,30,30,.96);color:#fff;font:600 13px/1.3 system-ui,sans-serif;box-shadow:0 5px 22px rgba(0,0,0,.32)';
+            const status = document.createElement('div');
+            status.id = statusId;
+            status.style.cssText = 'margin:0 2px 6px;opacity:.8;font-size:12px';
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;gap:8px;align-items:flex-end';
+            const input = document.createElement('textarea');
+            input.id = humanBoxId;
+            input.rows = 2;
+            input.placeholder = 'Scrivi a Bot-tazzi…';
+            input.style.cssText = 'flex:1;resize:vertical;max-height:180px;padding:9px 10px;border-radius:10px;border:1px solid rgba(255,255,255,.25);background:#fff;color:#111;font:14px/1.35 system-ui,sans-serif';
+            const send = document.createElement('button');
+            send.id = sendId;
+            send.type = 'button';
+            send.textContent = 'Invia';
+            send.style.cssText = 'padding:10px 14px;border-radius:10px;border:0;cursor:pointer;font-weight:800';
+            const sendHuman = () => {
+              const text = input.value.trim();
+              if (!text || hasPendingDraft()) return;
+              try {
+                localStorage.setItem(draftKey, JSON.stringify({draft_id:`${Date.now()}-${Math.random()}`, successor_url:config.conversation_url, text, submit:true, created_at:Date.now()}));
+              } catch (_) { return; }
+              input.value = '';
+              updateHumanUi();
+              setTimeout(importDraft, 0);
+            };
+            send.addEventListener('click', sendHuman);
+            input.addEventListener('keydown', event => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendHuman();
+              }
+            });
+            row.appendChild(input);
+            row.appendChild(send);
+            panel.appendChild(status);
+            panel.appendChild(row);
+            document.body.appendChild(panel);
+            updateHumanUi();
+          };
+          const lockNative = () => {
+            ensureHumanUi();
+            const composer = findComposer();
+            if (!composer) return;
+            composer.setAttribute('data-bottazzi-native-composer', '1');
+            composer.style.pointerEvents = 'none';
+            composer.style.opacity = '0.22';
+            composer.tabIndex = -1;
+            const send = findSend();
+            if (send) {
+              send.style.pointerEvents = 'none';
+              send.tabIndex = -1;
+            }
+          };
           window.name = 'bottazzi-active';
-          if (!window[stateKey]) {
-            const onStorage = event => { if (event.key === draftKey) setTimeout(importDraft, 0); };
-            window.addEventListener('storage', onStorage);
-            window.addEventListener('focus', () => setTimeout(importDraft, 0));
-            const observer = new MutationObserver(() => importDraft());
-            observer.observe(document.documentElement, {subtree:true, childList:true});
-            window[stateKey] = {version:1, observer, onStorage};
+          try { localStorage.setItem(activeKey, config.conversation_url); } catch (_) {}
+          let state = window[stateKey];
+          if (!state || typeof state !== 'object') state = {version:2};
+          if (!state.onStorage) {
+            state.onStorage = event => { if (event.key === draftKey) setTimeout(importDraft, 0); };
+            window.addEventListener('storage', state.onStorage);
           }
-          window[stateKey].conversation_url = config.conversation_url;
+          if (!state.onFocus) {
+            state.onFocus = () => setTimeout(importDraft, 0);
+            window.addEventListener('focus', state.onFocus);
+          }
+          if (!state.observer) {
+            state.observer = new MutationObserver(() => { lockNative(); importDraft(); });
+            state.observer.observe(document.documentElement, {subtree:true, childList:true});
+          }
+          state.conversation_url = config.conversation_url;
+          window[stateKey] = state;
+          lockNative();
           importDraft();
-          return JSON.stringify({ok:true, human_input_target:true, conversation_url:config.conversation_url, window_name:window.name});
+          return JSON.stringify({ok:true, human_input_target:true, conversation_url:config.conversation_url, window_name:window.name, human_composer:Boolean(document.getElementById(humanBoxId)), native_locked:Boolean(findComposer())});
         })()'''.replace("__CONFIG__", config)
         result = self._page_call(target.websocket_url, "Runtime.evaluate", {"expression": expression, "returnByValue": True})
         raw = (result.get("result") or {}).get("value")
@@ -922,13 +1037,15 @@ class ChromeCdp:
         target_id: str,
         *,
         successor_url: str | None = None,
-        notice: str = "Questa chat è passata a Bot-tazzi. Il campo normale è riservato al bot; usa il campo umano per continuare nella chat attiva.",
+        notice: str = "Questa chat è stata archiviata. Puoi continuare dal campo Bot-tazzi qui sotto; questa scheda si chiuderà automaticamente.",
+        close_after_s: int = 30,
     ) -> dict[str, Any]:
         target = self._wait_target(target_id)
         if not target.websocket_url or not target.is_chatgpt:
             raise CdpError("ghost_target_invalid")
         successor = _canonical_chatgpt_conversation_url(successor_url or "")
-        config = json.dumps({"notice": notice, "successor_url": successor}, ensure_ascii=False)
+        close_after_ms = max(5, int(close_after_s)) * 1000
+        config = json.dumps({"notice": notice, "successor_url": successor, "close_after_ms": close_after_ms}, ensure_ascii=False)
         expression = r'''(() => {
           const config = __CONFIG__;
           const handoffStateKey = '__bottazziHandoffLockV1';
@@ -942,12 +1059,27 @@ class ChromeCdp:
           const handoffOverlay = document.getElementById(handoffOverlayId);
           if (handoffOverlay) handoffOverlay.remove();
           try { delete window[handoffStateKey]; } catch (_) { window[handoffStateKey] = null; }
+          const activeState = window.__bottazziHumanInputTargetV2;
+          if (activeState && activeState.observer) activeState.observer.disconnect();
+          if (activeState && activeState.onStorage) window.removeEventListener('storage', activeState.onStorage);
+          if (activeState && activeState.onFocus) window.removeEventListener('focus', activeState.onFocus);
+          const activePanel = document.getElementById('bottazzi-human-panel');
+          if (activePanel) activePanel.remove();
+          try { delete window.__bottazziHumanInputTargetV2; } catch (_) { window.__bottazziHumanInputTargetV2 = null; }
           window.name = '';
           const stateKey = '__bottazziGhostTabV1';
           const bannerId = 'bottazzi-ghost-banner';
+          const countdownId = 'bottazzi-ghost-countdown';
           const humanBoxId = 'bottazzi-human-composer';
-          const draftKey = '__bottazziHumanDraftV1';
+          const draftKey = '__bottazziHumanDraftV2';
+          const activeKey = '__bottazziActiveConversationV2';
           const nativeSelectors = ['#prompt-textarea', 'textarea', '[contenteditable="true"]'];
+          let state = window[stateKey];
+          if (!state || typeof state !== 'object') state = {version:2};
+          if (!Number(state.close_at)) state.close_at = Date.now() + Number(config.close_after_ms || 30000);
+          state.version = 2;
+          state.config = config;
+          window[stateKey] = state;
           const visible = el => {
             if (!el) return false;
             const r = el.getBoundingClientRect();
@@ -971,6 +1103,10 @@ class ChromeCdp:
             const text = document.createElement('div');
             text.textContent = String(config.notice || 'Chat passata a Bot-tazzi.');
             banner.appendChild(text);
+            const countdown = document.createElement('div');
+            countdown.id = countdownId;
+            countdown.style.cssText = 'margin-top:5px;font-weight:800';
+            banner.appendChild(countdown);
             const row = document.createElement('div');
             row.style.cssText = 'display:flex;gap:8px;margin-top:8px';
             const input = document.createElement('textarea');
@@ -984,12 +1120,15 @@ class ChromeCdp:
             send.style.cssText = 'padding:8px 12px;border-radius:8px;border:0;cursor:pointer;font-weight:700';
             const forward = () => {
               const textValue = input.value.trim();
-              if (!config.successor_url || !textValue) return;
+              if (!textValue) return;
+              let targetUrl = config.successor_url || '';
+              try { targetUrl = localStorage.getItem(activeKey) || targetUrl; } catch (_) {}
+              if (!targetUrl) return;
               try {
-                localStorage.setItem(draftKey, JSON.stringify({successor_url:config.successor_url, text:textValue, created_at:Date.now()}));
+                localStorage.setItem(draftKey, JSON.stringify({draft_id:`${Date.now()}-${Math.random()}`, successor_url:targetUrl, text:textValue, submit:true, created_at:Date.now()}));
               } catch (_) { return; }
               input.value = '';
-              window.open(config.successor_url, 'bottazzi-active');
+              window.open(targetUrl, 'bottazzi-active');
             };
             send.addEventListener('click', forward);
             input.addEventListener('keydown', event => {
@@ -1002,6 +1141,18 @@ class ChromeCdp:
             row.appendChild(send);
             banner.appendChild(row);
             document.body.appendChild(banner);
+          };
+          const updateCountdown = () => {
+            ensureUi();
+            const countdown = document.getElementById(countdownId);
+            if (!countdown) return;
+            const remaining = Math.max(0, Math.ceil((Number(state.close_at || 0) - Date.now()) / 1000));
+            countdown.textContent = remaining > 0 ? `Chiusura automatica tra ${remaining} s` : 'Chiusura automatica…';
+          };
+          const requestClose = () => {
+            state.close_requested = true;
+            updateCountdown();
+            try { window.close(); } catch (_) {}
           };
           const lockNative = () => {
             ensureUi();
@@ -1019,14 +1170,17 @@ class ChromeCdp:
               });
             }
           };
-          if (!window[stateKey]) {
+          if (!state.observer) {
             const observer = new MutationObserver(lockNative);
             observer.observe(document.documentElement, {subtree:true, childList:true});
-            window[stateKey] = {version:1, observer};
+            state.observer = observer;
           }
-          window[stateKey].config = config;
+          if (!state.countdown_timer) state.countdown_timer = setInterval(updateCountdown, 250);
+          const closeDelay = Math.max(0, Number(state.close_at || 0) - Date.now());
+          if (!state.close_timer) state.close_timer = setTimeout(requestClose, closeDelay);
           lockNative();
-          return JSON.stringify({ok:true, ghost:true, successor_url:config.successor_url || null, human_composer:Boolean(document.getElementById(humanBoxId))});
+          updateCountdown();
+          return JSON.stringify({ok:true, ghost:true, successor_url:config.successor_url || null, human_composer:Boolean(document.getElementById(humanBoxId)), close_at:Number(state.close_at || 0), close_after_ms:Number(config.close_after_ms || 0)});
         })()'''.replace("__CONFIG__", config)
         result = self._page_call(target.websocket_url, "Runtime.evaluate", {"expression": expression, "returnByValue": True})
         raw = (result.get("result") or {}).get("value")

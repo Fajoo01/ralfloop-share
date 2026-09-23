@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -324,6 +325,7 @@ class FakeAdoptionCdp:
         self.temporary_urls: dict[str, str] = {}
         self.conversation_calls: list[tuple[str, bool]] = []
         self.created_targets: list[tuple[str, bool]] = []
+        self.human_input_targets: list[tuple[str, str]] = []
 
     def targets(self):
         targets = [
@@ -352,6 +354,10 @@ class FakeAdoptionCdp:
             "response_in_progress": self.busy,
             "composer_chars": 0,
         }
+
+    def install_human_input_target(self, target_id: str, conversation_url: str):
+        self.human_input_targets.append((target_id, conversation_url))
+        return {"ok": True, "human_input_target": True, "conversation_url": conversation_url}
 
     def create_chatgpt_target(self, *, clear_cache: bool = False, background: bool = False) -> str:
         target_id = f"archive-temp-{len(self.temporary_urls) + 1}"
@@ -609,6 +615,37 @@ def test_incomplete_rollover_rolls_back_unconfirmed_successor(tmp_path) -> None:
     assert cdp.closed == ["successor"]
     assert handoff.load_current()["source_chat_url"] == "https://chatgpt.com/c/source"
     assert journal.load() is None
+
+
+def test_expired_ghost_cleanup_closes_only_retired_tabs() -> None:
+    class FakeGhostCdp:
+        def __init__(self) -> None:
+            self.closed = []
+
+        def chatgpt_focus_state(self, target_id: str):
+            states = {
+                "source": {"ghost": True, "ghost_close_at": 1},
+                "expired": {"ghost": True, "ghost_close_at": 1},
+                "future": {"ghost": True, "ghost_close_at": int(time.time() * 1000) + 60000},
+                "plain": {"ghost": False, "ghost_close_at": 1},
+            }
+            return states[target_id]
+
+        def close_target(self, target_id: str) -> None:
+            self.closed.append(target_id)
+
+    tabs = [
+        BrowserTarget("source", "page", "https://chatgpt.com/c/source", "source", "ws://source"),
+        BrowserTarget("expired", "page", "https://chatgpt.com/c/expired", "expired", "ws://expired"),
+        BrowserTarget("future", "page", "https://chatgpt.com/c/future", "future", "ws://future"),
+        BrowserTarget("plain", "page", "https://chatgpt.com/c/plain", "plain", "ws://plain"),
+    ]
+    fake = FakeGhostCdp()
+
+    closed = gpt_session_tool._cleanup_expired_ghost_tabs(fake, tabs, protected_target_ids={"source"})
+
+    assert closed == ["expired"]
+    assert fake.closed == ["expired"]
 
 
 def test_external_adoption_replaces_watcher_when_it_matches_active_worker(monkeypatch, tmp_path) -> None:

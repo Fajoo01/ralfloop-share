@@ -299,6 +299,28 @@ def _unlock_rollover_source(cdp: ChromeCdp, source_target_id: str) -> None:
         cdp.unlock_human_input_after_failed_handoff(source_target_id)
 
 
+def _cleanup_expired_ghost_tabs(cdp: ChromeCdp, tabs, *, protected_target_ids=()) -> list[str]:
+    protected = {str(value) for value in protected_target_ids if value}
+    now_ms = int(time.time() * 1000)
+    closed: list[str] = []
+    for tab in tabs:
+        if tab.target_id in protected:
+            continue
+        try:
+            state = cdp.chatgpt_focus_state(tab.target_id)
+        except (AttributeError, CdpError):
+            continue
+        close_at = int(state.get("ghost_close_at") or 0)
+        if not state.get("ghost") or close_at <= 0 or close_at > now_ms:
+            continue
+        try:
+            cdp.close_target(tab.target_id)
+        except CdpError:
+            continue
+        closed.append(tab.target_id)
+    return closed
+
+
 def _finalize_adoption_state(
     adoption: ExternalChatAdoptionStore,
     *,
@@ -511,6 +533,19 @@ def cmd_adopt_external(args: argparse.Namespace) -> int:
             _json({"ok": False, "action": "noop", "reason": "chatgpt_source_ambiguous", "chatgpt_tab_count": len(tabs)})
             return 0
         source = tabs[0]
+
+    if args.apply:
+        closed_ghosts = _cleanup_expired_ghost_tabs(cdp, tabs, protected_target_ids={source.target_id})
+        if closed_ghosts:
+            tabs = [t for t in cdp.targets() if t.target_type == "page" and t.is_chatgpt]
+            source = next((tab for tab in tabs if tab.target_id == source.target_id), source)
+        active_source_url = normalize_chatgpt_conversation_url(source.url)
+        if active_source_url:
+            try:
+                cdp.install_human_input_target(source.target_id, active_source_url)
+            except CdpError as exc:
+                _json({"ok": False, "action": "deferred", "reason": f"human_input_install_failed:{exc}", "source_target_id": source.target_id})
+                return 1
 
     # A human-selected conversation in the headed browser is authoritative for
     # interactive input. Background watcher/recovery tabs never have focus, and
@@ -792,6 +827,7 @@ def cmd_adopt_external(args: argparse.Namespace) -> int:
             candidate_url=candidate,
         )
         adopted_ui = cdp.navigate_chatgpt_conversation(source.target_id, candidate)
+        cdp.install_human_input_target(source.target_id, candidate)
         journal.update(phase="browser_done")
         store.update_source_chat(source.target_id, candidate)
         journal.update(phase="source_state_done")
