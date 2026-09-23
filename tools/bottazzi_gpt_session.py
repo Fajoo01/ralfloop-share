@@ -1006,9 +1006,9 @@ def cmd_companion_send(args: argparse.Namespace) -> int:
 def cmd_sync_ui(args: argparse.Namespace) -> int:
     cdp = ChromeCdp(args.endpoint)
     store = HandoffStore(args.state_dir)
-    tabs = [t for t in cdp.targets() if t.target_type == "page" and t.is_chatgpt and normalize_chatgpt_conversation_url(t.url)]
+    tabs = [t for t in cdp.targets() if t.target_type == "page" and t.is_chatgpt]
     if not tabs:
-        _json({"ok": True, "action": "noop", "reason": "no_chatgpt_conversations"})
+        _json({"ok": True, "action": "noop", "reason": "no_chatgpt_tabs"})
         return 0
     source, _, error = _resolve_stored_source(tabs, store)
     if error or source is None:

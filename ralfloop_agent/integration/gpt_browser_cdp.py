@@ -1212,10 +1212,15 @@ class ChromeCdp:
           };
           const topicFromSidebar = () => {
             const wanted = canonical(location.href);
-            for (const a of document.querySelectorAll('a[href]')) {
+            if (!wanted) return '';
+            for (const a of document.querySelectorAll('#history a[href], nav a[href]')) {
+              const rawHref = String(a.getAttribute('href') || '').trim();
+              if (!rawHref || rawHref.startsWith('#')) continue;
               if (canonical(a.href) !== wanted) continue;
               const text = strip(a.innerText || a.textContent || '');
-              if (text && text.length <= 180) return text;
+              if (!text || text.length > 180) continue;
+              if (/^(?:vai ai contenuti|skip to content|main content|chatgpt)$/i.test(text)) continue;
+              return text;
             }
             return '';
           };
