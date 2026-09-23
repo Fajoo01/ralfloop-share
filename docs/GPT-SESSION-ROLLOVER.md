@@ -32,9 +32,11 @@ The policy is separate from browser mechanics so it can later be fed by DOM/runt
 
 ## Browser behavior
 
-A rollover creates a new blank tab, clears the dedicated browser HTTP cache through CDP, closes only old local ChatGPT tabs in this dedicated browser, and navigates the new tab to `https://chatgpt.com/`.
+An automatic handoff creates a new blank tab, clears the dedicated browser HTTP cache through CDP, navigates the new tab to `https://chatgpt.com/`, submits the durable handoff, and closes only the selected worker source tab after a real new user turn is observed. Other ChatGPT tabs in the dedicated profile are left untouched.
 
-It does **not** delete any server-side ChatGPT conversation. Old chats should be archived first at the ChatGPT account level. Automatic deletion remains disabled.
+The legacy manual `rotate --apply` command still rotates all local ChatGPT tabs and should not be used as the automatic shepherd path when unrelated tabs are present.
+
+No rollover path deletes any server-side ChatGPT conversation. Automatic server-side deletion remains disabled.
 
 ## CLI
 
@@ -62,9 +64,11 @@ Git/runtime state is authoritative. A new GPT chat must consume the handoff only
 
 `status` now probes the live ChatGPT DOM and reports whether the composer is ready, the current user/assistant turn counts, page age, and whether interactive login/challenge handling is required.
 
-`shepherd` evaluates the rollover policy from those live metrics. With `--apply --submit`, it opens a new ChatGPT tab, clears only disposable browser cache, injects the durable handoff, submits it, and only then closes the old local ChatGPT tab. If the new composer is not ready, the old tab stays open and the rollover is blocked safely.
+`shepherd` evaluates the rollover policy from those live metrics. With `--apply --submit`, it opens a new ChatGPT tab, waits until the fresh page is fully loaded and settled past the server-rendered composer race, injects text through trusted CDP input, submits through the hydrated send button, and only closes the selected source after the DOM shows a real increment in user turns. If submit is not confirmed, the temporary target is closed and the source stays open.
 
-The periodic units are `bottazzi-gpt-session-shepherd.service` and `bottazzi-gpt-session-shepherd.timer`. They are intended to run once per minute after the one-time account login has been verified.
+The successful successor target is persisted in `current.json` as `source_chat`. On later timer runs this identifies the worker even if unrelated ChatGPT tabs are open. If there are multiple tabs and the stored worker cannot be found, the shepherd fails closed instead of guessing. `--source-target-id` exists for explicit smoke/recovery operations.
+
+The periodic units are `bottazzi-gpt-session-shepherd.service` and `bottazzi-gpt-session-shepherd.timer`. They run once per minute after the one-time account login has been verified.
 
 ## One-time interactive login mode
 

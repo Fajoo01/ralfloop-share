@@ -129,7 +129,28 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
     if not tabs:
         _json({"ok": False, "action": "noop", "reason": "chatgpt_tab_not_found"})
         return 0
-    ui = cdp.chatgpt_ui_state(tabs[-1].target_id)
+    store = HandoffStore(args.state_dir)
+    source = None
+    if args.source_target_id:
+        source = next((tab for tab in tabs if tab.target_id == args.source_target_id), None)
+        if source is None:
+            _json({"ok": False, "action": "noop", "reason": "source_target_not_found", "source_target_id": args.source_target_id})
+            return 0
+    else:
+        stored_source = ""
+        if store.current_path.exists():
+            stored_source = str(store.load_current().get("source_chat") or "")
+        if stored_source:
+            source = next((tab for tab in tabs if tab.target_id == stored_source), None)
+            if source is None and len(tabs) > 1:
+                _json({"ok": False, "action": "noop", "reason": "stored_source_not_found", "source_target_id": stored_source, "chatgpt_tab_count": len(tabs)})
+                return 0
+        if source is None:
+            if len(tabs) != 1:
+                _json({"ok": False, "action": "noop", "reason": "chatgpt_source_ambiguous", "chatgpt_tab_count": len(tabs)})
+                return 0
+            source = tabs[0]
+    ui = cdp.chatgpt_ui_state(source.target_id)
     metrics = SessionMetrics(
         turns=int(ui.get("user_turns") or 0),
         age_minutes=int(ui.get("page_age_minutes") or 0),
@@ -159,16 +180,18 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
         report["dry_run"] = True
         _json(report)
         return 0
-    prompt = HandoffStore(args.state_dir).render_prompt()
+    prompt = store.render_prompt()
     try:
-        handoff = cdp.handoff_to_new_chat(prompt, source_target_id=tabs[-1].target_id, submit=args.submit)
+        handoff = cdp.handoff_to_new_chat(prompt, source_target_id=source.target_id, submit=args.submit)
     except CdpError as exc:
         report["ok"] = False
         report["blocked"] = str(exc)
         _json(report)
         return 0
+    store.update_source_chat(str(handoff.get("new_target_id") or "") or None)
     report["applied"] = True
     report["handoff"] = handoff
+    report["worker_target_id"] = handoff.get("new_target_id")
     _json(report)
     return 0
 
@@ -204,6 +227,7 @@ def build_parser() -> argparse.ArgumentParser:
     shepherd = sub.add_parser("shepherd")
     shepherd.add_argument("--apply", action="store_true")
     shepherd.add_argument("--submit", action="store_true")
+    shepherd.add_argument("--source-target-id", default=None)
     shepherd.add_argument("--max-turns", type=int, default=36)
     shepherd.add_argument("--max-age-minutes", type=int, default=120)
     shepherd.add_argument("--max-errors", type=int, default=2)

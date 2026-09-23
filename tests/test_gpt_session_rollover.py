@@ -65,6 +65,8 @@ def test_handoff_round_trip_and_prompt(tmp_path) -> None:
 
     payload = json.loads(store.current_path.read_text())
     assert payload["schema_version"] == "bottazzi_gpt_handoff_v1"
+    store.update_source_chat("worker-target")
+    assert store.load_current()["source_chat"] == "worker-target"
 
 
 def test_handoff_rejects_secret_named_fields(tmp_path) -> None:
@@ -129,18 +131,24 @@ class FakeInjectCdp(FakeCdp):
     def _page_call(self, websocket_url, method, params=None):
         self.calls.append((websocket_url, method))
         if method == "Runtime.evaluate":
+            if "send-button" in (params or {}).get("expression", ""):
+                self.sent = True
+                return {"result": {"value": json.dumps({"clicked": True})}}
             return {"result": {"value": json.dumps({"ok": True})}}
         if method == "Input.dispatchKeyEvent" and (params or {}).get("type") == "keyUp":
             self.sent = True
         return {}
 
 
-def test_inject_prompt_can_submit_with_enter() -> None:
+def test_inject_prompt_can_submit_with_button() -> None:
     cdp = FakeInjectCdp()
     result = cdp.inject_prompt("handoff", target_id="new", submit=True)
     assert result["injected"] is True
     assert result["submitted"] is True
-    assert [method for _, method in cdp.calls].count("Input.dispatchKeyEvent") == 2
+    assert result["submit_method"] == "button_js"
+    assert [method for _, method in cdp.calls].count("Input.insertText") == 1
+    assert [method for _, method in cdp.calls].count("Input.dispatchMouseEvent") == 0
+    assert [method for _, method in cdp.calls].count("Input.dispatchKeyEvent") == 0
 
 
 class FailingHandoffCdp(FakeCdp):

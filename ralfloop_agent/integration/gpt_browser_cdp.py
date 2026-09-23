@@ -92,8 +92,10 @@ class ChromeCdp:
             .filter(visible)
             .filter((el) => /(?:log in|sign in|accedi|registrati|sign up)/i.test((el.innerText || '').trim()));
           const authenticatedHint = loginControls.length === 0;
+          const pageAgeMs = Math.max(0, Math.floor(performance.now()));
+          const pageSettled = document.readyState === 'complete' && pageAgeMs >= 3000;
           return JSON.stringify({
-            ready: Boolean(composer) && authenticatedHint,
+            ready: Boolean(composer) && authenticatedHint && pageSettled,
             composer_ready: Boolean(composer),
             authenticated_hint: authenticatedHint,
             login_controls: loginControls.length,
@@ -104,6 +106,9 @@ class ChromeCdp:
             page_age_minutes: Math.max(0, Math.floor(performance.now() / 60000)),
             interaction_required: !authenticatedHint || !composer || /ci siamo quasi/i.test(document.title || ''),
             composer_kind: composer ? (composer.id || composer.tagName || '').toLowerCase() : null,
+            document_ready_state: document.readyState,
+            page_age_ms: pageAgeMs,
+            page_settled: pageSettled,
           });
         })()"""
         result = self._page_call(
@@ -139,7 +144,7 @@ class ChromeCdp:
             auth_state = {}
         authenticated = bool(auth_state.get("authenticated")) if isinstance(auth_state, dict) else False
         state["authenticated"] = authenticated
-        state["ready"] = bool(state.get("composer_ready")) and authenticated
+        state["ready"] = bool(state.get("composer_ready")) and authenticated and bool(state.get("page_settled"))
         state["interaction_required"] = (
             not authenticated
             or not bool(state.get("composer_ready"))
@@ -173,60 +178,94 @@ class ChromeCdp:
         baseline_user_turns = int(state.get("user_turns") or 0)
         if not target.websocket_url:
             raise CdpError("chatgpt_target_missing_websocket")
-        prompt_json = json.dumps(prompt, ensure_ascii=False)
-        expression = f"""(() => {{
-          const visible = (el) => {{
+        focus_expression = r"""(() => {
+          const visible = (el) => {
             if (!el) return false;
             const rect = el.getBoundingClientRect();
             const style = window.getComputedStyle(el);
             return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && !el.disabled;
-          }};
+          };
           const selectors = ['#prompt-textarea', 'textarea', '[contenteditable="true"]'];
           let el = null;
-          for (const selector of selectors) {{
+          for (const selector of selectors) {
             el = Array.from(document.querySelectorAll(selector)).find(visible) || null;
             if (el) break;
-          }}
-          if (!el) return JSON.stringify({{ok:false, reason:'composer_not_found'}});
-          const text = {prompt_json};
+          }
+          if (!el) return JSON.stringify({ok:false, reason:'composer_not_found'});
           el.focus();
-          if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {{
-            const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-            const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
-            setter.call(el, text);
-            el.dispatchEvent(new Event('input', {{bubbles:true}}));
-          }} else {{
-            el.textContent = '';
+          if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
+            el.select();
+          } else {
             const selection = window.getSelection();
             const range = document.createRange();
             range.selectNodeContents(el);
-            range.collapse(true);
             selection.removeAllRanges();
             selection.addRange(range);
-            document.execCommand('insertText', false, text);
-            el.dispatchEvent(new InputEvent('input', {{bubbles:true, inputType:'insertText', data:text}}));
-          }}
-          return JSON.stringify({{ok:true}});
-        }})()"""
+          }
+          return JSON.stringify({ok:true});
+        })()"""
         result = self._page_call(
             target.websocket_url,
             "Runtime.evaluate",
-            {"expression": expression, "returnByValue": True},
+            {"expression": focus_expression, "returnByValue": True},
         )
         raw = (result.get("result") or {}).get("value")
         try:
-            injected = json.loads(raw) if isinstance(raw, str) else {}
+            focused = json.loads(raw) if isinstance(raw, str) else {}
         except json.JSONDecodeError as exc:
-            raise CdpError("prompt_injection_invalid") from exc
-        if not isinstance(injected, dict) or not injected.get("ok"):
-            reason = injected.get("reason", "unknown") if isinstance(injected, dict) else "unknown"
-            raise CdpError(f"prompt_injection_failed:{reason}")
+            raise CdpError("prompt_focus_invalid") from exc
+        if not isinstance(focused, dict) or not focused.get("ok"):
+            reason = focused.get("reason", "unknown") if isinstance(focused, dict) else "unknown"
+            raise CdpError(f"prompt_focus_failed:{reason}")
+        self._page_call(target.websocket_url, "Input.insertText", {"text": prompt})
         submit_confirmed = False
+        submit_method: str | None = None
         if submit:
-            common = {"key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13, "nativeVirtualKeyCode": 13}
-            self._page_call(target.websocket_url, "Input.dispatchKeyEvent", {"type": "keyDown", **common})
-            self._page_call(target.websocket_url, "Input.dispatchKeyEvent", {"type": "keyUp", **common})
-            confirm_deadline = time.monotonic() + 10.0
+            click_expression = r"""(() => {
+              const visible = (el) => {
+                if (!el || el.disabled) return false;
+                const rect = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+              };
+              const selectors = [
+                'button[data-testid="send-button"]',
+                'button[aria-label*="Send"]',
+                'button[aria-label*="send"]',
+                'button[aria-label*="Invia"]',
+                'button[aria-label*="invia"]',
+              ];
+              let button = null;
+              for (const selector of selectors) {
+                button = Array.from(document.querySelectorAll(selector)).find(visible) || null;
+                if (button) break;
+              }
+              if (!button) return JSON.stringify({clicked:false});
+              button.click();
+              return JSON.stringify({clicked:true});
+            })()"""
+            click_deadline = time.monotonic() + 3.0
+            while time.monotonic() < click_deadline and submit_method is None:
+                click_result = self._page_call(
+                    target.websocket_url,
+                    "Runtime.evaluate",
+                    {"expression": click_expression, "returnByValue": True},
+                )
+                click_raw = (click_result.get("result") or {}).get("value")
+                try:
+                    click_state = json.loads(click_raw) if isinstance(click_raw, str) else {}
+                except json.JSONDecodeError:
+                    click_state = {}
+                if isinstance(click_state, dict) and click_state.get("clicked"):
+                    submit_method = "button_js"
+                    break
+                time.sleep(0.25)
+            if submit_method is None:
+                common = {"key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13, "nativeVirtualKeyCode": 13}
+                self._page_call(target.websocket_url, "Input.dispatchKeyEvent", {"type": "keyDown", **common})
+                self._page_call(target.websocket_url, "Input.dispatchKeyEvent", {"type": "keyUp", **common})
+                submit_method = "enter"
+            confirm_deadline = time.monotonic() + 30.0
             while time.monotonic() < confirm_deadline:
                 current_target = self._wait_target(target.target_id)
                 if not current_target.is_chatgpt:
@@ -237,8 +276,30 @@ class ChromeCdp:
                     break
                 time.sleep(0.25)
             if not submit_confirmed:
-                raise CdpError("submit_not_confirmed")
-        return {"target_id": target.target_id, "injected": True, "submitted": submit_confirmed, "submit_confirmed": submit_confirmed}
+                diagnostic_expression = r"""(() => {
+                  const composer = document.querySelector('#prompt-textarea') || document.querySelector('textarea') || document.querySelector('[contenteditable="true"]');
+                  const send = document.querySelector('button[data-testid="send-button"]') || document.querySelector('button[aria-label*="Send"]') || document.querySelector('button[aria-label*="send"]') || document.querySelector('button[aria-label*="Invia"]') || document.querySelector('button[aria-label*="invia"]');
+                  const text = composer ? (composer.value || composer.innerText || composer.textContent || '') : '';
+                  return JSON.stringify({
+                    composer_chars: text.length,
+                    send_found: Boolean(send),
+                    send_disabled: send ? Boolean(send.disabled) : null,
+                    url: location.href,
+                    user_turns: document.querySelectorAll('[data-message-author-role="user"]').length,
+                  });
+                })()"""
+                diagnostic_result = self._page_call(
+                    target.websocket_url,
+                    "Runtime.evaluate",
+                    {"expression": diagnostic_expression, "returnByValue": True},
+                )
+                diagnostic_raw = (diagnostic_result.get("result") or {}).get("value")
+                try:
+                    diagnostic = json.loads(diagnostic_raw) if isinstance(diagnostic_raw, str) else {}
+                except json.JSONDecodeError:
+                    diagnostic = {}
+                raise CdpError(f"submit_not_confirmed:{submit_method}:{json.dumps(diagnostic, sort_keys=True)}")
+        return {"target_id": target.target_id, "injected": True, "submitted": submit_confirmed, "submit_confirmed": submit_confirmed, "submit_method": submit_method}
 
     def handoff_to_new_chat(
         self,

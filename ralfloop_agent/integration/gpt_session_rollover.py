@@ -133,6 +133,16 @@ class HandoffStore:
         _reject_secret_keys(data)
         return data
 
+    def update_source_chat(self, source_chat: str | None) -> None:
+        data = self.load_current()
+        data["source_chat"] = source_chat
+        _reject_secret_keys(data)
+        encoded = json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        if len(encoded.encode("utf-8")) > 256 * 1024:
+            raise GptSessionError("handoff_too_large")
+        self._ensure_dirs()
+        _atomic_write(self.current_path, encoded)
+
     def render_prompt(self) -> str:
         data = self.load_current()
         repo = data.get("repo") or {}
