@@ -4,6 +4,7 @@ import json
 import os
 import re
 import tempfile
+import urllib.parse
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -200,6 +201,82 @@ class HandoffStore:
         self.archive_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.root, 0o700)
         os.chmod(self.archive_dir, 0o700)
+
+
+def normalize_chatgpt_conversation_url(value: str) -> str | None:
+    try:
+        parsed = urllib.parse.urlparse(str(value or ""))
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").lower()
+    if host != "chatgpt.com" and not host.endswith(".chatgpt.com"):
+        return None
+    match = re.fullmatch(r"(?:/g/[^/]+)?/c/([A-Za-z0-9-]+)", parsed.path.rstrip("/"))
+    if not match:
+        return None
+    return f"https://chatgpt.com/c/{match.group(1)}"
+
+
+def select_external_conversation(
+    conversation_urls: list[str],
+    *,
+    seen_urls: list[str] | set[str],
+    open_urls: list[str] | set[str],
+    source_url: str | None,
+) -> str | None:
+    seen = {item for value in seen_urls if (item := normalize_chatgpt_conversation_url(value))}
+    opened = {item for value in open_urls if (item := normalize_chatgpt_conversation_url(value))}
+    source = normalize_chatgpt_conversation_url(source_url or "")
+    for value in conversation_urls:
+        candidate = normalize_chatgpt_conversation_url(value)
+        if candidate and candidate not in seen and candidate not in opened and candidate != source:
+            return candidate
+    return None
+
+
+class ExternalChatAdoptionStore:
+    schema_version = "bottazzi_gpt_external_adoption_v1"
+
+    def __init__(self, root: str | os.PathLike[str] | None = None) -> None:
+        self.root = Path(root).expanduser() if root else default_state_dir()
+        self.path = self.root / "external-chat-adoption.json"
+
+    def load(self) -> dict[str, Any]:
+        if not self.path.exists():
+            return {
+                "schema_version": self.schema_version,
+                "seen_conversations": [],
+                "watcher_target_id": None,
+                "last_adopted_conversation": None,
+                "last_scan_epoch": 0,
+            }
+        if self.path.is_symlink():
+            raise GptSessionError("external_adoption_symlink_rejected")
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise GptSessionError("external_adoption_invalid") from exc
+        if not isinstance(data, dict) or data.get("schema_version") != self.schema_version:
+            raise GptSessionError("external_adoption_invalid")
+        _reject_secret_keys(data)
+        return data
+
+    def save(self, data: Mapping[str, Any]) -> None:
+        payload = dict(data)
+        payload["schema_version"] = self.schema_version
+        seen: list[str] = []
+        for value in payload.get("seen_conversations") or []:
+            normalized = normalize_chatgpt_conversation_url(str(value))
+            if normalized and normalized not in seen:
+                seen.append(normalized)
+        payload["seen_conversations"] = seen[-256:]
+        _reject_secret_keys(payload)
+        encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        if len(encoded.encode("utf-8")) > 64 * 1024:
+            raise GptSessionError("external_adoption_too_large")
+        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(self.root, 0o700)
+        _atomic_write(self.path, encoded)
 
 
 def _bullets(values: Any) -> str:

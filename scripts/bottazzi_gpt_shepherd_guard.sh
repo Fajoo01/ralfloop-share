@@ -17,6 +17,13 @@ if [[ -f "$SNOOZE_FILE" ]]; then
   fi
 fi
 
+adoption="$($PY "$TOOL" --endpoint "$ENDPOINT" adopt-external --apply --scan-interval-seconds 30 2>/dev/null || true)"
+if [[ -n "$adoption" ]]; then
+  read -r adoption_action adoption_reason < <(printf '%s' "$adoption" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); print(str(d.get("action") or ""), str(d.get("reason") or ""))' 2>/dev/null || echo 'noop parse_failed')
+  [[ "$adoption_action" != "adopted" ]] || exit 0
+  [[ "$adoption_reason" != "unsent_composer_text" ]] || exit 0
+fi
+
 probe="$($PY "$TOOL" --endpoint "$ENDPOINT" shepherd 2>/dev/null || true)"
 [[ -n "$probe" ]] || exit 0
 

@@ -4,20 +4,24 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from ralfloop_agent.integration.gpt_browser_cdp import ChromeCdp, CdpError
+from ralfloop_agent.integration.gpt_browser_cdp import CHATGPT_ORIGIN, ChromeCdp, CdpError
 from ralfloop_agent.integration.gpt_session_rollover import (
+    ExternalChatAdoptionStore,
     GptSessionError,
     Handoff,
     HandoffStore,
     RolloverPolicy,
     SessionMetrics,
     evaluate_rollover,
+    normalize_chatgpt_conversation_url,
+    select_external_conversation,
     session_metrics_from_ui,
     should_defer_latency_rollover,
 )
@@ -129,6 +133,150 @@ def cmd_rotate(args: argparse.Namespace) -> int:
     _json(result)
     return 0
 
+
+
+def cmd_adopt_external(args: argparse.Namespace) -> int:
+    cdp = ChromeCdp(args.endpoint)
+    store = HandoffStore(args.state_dir)
+    adoption = ExternalChatAdoptionStore(args.state_dir)
+    had_state = adoption.path.exists()
+    try:
+        adoption_state = adoption.load()
+        tabs = [t for t in cdp.targets() if t.target_type == "page" and t.is_chatgpt]
+    except (CdpError, GptSessionError) as exc:
+        _json({"ok": False, "action": "noop", "reason": str(exc)})
+        return 0
+    if not tabs:
+        _json({"ok": False, "action": "noop", "reason": "chatgpt_tab_not_found"})
+        return 0
+
+    stored_source = ""
+    if store.current_path.exists():
+        try:
+            stored_source = str(store.load_current().get("source_chat") or "")
+        except GptSessionError as exc:
+            _json({"ok": False, "action": "noop", "reason": str(exc)})
+            return 0
+    source = next((tab for tab in tabs if tab.target_id == stored_source), None) if stored_source else None
+    if source is None:
+        if len(tabs) != 1:
+            _json({"ok": False, "action": "noop", "reason": "chatgpt_source_ambiguous", "chatgpt_tab_count": len(tabs)})
+            return 0
+        source = tabs[0]
+
+    now = int(time.time())
+    watcher_id = str(adoption_state.get("watcher_target_id") or "")
+    watcher = next((tab for tab in tabs if tab.target_id == watcher_id), None) if watcher_id else None
+    last_scan = int(adoption_state.get("last_scan_epoch") or 0)
+    if had_state and watcher is not None and now - last_scan < max(0, args.scan_interval_seconds):
+        _json({"ok": True, "action": "noop", "reason": "scan_interval", "next_scan_in_seconds": max(0, args.scan_interval_seconds - (now - last_scan))})
+        return 0
+
+    watcher_created = False
+    try:
+        if watcher is None:
+            watcher_id = cdp.create_chatgpt_target(clear_cache=False)
+            watcher_created = True
+        conversation_urls = cdp.conversation_urls(watcher_id, reload=not watcher_created)
+        tabs = [t for t in cdp.targets() if t.target_type == "page" and t.is_chatgpt]
+        source = next((tab for tab in tabs if tab.target_id == source.target_id), source)
+    except CdpError as exc:
+        if watcher_created and watcher_id:
+            try:
+                cdp.close_target(watcher_id)
+            except CdpError:
+                pass
+        _json({"ok": False, "action": "noop", "reason": str(exc), "watcher_target_id": watcher_id or None})
+        return 0
+
+    source_url = normalize_chatgpt_conversation_url(source.url)
+    seen_urls = list(adoption_state.get("seen_conversations") or [])
+    if not had_state:
+        baseline = list(conversation_urls)
+        if source_url and source_url not in baseline:
+            baseline.append(source_url)
+        adoption_state.update(
+            {
+                "seen_conversations": baseline,
+                "watcher_target_id": watcher_id,
+                "last_adopted_conversation": None,
+                "last_scan_epoch": now,
+            }
+        )
+        adoption.save(adoption_state)
+        _json({"ok": True, "action": "baseline", "conversation_count": len(baseline), "watcher_target_id": watcher_id})
+        return 0
+
+    open_urls = [tab.url for tab in tabs if tab.target_id != watcher_id]
+    candidate = select_external_conversation(
+        conversation_urls,
+        seen_urls=seen_urls,
+        open_urls=open_urls,
+        source_url=source.url,
+    )
+    if candidate is None:
+        merged = list(seen_urls)
+        for value in conversation_urls:
+            normalized = normalize_chatgpt_conversation_url(value)
+            if normalized and normalized not in merged:
+                merged.append(normalized)
+        adoption_state.update({"seen_conversations": merged, "watcher_target_id": watcher_id, "last_scan_epoch": now})
+        adoption.save(adoption_state)
+        _json({"ok": True, "action": "noop", "reason": "no_external_conversation", "watcher_target_id": watcher_id})
+        return 0
+
+    try:
+        ui = cdp.chatgpt_ui_state(source.target_id)
+    except CdpError as exc:
+        _json({"ok": False, "action": "deferred", "reason": str(exc), "conversation_url": candidate})
+        return 0
+    busy_reason = None
+    if bool(ui.get("response_pending")) or bool(ui.get("response_in_progress")):
+        busy_reason = "worker_response_active"
+    elif int(ui.get("composer_chars") or 0) > 0:
+        busy_reason = "unsent_composer_text"
+    elif not bool(ui.get("ready")):
+        busy_reason = "worker_not_ready"
+    if busy_reason:
+        adoption_state.update({"watcher_target_id": watcher_id, "last_scan_epoch": now})
+        adoption.save(adoption_state)
+        _json({"ok": True, "action": "deferred", "reason": busy_reason, "conversation_url": candidate})
+        return 0
+    if not args.apply:
+        adoption_state.update({"watcher_target_id": watcher_id, "last_scan_epoch": now})
+        adoption.save(adoption_state)
+        _json({"ok": True, "action": "candidate", "conversation_url": candidate, "source_target_id": source.target_id})
+        return 0
+
+    try:
+        adopted_ui = cdp.navigate_chatgpt_conversation(source.target_id, candidate)
+    except CdpError as exc:
+        _json({"ok": False, "action": "deferred", "reason": str(exc), "conversation_url": candidate})
+        return 0
+    updated_seen = list(seen_urls)
+    for value in (source_url, candidate):
+        if value and value not in updated_seen:
+            updated_seen.append(value)
+    adoption_state.update(
+        {
+            "seen_conversations": updated_seen,
+            "watcher_target_id": watcher_id,
+            "last_adopted_conversation": candidate,
+            "last_scan_epoch": now,
+        }
+    )
+    adoption.save(adoption_state)
+    _json(
+        {
+            "ok": True,
+            "action": "adopted",
+            "conversation_url": candidate,
+            "source_target_id": source.target_id,
+            "user_turns": int(adopted_ui.get("user_turns") or 0),
+            "server_chat_deleted": False,
+        }
+    )
+    return 0
 
 
 def cmd_shepherd(args: argparse.Namespace) -> int:
@@ -272,6 +420,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     render = sub.add_parser("render")
     render.set_defaults(func=cmd_render)
+
+    adopt = sub.add_parser("adopt-external")
+    adopt.add_argument("--apply", action="store_true")
+    adopt.add_argument("--scan-interval-seconds", type=int, default=30)
+    adopt.set_defaults(func=cmd_adopt_external)
 
     shepherd = sub.add_parser("shepherd")
     shepherd.add_argument("--apply", action="store_true")

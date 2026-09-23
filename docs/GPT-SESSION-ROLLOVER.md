@@ -72,6 +72,14 @@ The successful successor target is persisted in `current.json` as `source_chat`.
 
 The periodic units are `bottazzi-gpt-session-shepherd.service` and `bottazzi-gpt-session-shepherd.timer`. The production timer probes every 15 seconds after the one-time account login has been verified, so a 30-second latency/error threshold is observed promptly without a tight polling loop.
 
+## External/app chat adoption
+
+The periodic shepherd also runs `adopt-external --apply` before evaluating rollover. A dedicated watcher tab refreshes the authenticated ChatGPT sidebar at most every 30 seconds and detects account-synced conversations created by another client, including the mobile app.
+
+The first scan is baseline-only: conversations already visible in the sidebar are marked as seen and are never adopted retroactively. A later conversation is eligible only when it is new to the watcher, is not already open in the dedicated browser, and is not the current worker conversation. When eligible, the existing worker tab is navigated to that conversation so its target ID remains the durable `source_chat` and the normal rollover policy continues to apply.
+
+Adoption is deferred while the worker has an active/pending response, unsent composer text, or is not ready. The watcher never sends a message, never copies authentication material, and never deletes a server-side conversation. Its durable state stores only canonical conversation URLs, the watcher target ID, timestamps, and the last adopted conversation; prompt/response text is not persisted.
+
 ## One-time interactive login mode
 
 Sibilla already exposes a bandi-owned X display on `:1`. `bottazzi-gpt-browser-login.service` runs the same dedicated profile and CDP port 9238 headed on that display, without copying cookies from any other browser. Use it only to complete the one-time ChatGPT login; then return to `bottazzi-gpt-browser.service`. Authentication remains under the dedicated profile while `/tmp/bottazzi-gpt-browser-cache` stays disposable.

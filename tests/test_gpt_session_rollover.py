@@ -7,12 +7,15 @@ import websocket
 
 from ralfloop_agent.integration.gpt_browser_cdp import BrowserTarget, CdpError, ChromeCdp
 from ralfloop_agent.integration.gpt_session_rollover import (
+    ExternalChatAdoptionStore,
     GptSessionError,
     Handoff,
     HandoffStore,
     RolloverPolicy,
     SessionMetrics,
     evaluate_rollover,
+    normalize_chatgpt_conversation_url,
+    select_external_conversation,
     session_metrics_from_ui,
     should_defer_latency_rollover,
 )
@@ -124,6 +127,50 @@ def test_handoff_round_trip_and_prompt(tmp_path) -> None:
     assert store.load_current()["source_chat"] == "worker-target"
 
 
+def test_external_conversation_url_is_canonical_and_query_free() -> None:
+    assert normalize_chatgpt_conversation_url("https://chatgpt.com/c/abc-123?messageId=x") == "https://chatgpt.com/c/abc-123"
+    assert normalize_chatgpt_conversation_url("https://chatgpt.com/c/abc-123/") == "https://chatgpt.com/c/abc-123"
+    assert normalize_chatgpt_conversation_url("https://chatgpt.com/g/g-p-demo/c/abc-123") == "https://chatgpt.com/c/abc-123"
+    assert normalize_chatgpt_conversation_url("https://example.com/c/abc-123") is None
+    assert normalize_chatgpt_conversation_url("https://chatgpt.com/g/gpt") is None
+
+
+def test_external_conversation_selection_excludes_seen_open_and_source() -> None:
+    urls = [
+        "https://chatgpt.com/c/seen",
+        "https://chatgpt.com/c/open",
+        "https://chatgpt.com/c/source",
+        "https://chatgpt.com/c/from-app?messageId=finalAgentTurnStart",
+    ]
+    assert select_external_conversation(
+        urls,
+        seen_urls=["https://chatgpt.com/c/seen"],
+        open_urls=["https://chatgpt.com/c/open"],
+        source_url="https://chatgpt.com/c/source",
+    ) == "https://chatgpt.com/c/from-app"
+
+
+def test_external_adoption_store_round_trip_is_bounded(tmp_path) -> None:
+    store = ExternalChatAdoptionStore(tmp_path)
+    payload = store.load()
+    payload.update(
+        {
+            "seen_conversations": [
+                "https://chatgpt.com/c/one?messageId=x",
+                "https://chatgpt.com/c/one",
+                "https://example.com/c/nope",
+            ],
+            "watcher_target_id": "watcher",
+            "last_scan_epoch": 123,
+        }
+    )
+    store.save(payload)
+    saved = store.load()
+    assert saved["seen_conversations"] == ["https://chatgpt.com/c/one"]
+    assert saved["watcher_target_id"] == "watcher"
+    assert store.path.stat().st_mode & 0o077 == 0
+
+
 def test_handoff_rejects_secret_named_fields(tmp_path) -> None:
     handoff = Handoff(goal="x", current_state="y")
     handoff.action_receipts = [{"action": "x", "token": "should-never-be-stored"}]
@@ -135,6 +182,29 @@ def test_chatgpt_target_detection() -> None:
     assert BrowserTarget("1", "page", "https://chatgpt.com/c/abc", "x").is_chatgpt
     assert BrowserTarget("2", "page", "https://foo.chatgpt.com/", "x").is_chatgpt
     assert not BrowserTarget("3", "page", "https://example.com/?next=chatgpt.com", "x").is_chatgpt
+
+
+def test_conversation_navigation_waits_for_initial_blank(monkeypatch) -> None:
+    cdp = ChromeCdp("http://127.0.0.1:1")
+    sequence = iter(
+        [
+            BrowserTarget("target", "page", "about:blank", "blank", "ws://target"),
+            BrowserTarget("target", "page", "https://chatgpt.com/", "home", "ws://target"),
+            BrowserTarget("target", "page", "https://chatgpt.com/c/abc", "chat", "ws://target"),
+        ]
+    )
+    settled = BrowserTarget("target", "page", "https://chatgpt.com/c/abc", "chat", "ws://target")
+
+    def wait_target(target_id, *, attempts=20):
+        assert target_id == "target"
+        return next(sequence, settled)
+
+    monkeypatch.setattr(cdp, "_wait_target", wait_target)
+    monkeypatch.setattr(cdp, "_page_call", lambda *args, **kwargs: {})
+    monkeypatch.setattr(cdp, "chatgpt_ui_state", lambda target_id: {"ready": True, "target_id": target_id})
+
+    result = cdp.navigate_chatgpt_conversation("target", "https://chatgpt.com/c/abc", wait_timeout_s=1.0)
+    assert result["ready"] is True
 
 
 class FakeCdp(ChromeCdp):

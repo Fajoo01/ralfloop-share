@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.parse
 import urllib.request
@@ -12,6 +13,20 @@ import websocket
 
 DEFAULT_ENDPOINT = os.getenv("BOTTAZZI_GPT_CDP_ENDPOINT", "http://127.0.0.1:9238")
 CHATGPT_ORIGIN = "https://chatgpt.com/"
+
+
+def _canonical_chatgpt_conversation_url(value: str) -> str | None:
+    try:
+        parsed = urllib.parse.urlparse(str(value or ""))
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").lower()
+    if host != "chatgpt.com" and not host.endswith(".chatgpt.com"):
+        return None
+    match = re.fullmatch(r"(?:/g/[^/]+)?/c/([A-Za-z0-9-]+)", parsed.path.rstrip("/"))
+    if not match:
+        return None
+    return f"https://chatgpt.com/c/{match.group(1)}"
 
 
 class CdpError(RuntimeError):
@@ -235,6 +250,7 @@ class ChromeCdp:
             page_age_minutes: Math.max(0, Math.floor(performance.now() / 60000)),
             interaction_required: !authenticatedHint || !composer || /ci siamo quasi/i.test(document.title || ''),
             composer_kind: composer ? (composer.id || composer.tagName || '').toLowerCase() : null,
+            composer_chars: composer ? String(composer.value || composer.innerText || composer.textContent || '').length : 0,
             document_ready_state: document.readyState,
             page_age_ms: pageAgeMs,
             page_settled: pageSettled,
@@ -469,6 +485,130 @@ class ChromeCdp:
             "server_chat_deleted": False,
             "cache_cleared": True,
         }
+
+    def conversation_urls(
+        self,
+        target_id: str,
+        *,
+        reload: bool = False,
+        wait_timeout_s: float = 20.0,
+    ) -> list[str]:
+        target = self._wait_target(target_id)
+        if not target.websocket_url:
+            raise CdpError("conversation_scan_target_invalid")
+        deadline = time.monotonic() + wait_timeout_s
+        while time.monotonic() < deadline and not target.is_chatgpt:
+            time.sleep(0.25)
+            target = self._wait_target(target_id)
+        if not target.is_chatgpt or not target.websocket_url:
+            raise CdpError("conversation_scan_target_invalid")
+        if reload:
+            self._page_call(target.websocket_url, "Page.enable")
+            self._page_call(target.websocket_url, "Page.reload", {"ignoreCache": True})
+        expression = r"""(() => {
+          const urls = [];
+          const seen = new Set();
+          for (const anchor of document.querySelectorAll('a[href]')) {
+            const href = String(anchor.href || '');
+            if (!/^https:\/\/chatgpt\.com\/(?:g\/[^/]+\/)?c\/[A-Za-z0-9-]+(?:[/?#].*)?$/.test(href)) continue;
+            const normalized = href.replace(/[?#].*$/, '').replace(/\/$/, '');
+            if (seen.has(normalized)) continue;
+            seen.add(normalized);
+            urls.push(normalized);
+          }
+          return JSON.stringify({ready: document.readyState === 'complete', urls});
+        })()"""
+        last_urls: list[str] = []
+        authenticated_seen = False
+        while time.monotonic() < deadline:
+            try:
+                state = self.chatgpt_ui_state(target_id)
+            except CdpError:
+                time.sleep(0.25)
+                continue
+            if not state.get("authenticated"):
+                time.sleep(0.25)
+                continue
+            authenticated_seen = True
+            if not state.get("page_settled"):
+                time.sleep(0.25)
+                continue
+            target = self._wait_target(target_id)
+            if not target.websocket_url:
+                raise CdpError("conversation_scan_target_missing_websocket")
+            result = self._page_call(
+                target.websocket_url,
+                "Runtime.evaluate",
+                {"expression": expression, "returnByValue": True},
+            )
+            raw = (result.get("result") or {}).get("value")
+            try:
+                payload = json.loads(raw) if isinstance(raw, str) else {}
+            except json.JSONDecodeError:
+                payload = {}
+            values = payload.get("urls") if isinstance(payload, dict) else []
+            if isinstance(values, list):
+                last_urls = []
+                for value in values:
+                    normalized = _canonical_chatgpt_conversation_url(str(value))
+                    if normalized and normalized not in last_urls:
+                        last_urls.append(normalized)
+            if payload.get("ready") and last_urls:
+                return last_urls
+            time.sleep(0.25)
+        if last_urls:
+            return last_urls
+        if not authenticated_seen:
+            raise CdpError("conversation_scan_unauthenticated")
+        raise CdpError("conversation_scan_timeout")
+
+    def create_chatgpt_target(self, *, clear_cache: bool = False) -> str:
+        target_id = self.create_target("about:blank")
+        target = self._wait_target(target_id)
+        if not target.websocket_url:
+            raise CdpError("new_target_missing_websocket")
+        self._page_call(target.websocket_url, "Network.enable")
+        if clear_cache:
+            self._page_call(target.websocket_url, "Network.clearBrowserCache")
+        self._page_call(target.websocket_url, "Page.enable")
+        self._page_call(target.websocket_url, "Page.navigate", {"url": CHATGPT_ORIGIN})
+        return target_id
+
+    def navigate_chatgpt_conversation(
+        self,
+        target_id: str,
+        url: str,
+        *,
+        wait_timeout_s: float = 20.0,
+    ) -> dict[str, Any]:
+        normalized = _canonical_chatgpt_conversation_url(url)
+        if not normalized:
+            raise CdpError("conversation_url_invalid")
+        target = self._wait_target(target_id)
+        navigation_deadline = time.monotonic() + wait_timeout_s
+        while time.monotonic() < navigation_deadline and not target.is_chatgpt:
+            time.sleep(0.25)
+            target = self._wait_target(target_id)
+        if not target.is_chatgpt or not target.websocket_url:
+            raise CdpError("conversation_navigation_target_invalid")
+        self._page_call(target.websocket_url, "Page.enable")
+        self._page_call(target.websocket_url, "Page.navigate", {"url": normalized})
+        deadline = time.monotonic() + wait_timeout_s
+        last_state: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            try:
+                current = self._wait_target(target_id)
+                if _canonical_chatgpt_conversation_url(current.url) != normalized:
+                    time.sleep(0.25)
+                    continue
+                last_state = self.chatgpt_ui_state(target_id)
+            except CdpError:
+                time.sleep(0.25)
+                continue
+            if last_state.get("ready"):
+                return last_state
+            time.sleep(0.25)
+        raise CdpError(f"conversation_navigation_timeout:{normalized}")
 
     def rotate_chatgpt_tab(self, *, close_old: bool = True) -> dict[str, Any]:
         previous = [target for target in self.targets() if target.target_type == "page" and target.is_chatgpt]
