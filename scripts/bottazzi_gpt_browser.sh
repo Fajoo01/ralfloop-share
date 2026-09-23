@@ -4,7 +4,8 @@ set -euo pipefail
 CHROME_BIN="${BOTTAZZI_GPT_CHROME_BIN:-/usr/bin/google-chrome}"
 PROFILE_DIR="${BOTTAZZI_GPT_PROFILE_DIR:-/home/bandi/.local/share/bottazzi-gpt-browser/profile}"
 CACHE_DIR="${BOTTAZZI_GPT_CACHE_DIR:-/tmp/bottazzi-gpt-browser-cache}"
-CDP_PORT="${BOTTAZZI_GPT_CDP_PORT:-9237}"
+CONFIG_DIR="${BOTTAZZI_GPT_CONFIG_DIR:-/home/bandi/.local/share/bottazzi-gpt-browser/config}"
+CDP_PORT="${BOTTAZZI_GPT_CDP_PORT:-9238}"
 HEADLESS="${BOTTAZZI_GPT_HEADLESS:-1}"
 
 if [[ ! -x "$CHROME_BIN" ]]; then
@@ -12,8 +13,8 @@ if [[ ! -x "$CHROME_BIN" ]]; then
   exit 2
 fi
 
-mkdir -p "$PROFILE_DIR" "$CACHE_DIR"
-chmod 700 "$PROFILE_DIR"
+mkdir -p "$PROFILE_DIR" "$CACHE_DIR" "$CONFIG_DIR"
+chmod 700 "$PROFILE_DIR" "$CACHE_DIR" "$CONFIG_DIR"
 
 args=(
   --remote-debugging-address=127.0.0.1
@@ -25,6 +26,8 @@ args=(
   --no-default-browser-check
   --disable-default-apps
   --disable-sync
+  --disable-breakpad
+  --disable-crash-reporter
   --password-store=basic
 )
 

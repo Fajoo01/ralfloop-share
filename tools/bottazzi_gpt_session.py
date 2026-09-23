@@ -119,7 +119,7 @@ def cmd_rotate(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Bot-tazzi dedicated GPT browser/session controller")
-    parser.add_argument("--endpoint", default="http://127.0.0.1:9237")
+    parser.add_argument("--endpoint", default="http://127.0.0.1:9238")
     parser.add_argument("--state-dir", default=None)
     sub = parser.add_subparsers(dest="command", required=True)
 

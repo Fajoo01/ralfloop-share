@@ -10,7 +10,7 @@ from typing import Any
 
 import websocket
 
-DEFAULT_ENDPOINT = os.getenv("BOTTAZZI_GPT_CDP_ENDPOINT", "http://127.0.0.1:9237")
+DEFAULT_ENDPOINT = os.getenv("BOTTAZZI_GPT_CDP_ENDPOINT", "http://127.0.0.1:9238")
 CHATGPT_ORIGIN = "https://chatgpt.com/"
 
 
