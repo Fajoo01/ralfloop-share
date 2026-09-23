@@ -124,7 +124,15 @@ def test_local_maintenance_http_surface_rejects_arbitrary_shell():
 def test_patch_allowed_terminal_cwd_uses_coding_harness(monkeypatch, tmp_path):
     import subprocess
 
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    main = tmp_path / "main"
+    worktree = tmp_path / "ticket"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(main)], check=True)
+    subprocess.run(["git", "-C", str(main), "config", "user.email", "routing-test@example.invalid"], check=True)
+    subprocess.run(["git", "-C", str(main), "config", "user.name", "Routing Test"], check=True)
+    (main / "base.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(main), "add", "base.txt"], check=True)
+    subprocess.run(["git", "-C", str(main), "commit", "-q", "-m", "base"], check=True)
+    subprocess.run(["git", "-C", str(main), "worktree", "add", "-q", "-b", "ticket", str(worktree)], check=True)
     observed = {}
 
     def fake_harness(config):
@@ -140,7 +148,8 @@ def test_patch_allowed_terminal_cwd_uses_coding_harness(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "ralfloop_agent.coding_harness.harness.run_harness", fake_harness
     )
-    monkeypatch.setenv("RALF_CODE_WORKTREE_ROOTS", str(tmp_path.parent))
+    monkeypatch.setenv("RALF_CODE_WORKTREE_ROOTS", str(tmp_path))
+    monkeypatch.setenv("RALF_PROGRAMMER_STATE_ROOT", str(tmp_path / "programmer-state"))
     monkeypatch.setenv("RALF_CODE_PROVIDER", "llamacpp-code-local")
     monkeypatch.setenv("RALF_CODE_MODEL", "qwen2.5-coder-7b")
     monkeypatch.setenv("RALF_CODE_FALLBACK_PROVIDER", "agentcpm-local")
@@ -151,7 +160,7 @@ def test_patch_allowed_terminal_cwd_uses_coding_harness(monkeypatch, tmp_path):
             "user_goal": "correggi codice nel repository e verifica il diff",
             "extra_context": {
                 "source": "ralf_terminal",
-                "terminal_client": {"cwd": str(tmp_path)},
+                "terminal_client": {"cwd": str(worktree)},
             },
         },
     )
@@ -160,7 +169,7 @@ def test_patch_allowed_terminal_cwd_uses_coding_harness(monkeypatch, tmp_path):
     assert payload["ok"] is True
     assert payload["capability"] == "local_code_patch"
     assert observed == {
-        "workdir": str(tmp_path.resolve()),
+        "workdir": str(worktree.resolve()),
         "validator": "git diff --check",
         "worker_user": "sibilla-cumana",
         "provider": "llamacpp-code-local",

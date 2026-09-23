@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import pwd
+import shutil
 import subprocess
 from typing import Any, Mapping
 
@@ -49,6 +50,7 @@ class HarnessConfig:
     model: str = "AgentCPM-Explore"
     fallback_provider: str | None = None
     fallback_model: str | None = None
+    worker_tools: tuple[str, ...] = ("read", "edit", "write", "bash")
     allow_test_changes: bool = False
     protected_globs: tuple[str, ...] = ()
     ds4_base_url: str = "http://127.0.0.1:19194"
@@ -233,6 +235,35 @@ def assess_coding_risk(
 
 def _run_shell(command: str, root: Path, timeout_sec: int) -> tuple[int, str]:
     environment = safe_execution_environment(os.environ)
+    normalized = " ".join(command.split())
+
+    # The programmer's default validator must remain available even when the
+    # optional shell-AST binary is not installed in a fresh worktree. Execute
+    # this one fixed Git check directly, with external diff/textconv disabled.
+    if normalized == "git diff --check":
+        git = shutil.which("git", path="/usr/bin:/bin")
+        if not git:
+            return 127, "VALIDATOR_GIT_UNAVAILABLE"
+        argv = [git, "--no-pager", "diff", "--no-ext-diff", "--no-textconv", "--check"]
+        try:
+            result = subprocess.run(
+                argv,
+                cwd=root,
+                shell=False,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=timeout_sec,
+                env=environment,
+            )
+            return result.returncode, _trim(result.stdout or "")
+        except subprocess.TimeoutExpired as exc:
+            output = exc.stdout or ""
+            if isinstance(output, bytes):
+                output = output.decode("utf-8", errors="replace")
+            return 124, _trim(output + "\nVALIDATOR_TIMEOUT")
+
     review = RalfShellJudge(ShellPolicy.for_sandbox(root)).review(
         command, str(root), environment,
     )
@@ -284,11 +315,44 @@ def _pi_command(
         "--no-session",
         "--provider", selected_provider,
         "--model", selected_model,
-        "--tools", "read,edit,write,bash",
+        "--tools", ",".join(config.worker_tools),
         "--mode", "json",
         "-p", prompt,
     ]
     return command
+
+
+def _pi_effective_return_code(process_rc: int, output: str) -> int:
+    """Treat a pi JSON session that settled in API error as a worker failure."""
+    if process_rc != 0:
+        return process_rc
+
+    last_assistant_stop_reason: str | None = None
+    retry_result: bool | None = None
+    for line in output.splitlines():
+        try:
+            event = json.loads(line)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(event, dict):
+            continue
+        event_type = event.get("type")
+        if event_type in {"message_end", "turn_end"}:
+            message = event.get("message")
+            if isinstance(message, dict) and message.get("role") == "assistant":
+                reason = message.get("stopReason")
+                if isinstance(reason, str):
+                    last_assistant_stop_reason = reason
+        elif event_type == "auto_retry_end":
+            success = event.get("success")
+            if isinstance(success, bool):
+                retry_result = success
+
+    if retry_result is False:
+        return 70
+    if retry_result is not True and last_assistant_stop_reason == "error":
+        return 70
+    return 0
 
 
 def _run_worker_once(
@@ -308,7 +372,8 @@ def _run_worker_once(
             text=True,
             timeout=config.worker_timeout_sec + 20,
         )
-        return result.returncode, _trim(result.stdout or "")
+        output = result.stdout or ""
+        return _pi_effective_return_code(result.returncode, output), _trim(output)
     except subprocess.TimeoutExpired as exc:
         output = exc.stdout or ""
         if isinstance(output, bytes):
@@ -347,6 +412,14 @@ def _worker_prompt(config: HarnessConfig) -> str:
         if not config.allow_test_changes
         else "Test files may be changed only when the task genuinely requires it."
     )
+    validation_rule = (
+        f"Run the validation command after the change: {config.validator_command}"
+        if "bash" in config.worker_tools
+        else (
+            "Do not run shell commands. The deterministic harness will run validation "
+            f"after your edit: {config.validator_command}"
+        )
+    )
 
     return "\n".join((
         "You are the coding worker.",
@@ -354,10 +427,10 @@ def _worker_prompt(config: HarnessConfig) -> str:
         test_rule,
         "Inspect the repository before changing it.",
         "Make the smallest correct implementation change.",
-        f"Validation command: {config.validator_command}",
-        "Run the validation command after the change.",
+        validation_rule,
+        "Do not commit, push, deploy, or change Git history.",
         "Do not broaden scope unnecessarily.",
-        "Stop after the task is implemented and validation has been attempted.",
+        "Stop after the task is implemented and validation has been attempted by the allowed tools.",
     ))
 
 
@@ -379,7 +452,15 @@ def _repair_prompt(
             else "Do not change tests unless essential to the original task."
         ),
         "Apply only the minimal repair required.",
-        f"Run validation once: {config.validator_command}",
+        (
+            f"Run validation once: {config.validator_command}"
+            if "bash" in config.worker_tools
+            else (
+                "Do not run shell commands. The deterministic harness will run validation "
+                f"after the repair: {config.validator_command}"
+            )
+        ),
+        "Do not commit, push, deploy, or change Git history.",
         "Stop after that. Do not perform unrelated cleanup.",
     ))
 
@@ -469,6 +550,13 @@ def run_harness(
     }
 
     deterministic_green = validator_rc == 0 and not protected
+
+    # A dead worker that produced no patch has nothing useful for the semantic
+    # judge to review. Fail closed here instead of spending judge/GPU capacity.
+    if worker_rc != 0 and not changed:
+        report["final_status"] = "fail_closed"
+        report["decision"] = "worker_failed_without_changes"
+        return report
 
     # Fast path: clean deterministic success, small scope, no DS4.
     if risk.level == "low" and deterministic_green:

@@ -1296,58 +1296,57 @@ def _local_code_workdir(req: TaskRunRequest) -> Path | None:
 
 
 def _run_local_code_patch(req: TaskRunRequest, route_model, capability_route: dict):
-    from ralfloop_agent.coding_harness.harness import HarnessConfig, run_harness
+    from dataclasses import replace
+    from ralfloop_agent.programmer import ProgrammerAgent, ProgrammerConfig, ProgrammerState
 
     workdir = _local_code_workdir(req)
     if workdir is None:
         return {
             "ok": False,
             "mode": req.mode,
-            "current_role": "local_code_patch",
-            "role_history": ["capability_router", "local_code_patch"],
+            "current_role": "programmer",
+            "role_history": ["capability_router", "programmer"],
             "stop_reason": "trusted_git_worktree_required",
             "interaction_mode": "agent",
             "capability": "local_code_patch",
             "approval_required": False,
             "capability_route": capability_route,
-            "final_answer": "Patch locale non eseguita: serve un cwd che sia la radice di un worktree Git locale consentito.",
+            "final_answer": "Programmatore non eseguito: serve un cwd che sia la radice di un worktree Git locale consentito.",
             "artifacts": [],
-            "audit_summary": ["local_code_patch::worktree_rejected"],
+            "audit_summary": ["programmer::worktree_rejected"],
         }
-    worker_user = os.environ.get("RALF_CODE_WORKER_USER", "sibilla-cumana").strip() or "sibilla-cumana"
-    worker_provider = os.environ.get("RALF_CODE_PROVIDER", "agentcpm-local").strip() or "agentcpm-local"
-    worker_model = os.environ.get("RALF_CODE_MODEL", "AgentCPM-Explore").strip() or "AgentCPM-Explore"
-    fallback_provider = os.environ.get("RALF_CODE_FALLBACK_PROVIDER", "").strip() or None
-    fallback_model = os.environ.get("RALF_CODE_FALLBACK_MODEL", "").strip() or None
     validator = str(
         ((req.extra_context or {}).get("terminal_client") or {}).get("validator_command")
         or "git diff --check"
     )
-    report = run_harness(HarnessConfig(
+    programmer_config = ProgrammerConfig.from_environment(
         workdir=workdir,
         task=req.user_goal,
         validator_command=validator,
-        worker_user=worker_user,
-        provider=worker_provider,
-        model=worker_model,
-        fallback_provider=fallback_provider,
-        fallback_model=fallback_model,
         allow_test_changes=False,
-    ))
-    passed = report.get("final_status") == "pass"
+        allow_worker_shell=os.environ.get("RALF_CODE_WORKER_SHELL", "0").strip().lower()
+        in {"1", "true", "yes", "on"},
+    )
+    if not programmer_config.allowed_roots:
+        # `_local_code_workdir` has already checked the operational allowlist;
+        # carry that trust boundary forward without inventing host-specific paths.
+        programmer_config = replace(programmer_config, allowed_roots=(workdir.parent,))
+    result = ProgrammerAgent(programmer_config).run()
+    report = result.as_dict()
+    passed = result.state is ProgrammerState.CANDIDATE_READY
     return {
         "ok": passed,
         "mode": req.mode,
-        "current_role": "local_code_patch",
-        "role_history": ["capability_router", "local_code_patch"],
-        "stop_reason": "local_code_patch_completed" if passed else "local_code_patch_failed",
+        "current_role": "programmer",
+        "role_history": ["capability_router", "programmer"],
+        "stop_reason": "programmer_candidate_ready" if passed else f"programmer_{result.state.value}",
         "interaction_mode": "agent",
         "capability": "local_code_patch",
         "approval_required": False,
         "capability_route": capability_route,
         "final_answer": json.dumps(report, ensure_ascii=False, sort_keys=True),
         "artifacts": [],
-        "audit_summary": [f"local_code_patch::{report.get('decision', 'unknown')}::{report.get('final_status', 'unknown')}"] ,
+        "audit_summary": [f"programmer::{result.reason}::{result.state.value}"],
     }
 
 
