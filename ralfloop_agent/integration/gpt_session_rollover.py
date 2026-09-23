@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import errno
+import fcntl
 import json
 import os
 import re
 import tempfile
 import urllib.parse
+import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -206,6 +209,107 @@ class HandoffStore:
         self.archive_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.root, 0o700)
         os.chmod(self.archive_dir, 0o700)
+
+
+class MutationLock:
+    def __init__(self, root: str | os.PathLike[str] | None = None) -> None:
+        self.root = Path(root).expanduser() if root else default_state_dir()
+        self.path = self.root / "mutation.lock"
+        self._fd: int | None = None
+
+    def __enter__(self) -> "MutationLock":
+        if self.root.is_symlink() or self.path.is_symlink():
+            raise GptSessionError("mutation_lock_path_invalid")
+        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(self.root, 0o700)
+        flags = os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(self.path, flags, 0o600)
+        os.fchmod(fd, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            os.close(fd)
+            if exc.errno in (errno.EACCES, errno.EAGAIN):
+                raise GptSessionError("mutation_locked") from exc
+            raise
+        self._fd = fd
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self._fd is None:
+            return
+        try:
+            fcntl.flock(self._fd, fcntl.LOCK_UN)
+        finally:
+            os.close(self._fd)
+            self._fd = None
+
+
+class MutationJournalStore:
+    schema_version = "bottazzi_gpt_mutation_journal_v1"
+
+    def __init__(self, root: str | os.PathLike[str] | None = None) -> None:
+        self.root = Path(root).expanduser() if root else default_state_dir()
+        self.path = self.root / "mutation-journal.json"
+
+    def load(self) -> dict[str, Any] | None:
+        if not self.path.exists():
+            return None
+        if self.path.is_symlink():
+            raise GptSessionError("mutation_journal_symlink_rejected")
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise GptSessionError("mutation_journal_invalid") from exc
+        if not isinstance(data, dict) or data.get("schema_version") != self.schema_version:
+            raise GptSessionError("mutation_journal_invalid")
+        _reject_secret_keys(data)
+        return data
+
+    def begin(self, kind: str, **details: Any) -> dict[str, Any]:
+        if self.load() is not None:
+            raise GptSessionError("mutation_journal_busy")
+        payload = {
+            "schema_version": self.schema_version,
+            "transaction_id": uuid.uuid4().hex,
+            "kind": str(kind),
+            "phase": "prepared",
+            "created_at": _now(),
+            "updated_at": _now(),
+            **details,
+        }
+        self.save(payload)
+        return payload
+
+    def update(self, **changes: Any) -> dict[str, Any]:
+        payload = self.load()
+        if payload is None:
+            raise GptSessionError("mutation_journal_missing")
+        payload.update(changes)
+        payload["updated_at"] = _now()
+        self.save(payload)
+        return payload
+
+    def save(self, data: Mapping[str, Any]) -> None:
+        payload = dict(data)
+        payload["schema_version"] = self.schema_version
+        _reject_secret_keys(payload)
+        encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        if len(encoded.encode("utf-8")) > 32 * 1024:
+            raise GptSessionError("mutation_journal_too_large")
+        if self.root.is_symlink() or self.path.is_symlink():
+            raise GptSessionError("mutation_journal_path_invalid")
+        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(self.root, 0o700)
+        _atomic_write(self.path, encoded)
+
+    def clear(self) -> None:
+        if self.path.is_symlink():
+            raise GptSessionError("mutation_journal_symlink_rejected")
+        try:
+            self.path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def normalize_chatgpt_conversation_url(value: str) -> str | None:

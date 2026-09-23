@@ -18,6 +18,8 @@ from ralfloop_agent.integration.gpt_session_rollover import (
     GptSessionError,
     Handoff,
     HandoffStore,
+    MutationJournalStore,
+    MutationLock,
     RolloverPolicy,
     SessionMetrics,
     evaluate_rollover,
@@ -163,11 +165,150 @@ def _resolve_stored_source(tabs, store: HandoffStore):
     return None, {}, None
 
 
+def _finalize_adoption_state(
+    adoption: ExternalChatAdoptionStore,
+    *,
+    source_url: str | None,
+    candidate_url: str,
+    now: int,
+) -> None:
+    state = adoption.load()
+    seen = list(state.get("seen_conversations") or [])
+    for value in (source_url, candidate_url):
+        if value and value not in seen:
+            seen.append(value)
+    remaining_unvalidated = []
+    for value in state.get("unvalidated_candidates") or []:
+        if not isinstance(value, dict):
+            continue
+        normalized = normalize_chatgpt_conversation_url(str(value.get("conversation_url") or ""))
+        if normalized != candidate_url:
+            remaining_unvalidated.append(value)
+    state.update(
+        {
+            "seen_conversations": seen,
+            "last_adopted_conversation": candidate_url,
+            "pending_conversation": None,
+            "pending_detected_epoch": 0,
+            "unvalidated_candidates": remaining_unvalidated,
+            "last_scan_epoch": max(int(state.get("last_scan_epoch") or 0), now),
+        }
+    )
+    adoption.save(state)
+
+
+def _recover_incomplete_mutation(
+    cdp: ChromeCdp,
+    store: HandoffStore,
+    adoption: ExternalChatAdoptionStore,
+    journal: MutationJournalStore,
+) -> dict | None:
+    entry = journal.load()
+    if entry is None:
+        return None
+    kind = str(entry.get("kind") or "")
+    phase = str(entry.get("phase") or "")
+    tabs = [t for t in cdp.targets() if t.target_type == "page" and t.is_chatgpt]
+    current = store.load_current()
+    current_url = normalize_chatgpt_conversation_url(str(current.get("source_chat_url") or ""))
+
+    if kind == "adopt_external":
+        source_target_id = str(entry.get("source_target_id") or "")
+        source_url = normalize_chatgpt_conversation_url(str(entry.get("source_url") or ""))
+        candidate_url = normalize_chatgpt_conversation_url(str(entry.get("candidate_url") or ""))
+        if not source_target_id or not source_url or not candidate_url:
+            raise GptSessionError("mutation_recovery_required:adopt_external:invalid_journal")
+        target = next((tab for tab in tabs if tab.target_id == source_target_id), None)
+        target_url = normalize_chatgpt_conversation_url(target.url) if target is not None else None
+        if current_url == candidate_url:
+            resolved, _, error = _resolve_stored_source(tabs, store)
+            if error:
+                raise GptSessionError(f"mutation_recovery_required:adopt_external:{error}")
+            if resolved is None or normalize_chatgpt_conversation_url(resolved.url) != candidate_url:
+                raise GptSessionError("mutation_recovery_required:adopt_external:candidate_tab_missing")
+            _finalize_adoption_state(adoption, source_url=source_url, candidate_url=candidate_url, now=int(time.time()))
+            journal.clear()
+            return {"kind": kind, "outcome": "committed", "phase": phase, "conversation_url": candidate_url}
+        if target is not None and target_url == candidate_url:
+            store.update_source_chat(target.target_id, candidate_url)
+            journal.update(phase="source_state_done")
+            _finalize_adoption_state(adoption, source_url=source_url, candidate_url=candidate_url, now=int(time.time()))
+            journal.clear()
+            return {"kind": kind, "outcome": "committed", "phase": phase, "conversation_url": candidate_url}
+        if current_url == source_url:
+            resolved, _, error = _resolve_stored_source(tabs, store)
+            if error:
+                raise GptSessionError(f"mutation_recovery_required:adopt_external:{error}")
+            if resolved is not None and normalize_chatgpt_conversation_url(resolved.url) == source_url:
+                journal.clear()
+                return {"kind": kind, "outcome": "rolled_back", "phase": phase}
+        raise GptSessionError("mutation_recovery_required:adopt_external:ambiguous_state")
+
+    if kind == "rollover":
+        source_target_id = str(entry.get("source_target_id") or "")
+        source_url = normalize_chatgpt_conversation_url(str(entry.get("source_url") or ""))
+        successor_target_id = str(entry.get("successor_target_id") or "")
+        if not source_target_id or not source_url:
+            raise GptSessionError("mutation_recovery_required:rollover:invalid_journal")
+        source_tab = next((tab for tab in tabs if tab.target_id == source_target_id), None)
+        successor = next((tab for tab in tabs if tab.target_id == successor_target_id), None) if successor_target_id else None
+        if successor is not None:
+            successor_url = normalize_chatgpt_conversation_url(successor.url)
+            if successor_url:
+                try:
+                    successor_ui = cdp.chatgpt_ui_state(successor.target_id)
+                except CdpError as exc:
+                    raise GptSessionError(f"mutation_recovery_pending:rollover:{exc}") from exc
+                if int(successor_ui.get("user_turns") or 0) >= 1:
+                    store.update_source_chat(successor.target_id, successor_url)
+                    journal.update(phase="source_state_done", successor_url=successor_url)
+                    if source_tab is not None and source_tab.target_id != successor.target_id:
+                        cdp.close_target(source_tab.target_id)
+                    journal.update(phase="source_closed")
+                    journal.clear()
+                    return {"kind": kind, "outcome": "committed", "phase": phase, "source_chat_url": successor_url}
+            cdp.close_target(successor.target_id)
+            current = store.load_current()
+            current_url = normalize_chatgpt_conversation_url(str(current.get("source_chat_url") or ""))
+            if current_url == source_url:
+                journal.clear()
+                return {"kind": kind, "outcome": "rolled_back", "phase": phase}
+            raise GptSessionError("mutation_recovery_required:rollover:unconfirmed_successor")
+        if phase in {"source_state_done", "source_closed", "committed"} and current_url and current_url != source_url:
+            resolved, _, error = _resolve_stored_source(tabs, store)
+            if error:
+                raise GptSessionError(f"mutation_recovery_required:rollover:{error}")
+            if resolved is not None and normalize_chatgpt_conversation_url(resolved.url) == current_url:
+                if source_tab is not None and source_tab.target_id != resolved.target_id:
+                    cdp.close_target(source_tab.target_id)
+                journal.clear()
+                return {"kind": kind, "outcome": "committed", "phase": phase, "source_chat_url": current_url}
+        if current_url == source_url:
+            resolved, _, error = _resolve_stored_source(tabs, store)
+            if error:
+                raise GptSessionError(f"mutation_recovery_required:rollover:{error}")
+            if resolved is not None and normalize_chatgpt_conversation_url(resolved.url) == source_url:
+                journal.clear()
+                return {"kind": kind, "outcome": "rolled_back", "phase": phase}
+        raise GptSessionError("mutation_recovery_required:rollover:ambiguous_state")
+
+    raise GptSessionError(f"mutation_recovery_required:unknown_kind:{kind or 'missing'}")
+
 
 def cmd_adopt_external(args: argparse.Namespace) -> int:
     cdp = ChromeCdp(args.endpoint)
     store = HandoffStore(args.state_dir)
     adoption = ExternalChatAdoptionStore(args.state_dir)
+    journal = MutationJournalStore(args.state_dir)
+    if args.apply:
+        try:
+            recovered = _recover_incomplete_mutation(cdp, store, adoption, journal)
+        except (CdpError, GptSessionError, OSError) as exc:
+            _json({"ok": False, "action": "noop", "reason": str(exc), "recovery_required": True})
+            return 1
+        if recovered is not None:
+            _json({"ok": True, "action": "recovered", "recovery": recovered})
+            return 0
     had_state = adoption.path.exists()
     try:
         adoption_state = adoption.load()
@@ -405,31 +546,36 @@ def cmd_adopt_external(args: argparse.Namespace) -> int:
         _json({"ok": True, "action": "candidate", "conversation_url": candidate, "source_target_id": source.target_id})
         return 0
 
+    if not source_url:
+        _json({"ok": False, "action": "deferred", "reason": "source_conversation_url_missing", "conversation_url": candidate})
+        return 1
     try:
+        journal.begin(
+            "adopt_external",
+            source_target_id=source.target_id,
+            source_url=source_url,
+            candidate_url=candidate,
+        )
         adopted_ui = cdp.navigate_chatgpt_conversation(source.target_id, candidate)
-    except CdpError as exc:
-        _json({"ok": False, "action": "deferred", "reason": str(exc), "conversation_url": candidate})
-        return 0
-    try:
+        journal.update(phase="browser_done")
         store.update_source_chat(source.target_id, candidate)
-    except (GptSessionError, OSError) as exc:
-        _json({"ok": False, "action": "adopted", "reason": f"source_identity_persist_failed:{type(exc).__name__}", "conversation_url": candidate, "source_target_id": source.target_id, "server_chat_deleted": False})
-        return 0
-    updated_seen = list(seen_urls)
-    for value in (source_url, candidate):
-        if value and value not in updated_seen:
-            updated_seen.append(value)
-    adoption_state.update(
-        {
-            "seen_conversations": updated_seen,
-            "watcher_target_id": watcher_id,
-            "last_adopted_conversation": candidate,
-            "pending_conversation": None,
-            "pending_detected_epoch": 0,
-            "last_scan_epoch": now,
-        }
-    )
-    adoption.save(adoption_state)
+        journal.update(phase="source_state_done")
+        _finalize_adoption_state(adoption, source_url=source_url, candidate_url=candidate, now=now)
+        journal.update(phase="committed")
+        journal.clear()
+    except (CdpError, GptSessionError, OSError) as exc:
+        _json(
+            {
+                "ok": False,
+                "action": "deferred",
+                "reason": f"mutation_incomplete:{exc}",
+                "conversation_url": candidate,
+                "source_target_id": source.target_id,
+                "recovery_required": True,
+                "server_chat_deleted": False,
+            }
+        )
+        return 1
     _json(
         {
             "ok": True,
@@ -445,11 +591,22 @@ def cmd_adopt_external(args: argparse.Namespace) -> int:
 
 def cmd_shepherd(args: argparse.Namespace) -> int:
     cdp = ChromeCdp(args.endpoint)
+    store = HandoffStore(args.state_dir)
+    if args.apply:
+        adoption = ExternalChatAdoptionStore(args.state_dir)
+        journal = MutationJournalStore(args.state_dir)
+        try:
+            recovered = _recover_incomplete_mutation(cdp, store, adoption, journal)
+        except (CdpError, GptSessionError, OSError) as exc:
+            _json({"ok": False, "action": "noop", "reason": str(exc), "recovery_required": True})
+            return 1
+        if recovered is not None:
+            _json({"ok": True, "action": "recovered", "recovery": recovered})
+            return 0
     tabs = [t for t in cdp.targets() if t.target_type == "page" and t.is_chatgpt]
     if not tabs:
         _json({"ok": False, "action": "noop", "reason": "chatgpt_tab_not_found"})
         return 0
-    store = HandoffStore(args.state_dir)
     source = None
     if args.source_target_id:
         source = next((tab for tab in tabs if tab.target_id == args.source_target_id), None)
@@ -511,51 +668,90 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
         _json(report)
         return 0
     prompt = store.render_prompt()
+    source_url = normalize_chatgpt_conversation_url(source.url)
+    if not source_url:
+        report["ok"] = False
+        report["blocked"] = "source_conversation_url_missing"
+        _json(report)
+        return 1
+    journal = MutationJournalStore(args.state_dir)
     try:
+        journal.begin("rollover", source_target_id=source.target_id, source_url=source_url)
+
+        def record_successor(target_id: str) -> None:
+            journal.update(phase="target_created", successor_target_id=target_id)
+
         handoff = cdp.handoff_to_new_chat(
             prompt,
             source_target_id=source.target_id,
             submit=args.submit,
             close_source=False,
+            target_created_hook=record_successor,
         )
-    except CdpError as exc:
+    except (CdpError, GptSessionError, OSError) as exc:
         report["ok"] = False
         report["blocked"] = str(exc)
+        try:
+            recovery = _recover_incomplete_mutation(
+                cdp,
+                store,
+                ExternalChatAdoptionStore(args.state_dir),
+                journal,
+            )
+        except (CdpError, GptSessionError, OSError) as recovery_exc:
+            report["recovery_required"] = True
+            report["recovery_error"] = str(recovery_exc)
+        else:
+            if recovery is not None:
+                report["recovery"] = recovery
         _json(report)
-        return 0
+        if str(exc) == "temporary_access_limited" and (report.get("recovery") or {}).get("outcome") == "rolled_back":
+            return 0
+        return 1
     new_target_id = str(handoff.get("new_target_id") or "")
     if not new_target_id:
         report["ok"] = False
         report["blocked"] = "handoff_target_missing"
+        report["recovery_required"] = True
         _json(report)
-        return 0
+        return 1
     new_source_url = None
     try:
         current_target = next((tab for tab in cdp.targets() if tab.target_id == new_target_id), None)
         if current_target is not None:
             new_source_url = normalize_chatgpt_conversation_url(current_target.url)
-    except CdpError:
-        pass
-    try:
+        journal.update(phase="browser_done", successor_target_id=new_target_id, successor_url=new_source_url)
+        if not new_source_url:
+            report["ok"] = False
+            report["blocked"] = "successor_conversation_url_missing"
+            report["recovery_required"] = True
+            report["worker_target_id"] = new_target_id
+            _json(report)
+            return 1
         store.update_source_chat(new_target_id, new_source_url)
-    except (GptSessionError, OSError) as exc:
-        try:
-            cdp.close_target(new_target_id)
-        except CdpError:
-            pass
+        journal.update(phase="source_state_done", successor_url=new_source_url)
+    except (CdpError, GptSessionError, OSError) as exc:
         report["ok"] = False
-        report["blocked"] = f"handoff_persist_failed:{type(exc).__name__}"
-        report["source_preserved"] = True
+        report["blocked"] = f"handoff_persist_incomplete:{exc}"
+        report["recovery_required"] = True
         _json(report)
-        return 0
+        return 1
     closed: list[str] = []
     if source.target_id != new_target_id:
         try:
             cdp.close_target(source.target_id)
         except CdpError as exc:
+            report["ok"] = False
             report["source_close_error"] = str(exc)
+            report["recovery_required"] = True
+            report["worker_target_id"] = new_target_id
+            _json(report)
+            return 1
         else:
             closed.append(source.target_id)
+    journal.update(phase="source_closed")
+    journal.update(phase="committed")
+    journal.clear()
     handoff["closed_target_ids"] = closed
     report["applied"] = True
     report["handoff"] = handoff
@@ -615,9 +811,28 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _requires_mutation_lock(args: argparse.Namespace) -> bool:
+    if args.command in {"checkpoint", "adopt-external", "shepherd"}:
+        return True
+    if args.command == "rotate":
+        return bool(getattr(args, "apply", False))
+    return False
+
+
 def main() -> int:
     args = build_parser().parse_args()
-    return int(args.func(args))
+    if not _requires_mutation_lock(args):
+        return int(args.func(args))
+    try:
+        with MutationLock(args.state_dir):
+            return int(args.func(args))
+    except GptSessionError as exc:
+        reason = str(exc)
+        if reason == "mutation_locked":
+            _json({"ok": True, "action": "deferred", "reason": reason})
+            return 0
+        _json({"ok": False, "action": "noop", "reason": reason})
+        return 1
 
 
 if __name__ == "__main__":

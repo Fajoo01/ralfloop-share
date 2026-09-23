@@ -72,6 +72,10 @@ The successful successor target is persisted in `current.json` as `source_chat`.
 
 The periodic units are `bottazzi-gpt-session-shepherd.service` and `bottazzi-gpt-session-shepherd.timer`. The production timer probes every 15 seconds after the one-time account login has been verified, so a 30-second latency/error threshold is observed promptly without a tight polling loop.
 
+All commands that can mutate worker identity, adoption state or browser state are serialized by a non-blocking lock in the GPT state directory. A concurrent manual/timer operation returns `mutation_locked` instead of racing another mutation. Browser-changing adoption and rollover operations also use `mutation-journal.json`: the journal records only target IDs, canonical conversation URLs and transaction phases, never prompt text or authentication material. On the next apply cycle, an incomplete transaction is either completed from unambiguous browser/state evidence, rolled back when the original source is still intact, or left fail-closed with `mutation_recovery_required` if the state is ambiguous. A rollover never closes the source until the successor has a confirmed user turn, a canonical conversation URL and persisted source identity.
+
+The guard no longer suppresses controller stderr or silently converts malformed/failed controller responses into a successful timer cycle. Empty or invalid JSON, controller `ok:false`, failed persistence and unresolved recovery make the systemd unit fail visibly in the journal. Expected operational states such as scan throttling, user snooze, `mutation_locked` and `temporary_access_limited` remain non-fatal; the temporary-access condition still arms the existing cooldown.
+
 ## External/app chat adoption
 
 The periodic shepherd also runs `adopt-external --apply` before evaluating rollover. A dedicated watcher tab refreshes the authenticated ChatGPT sidebar at most every 30 seconds and detects account-synced conversations created by another client, including the mobile app.

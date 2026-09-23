@@ -7,7 +7,7 @@ import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 import websocket
 
@@ -459,6 +459,7 @@ class ChromeCdp:
         source_target_id: str | None = None,
         submit: bool = True,
         close_source: bool = True,
+        target_created_hook: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         previous = [target for target in self.targets() if target.target_type == "page" and target.is_chatgpt]
         if source_target_id is None:
@@ -468,17 +469,22 @@ class ChromeCdp:
         elif not any(target.target_id == source_target_id for target in previous):
             raise CdpError("handoff_source_not_found")
         target_id = self.create_target("about:blank")
-        target = self._wait_target(target_id)
-        if not target.websocket_url:
-            raise CdpError("new_target_missing_websocket")
-        self._page_call(target.websocket_url, "Network.enable")
-        self._page_call(target.websocket_url, "Network.clearBrowserCache")
-        self._page_call(target.websocket_url, "Page.enable")
-        self._page_call(target.websocket_url, "Page.navigate", {"url": CHATGPT_ORIGIN})
         try:
+            if target_created_hook is not None:
+                target_created_hook(target_id)
+            target = self._wait_target(target_id)
+            if not target.websocket_url:
+                raise CdpError("new_target_missing_websocket")
+            self._page_call(target.websocket_url, "Network.enable")
+            self._page_call(target.websocket_url, "Network.clearBrowserCache")
+            self._page_call(target.websocket_url, "Page.enable")
+            self._page_call(target.websocket_url, "Page.navigate", {"url": CHATGPT_ORIGIN})
             injected = self.inject_prompt(prompt, target_id=target_id, submit=submit)
         except Exception:
-            self.close_target(target_id)
+            try:
+                self.close_target(target_id)
+            except CdpError:
+                pass
             raise
         closed: list[str] = []
         if close_source and source_target_id != target_id:

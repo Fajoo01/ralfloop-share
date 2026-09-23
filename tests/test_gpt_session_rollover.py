@@ -8,13 +8,15 @@ import websocket
 
 from ralfloop_agent.integration.gpt_browser_cdp import BrowserTarget, CdpError, ChromeCdp
 import tools.bottazzi_gpt_session as gpt_session_tool
-from tools.bottazzi_gpt_session import _resolve_stored_source
+from tools.bottazzi_gpt_session import _recover_incomplete_mutation, _requires_mutation_lock, _resolve_stored_source
 
 from ralfloop_agent.integration.gpt_session_rollover import (
     ExternalChatAdoptionStore,
     GptSessionError,
     Handoff,
     HandoffStore,
+    MutationJournalStore,
+    MutationLock,
     RolloverPolicy,
     SessionMetrics,
     evaluate_rollover,
@@ -149,6 +151,44 @@ def test_checkpoint_schema_round_trips_runtime_worker_metadata(tmp_path) -> None
     assert current["updated_at"] == "2026-09-23T11:49:00+00:00"
 
 
+def test_mutation_lock_is_nonblocking_and_exclusive(tmp_path) -> None:
+    first = MutationLock(tmp_path)
+    with first:
+        with pytest.raises(GptSessionError, match="mutation_locked"):
+            with MutationLock(tmp_path):
+                pass
+    with MutationLock(tmp_path):
+        pass
+    assert first.path.stat().st_mode & 0o077 == 0
+
+
+def test_mutation_journal_round_trip_rejects_overwrite_and_clears(tmp_path) -> None:
+    journal = MutationJournalStore(tmp_path)
+    created = journal.begin(
+        "adopt_external",
+        source_target_id="source",
+        source_url="https://chatgpt.com/c/source",
+        candidate_url="https://chatgpt.com/c/candidate",
+    )
+    assert created["phase"] == "prepared"
+    updated = journal.update(phase="browser_done")
+    assert updated["phase"] == "browser_done"
+    with pytest.raises(GptSessionError, match="mutation_journal_busy"):
+        journal.begin("rollover", source_target_id="source", source_url="https://chatgpt.com/c/source")
+    assert journal.path.stat().st_mode & 0o077 == 0
+    journal.clear()
+    assert journal.load() is None
+
+
+def test_mutation_lock_policy_covers_all_state_mutators() -> None:
+    assert _requires_mutation_lock(SimpleNamespace(command="checkpoint")) is True
+    assert _requires_mutation_lock(SimpleNamespace(command="adopt-external", apply=False)) is True
+    assert _requires_mutation_lock(SimpleNamespace(command="shepherd", apply=False)) is True
+    assert _requires_mutation_lock(SimpleNamespace(command="rotate", apply=False)) is False
+    assert _requires_mutation_lock(SimpleNamespace(command="rotate", apply=True)) is True
+    assert _requires_mutation_lock(SimpleNamespace(command="status")) is False
+
+
 def test_external_conversation_url_is_canonical_and_query_free() -> None:
     assert normalize_chatgpt_conversation_url("https://chatgpt.com/c/abc-123?messageId=x") == "https://chatgpt.com/c/abc-123"
     assert normalize_chatgpt_conversation_url("https://chatgpt.com/c/abc-123/") == "https://chatgpt.com/c/abc-123"
@@ -251,6 +291,163 @@ class FakeAdoptionCdp:
 
 def _adoption_args(tmp_path):
     return SimpleNamespace(endpoint="http://127.0.0.1:9238", state_dir=str(tmp_path), scan_interval_seconds=0, apply=True)
+
+
+class FakeRecoveryCdp:
+    def __init__(self, targets: list[BrowserTarget], ui_by_target: dict[str, dict] | None = None) -> None:
+        self._targets = list(targets)
+        self.ui_by_target = dict(ui_by_target or {})
+        self.closed: list[str] = []
+
+    def targets(self):
+        return [target for target in self._targets if target.target_id not in self.closed]
+
+    def chatgpt_ui_state(self, target_id: str):
+        return dict(self.ui_by_target.get(target_id) or {"ready": True, "user_turns": 0})
+
+    def close_target(self, target_id: str) -> None:
+        self.closed.append(target_id)
+
+
+def test_incomplete_adoption_recovers_after_browser_navigation(tmp_path) -> None:
+    handoff = HandoffStore(tmp_path)
+    handoff.save(Handoff(goal="x", current_state="y"))
+    handoff.update_source_chat("source", "https://chatgpt.com/c/source")
+    adoption = ExternalChatAdoptionStore(tmp_path)
+    adoption.save(
+        {
+            "seen_conversations": ["https://chatgpt.com/c/source"],
+            "watcher_target_id": "watcher",
+            "pending_conversation": "https://chatgpt.com/c/from-app",
+            "pending_detected_epoch": 123,
+            "last_scan_epoch": 123,
+        }
+    )
+    journal = MutationJournalStore(tmp_path)
+    journal.begin(
+        "adopt_external",
+        source_target_id="source",
+        source_url="https://chatgpt.com/c/source",
+        candidate_url="https://chatgpt.com/c/from-app",
+    )
+    journal.update(phase="browser_done")
+    cdp = FakeRecoveryCdp(
+        [
+            BrowserTarget("source", "page", "https://chatgpt.com/c/from-app", "worker", "ws://source"),
+            BrowserTarget("watcher", "page", "https://chatgpt.com/", "watcher", "ws://watcher"),
+        ]
+    )
+
+    result = _recover_incomplete_mutation(cdp, handoff, adoption, journal)
+
+    assert result and result["outcome"] == "committed"
+    assert handoff.load_current()["source_chat_url"] == "https://chatgpt.com/c/from-app"
+    saved = adoption.load()
+    assert saved["last_adopted_conversation"] == "https://chatgpt.com/c/from-app"
+    assert saved["pending_conversation"] is None
+    assert journal.load() is None
+
+
+def test_incomplete_rollover_recovers_confirmed_successor_and_closes_old_source(tmp_path) -> None:
+    handoff = HandoffStore(tmp_path)
+    handoff.save(Handoff(goal="x", current_state="y"))
+    handoff.update_source_chat("source", "https://chatgpt.com/c/source")
+    adoption = ExternalChatAdoptionStore(tmp_path)
+    journal = MutationJournalStore(tmp_path)
+    journal.begin("rollover", source_target_id="source", source_url="https://chatgpt.com/c/source")
+    journal.update(phase="target_created", successor_target_id="successor")
+    cdp = FakeRecoveryCdp(
+        [
+            BrowserTarget("source", "page", "https://chatgpt.com/c/source", "old", "ws://source"),
+            BrowserTarget("successor", "page", "https://chatgpt.com/c/successor", "new", "ws://successor"),
+        ],
+        {"successor": {"ready": True, "user_turns": 1}},
+    )
+
+    result = _recover_incomplete_mutation(cdp, handoff, adoption, journal)
+
+    assert result and result["outcome"] == "committed"
+    current = handoff.load_current()
+    assert current["source_chat"] == "successor"
+    assert current["source_chat_url"] == "https://chatgpt.com/c/successor"
+    assert cdp.closed == ["source"]
+    assert journal.load() is None
+
+
+class FakeRateLimitedRolloverCdp:
+    def __init__(self) -> None:
+        self.source = BrowserTarget("source", "page", "https://chatgpt.com/c/source", "worker", "ws://source")
+
+    def targets(self):
+        return [self.source]
+
+    def chatgpt_ui_state(self, target_id: str):
+        assert target_id == "source"
+        return {
+            "ready": True,
+            "user_turns": 36,
+            "page_age_minutes": 1,
+            "consecutive_errors": 0,
+            "last_response_latency_ms": 0,
+            "current_response_latency_ms": 0,
+            "response_pending": False,
+            "response_in_progress": False,
+            "response_idle_ms": 0,
+        }
+
+    def handoff_to_new_chat(self, prompt: str, **kwargs):
+        hook = kwargs.get("target_created_hook")
+        assert hook is not None
+        hook("successor")
+        raise CdpError("temporary_access_limited")
+
+
+def test_rollover_rate_limit_rolls_back_journal_and_remains_operational(monkeypatch, tmp_path) -> None:
+    handoff = HandoffStore(tmp_path)
+    handoff.save(Handoff(goal="x", current_state="y"))
+    handoff.update_source_chat("source", "https://chatgpt.com/c/source")
+    fake = FakeRateLimitedRolloverCdp()
+    monkeypatch.setattr(gpt_session_tool, "ChromeCdp", lambda endpoint: fake)
+    args = SimpleNamespace(
+        endpoint="http://127.0.0.1:9238",
+        state_dir=str(tmp_path),
+        source_target_id=None,
+        max_turns=36,
+        max_age_minutes=120,
+        max_errors=2,
+        max_latency_ms=30000,
+        max_stall_ms=60000,
+        max_active_stall_ms=600000,
+        apply=True,
+        submit=True,
+    )
+
+    assert gpt_session_tool.cmd_shepherd(args) == 0
+    assert MutationJournalStore(tmp_path).load() is None
+    assert handoff.load_current()["source_chat_url"] == "https://chatgpt.com/c/source"
+
+
+def test_incomplete_rollover_rolls_back_unconfirmed_successor(tmp_path) -> None:
+    handoff = HandoffStore(tmp_path)
+    handoff.save(Handoff(goal="x", current_state="y"))
+    handoff.update_source_chat("source", "https://chatgpt.com/c/source")
+    adoption = ExternalChatAdoptionStore(tmp_path)
+    journal = MutationJournalStore(tmp_path)
+    journal.begin("rollover", source_target_id="source", source_url="https://chatgpt.com/c/source")
+    journal.update(phase="target_created", successor_target_id="successor")
+    cdp = FakeRecoveryCdp(
+        [
+            BrowserTarget("source", "page", "https://chatgpt.com/c/source", "old", "ws://source"),
+            BrowserTarget("successor", "page", "https://chatgpt.com/", "blank", "ws://successor"),
+        ]
+    )
+
+    result = _recover_incomplete_mutation(cdp, handoff, adoption, journal)
+
+    assert result and result["outcome"] == "rolled_back"
+    assert cdp.closed == ["successor"]
+    assert handoff.load_current()["source_chat_url"] == "https://chatgpt.com/c/source"
+    assert journal.load() is None
 
 
 def test_external_candidate_survives_worker_rollover(monkeypatch, tmp_path) -> None:
@@ -614,6 +811,19 @@ def test_handoff_failure_keeps_old_chatgpt_tab_open() -> None:
     with pytest.raises(CdpError, match="interaction_required"):
         cdp.handoff_to_new_chat("handoff")
     assert cdp.closed == ["new"]
+
+
+def test_handoff_target_hook_failure_cleans_new_target() -> None:
+    cdp = FakeInjectCdp()
+
+    def fail_hook(target_id: str) -> None:
+        assert target_id == "new"
+        raise RuntimeError("journal_write_failed")
+
+    with pytest.raises(RuntimeError, match="journal_write_failed"):
+        cdp.handoff_to_new_chat("handoff", target_created_hook=fail_hook)
+    assert cdp.closed == ["new"]
+
 
 class RedirectingInjectCdp(FakeInjectCdp):
     def _wait_target(self, target_id, *, attempts=20):
