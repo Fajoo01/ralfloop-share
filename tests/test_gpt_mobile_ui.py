@@ -194,3 +194,14 @@ def test_live_probe_reads_current_streaming_turn() -> None:
     assert "section[data-turn=\"assistant\"]" in source
     assert "[data-streaming-response-status]" in source
     assert "responseInProgress && streamingNode" in source
+
+
+def test_live_sample_cache_masks_single_probe_failure() -> None:
+    root = Path(__file__).resolve().parents[1]
+    frontend = (root / "ralfloop_agent" / "integration" / "gpt_frontend.py").read_text(encoding="utf-8")
+    html = (root / "web" / "gpt_queue.html").read_text(encoding="utf-8")
+    assert "self._companion_cache_ttl_s = 8.0" in frontend
+    assert "now - cached[0] <= self._companion_cache_ttl_s" in frontend
+    assert 'job["live_cached"]' in frontend
+    assert "ultimo campione valido" in html
+    assert "aggiornamento in ritardo" in html

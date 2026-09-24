@@ -4,6 +4,7 @@ import ipaddress
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -88,6 +89,8 @@ class GptWorkController:
         self.queue = queue
         self.cdp = cdp
         self._project_url_cache: dict[str, str] = {}
+        self._companion_cache: dict[str, tuple[float, str, dict[str, Any]]] = {}
+        self._companion_cache_ttl_s = 8.0
 
     def browser_snapshot(self) -> BrowserSnapshot:
         by_id: dict[str, Any] = {}
@@ -664,10 +667,18 @@ class GptWorkController:
             conversation_url = _canonical_chatgpt_conversation_url(target.url)
             if not conversation_url:
                 continue
+            sample_cached = False
+            now = time.monotonic()
             try:
                 companion = self.cdp.chatgpt_companion_state(target.target_id)
+                self._companion_cache[target.target_id] = (now, conversation_url, dict(companion))
             except (AttributeError, CdpError):
-                companion = {}
+                cached = self._companion_cache.get(target.target_id)
+                if cached and cached[1] == conversation_url and now - cached[0] <= self._companion_cache_ttl_s:
+                    companion = dict(cached[2])
+                    sample_cached = True
+                else:
+                    companion = {}
             if bool(companion.get("ghost")):
                 continue
             key = (target.target_id, conversation_url)
@@ -685,6 +696,7 @@ class GptWorkController:
                     "busy": bool(companion.get("busy")),
                     "composer_chars": int(companion.get("composer_chars") or 0),
                     "last_assistant_text": str(companion.get("last_assistant_text") or ""),
+                    "sample_cached": sample_cached,
                     "managed": bool(job_id),
                     "queued": bool(job_id),
                     "job_id": job_id,
@@ -701,6 +713,7 @@ class GptWorkController:
             live = live_by_job.get(job.get("job_id"))
             job["live_assistant_text"] = str((live or {}).get("last_assistant_text") or "")
             job["live_busy"] = bool((live or {}).get("busy"))
+            job["live_cached"] = bool((live or {}).get("sample_cached"))
         limit = int(base["settings"]["max_open_chats"])
         managed = sum(1 for row in browser_rows if row["managed"])
         base["browser"] = {
