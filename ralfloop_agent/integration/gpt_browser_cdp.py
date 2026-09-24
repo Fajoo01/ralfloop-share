@@ -1187,6 +1187,11 @@ class ChromeCdp:
         config = json.dumps({"mode": mode, "countdown_seconds": countdown_seconds}, ensure_ascii=False)
         expression = r'''(() => {
           const config = __CONFIG__;
+          for (const legacyKey of ['__bottazziTabIdentityV1','__bottazziTabIdentityV2']) {
+            const legacy = window[legacyKey];
+            if (legacy && legacy.timer) clearInterval(legacy.timer);
+            try { delete window[legacyKey]; } catch (_) { window[legacyKey] = null; }
+          }
           const key = '__bottazziTabIdentityV3';
           let state = window[key];
           if (!state || typeof state !== 'object') state = {base_title:'', original_title:'', timer:null, close_at:0};
@@ -1205,12 +1210,12 @@ class ChromeCdp:
             return value.length > 11 ? `${value.slice(0, 10)}…` : value;
           };
           const compactTopic = value => {
-            const stop = new Set(['riprendi','lavoro','verifica','aggiorna','creare','definire','test','il','lo','la','i','gli','le','di','del','della','dei','degli','delle','in','su','per','a','al','alla','ai','alle','da']);
+            const stop = new Set(['riprendi','lavoro','verifica','aggiorna','creare','definire','test','meccanismo','matematico','problema','accesso','stato','nuovo','nuova','chat','il','lo','la','i','gli','le','di','del','della','dei','degli','delle','in','su','per','a','al','alla','ai','alle','da']);
             const words = strip(value).split(/\s+/).filter(Boolean);
-            const useful = words.filter(word => !stop.has(word.toLowerCase())).slice(0, 3).map(compactWord);
-            const chosen = useful.length ? useful : words.slice(0, 3).map(compactWord);
+            const useful = words.filter(word => !stop.has(word.toLowerCase())).slice(0, 2).map(compactWord);
+            const chosen = useful.length ? useful : words.slice(-2).map(compactWord);
             let text = chosen.join(' ');
-            if (text.length > 28) text = `${text.slice(0, 27).trimEnd()}…`;
+            if (text.length > 22) text = `${text.slice(0, 21).trimEnd()}…`;
             return text;
           };
           const compactProject = value => {
