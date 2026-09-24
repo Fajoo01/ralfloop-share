@@ -362,6 +362,119 @@ def test_plain_text_is_rejected_then_forced_finish_is_traced(tmp_path: Path, mon
     assert tools == ["web_open", "agent_protocol_error", "agent_protocol_recovery", "web_finish"]
 
 
+def test_research_pheromone_active_respects_primary_gate_then_breaks_safe_ties(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("RALF_PHEROMONE_ROUTING", "active")
+    monkeypatch.setenv("RALF_PHEROMONE_DB", str(tmp_path / "pheromone.sqlite3"))
+    sources = {
+        "S1": {"url": "https://primary.example/reference", "authority_score": 4.0},
+        "S2": {"url": "https://learned.example/reference", "authority_score": 4.0},
+    }
+    router = web_research.PheromoneRouter(web_research.default_pheromone_db())
+    for index in range(12):
+        router.observe(
+            web_research._RESEARCH_PHEROMONE_CONTEXT,
+            "learned.example",
+            outcome="success",
+            quality=1.0,
+            latency_ms=10,
+        )
+
+    guarded, ranked = web_research._research_order_source_ids(
+        sources,
+        ("S1", "S2"),
+        primary_unopened=("S1",),
+    )
+    assert ranked is True
+    assert guarded[0] == "S1"
+
+    tied, ranked = web_research._research_order_source_ids(
+        sources,
+        ("S1", "S2"),
+    )
+    assert ranked is True
+    assert tied[0] == "S2"
+
+
+def test_research_pheromone_shadow_rewards_only_validated_cited_source(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("RALF_PHEROMONE_ROUTING", "shadow")
+    monkeypatch.setenv("RALF_PHEROMONE_DB", str(tmp_path / "pheromone.sqlite3"))
+    monkeypatch.setattr(web_research.socket, "getaddrinfo", _public_dns)
+    actions = iter(
+        (
+            '{"tool":"web_open","arguments":{"source_id":"S1"}}',
+            '{"tool":"web_finish","arguments":{"answer":"Verified source evidence.","claims":[{"text":"Verified source evidence.","citation_ids":["S1"]}]}}',
+        )
+    )
+    result = run_deep_web_research(
+        tmp_path,
+        {
+            "query": "verify source evidence",
+            "seed_urls": ["https://good.example/reference"],
+            "max_steps": 2,
+        },
+        action_provider=lambda messages: next(actions),
+        open_provider=lambda url, domains: {
+            "url": url,
+            "title": "Reference",
+            "text": "Verified source evidence.",
+            "content_hash": "a" * 64,
+            "bytes": 25,
+        },
+        state_dir=tmp_path / "runs",
+    )
+
+    assert result["adaptive_routing"]["mode"] == "shadow"
+    assert result["adaptive_routing"]["selection_applied"] is False
+    assert result["adaptive_routing"]["feedback_events"] == 1
+    score = web_research.PheromoneRouter(
+        web_research.default_pheromone_db()
+    ).rank(web_research._RESEARCH_PHEROMONE_CONTEXT, ["good.example"])[0]
+    assert score.observations == 1
+    assert score.successes == 1
+    assert score.failures == 0
+
+
+def test_research_pheromone_shadow_penalizes_open_timeout(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("RALF_PHEROMONE_ROUTING", "shadow")
+    monkeypatch.setenv("RALF_PHEROMONE_DB", str(tmp_path / "pheromone.sqlite3"))
+    monkeypatch.setattr(web_research.socket, "getaddrinfo", _public_dns)
+
+    def timeout_open(url, *, domains):
+        raise TimeoutError("fixture timeout")
+
+    result = run_deep_web_research(
+        tmp_path,
+        {
+            "query": "verify source evidence",
+            "seed_urls": ["https://slow.example/reference"],
+            "max_steps": 1,
+        },
+        action_provider=lambda messages: (
+            '{"tool":"web_open","arguments":{"source_id":"S1"}}'
+        ),
+        open_provider=timeout_open,
+        state_dir=tmp_path / "runs",
+    )
+
+    assert result["adaptive_routing"]["feedback_events"] == 1
+    score = web_research.PheromoneRouter(
+        web_research.default_pheromone_db()
+    ).rank(web_research._RESEARCH_PHEROMONE_CONTEXT, ["slow.example"])[0]
+    assert score.observations == 1
+    assert score.successes == 0
+    assert score.failures == 1
+    assert score.pheromone < 1.0
+
+
 class FakeProcess:
     def __init__(self, *, running=True, wait_values=None):
         self.running = running

@@ -20,6 +20,8 @@ from urllib.parse import parse_qs, parse_qsl, quote_plus, unquote, urlencode, ur
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import uuid4
 
+from src.pheromone_router import PheromoneRouter, default_pheromone_db, pheromone_mode
+
 from .log_reader import discover_logs, open_log, search_logs
 
 
@@ -860,6 +862,91 @@ def _source_semantic_terms(source: dict[str, Any]) -> set[str]:
         + " "
         + str(source.get("snippet") or "")
     )
+
+
+_RESEARCH_PHEROMONE_CONTEXT = "research:web_source:v1"
+
+
+def _research_source_candidate(source: dict[str, Any]) -> str:
+    return (urlparse(str(source.get("url") or "")).hostname or "").casefold().rstrip(".")
+
+
+def _research_pheromone_probabilities(
+    source_rows: list[dict[str, Any]],
+) -> dict[str, float]:
+    if pheromone_mode() == "off":
+        return {}
+    candidates = tuple(
+        dict.fromkeys(
+            candidate
+            for candidate in (_research_source_candidate(row) for row in source_rows)
+            if candidate
+        )
+    )
+    if len(candidates) < 2:
+        return {}
+    try:
+        ranked = PheromoneRouter(default_pheromone_db()).rank(
+            _RESEARCH_PHEROMONE_CONTEXT,
+            candidates,
+        )
+    except Exception:
+        return {}
+    return {item.candidate: item.probability for item in ranked}
+
+
+def _research_observe_source(
+    source: dict[str, Any],
+    *,
+    outcome: str,
+    quality: float,
+    latency_ms: float | None = None,
+) -> bool:
+    if pheromone_mode() == "off":
+        return False
+    candidate = _research_source_candidate(source)
+    if not candidate:
+        return False
+    try:
+        PheromoneRouter(default_pheromone_db()).observe(
+            _RESEARCH_PHEROMONE_CONTEXT,
+            candidate,
+            outcome=outcome,
+            quality=quality,
+            latency_ms=latency_ms,
+        )
+    except Exception:
+        return False
+    return True
+
+
+def _research_order_source_ids(
+    sources: dict[str, dict[str, Any]],
+    source_ids: tuple[str, ...],
+    *,
+    aspect_candidate_ids: tuple[str, ...] = (),
+    primary_unopened: tuple[str, ...] = (),
+) -> tuple[tuple[str, ...], bool]:
+    probabilities = _research_pheromone_probabilities(
+        [sources[source_id] for source_id in source_ids]
+    )
+    active = pheromone_mode() == "active"
+    ordered = tuple(
+        sorted(
+            source_ids,
+            key=lambda source_id: (
+                source_id not in aspect_candidate_ids,
+                source_id not in primary_unopened,
+                -_source_authority_score(sources[source_id]),
+                -probabilities.get(
+                    _research_source_candidate(sources[source_id]),
+                    0.0,
+                ) if active else 0.0,
+                source_id,
+            ),
+        )
+    )
+    return ordered, bool(probabilities)
 
 
 def _sources_semantically_duplicate(
@@ -2001,6 +2088,18 @@ def run_deep_web_research(
     log_source_ids: dict[str, str] = {}
     errors: list[str] = []
     trace: list[dict[str, Any]] = []
+    adaptive_rankings = 0
+    adaptive_feedback_events = 0
+
+    def adaptive_metadata() -> dict[str, Any]:
+        return {
+            "mode": pheromone_mode(),
+            "selection_applied": pheromone_mode() == "active" and adaptive_rankings > 0,
+            "rankings": adaptive_rankings,
+            "feedback_events": adaptive_feedback_events,
+            "context": _RESEARCH_PHEROMONE_CONTEXT,
+            "policy_boundary": "semantic_and_authority_gates_remain_authoritative",
+        }
 
     def visible_sources() -> list[dict[str, Any]]:
         return [
@@ -2119,6 +2218,7 @@ def run_deep_web_research(
             endpoint = resident_endpoint or server.endpoint
 
             def decide_with_server(rows: list[dict[str, Any]], finish_only: bool = False) -> str:
+                nonlocal adaptive_rankings
                 available_ids = tuple(
                     source_id
                     for source_id in sorted(sources)
@@ -2181,17 +2281,14 @@ def run_deep_web_research(
                     for source_id in primary_ids
                     if source_id not in opened
                 )
-                openable_ids = tuple(
-                    sorted(
-                        unopened_ids,
-                        key=lambda source_id: (
-                            source_id not in aspect_candidate_ids,
-                            source_id not in primary_unopened,
-                            -_source_authority_score(sources[source_id]),
-                            source_id,
-                        ),
-                    )
+                openable_ids, adaptive_ranked = _research_order_source_ids(
+                    sources,
+                    unopened_ids,
+                    aspect_candidate_ids=aspect_candidate_ids,
+                    primary_unopened=primary_unopened,
                 )
+                if adaptive_ranked:
+                    adaptive_rankings += 1
                 required_opened = min(min_opened_sources, len(available_ids))
                 required_primary = (
                     1 if deep_request else min(1, len(primary_ids))
@@ -2872,14 +2969,23 @@ def run_deep_web_research(
                         ),
                     }
                 else:
+                    open_started = time.monotonic()
                     try:
                         page = open_provider(sources[source_id]["url"], domains=domains)
                     except Exception as exc:
+                        open_latency_ms = max(0.0, (time.monotonic() - open_started) * 1000.0)
                         detail = str(exc).strip() or type(exc).__name__
                         error = f"web_open_failed:{detail}"
                         errors.append(error)
                         failed_open_ids.add(source_id)
                         sources[source_id]["open_failed"] = error
+                        if _research_observe_source(
+                            sources[source_id],
+                            outcome="timeout" if "timeout" in detail.casefold() else "failure",
+                            quality=0.0,
+                            latency_ms=open_latency_ms,
+                        ):
+                            adaptive_feedback_events += 1
                         result = {
                             "ok": False,
                             "error": error,
@@ -2890,6 +2996,7 @@ def run_deep_web_research(
                             "opened_source_ids": sorted(opened),
                         }
                     else:
+                        open_latency_ms = max(0.0, (time.monotonic() - open_started) * 1000.0)
                         final_url = str(page["url"])
                         content_hash = str(page["content_hash"])
                         duplicate_of = next(
@@ -2938,6 +3045,7 @@ def run_deep_web_research(
                                     "title": str(page.get("title") or sources[source_id]["title"]),
                                     "content_hash": content_hash,
                                     "opened": True,
+                                    "open_latency_ms": open_latency_ms,
                                 }
                             )
                             authority_score = _source_authority_score(
@@ -2989,6 +3097,13 @@ def run_deep_web_research(
                                 )
                                 error = f"web_open_semantic_mismatch:{source_id}"
                                 errors.append(error)
+                                if _research_observe_source(
+                                    sources[source_id],
+                                    outcome="failure",
+                                    quality=0.0,
+                                    latency_ms=open_latency_ms,
+                                ):
+                                    adaptive_feedback_events += 1
                                 result = {
                                     "ok": False,
                                     "error": error,
@@ -3110,6 +3225,19 @@ def run_deep_web_research(
                 else:
                     record(tool, {"answer_hash": _hash(answer), "claim_count": len(claims)}, {"ok": True})
                     cited_ids = sorted({item for claim in claims for item in claim["citation_ids"]})
+                    for cited_id in cited_ids:
+                        cited_source = sources[cited_id]
+                        if _research_observe_source(
+                            cited_source,
+                            outcome="success",
+                            quality=(
+                                1.0
+                                if _source_is_primary_candidate(cited_source)
+                                else 0.75
+                            ),
+                            latency_ms=cited_source.get("open_latency_ms"),
+                        ):
+                            adaptive_feedback_events += 1
                     citations = [
                         {
                             "source_id": item,
@@ -3131,6 +3259,7 @@ def run_deep_web_research(
                         "errors": [error for error in errors if _has_fatal_errors([error])],
                         "network_mode": "read_only",
                         "trace_path": str(trace_path),
+                        "adaptive_routing": adaptive_metadata(),
                     }
             compact = json.dumps(result, ensure_ascii=False, sort_keys=True)
             record(tool, {key: value for key, value in arguments.items() if key not in {"schema"}}, {"result_hash": _hash(compact), "chars": len(compact)})
@@ -3177,6 +3306,18 @@ def run_deep_web_research(
             for source_id in claim["citation_ids"]
         }
     )
+    if fallback_complete:
+        for source_id in fallback_cited_ids:
+            cited_source = sources[source_id]
+            if _research_observe_source(
+                cited_source,
+                outcome="success",
+                quality=(
+                    1.0 if _source_is_primary_candidate(cited_source) else 0.75
+                ),
+                latency_ms=cited_source.get("open_latency_ms"),
+            ):
+                adaptive_feedback_events += 1
     fallback_citations = [
         {
             "source_id": source_id,
@@ -3243,6 +3384,7 @@ def run_deep_web_research(
         ],
         "network_mode": "read_only",
         "trace_path": str(trace_path),
+        "adaptive_routing": adaptive_metadata(),
     }
 
 
