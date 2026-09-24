@@ -103,7 +103,7 @@ def test_completed_reply_with_stale_pending_is_released(tmp_path: Path) -> None:
             "response_pending": True,
             "response_idle_ms": 61_000,
         },
-        companion={"busy": False, "last_assistant_text": "Risposta finale stabile."},
+        companion={"busy": False, "last_assistant_text": "Risposta finale stabile.\n[[BOTTAZZI_GOAL_REACHED]]"},
     )
 
     report = shepherd(queue, cdp).run_once(auto_start=False)
@@ -112,7 +112,7 @@ def test_completed_reply_with_stale_pending_is_released(tmp_path: Path) -> None:
     assert job.state is GptJobState.REVIEW
     assert job.target_id is None
     assert cdp.closed == ["managed"]
-    assert report["actions"][0]["reason"] == "response_complete"
+    assert report["actions"][0]["reason"] == "goal_complete"
     assert any(target.target_id == "unmanaged" for target in cdp.targets())
 
 
@@ -166,7 +166,7 @@ def test_stale_busy_flag_releases_stable_substantive_answer(tmp_path: Path) -> N
             "response_pending": True,
             "response_idle_ms": 61_000,
         },
-        companion={"busy": True, "last_assistant_text": final},
+        companion={"busy": True, "last_assistant_text": final + "\n[[BOTTAZZI_GOAL_REACHED]]"},
     )
 
     report = shepherd(queue, cdp).run_once(auto_start=False)
@@ -175,8 +175,7 @@ def test_stale_busy_flag_releases_stable_substantive_answer(tmp_path: Path) -> N
     assert job.state is GptJobState.REVIEW
     assert job.last_assistant_text == final
     assert cdp.closed == ["managed"]
-    assert report["actions"][0]["reason"] == "response_complete"
-
+    assert report["actions"][0]["reason"] == "goal_complete"
 
 def test_transient_thinking_text_is_not_a_completed_answer(tmp_path: Path) -> None:
     queue, job_id = queue_with_active(tmp_path)

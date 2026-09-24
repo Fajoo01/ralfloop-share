@@ -141,3 +141,23 @@ def test_import_then_finish_closes_only_local_target(tmp_path: Path) -> None:
     assert finished.state is GptJobState.DONE
     assert cdp.closed == ["external"]
     assert queue.get_job(job.job_id).conversation_url == "https://chatgpt.com/c/a"
+
+
+def test_import_revives_terminal_record_for_same_conversation(tmp_path: Path) -> None:
+    queue = q(tmp_path)
+    old = queue.create_job(
+        "Iter di recupero",
+        conversation_url="https://chatgpt.com/c/a",
+        conversation_context_url="https://chatgpt.com/c/a",
+        state=GptJobState.DONE,
+    )
+    cdp = FakeCdp([page("external", "https://chatgpt.com/c/a", "Iter di recupero")])
+    controller = GptWorkController(queue, cdp)
+
+    revived = controller.import_target("external")
+
+    assert revived.job_id == old.job_id
+    assert revived.state is GptJobState.ACTIVE
+    assert revived.target_id == "external"
+    assert revived.last_error is None
+    assert len([job for job in queue.list_jobs(include_terminal=True) if job.conversation_url == "https://chatgpt.com/c/a"]) == 1

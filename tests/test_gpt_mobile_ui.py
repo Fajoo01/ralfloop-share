@@ -109,7 +109,7 @@ def test_completed_reply_is_saved_before_tab_release(tmp_path: Path):
     )
     class CompletedCdp(FakeCdp):
         def chatgpt_companion_state(self, target_id):
-            return {"focused": False, "busy": False, "composer_chars": 0, "last_assistant_text": "Risposta finale"}
+            return {"focused": False, "busy": False, "composer_chars": 0, "last_assistant_text": "Risposta finale\n[[BOTTAZZI_GOAL_REACHED]]"}
 
     cdp = CompletedCdp()
     cdp._targets.append(BrowserTarget("managed", "page", "https://chatgpt.com/c/current-chat", "Work", "ws://managed"))
@@ -147,7 +147,7 @@ def test_streaming_reply_is_persisted_while_job_stays_active(tmp_path: Path):
 def test_short_final_footer_does_not_replace_fuller_live_snapshot(tmp_path: Path):
     class FooterCdp(FakeCdp):
         def chatgpt_companion_state(self, target_id):
-            return {"focused": False, "busy": False, "composer_chars": 0, "last_assistant_text": "Elaborato per 6m\nStrumenti richiamati\n+1"}
+            return {"focused": False, "busy": False, "composer_chars": 0, "last_assistant_text": "Elaborato per 6m\nStrumenti richiamati\n+1\n[[BOTTAZZI_GOAL_REACHED]]"}
 
     queue = make_queue(tmp_path)
     job = queue.create_job("Work", conversation_url="https://chatgpt.com/c/current-chat", conversation_context_url="https://chatgpt.com/c/current-chat", target_id="managed", state=GptJobState.ACTIVE)

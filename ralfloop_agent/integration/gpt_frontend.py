@@ -368,6 +368,15 @@ class GptWorkController:
         conversation_url = _canonical_chatgpt_conversation_url(target.url)
         if not conversation_url:
             raise ValueError("conversation_url_invalid")
+        terminal_match = next(
+            (
+                job
+                for job in self.queue.list_jobs(include_terminal=True)
+                if job.conversation_url == conversation_url
+                and job.state in {GptJobState.DONE, GptJobState.CANCELLED}
+            ),
+            None,
+        )
         for job in self.queue.list_jobs():
             if job.conversation_url == conversation_url:
                 if job.target_id == target.target_id and job.state is GptJobState.ACTIVE:
@@ -377,10 +386,26 @@ class GptWorkController:
             raise ValueError("chat_slot_limit_reached")
         self.cdp.install_human_input_target(target.target_id, target.url)
         project_url = chatgpt_project_new_chat_url(target.url)
+        project_name = "Progetto ChatGPT" if project_url else ""
+        if terminal_match is not None:
+            self.queue.update_history_metadata(
+                terminal_match.job_id,
+                conversation_context_url=target.url,
+                project_name=project_name,
+                project_url=project_url,
+            )
+            return self.queue.bind_chat(
+                terminal_match.job_id,
+                conversation_url=conversation_url,
+                conversation_context_url=target.url,
+                target_id=target.target_id,
+                state=GptJobState.ACTIVE,
+                last_error=None,
+            )
         return self.queue.create_job(
             target.title or "Chat GPT",
             prompt=self._goal_managed_prompt("Porta a compimento il GOAL corrente già definito in questa conversazione, senza ripartire da zero."),
-            project_name="Progetto ChatGPT" if project_url else "",
+            project_name=project_name,
             project_url=project_url,
             conversation_url=conversation_url,
             conversation_context_url=target.url,

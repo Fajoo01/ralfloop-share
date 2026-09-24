@@ -11,7 +11,6 @@ from .gpt_work_queue import GptJobState, GptWorkQueue
 
 GOAL_MARKER = "[[BOTTAZZI_GOAL_REACHED]]"
 GOAL_BLOCKED_MARKER = "[[BOTTAZZI_GOAL_BLOCKED]]"
-GOAL_PROTOCOL = "BOT-TAZZI GOAL LOOP"
 GOAL_CONTINUATION = (
     "Continua automaticamente il lavoro verso il GOAL definito nel messaggio iniziale. "
     "Non chiedere conferme e non ripetere quanto già completato. "
@@ -157,19 +156,24 @@ class GptQueueShepherd:
             )
 
             if completed:
-                goal_managed = GOAL_PROTOCOL in str(job.prompt or "")
+                # Every ACTIVE queue job is GOAL-managed, including imported legacy chats.
+                goal_managed = True
                 goal_reached = GOAL_MARKER in final_text
                 goal_blocked = GOAL_BLOCKED_MARKER in final_text
                 clean_final_text = (
                     final_text.replace(GOAL_MARKER, "").replace(GOAL_BLOCKED_MARKER, "").strip()
                 )
-                if response_text:
-                    minimum_final_chars = max(120, len(saved_text) // 2)
-                    if not saved_text or len(response_text) >= minimum_final_chars:
-                        self.queue.set_last_assistant_text(job.job_id, clean_final_text)
-                if goal_reached or goal_blocked:
-                    self.queue.set_last_assistant_text(job.job_id, clean_final_text)
-                if goal_managed and goal_blocked:
+                clean_saved_text = (
+                    saved_text.replace(GOAL_MARKER, "").replace(GOAL_BLOCKED_MARKER, "").strip()
+                )
+                persisted_text = clean_final_text
+                if clean_saved_text:
+                    minimum_final_chars = max(120, len(clean_saved_text) // 2)
+                    if not clean_final_text or len(clean_final_text) < minimum_final_chars:
+                        persisted_text = clean_saved_text
+                if persisted_text:
+                    self.queue.set_last_assistant_text(job.job_id, persisted_text)
+                if goal_blocked:
                     self.controller.release_job(job.job_id)
                     self.queue.set_state(job.job_id, GptJobState.REVIEW, last_error="goal_blocked")
                     actions.append(
@@ -183,11 +187,9 @@ class GptQueueShepherd:
                         }
                     )
                     continue
-                if goal_managed and not goal_reached:
+                if not goal_reached:
                     try:
                         continuation = self.controller.send_message(job.job_id, GOAL_CONTINUATION)
-                        if clean_final_text:
-                            self.queue.set_last_assistant_text(job.job_id, clean_final_text)
                         actions.append(
                             {
                                 "job_id": job.job_id,
@@ -214,7 +216,7 @@ class GptQueueShepherd:
                     {
                         "job_id": job.job_id,
                         "action": "released",
-                        "reason": "goal_complete" if goal_reached else "response_complete",
+                        "reason": "goal_complete",
                         "user_turns": user_turns,
                         "assistant_turns": assistant_turns,
                         "response_idle_ms": idle_ms,
