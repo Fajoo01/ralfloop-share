@@ -113,9 +113,7 @@ class GptQueueShepherd:
             idle_ms = self._int(ui.get("response_idle_ms"))
             answered = user_turns > 0 and assistant_turns >= user_turns
 
-            completed = answered and (
-                not pending or idle_ms >= self.policy.complete_idle_ms
-            )
+            completed = answered and idle_ms >= self.policy.complete_idle_ms
             stalled = (
                 pending
                 and user_turns > assistant_turns

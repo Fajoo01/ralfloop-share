@@ -73,6 +73,26 @@ def shepherd(queue: GptWorkQueue, cdp: FakeCdp) -> GptQueueShepherd:
     )
 
 
+def test_fresh_not_pending_reply_waits_for_stable_idle_window(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    cdp = FakeCdp(
+        ui={
+            "user_turns": 1,
+            "assistant_turns": 1,
+            "response_in_progress": False,
+            "response_pending": False,
+            "response_idle_ms": 0,
+        },
+        companion={"busy": False, "last_assistant_text": "Va bene. Quando Bruto è"},
+    )
+
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    assert queue.get_job(job_id).state is GptJobState.ACTIVE
+    assert cdp.closed == []
+    assert report["actions"][0]["reason"] == "awaiting_settle"
+
+
 def test_completed_reply_with_stale_pending_is_released(tmp_path: Path) -> None:
     queue, job_id = queue_with_active(tmp_path)
     cdp = FakeCdp(
