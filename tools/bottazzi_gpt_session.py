@@ -1125,10 +1125,15 @@ def cmd_companion_send(args: argparse.Namespace) -> int:
     store = HandoffStore(args.state_dir)
     target = _companion_target(cdp, args.target_id)
     conversation_url = normalize_chatgpt_conversation_url(target.url)
+    current = store.load_current() if store.current_path.exists() else {}
+    current_target_id = str(current.get("source_chat") or "")
+    current_url = normalize_chatgpt_conversation_url(str(current.get("source_chat_url") or ""))
+    if current_target_id != target.target_id or current_url != conversation_url:
+        _json({"ok": True, "action": "deferred", "reason": "worker_assignment_mismatch", "target_id": target.target_id, "conversation_url": conversation_url})
+        return 0
     cdp.activate_target(target.target_id)
     cdp.install_human_input_target(target.target_id, target.url)
     result = cdp.queue_human_message(target.target_id, target.url, text.strip())
-    store.update_source_chat(target.target_id, conversation_url, target.url)
     action = "queued" if result.get("queued") else "deferred"
     _json({"ok": True, "action": action, "target_id": target.target_id, "conversation_url": conversation_url, **result})
     return 0
@@ -1382,7 +1387,9 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
             report["worker_target_id"] = new_target_id
             _json(report)
             return 1
-        store.update_source_chat(new_target_id, new_source_url, current_target.url if current_target is not None else new_source_url)
+        successor_context = current_target.url if current_target is not None else new_source_url
+        human_target = cdp.install_human_input_target(new_target_id, successor_context)
+        store.update_source_chat(new_target_id, new_source_url, successor_context)
         journal.update(phase="source_state_done", successor_url=new_source_url)
     except (CdpError, GptSessionError, OSError) as exc:
         report["ok"] = False
@@ -1400,13 +1407,17 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
         _json(report)
         return 1
     try:
-        ghost_state = _install_rollover_ghost(
-            cdp,
-            journal,
-            source_target_id=source.target_id,
-            successor_target_id=new_target_id,
-            successor_url=new_source_url,
-        )
+        if source.target_id == new_target_id:
+            journal.update(phase="source_ghosted", source_ghosted=False)
+            ghost_state = {"human_input_target": human_target, "ghost": None, "source_ghosted": False}
+        else:
+            ghost_state = _install_rollover_ghost(
+                cdp,
+                journal,
+                source_target_id=source.target_id,
+                successor_target_id=new_target_id,
+                successor_url=new_source_url,
+            )
     except (CdpError, GptSessionError, OSError) as exc:
         report["ok"] = False
         report["blocked"] = f"handoff_ghost_incomplete:{exc}"

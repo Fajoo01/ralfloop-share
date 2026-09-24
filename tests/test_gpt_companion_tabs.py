@@ -1,6 +1,11 @@
+import io
+import json
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 
+import tools.bottazzi_gpt_session as gpt_session_tool
+from ralfloop_agent.integration.gpt_session_rollover import Handoff, HandoffStore
 from tools.bottazzi_gpt_session import _companion_tabs
 
 
@@ -97,3 +102,46 @@ def test_companion_tabs_only_marks_logical_conversation_ghost_when_all_targets_a
     assert rows[0]["target_id"] == "live"
     assert rows[0]["ghost"] is False
     assert rows[0]["target_count"] == 2
+
+
+def test_companion_send_cannot_reassign_worker_implicitly(monkeypatch, tmp_path, capsys):
+    worker_url = "https://chatgpt.com/c/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    other_url = "https://chatgpt.com/c/11111111-2222-3333-4444-555555555555"
+    handoff = HandoffStore(tmp_path)
+    handoff.save(Handoff(goal="x", current_state="y"))
+    handoff.update_source_chat("worker", worker_url)
+
+    class SendCdp:
+        def __init__(self):
+            self.activated = []
+            self.installed = []
+            self.queued = []
+
+        def targets(self):
+            return [SimpleNamespace(target_id="other", target_type="page", is_chatgpt=True, url=other_url)]
+
+        def chatgpt_focus_state(self, target_id):
+            return {"ghost": False}
+
+        def activate_target(self, target_id):
+            self.activated.append(target_id)
+
+        def install_human_input_target(self, target_id, url):
+            self.installed.append((target_id, url))
+
+        def queue_human_message(self, target_id, url, text):
+            self.queued.append((target_id, url, text))
+            return {"queued": True}
+
+    fake = SendCdp()
+    monkeypatch.setattr(gpt_session_tool, "ChromeCdp", lambda endpoint: fake)
+    monkeypatch.setattr(sys, "stdin", io.StringIO("ciao"))
+    args = SimpleNamespace(endpoint="http://127.0.0.1:9238", state_dir=str(tmp_path), target_id="other")
+
+    assert gpt_session_tool.cmd_companion_send(args) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["reason"] == "worker_assignment_mismatch"
+    assert fake.activated == []
+    assert fake.installed == []
+    assert fake.queued == []
+    assert handoff.load_current()["source_chat"] == "worker"

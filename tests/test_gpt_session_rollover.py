@@ -1654,6 +1654,17 @@ def test_human_relay_never_uses_window_open_for_active_assignment() -> None:
     assert "window.open(" not in source
 
 
+def test_shepherd_binds_successor_witness_before_persist_and_archive() -> None:
+    source = (Path(__file__).resolve().parents[1] / "tools" / "bottazzi_gpt_session.py").read_text(encoding="utf-8")
+    start = source.index("def cmd_shepherd")
+    end = source.index("def cmd_archive_cleanup", start)
+    body = source[start:end]
+    bind = body.index("human_target = cdp.install_human_input_target")
+    persist = body.index("store.update_source_chat", bind)
+    archive = body.index("_archive_source_with_journal", persist)
+    assert bind < persist < archive
+
+
 def test_handoff_requires_source_when_multiple_chatgpt_tabs() -> None:
     cdp = MultiTabHandoffCdp()
     with pytest.raises(CdpError, match="handoff_source_ambiguous"):
