@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import os
 from pathlib import Path
+import secrets
 import time
 from typing import Any
 from urllib.parse import unquote_plus
@@ -13,14 +14,17 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 import requests
 
+from openshell_backend import oidc_auth
 from ralfloop_agent.call_recordings import CallRecordingStore
 
 APP_NAME = "Bot-tazzi — App"
 UI_PATH = Path(__file__).with_name("bottazzi_ui.html")
 BACKEND = os.getenv("BOTTAZZI_APP_BACKEND", "http://127.0.0.1:19090").rstrip("/")
 COOKIE = "bottazzi_app_session"
+OIDC_STATE_COOKIE = "bottazzi_oidc_state"
 SESSION_TTL = int(os.getenv("BOTTAZZI_APP_SESSION_TTL", "86400"))
-PUBLIC_PATHS = {"/login", "/healthz", "/manifest.webmanifest", "/sw.js", "/icon.svg"}
+OIDC_STATE_TTL = 600
+PUBLIC_PATHS = {"/login", "/oidc/login", "/oidc/callback", "/healthz", "/manifest.webmanifest", "/sw.js", "/icon.svg"}
 
 app = FastAPI(title=APP_NAME, docs_url=None, redoc_url=None, openapi_url=None)
 CALL_RECORDINGS = CallRecordingStore.from_env()
@@ -91,20 +95,72 @@ async def app_auth(request: Request, call_next):
     if _session_ok(request.cookies.get(COOKIE)):
         return await call_next(request)
     if "text/html" in request.headers.get("accept", ""):
-        return RedirectResponse(_url(request, "/login"), status_code=303)
+        target = "/oidc/login" if oidc_auth.enabled() else "/login"
+        return RedirectResponse(_url(request, target), status_code=303)
     return JSONResponse({"detail": "app_auth_required"}, status_code=401)
 
 
 LOGIN_HTML = """<!doctype html><html lang='it'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'><meta name='theme-color' content='#171512'><title>Bot-tazzi — Accesso privato</title><style>:root{color-scheme:dark;font-family:Inter,system-ui,sans-serif}*{box-sizing:border-box}body{margin:0;min-height:100dvh;display:grid;place-items:center;background:radial-gradient(circle at 80% 0,#38251f 0,transparent 30%),#171512;color:#f3ead8}.card{width:min(430px,calc(100vw - 32px));background:#211e1a;border:1px solid #3c362e;border-radius:22px;padding:28px;box-shadow:0 22px 60px #0008}.mark{width:72px;height:72px;border-radius:22px;display:grid;place-items:center;background:linear-gradient(145deg,#f0d3aa,#b87d51);overflow:hidden}.mark svg{width:70px;height:70px}h1{margin:18px 0 8px;font-size:30px}p{color:#b6aa96;line-height:1.5}input,button{width:100%;font:inherit;border-radius:12px}input{margin-top:12px;padding:14px;background:#171512;border:1px solid #4a4238;color:#f3ead8;outline:none}button{margin-top:12px;padding:13px;border:0;background:#e34b3d;color:white;font-weight:800;cursor:pointer}.err{min-height:20px;color:#ef9389;font-size:13px;margin-top:10px}</style></head><body><main class='card'><div class='mark'><svg viewBox='0 0 100 100' aria-label='Peppone'><path d='M20 30Q50 8 80 30L76 40H24Z' fill='#472b22'/><circle cx='50' cy='55' r='27' fill='#d8a06f'/><path d='M26 44Q50 30 74 44' fill='none' stroke='#472b22' stroke-width='5'/><circle cx='40' cy='52' r='3' fill='#241812'/><circle cx='60' cy='52' r='3' fill='#241812'/><path d='M50 57l-3 8h6' fill='none' stroke='#8c5a37' stroke-width='2'/><path d='M49 67c-7-8-15-5-18 0 6 2 12 3 18 1 6 2 12 1 18-1-3-5-11-8-18 0z' fill='#2a1a15'/><path d='M37 76q13 8 26 0' fill='none' stroke='#7d3f2f' stroke-width='2'/></svg></div><h1>Bot-tazzi</h1><p>Peppone · assistente locale. Accesso privato alla tua infrastruttura.</p><form id='f'><input id='p' type='password' autocomplete='current-password' autofocus placeholder='Password Bot-tazzi'><button>Entra</button><div class='err' id='e'></div></form></main><script>document.querySelector('#f').addEventListener('submit',async e=>{e.preventDefault();const out=document.querySelector('#e');out.textContent='';const r=await fetch('./login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:document.querySelector('#p').value})});const j=await r.json().catch(()=>({}));if(r.ok){location.href=j.next||'./'}else out.textContent='Password errata';});</script></body></html>"""
 
 
-@app.get("/login", response_class=HTMLResponse)
-def login_page() -> HTMLResponse:
+@app.get("/oidc/login")
+def oidc_login(request: Request) -> Response:
+    if not oidc_auth.enabled():
+        return RedirectResponse(_url(request, "/login"), status_code=303)
+    state = secrets.token_urlsafe(32)
+    try:
+        target = oidc_auth.authorization_url(state=state)
+    except (RuntimeError, requests.RequestException, ValueError):
+        return JSONResponse({"detail": "portachiavi_unavailable"}, status_code=503)
+    response = RedirectResponse(target, status_code=303)
+    prefix = _prefix(request)
+    response.set_cookie(
+        OIDC_STATE_COOKIE,
+        state,
+        max_age=OIDC_STATE_TTL,
+        httponly=True,
+        secure=_secure_cookie(request),
+        samesite="lax",
+        path=(prefix + "/") if prefix else "/",
+    )
+    return response
+
+
+@app.get("/oidc/callback")
+def oidc_callback(request: Request, code: str = "", state: str = "", error: str = "") -> Response:
+    expected = request.cookies.get(OIDC_STATE_COOKIE)
+    if error or not code or not state or not expected or not hmac.compare_digest(expected, state):
+        return JSONResponse({"detail": "portachiavi_callback_invalid"}, status_code=400)
+    try:
+        oidc_auth.exchange_code(code)
+    except (RuntimeError, requests.RequestException, ValueError):
+        return JSONResponse({"detail": "portachiavi_login_failed"}, status_code=503)
+    prefix = _prefix(request)
+    response = RedirectResponse(_url(request, "/"), status_code=303)
+    response.set_cookie(
+        COOKIE,
+        _make_session(),
+        max_age=SESSION_TTL,
+        httponly=True,
+        secure=_secure_cookie(request),
+        samesite="lax",
+        path=(prefix + "/") if prefix else "/",
+    )
+    response.delete_cookie(OIDC_STATE_COOKIE, path=(prefix + "/") if prefix else "/")
+    return response
+
+
+@app.get("/login")
+def login_page(request: Request) -> Response:
+    if oidc_auth.enabled():
+        return RedirectResponse(_url(request, "/oidc/login"), status_code=303)
     return HTMLResponse(LOGIN_HTML, headers={"cache-control": "no-store"})
 
 
 @app.post("/login")
 async def login(request: Request) -> JSONResponse:
+    if oidc_auth.enabled():
+        return JSONResponse({"detail": "password_login_disabled"}, status_code=410)
     try:
         payload = await request.json()
     except Exception:
@@ -139,6 +195,7 @@ def healthz() -> dict[str, Any]:
         "ok": True,
         "service": "bottazzi-app-gateway",
         "call_recordings": True,
+        "auth_mode": oidc_auth.auth_mode(),
     }
 
 

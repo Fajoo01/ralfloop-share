@@ -20,6 +20,7 @@ def _password_spec(password: str) -> str:
 def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
     monkeypatch.setenv("BOTTAZZI_APP_PASSWORD_HASH", _password_spec("app-pass"))
     monkeypatch.setenv("BOTTAZZI_APP_SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("BOTTAZZI_APP_AUTH_MODE", "password")
     monkeypatch.setattr(app_gateway, "CALL_RECORDINGS", CallRecordingStore(tmp_path / "calls"))
     return TestClient(app_gateway.app)
 
@@ -195,3 +196,64 @@ def test_gateway_systemd_is_release_bound_and_secret_free() -> None:
     assert "EnvironmentFile=/etc/ralfloop/bottazzi-app-gateway.env" in unit
     assert "REPLACE_WITH_RANDOM_SECRET" in example
     assert "BOTTAZZI_APP_PASSWORD_HASH=" in example
+
+
+def test_oidc_mode_redirects_html_to_portachiavi(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOTTAZZI_APP_AUTH_MODE", "oidc")
+    monkeypatch.setattr(
+        app_gateway.oidc_auth,
+        "authorization_url",
+        lambda *, state: f"https://idp.example/authorize?state={state}",
+    )
+    root = client.get("/", follow_redirects=False, headers={"accept": "text/html"})
+    assert root.status_code == 303
+    assert root.headers["location"].endswith("/oidc/login")
+
+    start = client.get("/oidc/login", follow_redirects=False)
+    assert start.status_code == 303
+    assert start.headers["location"].startswith("https://idp.example/authorize?state=")
+    assert "bottazzi_oidc_state=" in start.headers["set-cookie"]
+
+    legacy = client.post("/login", json={"password": "app-pass"})
+    assert legacy.status_code == 410
+    assert legacy.json()["detail"] == "password_login_disabled"
+
+
+def test_oidc_callback_establishes_bot_tazzi_session(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from urllib.parse import parse_qs, urlparse
+
+    monkeypatch.setenv("BOTTAZZI_APP_AUTH_MODE", "oidc")
+    monkeypatch.setattr(
+        app_gateway.oidc_auth,
+        "authorization_url",
+        lambda *, state: f"https://idp.example/authorize?state={state}",
+    )
+    monkeypatch.setattr(
+        app_gateway.oidc_auth,
+        "exchange_code",
+        lambda code: {"sub": "member-1", "email": "member@example.test"},
+    )
+    start = client.get("/oidc/login", follow_redirects=False)
+    state = parse_qs(urlparse(start.headers["location"]).query)["state"][0]
+
+    callback = client.get(
+        f"/oidc/callback?code=ok&state={state}",
+        follow_redirects=False,
+    )
+    assert callback.status_code == 303
+    assert callback.headers["location"].endswith("/")
+    assert "bottazzi_app_session=" in callback.headers["set-cookie"]
+    assert client.get("/").status_code == 200
+
+
+def test_oidc_callback_rejects_wrong_state(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOTTAZZI_APP_AUTH_MODE", "oidc")
+    monkeypatch.setattr(
+        app_gateway.oidc_auth,
+        "authorization_url",
+        lambda *, state: f"https://idp.example/authorize?state={state}",
+    )
+    client.get("/oidc/login", follow_redirects=False)
+    callback = client.get("/oidc/callback?code=ok&state=wrong", follow_redirects=False)
+    assert callback.status_code == 400
+    assert callback.json()["detail"] == "portachiavi_callback_invalid"
