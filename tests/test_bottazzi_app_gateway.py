@@ -46,6 +46,18 @@ def test_bot_tazzi_is_product_and_peppone_is_persona(client: TestClient) -> None
     assert manifest["name"].startswith("Bot-tazzi")
 
 
+def test_whatsapp_gpt_ui_is_separate_and_authenticated(client: TestClient) -> None:
+    assert client.get("/assistant/v1/gpt-ui", headers={"accept": "text/html"}, follow_redirects=False).status_code == 303
+    client.post("/login", json={"password": "app-pass"})
+    ui = client.get("/assistant/v1/gpt-ui")
+    assert ui.status_code == 200
+    assert 'id="chatList"' in ui.text
+    assert 'id="attachBtn"' in ui.text
+    assert 'id="sendMic"' in ui.text
+    assert "Fotocamera" in ui.text
+    assert "data-speak" in ui.text
+
+
 def test_app_internet_agent_stays_gateway_bounded(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     client.post("/login", json={"password": "app-pass"})
     seen = {}

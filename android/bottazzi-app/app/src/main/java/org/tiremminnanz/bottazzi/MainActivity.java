@@ -70,13 +70,19 @@ public final class MainActivity extends Activity {
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
-            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                Uri target = request.getUrl();
-                if (sameOrigin(BuildConfig.APP_URL, target)) {
-                    return false;
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                Uri current = Uri.parse(url);
+                Uri base = Uri.parse(BuildConfig.APP_URL);
+                String currentPath = current.getPath() == null ? "" : current.getPath();
+                String basePath = base.getPath() == null ? "" : base.getPath();
+                if (
+                    sameOrigin(BuildConfig.APP_URL, current)
+                    && ("/".equals(currentPath) || basePath.equals(currentPath))
+                    && !gptUiUrl().equals(url)
+                ) {
+                    view.loadUrl(gptUiUrl());
                 }
-                startActivity(new Intent(Intent.ACTION_VIEW, target));
-                return true;
             }
         });
         webView.setWebChromeClient(new WebChromeClient() {
@@ -100,11 +106,19 @@ public final class MainActivity extends Activity {
             }
         });
         webView.addJavascriptInterface(new SpeechBridge(), "BotTazziNative");
-        webView.loadUrl(BuildConfig.APP_URL);
+        webView.loadUrl(gptUiUrl());
 
         requestNotificationPermission();
         requestAudioPermission();
         startNotificationService();
+    }
+
+    private String gptUiUrl() {
+        String base = BuildConfig.APP_URL;
+        while (base.endsWith("/")) {
+            base = base.substring(0, base.length() - 1);
+        }
+        return base + "/gpt-ui";
     }
 
     @SuppressWarnings("deprecation")

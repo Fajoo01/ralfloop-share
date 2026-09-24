@@ -14,6 +14,7 @@ import requests
 
 APP_NAME = "Bot-tazzi — App"
 UI_PATH = Path(__file__).with_name("bottazzi_ui.html")
+GPT_UI_PATH = Path(__file__).with_name("bottazzi_gpt_mobile_ui.html")
 BACKEND = os.getenv("BOTTAZZI_APP_BACKEND", "http://127.0.0.1:19090").rstrip("/")
 GPT_QUEUE = os.getenv("BOTTAZZI_APP_GPT_QUEUE", "http://127.0.0.1:19201").rstrip("/")
 COOKIE = "bottazzi_app_session"
@@ -150,6 +151,12 @@ def root_ui() -> HTMLResponse:
 @app.get("/assistant/v1/ui", response_class=HTMLResponse)
 def assistant_ui() -> HTMLResponse:
     return _ui()
+
+
+@app.get("/assistant/v1/gpt-ui", response_class=HTMLResponse)
+def gpt_mobile_ui() -> HTMLResponse:
+    html = GPT_UI_PATH.read_text(encoding="utf-8")
+    return HTMLResponse(html, headers={"cache-control": "no-store"})
 
 
 def _proxy_response(upstream: requests.Response) -> Response:
