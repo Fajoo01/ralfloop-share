@@ -10,6 +10,9 @@ Group=ralf-mcp
 Environment=HOME=/home/bandi
 Environment=BOTTAZZI_GPT_CDP_ENDPOINT=http://127.0.0.1:9238
 Environment=BOTTAZZI_GPT_FRONTEND_ORIGIN=http://127.0.0.1:19201
+Environment=BOTTAZZI_GPT_FRONTEND_BIND=0.0.0.0
+Environment=BOTTAZZI_GPT_FRONTEND_ALLOWED_ORIGINS=http://127.0.0.1:19201,http://localhost:19201,http://10.252.14.7:19201
+Environment=BOTTAZZI_GPT_FRONTEND_ALLOWED_NETWORKS=127.0.0.0/8,10.252.14.0/24
 Environment=BOTTAZZI_GPT_WORK_QUEUE_DB=/home/bandi/.local/state/bottazzi/gpt-session/work-queue.sqlite3
 ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/bandi/.local/share/bottazzi-gpt-browser/runtime-current/tools/bottazzi_gpt_queue_server.py --origin http://127.0.0.1:19201
 Restart=on-failure

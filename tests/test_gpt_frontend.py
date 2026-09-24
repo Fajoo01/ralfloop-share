@@ -8,7 +8,9 @@ import socket
 import threading
 from urllib.parse import urlparse
 
-from ralfloop_agent.integration.gpt_browser_cdp import BrowserTarget
+import pytest
+
+from ralfloop_agent.integration.gpt_browser_cdp import BrowserTarget, CdpError
 from ralfloop_agent.integration.gpt_frontend import GptWorkController, create_server
 from ralfloop_agent.integration.gpt_work_queue import GptJobState, GptWorkQueue
 
@@ -22,6 +24,9 @@ class FakeCdp:
         self.closed: list[str] = []
         self.messages: list[tuple[str, str, str]] = []
         self.activated: list[str] = []
+        self.history_records: list[dict[str, str]] = []
+        self.history_projects: list[dict[str, str]] = []
+        self.resolved_project_urls: dict[str, str] = {}
 
     def targets(self):
         return list(self._targets)
@@ -46,6 +51,19 @@ class FakeCdp:
         self.messages.append((target_id, conversation_url, text))
         return {"ok": True, "queued": True}
 
+    def create_target(self, url: str, *, background: bool = False):
+        target_id = f"temp-{len(self._targets)+1}"
+        self._targets.append(BrowserTarget(target_id, "page", url, "ChatGPT", f"ws://{target_id}"))
+        return target_id
+
+    def project_records(self, target_id: str, *, wait_timeout_s: float = 12.0):
+        return list(self.history_projects)
+
+    def resolve_project_url(self, target_id: str, project_name: str, *, wait_timeout_s: float = 12.0):
+        if project_name not in self.resolved_project_urls:
+            raise RuntimeError("project_not_found")
+        return self.resolved_project_urls[project_name]
+
     def create_chatgpt_target(self, *, clear_cache: bool = False, background: bool = True):
         target_id = f"reopen-{len(self._targets)+1}"
         self._targets.append(BrowserTarget(target_id, "page", "https://chatgpt.com/", "ChatGPT", f"ws://{target_id}"))
@@ -57,6 +75,12 @@ class FakeCdp:
                 self._targets[index] = BrowserTarget(target_id, "page", url, target.title, target.websocket_url)
                 return {"authenticated": True, "ready": True}
         raise RuntimeError("target_missing")
+
+    def conversation_records(self, target_id: str, *, reload: bool = False, wait_timeout_s: float = 3.0):
+        return list(self.history_records)
+
+    def sidebar_catalog(self, target_id: str, *, wait_timeout_s: float = 5.0, max_records: int = 240):
+        return {"chats": list(self.history_records), "projects": list(self.history_projects)}
 
     def start_chatgpt_job(self, prompt: str, *, new_chat_url: str, background: bool, submit: bool, wait_timeout_s: float = 30.0):
         number = len(self.started) + 1
@@ -188,6 +212,26 @@ def test_missing_active_target_moves_to_review_without_deleting_job(tmp_path: Pa
     assert reviewed.last_error == "chat_not_open_locally"
 
 
+def test_send_message_rejects_target_reused_for_different_conversation(tmp_path: Path) -> None:
+    queue = make_queue(tmp_path)
+    job = queue.create_job("One", prompt="Do one")
+    cdp = FakeCdp()
+    controller = GptWorkController(queue, cdp)
+    controller.pump(max_to_start=1)
+    active = queue.get_job(job.job_id)
+    assert active.target_id == "target-1"
+    assert active.conversation_url == "https://chatgpt.com/c/chat-1"
+
+    cdp._targets = [
+        BrowserTarget("target-1", "page", "https://chatgpt.com/c/other-chat", "Other", "ws://target-1"),
+    ]
+
+    with pytest.raises(CdpError, match="job_target_assignment_mismatch"):
+        controller.send_message(job.job_id, "Non mischiare questa chat")
+
+    assert cdp.messages == []
+
+
 def test_frontend_api_groups_projects_and_auto_starts(tmp_path: Path) -> None:
     queue = make_queue(tmp_path)
     queue.set_max_open_chats(1)
@@ -233,3 +277,183 @@ def test_frontend_rejects_cross_origin_mutation(tmp_path: Path) -> None:
 
     assert status == 403
     assert body["error"] == "origin_not_allowed"
+
+
+def test_account_history_lists_existing_chat_without_opening_new_one(tmp_path: Path) -> None:
+    queue = make_queue(tmp_path)
+    cdp = FakeCdp()
+    cdp._targets = [BrowserTarget("worker", "page", "https://chatgpt.com/c/open-1", "Open", "ws://worker")]
+    cdp.history_records = [
+        {"url": "https://chatgpt.com/c/history-1", "title": "Filologo storico"},
+        {"url": "https://chatgpt.com/c/open-1", "title": "Chat aperta"},
+    ]
+    controller = GptWorkController(queue, cdp)
+
+    history = controller.account_history()
+
+    assert history["error"] is None
+    assert [row["title"] for row in history["chats"]] == ["Filologo storico", "Chat aperta"]
+    assert history["chats"][0]["open"] is False
+    assert history["chats"][1]["open"] is True
+    assert cdp.started == []
+
+
+def test_history_resume_reopens_existing_conversation_without_creating_chat(tmp_path: Path) -> None:
+    queue = make_queue(tmp_path)
+    cdp = FakeCdp()
+    cdp._targets = [BrowserTarget("home", "page", "https://chatgpt.com/", "ChatGPT", "ws://home")]
+    cdp.history_records = [{"url": "https://chatgpt.com/c/history-1", "title": "Lavoro vecchio"}]
+    with running_frontend(queue, cdp) as (port, origin):
+        status, history = request(port, "GET", "/api/history", origin=origin)
+        assert status == 200
+        assert history["chats"][0]["conversation_url"] == "https://chatgpt.com/c/history-1"
+
+        status, resumed = request(
+            port,
+            "POST",
+            "/api/history/resume",
+            origin=origin,
+            payload={"conversation_url": "https://chatgpt.com/c/history-1", "title": "Lavoro vecchio"},
+        )
+
+    assert status == 200
+    assert resumed["server_chat_created"] is False
+    assert resumed["job"]["conversation_url"] == "https://chatgpt.com/c/history-1"
+    assert resumed["job"]["state"] == "active"
+    assert cdp.started == []
+    assert any(target.url == "https://chatgpt.com/c/history-1" for target in cdp._targets)
+    assert cdp.installed[-1][1] == "https://chatgpt.com/c/history-1"
+
+
+def test_account_history_exposes_projects_and_project_chat_context(tmp_path: Path) -> None:
+    queue = make_queue(tmp_path)
+    cdp = FakeCdp()
+    cdp._targets = [BrowserTarget("home", "page", "https://chatgpt.com/", "ChatGPT", "ws://home")]
+    cdp.history_projects = [
+        {"url": "https://chatgpt.com/g/g-p-colletti/project", "title": "Colletti Bianchi", "project_id": "g-p-colletti"},
+    ]
+    cdp.history_records = [
+        {
+            "url": "https://chatgpt.com/c/history-1",
+            "context_url": "https://chatgpt.com/g/g-p-colletti/c/history-1",
+            "title": "Commercialista",
+            "project_id": "g-p-colletti",
+        },
+    ]
+    controller = GptWorkController(queue, cdp)
+
+    history = controller.account_history()
+
+    assert history["project_count"] == 1
+    assert history["projects"][0]["title"] == "Colletti Bianchi"
+    assert history["chats"][0]["project_name"] == "Colletti Bianchi"
+    assert history["chats"][0]["project_url"] == "https://chatgpt.com/g/g-p-colletti/project"
+    assert history["chats"][0]["conversation_context_url"] == "https://chatgpt.com/g/g-p-colletti/c/history-1"
+
+
+def test_project_history_resume_preserves_project_context_without_new_chat(tmp_path: Path) -> None:
+    queue = make_queue(tmp_path)
+    cdp = FakeCdp()
+    cdp._targets = [BrowserTarget("home", "page", "https://chatgpt.com/", "ChatGPT", "ws://home")]
+    with running_frontend(queue, cdp) as (port, origin):
+        status, resumed = request(
+            port,
+            "POST",
+            "/api/history/resume",
+            origin=origin,
+            payload={
+                "conversation_url": "https://chatgpt.com/c/history-project-1",
+                "conversation_context_url": "https://chatgpt.com/g/g-p-colletti/c/history-project-1",
+                "title": "Commercialista",
+                "project_name": "Colletti Bianchi",
+                "project_url": "https://chatgpt.com/g/g-p-colletti/project",
+            },
+        )
+
+    assert status == 200
+    assert resumed["server_chat_created"] is False
+    assert resumed["job"]["project_name"] == "Colletti Bianchi"
+    assert resumed["job"]["project_url"] == "https://chatgpt.com/g/g-p-colletti/project"
+    assert resumed["job"]["conversation_context_url"] == "https://chatgpt.com/g/g-p-colletti/c/history-project-1"
+    assert cdp.started == []
+
+
+def test_create_job_resolves_name_only_project_and_closes_lookup_tab(tmp_path: Path) -> None:
+    queue = make_queue(tmp_path)
+    cdp = FakeCdp()
+    cdp.resolved_project_urls["Indipendentemenza dai colletti bianchi"] = "https://chatgpt.com/g/g-p-colletti/project"
+    with running_frontend(queue, cdp) as (port, origin):
+        status, created = request(
+            port,
+            "POST",
+            "/api/jobs",
+            origin=origin,
+            payload={
+                "title": "Filologo",
+                "prompt": "Continua il lavoro",
+                "project_name": "Indipendentemenza dai colletti bianchi",
+                "project_url": None,
+            },
+        )
+
+    assert status == 200
+    assert created["job"]["project_name"] == "Indipendentemenza dai colletti bianchi"
+    assert created["job"]["project_url"] == "https://chatgpt.com/g/g-p-colletti/project"
+    assert any(target_id.startswith("temp-") for target_id in cdp.closed)
+    assert not any(target.target_id.startswith("temp-") for target in cdp._targets)
+
+
+def test_frontend_rejects_client_outside_allowed_networks(tmp_path: Path) -> None:
+    queue = make_queue(tmp_path)
+    cdp = FakeCdp()
+    port = free_port()
+    origin = f"http://127.0.0.1:{port}"
+    server = create_server(
+        queue,
+        cdp,
+        origin=origin,
+        allowed_networks=("10.252.14.0/24",),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = request(port, "GET", "/healthz", origin=origin)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert status == 403
+    assert body["error"] == "client_not_allowed"
+
+
+def test_frontend_accepts_vpn_host_when_explicitly_allowed(tmp_path: Path) -> None:
+    queue = make_queue(tmp_path)
+    cdp = FakeCdp()
+    port = free_port()
+    local_origin = f"http://127.0.0.1:{port}"
+    vpn_origin = f"http://10.252.14.7:{port}"
+    server = create_server(
+        queue,
+        cdp,
+        origin=local_origin,
+        allowed_origins=(local_origin, vpn_origin),
+        allowed_networks=("127.0.0.0/8", "10.252.14.0/24"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = request(
+            port,
+            "GET",
+            "/healthz",
+            origin=local_origin,
+            extra_headers={"Host": f"10.252.14.7:{port}"},
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert status == 200
+    assert body["ok"] is True

@@ -696,6 +696,291 @@ class ChromeCdp:
                 records.append({"url": url, "title": str(value.get("title") or "").strip()})
         return records
 
+
+    def sidebar_catalog(
+        self,
+        target_id: str,
+        *,
+        wait_timeout_s: float = 5.0,
+        max_records: int = 240,
+    ) -> dict[str, list[dict[str, str]]]:
+        """Collect chat history and ChatGPT projects from the sidebar.
+
+        The sidebar scroll position is restored before returning. Callers should
+        prefer a background/non-focused ChatGPT target when available.
+        """
+        target = self._wait_target(target_id)
+        if not target.is_chatgpt or not target.websocket_url:
+            raise CdpError("sidebar_catalog_target_invalid")
+        call_timeout = max(1.0, min(float(wait_timeout_s), max(self.timeout_s, 5.0)))
+        limit = max(1, min(int(max_records), 500))
+        expression = r"""(async () => {
+          const maxRecords = __LIMIT__;
+          const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
+          const chatInfo = value => {
+            try {
+              const u = new URL(String(value || ''), location.origin);
+              const m = u.pathname.match(/^\/(?:g\/([^/]+)\/)?c\/([A-Za-z0-9-]+)/);
+              if (!m) return null;
+              return {
+                url: `${u.origin}/c/${m[2]}`,
+                context_url: m[1] ? `${u.origin}/g/${m[1]}/c/${m[2]}` : `${u.origin}/c/${m[2]}`,
+                project_id: m[1] || '',
+              };
+            } catch (_) { return null; }
+          };
+          const projectInfo = value => {
+            try {
+              const u = new URL(String(value || ''), location.origin);
+              const m = u.pathname.match(/(?:^|\/)(g-p-[A-Za-z0-9_-]+)/);
+              if (!m) return null;
+              return {url: `${u.origin}/g/${m[1]}/project`, project_id: m[1]};
+            } catch (_) { return null; }
+          };
+          const navs = [...document.querySelectorAll('nav')];
+          const scrollport = navs.find(n => n.scrollHeight > n.clientHeight && [...n.querySelectorAll('a[href]')].some(a => chatInfo(a.href) || projectInfo(a.href)))
+            || navs.find(n => [...n.querySelectorAll('a[href]')].some(a => chatInfo(a.href) || projectInfo(a.href)));
+          if (!scrollport) return JSON.stringify({chats: [], projects: [], reason: 'sidebar_scrollport_not_found'});
+          const originalTop = scrollport.scrollTop;
+          const chats = new Map();
+          const projects = new Map();
+          const projectToggle = [...document.querySelectorAll('button')].find(button => /^(?:progetti|projects)(?:\s|$)/i.test(clean(button.innerText || button.textContent || button.getAttribute('aria-label') || ''))) || null;
+          const projectWasCollapsed = Boolean(projectToggle && projectToggle.getAttribute('aria-expanded') === 'false');
+          const collect = () => {
+            for (const anchor of scrollport.querySelectorAll('a[href]')) {
+              const title = clean(anchor.innerText || anchor.textContent || anchor.getAttribute('aria-label') || '');
+              const chat = chatInfo(anchor.href);
+              if (chat && !chats.has(chat.url)) {
+                chats.set(chat.url, {...chat, title: title || 'Chat GPT'});
+              }
+            }
+            for (const anchor of document.querySelectorAll('a[href]')) {
+              const project = projectInfo(anchor.href);
+              if (!project || projects.has(project.url)) continue;
+              const title = clean(anchor.innerText || anchor.textContent || anchor.getAttribute('aria-label') || '');
+              projects.set(project.url, {...project, title: title || 'Progetto ChatGPT'});
+            }
+          };
+          try {
+            if (projectWasCollapsed) {
+              projectToggle.click();
+              await new Promise(resolve => setTimeout(resolve, 250));
+            }
+            collect();
+            if (scrollport.scrollHeight > scrollport.clientHeight) {
+              scrollport.scrollTop = 0;
+              await new Promise(resolve => setTimeout(resolve, 120));
+              collect();
+              let stable = 0;
+              let previousTop = -1;
+              let previousHeight = scrollport.scrollHeight;
+              for (let i = 0; i < 80 && chats.size < maxRecords; i++) {
+                const step = Math.max(220, Math.floor(scrollport.clientHeight * 0.82));
+                scrollport.scrollTop = Math.min(scrollport.scrollHeight, scrollport.scrollTop + step);
+                await new Promise(resolve => setTimeout(resolve, 250));
+                collect();
+                const currentHeight = scrollport.scrollHeight;
+                const atEnd = scrollport.scrollTop + scrollport.clientHeight >= currentHeight - 4;
+                if (atEnd && currentHeight <= previousHeight + 4 && scrollport.scrollTop === previousTop) stable += 1;
+                else if (atEnd && currentHeight <= previousHeight + 4) stable += 1;
+                else stable = 0;
+                previousTop = scrollport.scrollTop;
+                previousHeight = currentHeight;
+                if (stable >= 6) break;
+              }
+            }
+          } finally {
+            scrollport.scrollTop = originalTop;
+            if (projectWasCollapsed && projectToggle) projectToggle.click();
+          }
+          return JSON.stringify({
+            chats: [...chats.values()].slice(0, maxRecords),
+            projects: [...projects.values()],
+            reason: ''
+          });
+        })()""".replace("__LIMIT__", str(limit))
+        result = self._page_call(
+            target.websocket_url,
+            "Runtime.evaluate",
+            {"expression": expression, "awaitPromise": True, "returnByValue": True},
+            timeout_s=call_timeout,
+        )
+        raw = (result.get("result") or {}).get("value")
+        try:
+            payload = json.loads(raw) if isinstance(raw, str) else {}
+        except json.JSONDecodeError:
+            payload = {}
+        chats: list[dict[str, str]] = []
+        seen_chats: set[str] = set()
+        for value in payload.get("chats", []) if isinstance(payload, dict) else []:
+            if not isinstance(value, dict):
+                continue
+            url = _canonical_chatgpt_conversation_url(str(value.get("url") or ""))
+            if not url or url in seen_chats:
+                continue
+            context = str(value.get("context_url") or url)
+            try:
+                context = _safe_chatgpt_conversation_context_url(context)
+            except CdpError:
+                context = url
+            seen_chats.add(url)
+            chats.append({
+                "url": url,
+                "context_url": context,
+                "title": str(value.get("title") or "").strip(),
+                "project_id": str(value.get("project_id") or "").strip(),
+            })
+        projects: list[dict[str, str]] = []
+        seen_projects: set[str] = set()
+        for value in payload.get("projects", []) if isinstance(payload, dict) else []:
+            if not isinstance(value, dict):
+                continue
+            try:
+                project_url = _safe_chatgpt_new_chat_url(str(value.get("url") or ""))
+            except CdpError:
+                continue
+            if project_url == CHATGPT_ORIGIN or project_url in seen_projects:
+                continue
+            seen_projects.add(project_url)
+            projects.append({
+                "url": project_url,
+                "title": str(value.get("title") or "").strip() or "Progetto ChatGPT",
+                "project_id": str(value.get("project_id") or "").strip(),
+            })
+        return {"chats": chats, "projects": projects}
+
+    def conversation_records_deep(
+        self,
+        target_id: str,
+        *,
+        wait_timeout_s: float = 5.0,
+        max_records: int = 240,
+    ) -> list[dict[str, str]]:
+        return self.sidebar_catalog(
+            target_id,
+            wait_timeout_s=wait_timeout_s,
+            max_records=max_records,
+        )["chats"]
+
+    def project_records(
+        self,
+        target_id: str,
+        *,
+        wait_timeout_s: float = 12.0,
+    ) -> list[dict[str, str]]:
+        """Return project names visible in ChatGPT's project directory.
+
+        Project rows are application controls rather than normal anchors, so the
+        canonical URL is resolved lazily only when a project is selected.
+        """
+        target = self._wait_target(target_id)
+        if not target.is_chatgpt or not target.websocket_url:
+            raise CdpError("project_scan_target_invalid")
+        expression = r"""(() => {
+          const rows = [];
+          const seen = new Set();
+          for (const row of document.querySelectorAll('[role="row"][data-page-table-selectable-row]')) {
+            const cell = row.querySelector('[role="gridcell"]');
+            const titleNode = cell && (cell.querySelector('.text-token-text-primary') || cell);
+            const title = String(titleNode ? (titleNode.innerText || titleNode.textContent || '') : '')
+              .replace(/\s+/g, ' ').trim();
+            if (!title || seen.has(title)) continue;
+            seen.add(title);
+            rows.push({title});
+          }
+          return JSON.stringify({ready: document.readyState === 'complete', rows});
+        })()"""
+        deadline = time.monotonic() + max(1.0, float(wait_timeout_s))
+        last_rows: list[dict[str, str]] = []
+        while time.monotonic() < deadline:
+            target = self._wait_target(target_id)
+            if not target.is_chatgpt or not target.websocket_url:
+                raise CdpError("project_scan_target_invalid")
+            result = self._page_call(
+                target.websocket_url,
+                "Runtime.evaluate",
+                {"expression": expression, "returnByValue": True},
+                timeout_s=min(max(1.0, self.timeout_s), 5.0),
+            )
+            raw = (result.get("result") or {}).get("value")
+            try:
+                payload = json.loads(raw) if isinstance(raw, str) else {}
+            except json.JSONDecodeError:
+                payload = {}
+            values = payload.get("rows") if isinstance(payload, dict) else []
+            rows: list[dict[str, str]] = []
+            if isinstance(values, list):
+                for value in values:
+                    if not isinstance(value, dict):
+                        continue
+                    title = str(value.get("title") or "").strip()
+                    if title and all(row["title"] != title for row in rows):
+                        rows.append({"title": title, "url": "", "project_id": ""})
+            if rows:
+                return rows
+            last_rows = rows
+            time.sleep(0.25)
+        return last_rows
+
+    def resolve_project_url(
+        self,
+        target_id: str,
+        project_name: str,
+        *,
+        wait_timeout_s: float = 12.0,
+    ) -> str:
+        wanted = str(project_name or "").strip()
+        if not wanted:
+            raise CdpError("project_name_required")
+        deadline = time.monotonic() + max(1.0, float(wait_timeout_s))
+        click_expression = r"""(() => {
+          const wanted = __WANTED__;
+          const rows = [...document.querySelectorAll('[role="row"][data-page-table-selectable-row]')];
+          const row = rows.find(row => {
+            const cell = row.querySelector('[role="gridcell"]');
+            const titleNode = cell && (cell.querySelector('.text-token-text-primary') || cell);
+            const title = String(titleNode ? (titleNode.innerText || titleNode.textContent || '') : '')
+              .replace(/\s+/g, ' ').trim();
+            return title === wanted;
+          });
+          if (!row) return JSON.stringify({clicked:false, count:rows.length});
+          const cell = row.querySelector('[role="gridcell"]') || row;
+          cell.click();
+          return JSON.stringify({clicked:true});
+        })()""".replace("__WANTED__", json.dumps(wanted, ensure_ascii=False))
+        clicked = False
+        while time.monotonic() < deadline and not clicked:
+            target = self._wait_target(target_id)
+            if not target.is_chatgpt or not target.websocket_url:
+                raise CdpError("project_resolve_target_invalid")
+            result = self._page_call(
+                target.websocket_url,
+                "Runtime.evaluate",
+                {"expression": click_expression, "returnByValue": True},
+                timeout_s=min(max(1.0, self.timeout_s), 5.0),
+            )
+            raw = (result.get("result") or {}).get("value")
+            try:
+                state = json.loads(raw) if isinstance(raw, str) else {}
+            except json.JSONDecodeError:
+                state = {}
+            clicked = bool(isinstance(state, dict) and state.get("clicked"))
+            if not clicked:
+                time.sleep(0.25)
+        if not clicked:
+            raise CdpError("project_not_found")
+        while time.monotonic() < deadline:
+            target = self._wait_target(target_id)
+            try:
+                url = _safe_chatgpt_new_chat_url(target.url)
+            except CdpError:
+                time.sleep(0.2)
+                continue
+            if url != CHATGPT_ORIGIN:
+                return url
+            time.sleep(0.2)
+        raise CdpError("project_navigation_timeout")
+
     def create_chatgpt_target(self, *, clear_cache: bool = False, background: bool = False) -> str:
         target_id = self.create_target("about:blank", background=background)
         target = self._wait_target(target_id)

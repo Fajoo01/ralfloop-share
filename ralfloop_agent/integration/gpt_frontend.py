@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
@@ -42,6 +43,14 @@ class ImportChat(ApiInput):
     target_id: str = Field(min_length=1, max_length=160)
 
 
+class ResumeChat(ApiInput):
+    conversation_url: str = Field(min_length=1, max_length=1200)
+    conversation_context_url: str | None = Field(default=None, max_length=1200)
+    title: str = Field(default="Chat GPT", min_length=1, max_length=300)
+    project_name: str = Field(default="", max_length=300)
+    project_url: str | None = Field(default=None, max_length=1200)
+
+
 class SendMessage(ApiInput):
     text: str = Field(min_length=1, max_length=32_000)
 
@@ -78,6 +87,7 @@ class GptWorkController:
     def __init__(self, queue: GptWorkQueue, cdp: ChromeCdp) -> None:
         self.queue = queue
         self.cdp = cdp
+        self._project_url_cache: dict[str, str] = {}
 
     def browser_snapshot(self) -> BrowserSnapshot:
         by_id: dict[str, Any] = {}
@@ -300,6 +310,179 @@ class GptWorkController:
             state=GptJobState.ACTIVE,
         )
 
+    def resolve_project_url_by_name(self, project_name: str) -> str:
+        name = str(project_name or "").strip()
+        if not name:
+            raise ValueError("project_name_required")
+        cached = self._project_url_cache.get(name.casefold())
+        if cached:
+            return cached
+        if not hasattr(self.cdp, "resolve_project_url"):
+            raise CdpError("project_resolver_unavailable")
+        target_id = self.cdp.create_target("https://chatgpt.com/projects", background=True)
+        try:
+            url = self.cdp.resolve_project_url(target_id, name, wait_timeout_s=12.0)
+            self._project_url_cache[name.casefold()] = url
+            return url
+        finally:
+            try:
+                self.cdp.close_target(target_id)
+            except CdpError:
+                pass
+
+    def account_history(self) -> dict[str, Any]:
+        jobs = self.queue.list_jobs()
+        jobs_by_conversation: dict[str, GptWorkJob] = {}
+        terminal = {GptJobState.DONE, GptJobState.CANCELLED}
+        for job in jobs:
+            if not job.conversation_url:
+                continue
+            previous = jobs_by_conversation.get(job.conversation_url)
+            if previous is None or (previous.state in terminal and job.state not in terminal):
+                jobs_by_conversation[job.conversation_url] = job
+
+        open_rows = self.browser_rows()
+        open_by_conversation = {row["conversation_url"]: row for row in open_rows}
+        records: list[dict[str, str]] = []
+        projects: list[dict[str, str]] = []
+        scan_error: str | None = None
+        targets = [
+            target
+            for target in self.cdp.targets()
+            if target.target_type == "page" and target.is_chatgpt
+        ]
+        scored_targets: list[tuple[bool, Any]] = []
+        for target in targets:
+            focused = False
+            try:
+                focused = bool(self.cdp.chatgpt_companion_state(target.target_id).get("focused"))
+            except (AttributeError, CdpError):
+                pass
+            scored_targets.append((focused, target))
+        scored_targets.sort(key=lambda item: item[0])
+        for _, target in scored_targets[:4]:
+            try:
+                if hasattr(self.cdp, "sidebar_catalog"):
+                    catalog = self.cdp.sidebar_catalog(target.target_id, wait_timeout_s=20.0, max_records=240)
+                    records = list(catalog.get("chats") or [])
+                    projects = list(catalog.get("projects") or [])
+                else:
+                    records = self.cdp.conversation_records(target.target_id, reload=False, wait_timeout_s=1.0)
+                    projects = []
+            except (AttributeError, CdpError) as exc:
+                scan_error = str(exc)
+                continue
+            if records or projects:
+                scan_error = None
+                break
+
+        project_scan_error: str | None = None
+        temporary_project_target: str | None = None
+        if hasattr(self.cdp, "project_records"):
+            try:
+                temporary_project_target = self.cdp.create_target("https://chatgpt.com/projects", background=True)
+                page_projects = self.cdp.project_records(temporary_project_target, wait_timeout_s=12.0)
+                merged_projects: dict[str, dict[str, str]] = {}
+                for project in [*projects, *page_projects]:
+                    url = str(project.get("url") or "").strip()
+                    title = str(project.get("title") or "").strip()
+                    key = url or (f"name:{title.casefold()}" if title else "")
+                    if key:
+                        merged_projects[key] = project
+                projects = list(merged_projects.values())
+            except (AttributeError, CdpError, OSError) as exc:
+                project_scan_error = str(exc)
+            finally:
+                if temporary_project_target:
+                    try:
+                        self.cdp.close_target(temporary_project_target)
+                    except CdpError:
+                        pass
+
+        projects_by_id = {
+            str(project.get("project_id") or ""): project
+            for project in projects
+            if str(project.get("project_id") or "")
+        }
+        rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for rank, record in enumerate(records):
+            conversation_url = _canonical_chatgpt_conversation_url(str(record.get("url") or ""))
+            if not conversation_url or conversation_url in seen:
+                continue
+            seen.add(conversation_url)
+            opened = open_by_conversation.get(conversation_url)
+            job = jobs_by_conversation.get(conversation_url)
+            project_id = str(record.get("project_id") or "")
+            project = projects_by_id.get(project_id) or {}
+            context_url = str(record.get("context_url") or (opened or {}).get("url") or conversation_url)
+            rows.append({
+                "rank": rank,
+                "title": str(record.get("title") or "").strip() or (opened or {}).get("title") or "Chat GPT",
+                "conversation_url": conversation_url,
+                "conversation_context_url": context_url,
+                "project_id": project_id or None,
+                "project_name": project.get("title") or "",
+                "project_url": project.get("url") or None,
+                "open": bool(opened),
+                "managed": bool(job and job.state not in terminal),
+                "job_id": job.job_id if job and job.state not in terminal else None,
+                "job_state": job.state.value if job and job.state not in terminal else None,
+            })
+        for opened in open_rows:
+            conversation_url = opened["conversation_url"]
+            if conversation_url in seen:
+                continue
+            seen.add(conversation_url)
+            job = jobs_by_conversation.get(conversation_url)
+            rows.append({
+                "rank": len(rows),
+                "title": opened.get("title") or "Chat GPT",
+                "conversation_url": conversation_url,
+                "conversation_context_url": opened.get("url") or conversation_url,
+                "project_id": None,
+                "project_name": opened.get("project_name") or "",
+                "project_url": opened.get("project_url") or None,
+                "open": True,
+                "managed": bool(job and job.state not in terminal),
+                "job_id": job.job_id if job and job.state not in terminal else None,
+                "job_state": job.state.value if job and job.state not in terminal else None,
+            })
+        return {
+            "chats": rows,
+            "count": len(rows),
+            "projects": projects,
+            "project_count": len(projects),
+            "project_error": project_scan_error,
+            "error": scan_error if not rows and not projects else None,
+        }
+
+    def resume_history_chat(
+        self,
+        conversation_url: str,
+        title: str = "Chat GPT",
+        *,
+        conversation_context_url: str | None = None,
+        project_name: str = "",
+        project_url: str | None = None,
+    ) -> dict[str, Any]:
+        canonical = _canonical_chatgpt_conversation_url(conversation_url)
+        if not canonical:
+            raise ValueError("conversation_url_invalid")
+        context_url = conversation_context_url or canonical
+        existing = next((job for job in self.queue.list_jobs() if job.conversation_url == canonical and job.state not in {GptJobState.DONE, GptJobState.CANCELLED}), None)
+        if existing is None:
+            existing = self.queue.create_job(
+                str(title or "Chat GPT").strip() or "Chat GPT",
+                project_name=project_name,
+                project_url=project_url,
+                conversation_url=canonical,
+                conversation_context_url=context_url,
+                state=GptJobState.REVIEW,
+            )
+        result = self.start_job(existing.job_id)
+        return {"job": self.queue.get_job(existing.job_id).model_dump(mode="json"), "start": result, "server_chat_created": False}
+
     def send_message(self, job_id: str, text: str) -> dict[str, Any]:
         job = self.queue.get_job(job_id)
         if job.state is not GptJobState.ACTIVE:
@@ -509,11 +692,19 @@ def _host_from_origin(origin: str) -> str:
 class GptFrontendServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address: tuple[str, int], *, controller: GptWorkController, origin: str) -> None:
+    def __init__(
+        self,
+        address: tuple[str, int],
+        *,
+        controller: GptWorkController,
+        origins: tuple[str, ...],
+        allowed_networks: tuple[str, ...],
+    ) -> None:
         self.controller = controller
         self.queue = controller.queue
-        self.origin = origin.rstrip("/")
-        self.expected_host = _host_from_origin(self.origin)
+        self.allowed_origins = frozenset(origin.rstrip("/") for origin in origins)
+        self.allowed_hosts = frozenset(_host_from_origin(origin) for origin in self.allowed_origins)
+        self.allowed_networks = tuple(ipaddress.ip_network(value, strict=False) for value in allowed_networks)
         super().__init__(address, GptFrontendHandler)
 
 
@@ -548,12 +739,19 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
     def _error(self, status: int, message: str) -> None:
         self._send_json(status, {"error": message, "detail": message})
 
+    def _client_allowed(self) -> bool:
+        try:
+            address = ipaddress.ip_address(self.client_address[0])
+        except ValueError:
+            return False
+        return any(address in network for network in self.server.allowed_networks)
+
     def _host_allowed(self) -> bool:
-        return self.headers.get("Host", "") == self.server.expected_host
+        return self.headers.get("Host", "") in self.server.allowed_hosts
 
     def _mutation_allowed(self) -> bool:
         origin = self.headers.get("Origin")
-        if origin not in {None, self.server.origin}:
+        if origin is not None and origin.rstrip("/") not in self.server.allowed_origins:
             self._error(403, "origin_not_allowed")
             return False
         if self.headers.get("X-Bottazzi-Frontend") != "1":
@@ -595,6 +793,9 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
             return None
 
     def do_GET(self) -> None:
+        if not self._client_allowed():
+            self._error(403, "client_not_allowed")
+            return
         if not self._host_allowed():
             self._error(403, "host_not_allowed")
             return
@@ -621,9 +822,18 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
             except (CdpError, OSError) as exc:
                 self._error(503, str(exc))
             return
+        if path == "/api/history":
+            try:
+                self._send_json(200, {"ok": True, **self.server.controller.account_history()})
+            except (CdpError, OSError) as exc:
+                self._error(503, str(exc))
+            return
         self._error(404, "not_found")
 
     def do_POST(self) -> None:
+        if not self._client_allowed():
+            self._error(403, "client_not_allowed")
+            return
         if not self._host_allowed():
             self._error(403, "host_not_allowed")
             return
@@ -633,16 +843,26 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
         queue = self.server.queue
         controller = self.server.controller
         try:
+            if path == "/api/history/resume":
+                payload = self._validated(ResumeChat)
+                if payload is None:
+                    return
+                assert isinstance(payload, ResumeChat)
+                self._send_json(200, {"ok": True, **controller.resume_history_chat(payload.conversation_url, payload.title, conversation_context_url=payload.conversation_context_url, project_name=payload.project_name, project_url=payload.project_url)})
+                return
             if path == "/api/jobs":
                 payload = self._validated(CreateJob)
                 if payload is None:
                     return
                 assert isinstance(payload, CreateJob)
+                project_url = payload.project_url
+                if payload.project_name and not project_url:
+                    project_url = controller.resolve_project_url_by_name(payload.project_name)
                 job = queue.create_job(
                     payload.title,
                     prompt=payload.prompt,
                     project_name=payload.project_name,
-                    project_url=payload.project_url,
+                    project_url=project_url,
                 )
                 result: dict[str, Any] = {"ok": True, "job": job.model_dump(mode="json")}
                 if payload.auto_start:
@@ -749,16 +969,45 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
             self._error(503, str(exc))
 
 
+def _csv_env(name: str, default: str) -> tuple[str, ...]:
+    raw = os.getenv(name, default)
+    return tuple(part.strip() for part in raw.split(",") if part.strip())
+
+
 def create_server(
     queue: GptWorkQueue | None = None,
     cdp: ChromeCdp | None = None,
     *,
     origin: str = "http://127.0.0.1:19201",
+    bind_host: str | None = None,
+    allowed_origins: tuple[str, ...] | None = None,
+    allowed_networks: tuple[str, ...] | None = None,
 ) -> GptFrontendServer:
     parsed = urlparse(origin)
-    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"} or parsed.port is None:
-        raise ValueError("frontend_origin_must_be_localhost_http_with_port")
+    if parsed.scheme != "http" or parsed.port is None:
+        raise ValueError("frontend_origin_must_be_http_with_port")
+    bind_host = bind_host or os.getenv("BOTTAZZI_GPT_FRONTEND_BIND", parsed.hostname or "127.0.0.1")
+    if bind_host not in {"127.0.0.1", "localhost", "0.0.0.0", "::1"}:
+        raise ValueError("frontend_bind_host_not_allowed")
+    allowed_origins = allowed_origins or _csv_env("BOTTAZZI_GPT_FRONTEND_ALLOWED_ORIGINS", origin)
+    if not allowed_origins:
+        raise ValueError("frontend_allowed_origins_required")
+    for value in allowed_origins:
+        allowed = urlparse(value)
+        if allowed.scheme != "http" or allowed.port != parsed.port or not allowed.hostname:
+            raise ValueError("frontend_allowed_origin_invalid")
+    allowed_networks = allowed_networks or _csv_env(
+        "BOTTAZZI_GPT_FRONTEND_ALLOWED_NETWORKS",
+        "127.0.0.0/8,::1/128",
+    )
+    if not allowed_networks:
+        raise ValueError("frontend_allowed_networks_required")
     queue = queue or GptWorkQueue.from_env()
     cdp = cdp or ChromeCdp(os.getenv("BOTTAZZI_GPT_CDP_ENDPOINT", "http://127.0.0.1:9238"))
     controller = GptWorkController(queue, cdp)
-    return GptFrontendServer((parsed.hostname, parsed.port), controller=controller, origin=origin)
+    return GptFrontendServer(
+        (bind_host, parsed.port),
+        controller=controller,
+        origins=tuple(allowed_origins),
+        allowed_networks=tuple(allowed_networks),
+    )
