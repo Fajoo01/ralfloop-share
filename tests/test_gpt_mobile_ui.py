@@ -107,9 +107,18 @@ def test_completed_reply_is_saved_before_tab_release(tmp_path: Path):
         target_id="managed",
         state=GptJobState.ACTIVE,
     )
-    cdp = FakeCdp()
+    class CompletedCdp(FakeCdp):
+        def chatgpt_companion_state(self, target_id):
+            return {"focused": False, "busy": False, "composer_chars": 0, "last_assistant_text": "Risposta finale"}
+
+    cdp = CompletedCdp()
     cdp._targets.append(BrowserTarget("managed", "page", "https://chatgpt.com/c/current-chat", "Work", "ws://managed"))
-    shepherd = GptQueueShepherd(queue, cdp, policy=GptQueueShepherdPolicy(complete_idle_ms=60000, stalled_idle_ms=180000))
+    shepherd = GptQueueShepherd(
+        queue,
+        cdp,
+        policy=GptQueueShepherdPolicy(complete_idle_ms=60000, stalled_idle_ms=180000),
+        completion_notifier=lambda title: {"ok": True, "title": title},
+    )
     shepherd.run_once(auto_start=False)
     saved = queue.get_job(job.job_id)
     assert saved.state is GptJobState.REVIEW
@@ -146,7 +155,11 @@ def test_short_final_footer_does_not_replace_fuller_live_snapshot(tmp_path: Path
     queue.set_last_assistant_text(job.job_id, fuller)
     cdp = FooterCdp()
     cdp._targets.append(BrowserTarget("managed", "page", "https://chatgpt.com/c/current-chat", "Work", "ws://managed"))
-    GptQueueShepherd(queue, cdp).run_once(auto_start=False)
+    GptQueueShepherd(
+        queue,
+        cdp,
+        completion_notifier=lambda title: {"ok": True, "title": title},
+    ).run_once(auto_start=False)
     saved = queue.get_job(job.job_id)
     assert saved.state is GptJobState.REVIEW
     assert saved.last_assistant_text == fuller.strip()
@@ -215,6 +228,15 @@ def test_new_job_form_starts_chat_immediately_and_surfaces_launch_errors() -> No
     assert "Crea e avvia nuova chat" in html
     assert "auto_start:true" in html
     assert "const launch=result.start||result.pump" in html
+
+
+def test_send_feedback_voice_and_global_queue_order_are_visible() -> None:
+    html = (Path(__file__).resolve().parents[1] / "web" / "gpt_queue.html").read_text(encoding="utf-8")
+    assert "Inviato · GPT sta lavorando" in html
+    assert "state.drafts.delete(id);if(box)box.value=''" in html
+    assert "data-action=\"voice\"" in html
+    assert "/api/audio/transcribe" in html
+    assert "jobs=[...(s.jobs||[])].sort((a,b)=>Number(a.rank)-Number(b.rank))" in html
 
 
 def test_done_button_is_highlighted_for_completed_review_only() -> None:

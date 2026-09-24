@@ -4,6 +4,8 @@ import ipaddress
 import json
 import os
 import re
+import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -670,6 +672,53 @@ class GptWorkController:
         self.queue.set_last_assistant_text(job.job_id, "")
         return {"action": "queued", "job_id": job.job_id, "conversation_url": job.conversation_url}
 
+    def transcribe_audio(self, audio: bytes, content_type: str) -> dict[str, Any]:
+        if not audio:
+            raise ValueError("audio_required")
+        if len(audio) > 8 * 1024 * 1024:
+            raise ValueError("audio_too_large")
+        allowed = {
+            "audio/webm": ".webm",
+            "audio/ogg": ".ogg",
+            "audio/mp4": ".m4a",
+            "audio/mpeg": ".mp3",
+            "audio/wav": ".wav",
+            "audio/x-wav": ".wav",
+            "application/octet-stream": ".webm",
+        }
+        mime = str(content_type or "").split(";", 1)[0].strip().lower()
+        suffix = allowed.get(mime)
+        if suffix is None:
+            raise ValueError("audio_type_not_supported")
+        python_bin = os.getenv("BOTTAZZI_WHISPER_PYTHON", "/home/sibilla-cumana/venvs/asr/bin/python")
+        if not Path(python_bin).is_file():
+            raise RuntimeError("whisper_runtime_missing")
+        model_name = os.getenv("BOTTAZZI_WHISPER_MODEL", "small").strip() or "small"
+        language = os.getenv("BOTTAZZI_WHISPER_LANGUAGE", "it").strip() or "it"
+        timeout_s = max(20, min(180, int(os.getenv("BOTTAZZI_WHISPER_TIMEOUT", "90"))))
+        code = (
+            "import sys; from faster_whisper import WhisperModel; "
+            "m=WhisperModel(sys.argv[2],device='cpu',compute_type='int8'); "
+            "s,_=m.transcribe(sys.argv[1],beam_size=5,vad_filter=True,language=sys.argv[3]); "
+            "print(' '.join(x.text.strip() for x in s).strip())"
+        )
+        with tempfile.NamedTemporaryFile(prefix="bottazzi_gpt_voice_", suffix=suffix) as handle:
+            handle.write(audio)
+            handle.flush()
+            cp = subprocess.run(
+                [python_bin, "-c", code, handle.name, model_name, language],
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+                stdin=subprocess.DEVNULL,
+            )
+        if cp.returncode != 0:
+            raise RuntimeError((cp.stderr or cp.stdout or "audio_transcription_failed")[-1000:])
+        text = (cp.stdout or "").strip()
+        if not text:
+            raise ValueError("audio_not_understood")
+        return {"text": text[:32_000], "engine": "faster-whisper", "language": language}
+
     def activate_job(self, job_id: str) -> dict[str, Any]:
         job = self.queue.get_job(job_id)
         target = self._exact_job_target(job)
@@ -971,6 +1020,34 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def _audio_mutation_allowed(self) -> bool:
+        origin = self.headers.get("Origin")
+        if origin is not None and origin.rstrip("/") not in self.server.allowed_origins:
+            self._error(403, "origin_not_allowed")
+            return False
+        if self.headers.get("X-Bottazzi-Frontend") != "1":
+            self._error(403, "frontend_header_required")
+            return False
+        mime = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if mime not in {"audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "audio/wav", "audio/x-wav", "application/octet-stream"}:
+            self._error(415, "audio_type_not_supported")
+            return False
+        return True
+
+    def _read_audio(self) -> bytes | None:
+        try:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            self._error(400, "invalid_content_length")
+            return None
+        if length <= 0:
+            self._error(400, "audio_required")
+            return None
+        if length > 8 * 1024 * 1024:
+            self._error(413, "audio_too_large")
+            return None
+        return self.rfile.read(length)
+
     def _read_json(self) -> dict[str, Any] | None:
         try:
             length = int(self.headers.get("Content-Length", "0") or 0)
@@ -1056,11 +1133,24 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
         if not self._host_allowed():
             self._error(403, "host_not_allowed")
             return
-        if not self._mutation_allowed():
-            return
         path = urlparse(self.path).path
         queue = self.server.queue
         controller = self.server.controller
+        if path == "/api/audio/transcribe":
+            if not self._audio_mutation_allowed():
+                return
+            audio = self._read_audio()
+            if audio is None:
+                return
+            try:
+                self._send_json(200, {"ok": True, **controller.transcribe_audio(audio, self.headers.get("Content-Type", ""))})
+            except ValueError as exc:
+                self._error(422, str(exc))
+            except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+                self._error(503, str(exc))
+            return
+        if not self._mutation_allowed():
+            return
         try:
             if path == "/api/projects/open":
                 payload = self._validated(OpenProject)

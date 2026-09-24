@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+import os
+import socket
+from typing import Any, Callable
 
 from .gpt_browser_cdp import ChromeCdp, CdpError
 from .gpt_frontend import GptWorkController
@@ -33,11 +35,13 @@ class GptQueueShepherd:
         cdp: ChromeCdp,
         *,
         policy: GptQueueShepherdPolicy | None = None,
+        completion_notifier: Callable[[str], dict[str, Any]] | None = None,
     ) -> None:
         self.queue = queue
         self.cdp = cdp
         self.controller = GptWorkController(queue, cdp)
         self.policy = policy or GptQueueShepherdPolicy()
+        self.completion_notifier = completion_notifier or self._notify_completion
 
     @staticmethod
     def _int(value: Any) -> int:
@@ -45,6 +49,19 @@ class GptQueueShepherd:
             return max(0, int(value or 0))
         except (TypeError, ValueError):
             return 0
+
+    @staticmethod
+    def _notify_completion(title: str) -> dict[str, Any]:
+        socket_path = os.getenv("BOTTAZZI_TELEMETRY_SOCKET", "/run/bottazzi-telemetry.sock")
+        clean_title = " ".join(str(title or "Lavoro GPT").split())[:240]
+        message = f"BOT-TAZZI · lavoro completato: {clean_title}"
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as client:
+                client.connect(socket_path)
+                client.send(message.encode("utf-8"))
+        except OSError as exc:
+            return {"ok": False, "error": type(exc).__name__}
+        return {"ok": True, "message": message}
 
     def run_once(self, *, auto_start: bool = True) -> dict[str, Any]:
         self.controller.reconcile()
@@ -70,6 +87,7 @@ class GptQueueShepherd:
                 continue
 
             focused = bool(companion.get("focused"))
+            companion_busy = bool(companion.get("busy"))
             composer_chars = self._int(companion.get("composer_chars"))
             response_text = str(companion.get("last_assistant_text") or "").strip()
             response_in_progress = bool(ui.get("response_in_progress"))
@@ -84,6 +102,9 @@ class GptQueueShepherd:
                 continue
             if response_in_progress:
                 actions.append({"job_id": job.job_id, "action": "preserved", "reason": "response_in_progress"})
+                continue
+            if companion_busy:
+                actions.append({"job_id": job.job_id, "action": "preserved", "reason": "companion_busy"})
                 continue
 
             user_turns = self._int(ui.get("user_turns"))
@@ -107,6 +128,7 @@ class GptQueueShepherd:
                     minimum_final_chars = max(120, len(saved_text) // 2)
                     if not saved_text or len(response_text) >= minimum_final_chars:
                         self.queue.set_last_assistant_text(job.job_id, response_text)
+                notification = self.completion_notifier(job.title)
                 self.controller.release_job(job.job_id)
                 actions.append(
                     {
@@ -116,6 +138,7 @@ class GptQueueShepherd:
                         "user_turns": user_turns,
                         "assistant_turns": assistant_turns,
                         "response_idle_ms": idle_ms,
+                        "telegram_notification": notification,
                     }
                 )
                 continue

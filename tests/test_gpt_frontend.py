@@ -304,6 +304,37 @@ def test_marking_done_immediately_starts_next_queued_job(tmp_path: Path) -> None
     assert queue.get_job(second_id).state is GptJobState.ACTIVE
 
 
+def test_audio_transcription_endpoint_accepts_frontend_audio(tmp_path: Path, monkeypatch) -> None:
+    queue = make_queue(tmp_path)
+    cdp = FakeCdp()
+    monkeypatch.setattr(
+        GptWorkController,
+        "transcribe_audio",
+        lambda self, audio, content_type: {"text": "ciao bottazzi", "engine": "test", "language": "it", "bytes": len(audio)},
+    )
+    with running_frontend(queue, cdp) as (port, origin):
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+        body = b"fake-webm-audio"
+        conn.request(
+            "POST",
+            "/api/audio/transcribe",
+            body=body,
+            headers={
+                "Content-Type": "audio/webm",
+                "Content-Length": str(len(body)),
+                "X-Bottazzi-Frontend": "1",
+                "Origin": origin,
+            },
+        )
+        response = conn.getresponse()
+        data = json.loads(response.read().decode("utf-8"))
+        conn.close()
+
+    assert response.status == 200
+    assert data["text"] == "ciao bottazzi"
+    assert data["bytes"] == len(body)
+
+
 def test_frontend_rejects_cross_origin_mutation(tmp_path: Path) -> None:
     queue = make_queue(tmp_path)
     cdp = FakeCdp()

@@ -69,6 +69,7 @@ def shepherd(queue: GptWorkQueue, cdp: FakeCdp) -> GptQueueShepherd:
             complete_idle_ms=60_000,
             stalled_idle_ms=180_000,
         ),
+        completion_notifier=lambda title: {"ok": True, "title": title},
     )
 
 
@@ -111,6 +112,26 @@ def test_streaming_reply_is_never_released(tmp_path: Path) -> None:
     assert queue.get_job(job_id).state is GptJobState.ACTIVE
     assert cdp.closed == []
     assert report["actions"][0]["reason"] == "response_in_progress"
+
+
+def test_companion_busy_is_never_released_even_if_pending_looks_stale(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    cdp = FakeCdp(
+        ui={
+            "user_turns": 1,
+            "assistant_turns": 1,
+            "response_in_progress": False,
+            "response_pending": True,
+            "response_idle_ms": 999_999,
+        },
+        companion={"busy": True, "last_assistant_text": "Sì. Per"},
+    )
+
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    assert queue.get_job(job_id).state is GptJobState.ACTIVE
+    assert cdp.closed == []
+    assert report["actions"][0]["reason"] == "companion_busy"
 
 
 def test_focused_chat_is_never_released(tmp_path: Path) -> None:
