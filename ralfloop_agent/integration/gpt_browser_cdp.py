@@ -935,7 +935,7 @@ class ChromeCdp:
         entries cannot be mistaken for members of the selected project.
         """
         canonical_project = _safe_chatgpt_new_chat_url(project_url)
-        parsed = urlparse(canonical_project)
+        parsed = urllib.parse.urlparse(canonical_project)
         parts = [part for part in parsed.path.split("/") if part]
         if len(parts) < 2 or parts[0] != "g":
             raise CdpError("project_url_invalid")
