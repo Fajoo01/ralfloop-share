@@ -987,7 +987,7 @@ def cmd_adopt_external(args: argparse.Namespace) -> int:
 def _companion_tabs(cdp: ChromeCdp, store: HandoffStore) -> list[dict]:
     current = store.load_current() if store.current_path.exists() else {}
     worker_id = str(current.get("source_chat") or "")
-    rows: list[dict] = []
+    by_conversation: dict[str, list[dict]] = {}
     for tab in cdp.targets():
         conversation_url = normalize_chatgpt_conversation_url(tab.url)
         if tab.target_type != "page" or not tab.is_chatgpt or not conversation_url:
@@ -1000,7 +1000,7 @@ def _companion_tabs(cdp: ChromeCdp, store: HandoffStore) -> list[dict]:
             ui = cdp.chatgpt_ui_state(tab.target_id)
         except CdpError:
             ui = {}
-        rows.append(
+        by_conversation.setdefault(conversation_url, []).append(
             {
                 "target_id": tab.target_id,
                 "title": tab.title,
@@ -1013,6 +1013,45 @@ def _companion_tabs(cdp: ChromeCdp, store: HandoffStore) -> list[dict]:
                 "busy": bool(ui.get("response_pending")) or bool(ui.get("response_in_progress")),
             }
         )
+
+    rows: list[dict] = []
+    for candidates in by_conversation.values():
+        visible = [row for row in candidates if not row["ghost"]] or candidates
+        representative = max(
+            visible,
+            key=lambda row: (
+                bool(row["worker"]),
+                bool(row["busy"]),
+                bool(row["focused"]),
+            ),
+        )
+        worker = any(bool(row["worker"]) for row in candidates)
+        busy = any(bool(row["busy"]) for row in candidates)
+        focused = any(bool(row["focused"]) for row in candidates)
+        ghost = all(bool(row["ghost"]) for row in candidates)
+        state = "responding" if busy else "worker" if worker else "focused" if focused else "open"
+        rows.append(
+            {
+                **representative,
+                "worker": worker,
+                "focused": focused,
+                "ghost": ghost,
+                "busy": busy,
+                "active": busy or worker or focused,
+                "state": state,
+                "target_count": len(candidates),
+                "target_ids": [row["target_id"] for row in candidates],
+            }
+        )
+    rows.sort(
+        key=lambda row: (
+            not bool(row["active"]),
+            not bool(row["busy"]),
+            not bool(row["worker"]),
+            not bool(row["focused"]),
+            str(row["title"]).casefold(),
+        )
+    )
     return rows
 
 
