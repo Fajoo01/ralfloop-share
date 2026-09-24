@@ -1027,6 +1027,39 @@ def test_forced_access_limit_handoff_uses_fresh_target_after_cooldown(monkeypatc
     assert MutationJournalStore(tmp_path).load() is None
 
 
+def test_forced_access_limit_handoff_still_runs_after_alert_clears(monkeypatch, tmp_path) -> None:
+    handoff = HandoffStore(tmp_path)
+    handoff.save(Handoff(goal="x", current_state="y"))
+    handoff.update_source_chat("source", "https://chatgpt.com/c/source")
+    fake = FakeForcedAccessLimitCdp()
+    original_state = fake.chatgpt_ui_state
+
+    def cleared_state(target_id: str):
+        state = original_state(target_id)
+        state["temporary_access_limited"] = False
+        return state
+
+    fake.chatgpt_ui_state = cleared_state
+    monkeypatch.setattr(gpt_session_tool, "ChromeCdp", lambda endpoint: fake)
+    args = SimpleNamespace(
+        endpoint="http://127.0.0.1:9238",
+        state_dir=str(tmp_path),
+        source_target_id="source",
+        max_turns=36,
+        max_age_minutes=120,
+        max_errors=2,
+        max_latency_ms=30000,
+        max_stall_ms=60000,
+        max_active_stall_ms=600000,
+        force_access_limit_handoff=True,
+        apply=True,
+        submit=True,
+    )
+
+    assert gpt_session_tool.cmd_shepherd(args) == 0
+    assert fake.reuse_source_target is False
+
+
 def test_incomplete_rollover_rolls_back_unconfirmed_successor(tmp_path) -> None:
     handoff = HandoffStore(tmp_path)
     handoff.save(Handoff(goal="x", current_state="y"))

@@ -106,7 +106,19 @@ if [[ -n "$recovery_target" ]]; then
     continue_result="$(printf '%s\n' 'prosegui' | run_json rate_limit_continue "$PY" "$TOOL" --endpoint "$ENDPOINT" companion-send --target-id "$source_target_id")" || continue_result=""
     if [[ -n "$continue_result" ]]; then
       printf '%s\n' "$continue_result"
+      if printf '%s' "$continue_result" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); raise SystemExit(0 if d.get("queued") else 1)' >/dev/null 2>&1; then
+        rm -f "$RATE_LIMIT_RECOVERY_FILE" "$SNOOZE_FILE"
+        exit 0
+      fi
     fi
+    fallback_result="$(run_json rate_limit_new_chat "$PY" "$TOOL" --endpoint "$ENDPOINT" shepherd --apply --submit --source-target-id "$source_target_id" --force-access-limit-handoff)" || fallback_result=""
+    if [[ -n "$fallback_result" ]] && printf '%s' "$fallback_result" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); raise SystemExit(0 if d.get("ok") and d.get("applied") else 1)' >/dev/null 2>&1; then
+      rm -f "$RATE_LIMIT_RECOVERY_FILE" "$SNOOZE_FILE"
+      printf '%s\n' "$fallback_result"
+      exit 0
+    fi
+    printf '%s\n' "$(( now + RATE_LIMIT_COOLDOWN_SECONDS ))" > "$SNOOZE_FILE"
+    exit 0
   fi
   rm -f "$RATE_LIMIT_RECOVERY_FILE" "$SNOOZE_FILE"
   exit 0

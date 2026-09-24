@@ -1482,10 +1482,7 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
         max_idle_ms=args.max_stall_ms,
         max_active_idle_ms=args.max_active_stall_ms,
     )
-    force_access_limit_handoff = bool(
-        getattr(args, "force_access_limit_handoff", False)
-        and ui.get("temporary_access_limited")
-    )
+    force_access_limit_handoff = bool(getattr(args, "force_access_limit_handoff", False))
     report = {
         "ok": True,
         "ui": ui,
