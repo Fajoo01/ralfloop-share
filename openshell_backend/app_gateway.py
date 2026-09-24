@@ -15,6 +15,7 @@ import requests
 APP_NAME = "Bot-tazzi — App"
 UI_PATH = Path(__file__).with_name("bottazzi_ui.html")
 BACKEND = os.getenv("BOTTAZZI_APP_BACKEND", "http://127.0.0.1:19090").rstrip("/")
+GPT_QUEUE = os.getenv("BOTTAZZI_APP_GPT_QUEUE", "http://127.0.0.1:19201").rstrip("/")
 COOKIE = "bottazzi_app_session"
 SESSION_TTL = int(os.getenv("BOTTAZZI_APP_SESSION_TTL", "86400"))
 PUBLIC_PATHS = {"/login", "/healthz", "/manifest.webmanifest", "/sw.js", "/icon.svg"}
@@ -194,6 +195,32 @@ async def assistant_tasks(request: Request, rest_of_path: str = "") -> Response:
         )
     except requests.RequestException:
         return JSONResponse({"detail": "assistant_backend_unavailable"}, status_code=503)
+    return _proxy_response(upstream)
+
+
+@app.api_route("/assistant/v1/gpt", methods=["GET"])
+@app.api_route(
+    "/assistant/v1/gpt/{rest_of_path:path}",
+    methods=["GET", "POST", "PATCH", "DELETE"],
+)
+async def gpt_queue_proxy(request: Request, rest_of_path: str = "") -> Response:
+    upstream_path = "/api/snapshot" if not rest_of_path else f"/api/{rest_of_path}"
+    headers = {"X-Bottazzi-Frontend": "1"}
+    for key in ("content-type", "x-bottazzi-file-name", "x-bottazzi-image"):
+        value = request.headers.get(key)
+        if value:
+            headers[key] = value
+    try:
+        upstream = requests.request(
+            request.method,
+            f"{GPT_QUEUE}{upstream_path}",
+            params=list(request.query_params.multi_items()),
+            data=await request.body(),
+            headers=headers,
+            timeout=int(os.getenv("BOTTAZZI_APP_GPT_TIMEOUT", "120")),
+        )
+    except requests.RequestException:
+        return JSONResponse({"detail": "gpt_queue_unavailable"}, status_code=503)
     return _proxy_response(upstream)
 
 

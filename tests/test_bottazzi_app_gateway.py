@@ -90,6 +90,38 @@ def test_task_queue_proxy_uses_authenticated_gateway(client: TestClient, monkeyp
     assert seen["url"].endswith("/assistant/v1/tasks")
 
 
+def test_gpt_queue_proxy_is_authenticated_and_forwards_attachment(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert client.get("/assistant/v1/gpt").status_code == 401
+    client.post("/login", json={"password": "app-pass"})
+    seen = {}
+
+    class FakeResponse:
+        status_code = 200
+        content = b'{"ok":true,"attached":true}'
+        headers = {"content-type": "application/json"}
+        ok = True
+
+    def fake_request(method, url, *, params, data, headers, timeout):
+        seen.update(method=method, url=url, params=params, data=data, headers=headers, timeout=timeout)
+        return FakeResponse()
+
+    monkeypatch.setattr(app_gateway.requests, "request", fake_request)
+    response = client.post(
+        "/assistant/v1/gpt/jobs/job-1/attachment",
+        content=b"photo",
+        headers={
+            "content-type": "image/jpeg",
+            "x-bottazzi-file-name": "foto.jpg",
+            "x-bottazzi-image": "1",
+        },
+    )
+    assert response.status_code == 200
+    assert seen["url"].endswith("/api/jobs/job-1/attachment")
+    assert seen["headers"]["X-Bottazzi-Frontend"] == "1"
+    assert seen["headers"]["x-bottazzi-file-name"] == "foto.jpg"
+    assert seen["headers"]["x-bottazzi-image"] == "1"
+    assert seen["data"] == b"photo"
+
 
 def test_android_shell_has_no_source_hardcoded_backend() -> None:
     root = Path(__file__).resolve().parents[1] / "android" / "bottazzi-app"

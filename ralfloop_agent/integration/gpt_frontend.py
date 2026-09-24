@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -761,6 +761,59 @@ class GptWorkController:
             raise ValueError("audio_not_understood")
         return {"text": text[:32_000], "engine": "faster-whisper", "language": language}
 
+    def attach_file(
+        self,
+        job_id: str,
+        payload: bytes,
+        filename: str,
+        content_type: str,
+        *,
+        image_only: bool = False,
+    ) -> dict[str, Any]:
+        if not payload:
+            raise ValueError("attachment_required")
+        if len(payload) > 25 * 1024 * 1024:
+            raise ValueError("attachment_too_large")
+        job = self.queue.get_job(job_id)
+        if job.state is not GptJobState.ACTIVE:
+            raise ValueError("job_not_active")
+        target = self._exact_job_target(job)
+        safe_name = re.sub(r"[^A-Za-z0-9._ -]+", "_", Path(filename or "allegato").name).strip(" .")[:180] or "allegato"
+        mime = str(content_type or "application/octet-stream").split(";", 1)[0].strip().lower()
+        if image_only and not mime.startswith("image/"):
+            raise ValueError("image_required")
+        root = Path(os.getenv("BOTTAZZI_GPT_UPLOAD_DIR", "/home/bandi/.local/state/bottazzi/gpt-session/uploads"))
+        root.mkdir(parents=True, exist_ok=True)
+        now = time.time()
+        for old in root.glob("*"):
+            try:
+                if old.is_file() and now - old.stat().st_mtime > 3600:
+                    old.unlink()
+            except OSError:
+                pass
+        path = root / f"{time.time_ns()}-{safe_name}"
+        path.write_bytes(payload)
+        try:
+            result = self.cdp.attach_chatgpt_file(
+                target.target_id,
+                job.conversation_context_url or job.conversation_url or target.url,
+                path,
+                image_only=image_only,
+            )
+        except Exception:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            raise
+        return {
+            "action": "attached",
+            "job_id": job.job_id,
+            "filename": safe_name,
+            "content_type": mime,
+            **result,
+        }
+
     def activate_job(self, job_id: str) -> dict[str, Any]:
         job = self.queue.get_job(job_id)
         target = self._exact_job_target(job)
@@ -1090,6 +1143,30 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
             return None
         return self.rfile.read(length)
 
+    def _binary_mutation_allowed(self) -> bool:
+        origin = self.headers.get("Origin")
+        if origin is not None and origin.rstrip("/") not in self.server.allowed_origins:
+            self._error(403, "origin_not_allowed")
+            return False
+        if self.headers.get("X-Bottazzi-Frontend") != "1":
+            self._error(403, "frontend_header_required")
+            return False
+        return True
+
+    def _read_binary(self, *, limit: int = 25 * 1024 * 1024) -> bytes | None:
+        try:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            self._error(400, "invalid_content_length")
+            return None
+        if length <= 0:
+            self._error(400, "attachment_required")
+            return None
+        if length > limit:
+            self._error(413, "attachment_too_large")
+            return None
+        return self.rfile.read(length)
+
     def _read_json(self) -> dict[str, Any] | None:
         try:
             length = int(self.headers.get("Content-Length", "0") or 0)
@@ -1190,6 +1267,31 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
                 self._error(422, str(exc))
             except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
                 self._error(503, str(exc))
+            return
+        attachment_match = re.fullmatch(r"/api/jobs/([A-Za-z0-9-]+)/attachment", path)
+        if attachment_match:
+            if not self._binary_mutation_allowed():
+                return
+            payload = self._read_binary()
+            if payload is None:
+                return
+            try:
+                filename = unquote(self.headers.get("X-Bottazzi-File-Name", "allegato"))
+                image_only = self.headers.get("X-Bottazzi-Image", "0") == "1"
+                result = controller.attach_file(
+                    attachment_match.group(1),
+                    payload,
+                    filename,
+                    self.headers.get("Content-Type", "application/octet-stream"),
+                    image_only=image_only,
+                )
+                self._send_json(200, {"ok": True, **result})
+            except KeyError:
+                self._error(404, "job_not_found")
+            except ValueError as exc:
+                self._error(422, str(exc))
+            except (CdpError, OSError, RuntimeError) as exc:
+                self._error(409, str(exc))
             return
         if not self._mutation_allowed():
             return

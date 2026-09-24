@@ -1888,6 +1888,75 @@ class ChromeCdp:
             raise CdpError(str(state.get("reason") or "human_queue_message_failed"))
         return state
 
+    def attach_chatgpt_file(
+        self,
+        target_id: str,
+        conversation_url: str,
+        file_path: str | os.PathLike[str],
+        *,
+        image_only: bool = False,
+    ) -> dict[str, Any]:
+        normalized = _canonical_chatgpt_conversation_url(conversation_url)
+        if not normalized:
+            raise CdpError("attachment_conversation_url_invalid")
+        path = Path(file_path).expanduser().resolve()
+        if not path.is_file():
+            raise CdpError("attachment_file_missing")
+        target = self._wait_target(target_id)
+        if not target.websocket_url or not target.is_chatgpt:
+            raise CdpError("attachment_target_invalid")
+        if _canonical_chatgpt_conversation_url(target.url) != normalized:
+            raise CdpError("attachment_assignment_mismatch")
+        expression = (
+            "Array.from(document.querySelectorAll('input[type=file]')).find(x=>"
+            + (
+                "x.getAttribute('data-testid')==='upload-photos-input'||String(x.accept||'').includes('image')"
+                if image_only
+                else "!String(x.accept||'').trim()"
+            )
+            + ")||null"
+        )
+        result = self._page_call(
+            target.websocket_url,
+            "Runtime.evaluate",
+            {"expression": expression, "returnByValue": False},
+        )
+        object_id = (result.get("result") or {}).get("objectId")
+        if not object_id:
+            raise CdpError("attachment_input_not_found")
+        self._page_call(
+            target.websocket_url,
+            "DOM.setFileInputFiles",
+            {"objectId": object_id, "files": [str(path)]},
+            timeout_s=20.0,
+        )
+        basename = path.name
+        name_json = json.dumps(basename)
+        deadline = time.monotonic() + 12.0
+        last_state: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            verify_expression = (
+                f"(() => {{ const name={name_json}; "
+                "const inputs=[...document.querySelectorAll('input[type=file]')]; "
+                "const inInput=inputs.some(x=>[...x.files].some(f=>f.name===name)); "
+                "const body=String(document.body?.innerText||''); "
+                "return JSON.stringify({ok:inInput||body.includes(name),inInput,seen:body.includes(name)}); }})()"
+            )
+            verify = self._page_call(
+                target.websocket_url,
+                "Runtime.evaluate",
+                {"expression": verify_expression, "returnByValue": True},
+            )
+            raw = (verify.get("result") or {}).get("value")
+            try:
+                last_state = json.loads(raw) if isinstance(raw, str) else {}
+            except json.JSONDecodeError:
+                last_state = {}
+            if isinstance(last_state, dict) and last_state.get("ok"):
+                return {"attached": True, "filename": basename, "image_only": bool(image_only)}
+            time.sleep(0.25)
+        raise CdpError(f"attachment_not_confirmed:{json.dumps(last_state, sort_keys=True)}")
+
     def install_tab_identity(self, target_id: str, *, mode: str = "other", countdown_seconds: int | None = None) -> dict[str, Any]:
         if mode not in {"active", "other", "queue", "closing"}:
             raise CdpError("tab_identity_mode_invalid")
