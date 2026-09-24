@@ -22,6 +22,7 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
     monkeypatch.setenv("BOTTAZZI_APP_SESSION_SECRET", "test-session-secret")
     monkeypatch.setenv("BOTTAZZI_APP_AUTH_MODE", "password")
     monkeypatch.setattr(app_gateway, "CALL_RECORDINGS", CallRecordingStore(tmp_path / "calls"))
+    monkeypatch.setattr(app_gateway, "UPLOAD_ROOT", tmp_path / "uploads")
     return TestClient(app_gateway.app)
 
 

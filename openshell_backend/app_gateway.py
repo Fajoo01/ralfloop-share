@@ -5,7 +5,10 @@ import hashlib
 import hmac
 import os
 from pathlib import Path
+import re
 import secrets
+import subprocess
+import tempfile
 import time
 from typing import Any
 from urllib.parse import unquote_plus
@@ -21,6 +24,8 @@ APP_NAME = "Bot-tazzi — App"
 UI_PATH = Path(__file__).with_name("bottazzi_ui.html")
 BACKEND = os.getenv("BOTTAZZI_APP_BACKEND", "http://127.0.0.1:19090").rstrip("/")
 SCHOLARLY_BACKEND = os.getenv("BOTTAZZI_APP_SCHOLARLY_BACKEND", "").rstrip("/")
+UPLOAD_ROOT = Path(os.getenv("BOTTAZZI_APP_UPLOAD_ROOT", "/var/lib/ralfloop-bottazzi-call-recordings/app-uploads"))
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 COOKIE = "bottazzi_app_session"
 OIDC_STATE_COOKIE = "bottazzi_oidc_state"
 SESSION_TTL = int(os.getenv("BOTTAZZI_APP_SESSION_TTL", "86400"))
@@ -322,9 +327,99 @@ async def assistant_accounting_review(request: Request, rest_of_path: str = "") 
     return _proxy_response(upstream)
 
 
+
+@app.post("/assistant/v1/audio/transcribe")
+async def assistant_audio_transcribe(request: Request) -> Response:
+    content = await request.body()
+    if not content:
+        return JSONResponse({"detail": "audio_required"}, status_code=400)
+    if len(content) > 8 * 1024 * 1024:
+        return JSONResponse({"detail": "audio_too_large"}, status_code=413)
+    mime = request.headers.get("content-type", "").split(";", 1)[0].strip().casefold()
+    suffixes = {
+        "audio/webm": ".webm", "audio/ogg": ".ogg", "audio/mp4": ".m4a",
+        "audio/mpeg": ".mp3", "audio/wav": ".wav", "audio/x-wav": ".wav",
+        "application/octet-stream": ".webm",
+    }
+    suffix = suffixes.get(mime)
+    if suffix is None:
+        return JSONResponse({"detail": "audio_type_not_supported"}, status_code=415)
+    python_bin = os.getenv("BOTTAZZI_WHISPER_PYTHON", "/home/sibilla-cumana/venvs/asr/bin/python")
+    model_name = os.getenv("BOTTAZZI_WHISPER_MODEL", "small").strip() or "small"
+    language = os.getenv("BOTTAZZI_WHISPER_LANGUAGE", "it").strip() or "it"
+    code = (
+        "import sys; from faster_whisper import WhisperModel; "
+        "m=WhisperModel(sys.argv[2],device='cpu',compute_type='int8'); "
+        "s,_=m.transcribe(sys.argv[1],beam_size=5,vad_filter=True,language=sys.argv[3]); "
+        "print(' '.join(x.text.strip() for x in s).strip())"
+    )
+    try:
+        with tempfile.NamedTemporaryFile(prefix="bottazzi_app_voice_", suffix=suffix) as handle:
+            handle.write(content)
+            handle.flush()
+            cp = subprocess.run(
+                [python_bin, "-c", code, handle.name, model_name, language],
+                capture_output=True, text=True, timeout=90, stdin=subprocess.DEVNULL,
+            )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return JSONResponse({"detail": "audio_transcription_failed"}, status_code=503)
+    if cp.returncode != 0:
+        return JSONResponse({"detail": "audio_transcription_failed"}, status_code=503)
+    text = (cp.stdout or "").strip()
+    if not text:
+        return JSONResponse({"detail": "audio_not_understood"}, status_code=422)
+    return JSONResponse({"ok": True, "text": text[:32000], "engine": "faster-whisper", "language": language})
+
+
+@app.post("/assistant/v1/attachments")
+async def assistant_attachment(request: Request) -> Response:
+    content = await request.body()
+    if not content:
+        return JSONResponse({"detail": "attachment_required"}, status_code=400)
+    if len(content) > MAX_UPLOAD_BYTES:
+        return JSONResponse({"detail": "attachment_too_large"}, status_code=413)
+    raw_name = unquote_plus(request.headers.get("x-bottazzi-filename", "allegato")).strip()
+    safe_name = re.sub(r"[^A-Za-z0-9._ -]+", "_", Path(raw_name).name).strip(" .")[:120] or "allegato"
+    suffix = Path(safe_name).suffix.casefold()
+    allowed = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".txt", ".md", ".csv", ".json", ".doc", ".docx", ".xls", ".xlsx"}
+    if suffix not in allowed:
+        return JSONResponse({"detail": "attachment_type_not_supported"}, status_code=415)
+    UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+    attachment_id = secrets.token_hex(12)
+    path = UPLOAD_ROOT / f"{attachment_id}-{safe_name}"
+    path.write_bytes(content)
+    os.chmod(path, 0o600)
+    return JSONResponse({"ok": True, "attachment": {
+        "id": attachment_id, "name": safe_name, "path": str(path),
+        "content_type": request.headers.get("content-type", "application/octet-stream").split(";", 1)[0],
+        "size": len(content),
+    }})
+
+
 @app.post("/assistant/v1/chat")
 def assistant_chat(payload: dict[str, Any]) -> Response:
     outgoing = dict(payload)
+    app_attachments = outgoing.pop("app_attachments", [])
+    if isinstance(app_attachments, list) and app_attachments:
+        safe_rows = []
+        root = UPLOAD_ROOT.resolve()
+        for item in app_attachments[:5]:
+            if not isinstance(item, dict):
+                continue
+            try:
+                path = Path(str(item.get("path") or "")).resolve()
+            except (OSError, RuntimeError):
+                continue
+            if not path.is_file() or not (path == root or root in path.parents):
+                continue
+            safe_rows.append({"name": str(item.get("name") or path.name)[:120], "path": str(path), "content_type": str(item.get("content_type") or "application/octet-stream")})
+        if safe_rows:
+            original = str(outgoing.get("message") or "").strip() or "Analizza gli allegati."
+            lines = ["- {}: {} ({})".format(row["name"], row["path"], row["content_type"]) for row in safe_rows]
+            outgoing["message"] = (original + "\n\nAllegati locali disponibili sul server:\n" + "\n".join(lines) + "\nLeggi e usa questi file come input; per PDF o immagini usa il percorso visual/visual RAG quando necessario.")[:32000]
+            context = dict(outgoing.get("context") or {})
+            context["app_attachments"] = safe_rows
+            outgoing["context"] = context
     internet_agent = bool(outgoing.pop("app_internet_agent", False))
     scholarly = bool(outgoing.pop("app_scholarly", False))
     if internet_agent:
