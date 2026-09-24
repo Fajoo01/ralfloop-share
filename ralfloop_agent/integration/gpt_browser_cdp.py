@@ -732,7 +732,7 @@ class ChromeCdp:
           const projectInfo = value => {
             try {
               const u = new URL(String(value || ''), location.origin);
-              const m = u.pathname.match(/(?:^|\/)(g-p-[A-Za-z0-9_-]+)/);
+              const m = u.pathname.match(new RegExp('^/g/(g-p-[A-Za-z0-9_-]+)/project/?$'));
               if (!m) return null;
               return {url: `${u.origin}/g/${m[1]}/project`, project_id: m[1]};
             } catch (_) { return null; }
@@ -921,6 +921,86 @@ class ChromeCdp:
             last_rows = rows
             time.sleep(0.25)
         return last_rows
+
+    def project_conversation_records(
+        self,
+        target_id: str,
+        *,
+        project_url: str,
+        wait_timeout_s: float = 8.0,
+    ) -> list[dict[str, str]]:
+        """Read conversations from the currently open ChatGPT project page.
+
+        Only links outside navigation are considered, so recent-chat sidebar
+        entries cannot be mistaken for members of the selected project.
+        """
+        canonical_project = _safe_chatgpt_new_chat_url(project_url)
+        parsed = urlparse(canonical_project)
+        parts = [part for part in parsed.path.split("/") if part]
+        if len(parts) < 2 or parts[0] != "g":
+            raise CdpError("project_url_invalid")
+        project_id = parts[1]
+        expression = r'''(() => {
+          const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
+          const rows = [];
+          const seen = new Set();
+          for (const anchor of document.querySelectorAll('a[href]')) {
+            if (anchor.closest('nav')) continue;
+            let u;
+            try { u = new URL(anchor.href, location.origin); } catch (_) { continue; }
+            const m = u.pathname.match(new RegExp('^/(?:g/[^/]+/)?c/([A-Za-z0-9-]+)'));
+            if (!m) continue;
+            const url = `${u.origin}/c/${m[1]}`;
+            if (seen.has(url)) continue;
+            const title = clean(anchor.innerText || anchor.textContent || anchor.getAttribute('aria-label') || '');
+            if (!title) continue;
+            seen.add(url);
+            rows.push({url, title});
+          }
+          return JSON.stringify({ready: document.readyState === 'complete', rows});
+        })()'''
+        deadline = time.monotonic() + max(1.0, float(wait_timeout_s))
+        saw_ready = False
+        while time.monotonic() < deadline:
+            target = self._wait_target(target_id)
+            if not target.is_chatgpt or not target.websocket_url:
+                raise CdpError("project_chat_scan_target_invalid")
+            result = self._page_call(
+                target.websocket_url,
+                "Runtime.evaluate",
+                {"expression": expression, "returnByValue": True},
+                timeout_s=min(max(1.0, self.timeout_s), 5.0),
+            )
+            raw = (result.get("result") or {}).get("value")
+            try:
+                payload = json.loads(raw) if isinstance(raw, str) else {}
+            except json.JSONDecodeError:
+                payload = {}
+            values = payload.get("rows") if isinstance(payload, dict) else []
+            rows: list[dict[str, str]] = []
+            if isinstance(values, list):
+                for value in values:
+                    if not isinstance(value, dict):
+                        continue
+                    url = _canonical_chatgpt_conversation_url(str(value.get("url") or ""))
+                    title = str(value.get("title") or "").strip()
+                    if not url or not title or any(row["url"] == url for row in rows):
+                        continue
+                    conversation_id = url.rsplit("/", 1)[-1]
+                    rows.append({
+                        "url": url,
+                        "context_url": f"{CHATGPT_ORIGIN}/g/{project_id}/c/{conversation_id}",
+                        "title": title,
+                        "project_id": project_id,
+                    })
+            if rows:
+                return rows
+            ready = bool(isinstance(payload, dict) and payload.get("ready"))
+            if ready and saw_ready:
+                return []
+            saw_ready = saw_ready or ready
+            time.sleep(0.35)
+        return []
 
     def resolve_project_url(
         self,

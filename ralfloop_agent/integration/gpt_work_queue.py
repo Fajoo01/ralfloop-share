@@ -40,6 +40,7 @@ class GptWorkJob(BaseModel):
     state: GptJobState
     rank: int = Field(ge=1)
     last_error: str | None = Field(default=None, max_length=2000)
+    last_assistant_text: str = Field(default="", max_length=24_000)
     created_at: int
     updated_at: int
 
@@ -99,6 +100,7 @@ class GptWorkQueue:
                     state TEXT NOT NULL,
                     rank INTEGER NOT NULL,
                     last_error TEXT,
+                    last_assistant_text TEXT NOT NULL DEFAULT '',
                     created_at INTEGER NOT NULL,
                     updated_at INTEGER NOT NULL
                 )
@@ -107,6 +109,8 @@ class GptWorkQueue:
             columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(gpt_jobs)").fetchall()}
             if "conversation_context_url" not in columns:
                 conn.execute("ALTER TABLE gpt_jobs ADD COLUMN conversation_context_url TEXT")
+            if "last_assistant_text" not in columns:
+                conn.execute("ALTER TABLE gpt_jobs ADD COLUMN last_assistant_text TEXT NOT NULL DEFAULT ''")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_gpt_jobs_rank ON gpt_jobs(rank, created_at)"
             )
@@ -192,6 +196,7 @@ class GptWorkQueue:
             state=GptJobState(str(row["state"])),
             rank=int(row["rank"]),
             last_error=str(row["last_error"]) if row["last_error"] else None,
+            last_assistant_text=str(row["last_assistant_text"] or ""),
             created_at=int(row["created_at"]),
             updated_at=int(row["updated_at"]),
         )
@@ -362,6 +367,15 @@ class GptWorkQueue:
                 "UPDATE gpt_jobs SET state=?, last_error=?, updated_at=? WHERE job_id=?",
                 (state_value.value, str(last_error or "") or None, now, job_id),
             )
+            if result.rowcount != 1:
+                raise KeyError(job_id)
+        return self.get_job(job_id)
+
+    def set_last_assistant_text(self, job_id: str, text: str) -> GptWorkJob:
+        value = str(text or "").strip()[-24_000:]
+        now = int(self.clock())
+        with self._connect() as conn:
+            result = conn.execute("UPDATE gpt_jobs SET last_assistant_text=?, updated_at=? WHERE job_id=?", (value, now, job_id))
             if result.rowcount != 1:
                 raise KeyError(job_id)
         return self.get_job(job_id)

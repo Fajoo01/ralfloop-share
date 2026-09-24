@@ -97,6 +97,9 @@ class GptQueueShepherd:
             )
 
             if completed:
+                response_text = str(companion.get("last_assistant_text") or "").strip()
+                if response_text:
+                    self.queue.set_last_assistant_text(job.job_id, response_text)
                 self.controller.release_job(job.job_id)
                 actions.append(
                     {

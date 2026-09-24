@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -332,6 +332,66 @@ class GptWorkController:
             except CdpError:
                 pass
 
+    def project_history(self, project_name: str) -> dict[str, Any]:
+        name = str(project_name or "").strip()
+        if not name:
+            raise ValueError("project_name_required")
+        if not hasattr(self.cdp, "project_conversation_records"):
+            raise CdpError("project_chat_scan_unavailable")
+
+        target_id = self.cdp.create_target("https://chatgpt.com/projects", background=True)
+        try:
+            project_url = self.cdp.resolve_project_url(target_id, name, wait_timeout_s=12.0)
+            self._project_url_cache[name.casefold()] = project_url
+            records = self.cdp.project_conversation_records(
+                target_id,
+                project_url=project_url,
+                wait_timeout_s=8.0,
+            )
+        finally:
+            try:
+                self.cdp.close_target(target_id)
+            except CdpError:
+                pass
+
+        parsed = urlparse(project_url)
+        parts = [part for part in parsed.path.split("/") if part]
+        project_id = parts[1] if len(parts) >= 2 and parts[0] == "g" else ""
+        jobs = {
+            job.conversation_url: job
+            for job in self.queue.list_jobs()
+            if job.conversation_url and job.state not in {GptJobState.DONE, GptJobState.CANCELLED}
+        }
+        open_by_conversation = {
+            row["conversation_url"]: row
+            for row in self.browser_rows()
+        }
+        rows: list[dict[str, Any]] = []
+        for rank, record in enumerate(records):
+            conversation_url = _canonical_chatgpt_conversation_url(str(record.get("url") or ""))
+            if not conversation_url:
+                continue
+            job = jobs.get(conversation_url)
+            opened = open_by_conversation.get(conversation_url)
+            rows.append({
+                "rank": rank,
+                "title": str(record.get("title") or "").strip() or (opened or {}).get("title") or "Chat GPT",
+                "conversation_url": conversation_url,
+                "conversation_context_url": str(record.get("context_url") or conversation_url),
+                "project_id": project_id or str(record.get("project_id") or "") or None,
+                "project_name": name,
+                "project_url": project_url,
+                "open": bool(opened),
+                "managed": bool(job),
+                "job_id": job.job_id if job else None,
+                "job_state": job.state.value if job else None,
+            })
+        return {
+            "project": {"title": name, "url": project_url, "project_id": project_id},
+            "chats": rows,
+            "count": len(rows),
+        }
+
     def account_history(self) -> dict[str, Any]:
         jobs = self.queue.list_jobs()
         jobs_by_conversation: dict[str, GptWorkJob] = {}
@@ -488,7 +548,12 @@ class GptWorkController:
     def send_message(self, job_id: str, text: str) -> dict[str, Any]:
         job = self.queue.get_job(job_id)
         if job.state is not GptJobState.ACTIVE:
-            raise ValueError("job_not_active")
+            if not job.conversation_url or job.state not in {GptJobState.REVIEW, GptJobState.BLOCKED, GptJobState.FAILED}:
+                raise ValueError("job_not_active")
+            self.start_job(job_id)
+            job = self.queue.get_job(job_id)
+            if job.state is not GptJobState.ACTIVE:
+                raise ValueError("job_resume_failed")
         target = self._exact_job_target(job)
         context_url = job.conversation_context_url or target.url
         self.cdp.install_human_input_target(target.target_id, context_url)
@@ -593,6 +658,7 @@ class GptWorkController:
                     "focused": bool(companion.get("focused")),
                     "busy": bool(companion.get("busy")),
                     "composer_chars": int(companion.get("composer_chars") or 0),
+                    "last_assistant_text": str(companion.get("last_assistant_text") or ""),
                     "managed": bool(job_id),
                     "queued": bool(job_id),
                     "job_id": job_id,
@@ -604,6 +670,11 @@ class GptWorkController:
     def dashboard_snapshot(self) -> dict[str, Any]:
         base = self.queue.snapshot()
         browser_rows = self.browser_rows()
+        live_by_job = {row["job_id"]: row for row in browser_rows if row.get("job_id")}
+        for job in base.get("jobs", []):
+            live = live_by_job.get(job.get("job_id"))
+            job["live_assistant_text"] = str((live or {}).get("last_assistant_text") or "")
+            job["live_busy"] = bool((live or {}).get("busy"))
         limit = int(base["settings"]["max_open_chats"])
         managed = sum(1 for row in browser_rows if row["managed"])
         base["browser"] = {
@@ -827,6 +898,16 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
         if path == "/api/history":
             try:
                 self._send_json(200, {"ok": True, **self.server.controller.account_history()})
+            except (CdpError, OSError) as exc:
+                self._error(503, str(exc))
+            return
+        if path == "/api/project-history":
+            try:
+                query = parse_qs(urlparse(self.path).query)
+                name = str((query.get("name") or [""])[0]).strip()
+                self._send_json(200, {"ok": True, **self.server.controller.project_history(name)})
+            except ValueError as exc:
+                self._error(422, str(exc))
             except (CdpError, OSError) as exc:
                 self._error(503, str(exc))
             return
