@@ -102,7 +102,8 @@ def test_completed_reply_with_stale_pending_is_released(tmp_path: Path) -> None:
             "response_in_progress": False,
             "response_pending": True,
             "response_idle_ms": 61_000,
-        }
+        },
+        companion={"busy": False, "last_assistant_text": "Risposta finale stabile."},
     )
 
     report = shepherd(queue, cdp).run_once(auto_start=False)
@@ -134,7 +135,7 @@ def test_streaming_reply_is_never_released(tmp_path: Path) -> None:
     assert report["actions"][0]["reason"] == "response_in_progress"
 
 
-def test_companion_busy_is_never_released_even_if_pending_looks_stale(tmp_path: Path) -> None:
+def test_companion_busy_is_preserved_while_response_is_still_fresh(tmp_path: Path) -> None:
     queue, job_id = queue_with_active(tmp_path)
     cdp = FakeCdp(
         ui={
@@ -142,7 +143,7 @@ def test_companion_busy_is_never_released_even_if_pending_looks_stale(tmp_path: 
             "assistant_turns": 1,
             "response_in_progress": False,
             "response_pending": True,
-            "response_idle_ms": 999_999,
+            "response_idle_ms": 10_000,
         },
         companion={"busy": True, "last_assistant_text": "Sì. Per"},
     )
@@ -152,6 +153,50 @@ def test_companion_busy_is_never_released_even_if_pending_looks_stale(tmp_path: 
     assert queue.get_job(job_id).state is GptJobState.ACTIVE
     assert cdp.closed == []
     assert report["actions"][0]["reason"] == "companion_busy"
+
+
+def test_stale_busy_flag_releases_stable_substantive_answer(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    final = "Va bene. Quando Bruto è di nuovo acceso e raggiungibile, riprendo da lì senza rifare i passaggi già completati."
+    cdp = FakeCdp(
+        ui={
+            "user_turns": 1,
+            "assistant_turns": 1,
+            "response_in_progress": False,
+            "response_pending": True,
+            "response_idle_ms": 61_000,
+        },
+        companion={"busy": True, "last_assistant_text": final},
+    )
+
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    job = queue.get_job(job_id)
+    assert job.state is GptJobState.REVIEW
+    assert job.last_assistant_text == final
+    assert cdp.closed == ["managed"]
+    assert report["actions"][0]["reason"] == "response_complete"
+
+
+def test_transient_thinking_text_is_not_a_completed_answer(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    queue.set_last_assistant_text(job_id, "Sto pensando")
+    cdp = FakeCdp(
+        ui={
+            "user_turns": 1,
+            "assistant_turns": 1,
+            "response_in_progress": False,
+            "response_pending": True,
+            "response_idle_ms": 61_000,
+        },
+        companion={"busy": False, "last_assistant_text": "Sto pensando"},
+    )
+
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    assert queue.get_job(job_id).state is GptJobState.ACTIVE
+    assert cdp.closed == []
+    assert report["actions"][0]["reason"] == "awaiting_settle"
 
 
 def test_focused_chat_is_never_released(tmp_path: Path) -> None:

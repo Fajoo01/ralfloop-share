@@ -51,6 +51,22 @@ class GptQueueShepherd:
             return 0
 
     @staticmethod
+    def _substantive_response_text(value: Any) -> str:
+        text = str(value or "").strip()
+        normalized = " ".join(text.casefold().split()).strip(" .…")
+        if normalized in {
+            "sto pensando",
+            "thinking",
+            "sto cercando",
+            "searching",
+            "working",
+            "elaborazione in corso",
+            "ricerca in corso",
+        }:
+            return ""
+        return text
+
+    @staticmethod
     def _notify_completion(title: str) -> dict[str, Any]:
         socket_path = os.getenv("BOTTAZZI_TELEMETRY_SOCKET", "/run/bottazzi-telemetry.sock")
         clean_title = " ".join(str(title or "Lavoro GPT").split())[:240]
@@ -89,7 +105,7 @@ class GptQueueShepherd:
             focused = bool(companion.get("focused"))
             companion_busy = bool(companion.get("busy"))
             composer_chars = self._int(companion.get("composer_chars"))
-            response_text = str(companion.get("last_assistant_text") or "").strip()
+            response_text = self._substantive_response_text(companion.get("last_assistant_text"))
             response_in_progress = bool(ui.get("response_in_progress"))
             response_pending = bool(ui.get("response_pending"))
             if response_text and (response_in_progress or response_pending):
@@ -103,25 +119,33 @@ class GptQueueShepherd:
             if response_in_progress:
                 actions.append({"job_id": job.job_id, "action": "preserved", "reason": "response_in_progress"})
                 continue
-            if companion_busy:
-                actions.append({"job_id": job.job_id, "action": "preserved", "reason": "companion_busy"})
-                continue
 
             user_turns = self._int(ui.get("user_turns"))
             assistant_turns = self._int(ui.get("assistant_turns"))
             pending = bool(ui.get("response_pending"))
             idle_ms = self._int(ui.get("response_idle_ms"))
             answered = user_turns > 0 and assistant_turns >= user_turns
+            saved_text = self._substantive_response_text(
+                self.queue.get_job(job.job_id).last_assistant_text
+            )
+            final_text = response_text or saved_text
 
-            completed = answered and idle_ms >= self.policy.complete_idle_ms
+            if companion_busy and idle_ms < self.policy.complete_idle_ms:
+                actions.append({"job_id": job.job_id, "action": "preserved", "reason": "companion_busy"})
+                continue
+
+            completed = (
+                answered
+                and bool(final_text)
+                and idle_ms >= self.policy.complete_idle_ms
+            )
             stalled = (
                 pending
-                and user_turns > assistant_turns
                 and idle_ms >= self.policy.stalled_idle_ms
+                and (user_turns > assistant_turns or not final_text)
             )
 
             if completed:
-                saved_text = str(self.queue.get_job(job.job_id).last_assistant_text or "").strip()
                 if response_text:
                     minimum_final_chars = max(120, len(saved_text) // 2)
                     if not saved_text or len(response_text) >= minimum_final_chars:
