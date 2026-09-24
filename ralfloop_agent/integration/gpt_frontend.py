@@ -121,6 +121,8 @@ class GptWorkController:
         for job in self.queue.list_jobs():
             if job.state in {GptJobState.DONE, GptJobState.CANCELLED}:
                 continue
+            if job.state in {GptJobState.REVIEW, GptJobState.BLOCKED, GptJobState.FAILED}:
+                continue
             target = browser.targets_by_id.get(job.target_id or "")
             if target is not None and job.conversation_url:
                 target_conversation = _canonical_chatgpt_conversation_url(target.url)
