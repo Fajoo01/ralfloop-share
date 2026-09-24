@@ -177,6 +177,19 @@ class GptWorkController:
         except (AttributeError, CdpError):
             return False
 
+    @staticmethod
+    def _goal_managed_prompt(prompt: str) -> str:
+        clean = str(prompt or "").strip()
+        if not clean or "BOT-TAZZI GOAL LOOP" in clean:
+            return clean
+        return (
+            clean
+            + "\n\nBOT-TAZZI GOAL LOOP\n"
+            + "Porta a termine integralmente la richiesta sopra. Non considerare concluso il lavoro solo perché una singola risposta è terminata. "
+            + "Se il GOAL non è ancora realmente raggiunto, termina la risposta senza dichiarare il lavoro finito: Bot-tazzi continuerà automaticamente. "
+            + "Quando e solo quando il GOAL è davvero raggiunto, termina la risposta con una riga contenente esattamente [[BOTTAZZI_GOAL_REACHED]]."
+        )
+
     def _occupied_job_ids(self, browser: BrowserSnapshot) -> set[str]:
         occupied: set[str] = set()
         for job in self.queue.list_jobs():
@@ -224,7 +237,7 @@ class GptWorkController:
             target_id: str | None = None
             try:
                 result = self.cdp.start_chatgpt_job(
-                    job.prompt,
+                    self._goal_managed_prompt(job.prompt),
                     new_chat_url=job.project_url or CHATGPT_ORIGIN,
                     background=True,
                     submit=True,
@@ -363,6 +376,7 @@ class GptWorkController:
         project_url = chatgpt_project_new_chat_url(target.url)
         return self.queue.create_job(
             target.title or "Chat GPT",
+            prompt=self._goal_managed_prompt("Porta a compimento il GOAL corrente già definito in questa conversazione, senza ripartire da zero."),
             project_name="Progetto ChatGPT" if project_url else "",
             project_url=project_url,
             conversation_url=conversation_url,
@@ -1175,7 +1189,7 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
                     project_url = controller.resolve_project_url_by_name(payload.project_name)
                 job = queue.create_job(
                     payload.title,
-                    prompt=payload.prompt,
+                    prompt=controller._goal_managed_prompt(payload.prompt),
                     project_name=payload.project_name,
                     project_url=project_url,
                 )

@@ -259,3 +259,40 @@ def test_nonempty_composer_is_never_released(tmp_path: Path) -> None:
     assert queue.get_job(job_id).state is GptJobState.ACTIVE
     assert cdp.closed == []
     assert report["actions"][0]["reason"] == "composer_not_empty"
+
+
+def test_goal_managed_reply_auto_continues_same_chat_without_notification(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    with queue._connect() as conn:
+        conn.execute("UPDATE gpt_jobs SET prompt=? WHERE job_id=?", ("Fai il lavoro.\\n\\nBOT-TAZZI GOAL LOOP", job_id))
+    class GoalCdp(FakeCdp):
+        def __init__(self):
+            super().__init__(ui={"user_turns":1,"assistant_turns":1,"response_in_progress":False,"response_pending":False,"response_idle_ms":61000}, companion={"busy":False,"last_assistant_text":"Ho completato una fase, ma resta altro da fare."})
+            self.messages=[]
+        def install_human_input_target(self,target_id,conversation_url): return {"ok":True}
+        def queue_human_message(self,target_id,conversation_url,text): self.messages.append((target_id,conversation_url,text)); return {"queued":True}
+    notices=[]; cdp=GoalCdp()
+    runner=GptQueueShepherd(queue,cdp,policy=GptQueueShepherdPolicy(complete_idle_ms=60000,stalled_idle_ms=180000),completion_notifier=lambda title:notices.append(title) or {"ok":True})
+    report=runner.run_once(auto_start=False)
+    assert queue.get_job(job_id).state is GptJobState.ACTIVE
+    assert cdp.closed == []
+    assert len(cdp.messages)==1
+    assert "Continua automaticamente il lavoro verso il GOAL" in cdp.messages[0][2]
+    assert notices==[]
+    assert report["actions"][0]["reason"]=="goal_not_reached"
+
+
+def test_goal_marker_releases_and_notifies(tmp_path: Path) -> None:
+    queue,job_id=queue_with_active(tmp_path)
+    with queue._connect() as conn:
+        conn.execute("UPDATE gpt_jobs SET prompt=? WHERE job_id=?", ("Fai il lavoro.\\n\\nBOT-TAZZI GOAL LOOP", job_id))
+    cdp=FakeCdp(ui={"user_turns":1,"assistant_turns":1,"response_in_progress":False,"response_pending":False,"response_idle_ms":61000}, companion={"busy":False,"last_assistant_text":"Lavoro completato.\\n[[BOTTAZZI_GOAL_REACHED]]"})
+    notices=[]
+    runner=GptQueueShepherd(queue,cdp,policy=GptQueueShepherdPolicy(complete_idle_ms=60000,stalled_idle_ms=180000),completion_notifier=lambda title:notices.append(title) or {"ok":True})
+    report=runner.run_once(auto_start=False)
+    saved=queue.get_job(job_id)
+    assert saved.state is GptJobState.REVIEW
+    assert saved.target_id is None
+    assert "[[BOTTAZZI_GOAL_REACHED]]" not in saved.last_assistant_text
+    assert notices==["Managed"]
+    assert report["actions"][0]["reason"]=="goal_complete"
