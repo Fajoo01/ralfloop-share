@@ -1001,18 +1001,26 @@ def _companion_tabs(cdp: ChromeCdp, store: HandoffStore) -> list[dict]:
     current = store.load_current() if store.current_path.exists() else {}
     worker_id = str(current.get("source_chat") or "")
     by_conversation: dict[str, list[dict]] = {}
-    for tab in cdp.targets():
+    targets = list(cdp.targets())
+    for tab in targets:
         conversation_url = normalize_chatgpt_conversation_url(tab.url)
         if tab.target_type != "page" or not tab.is_chatgpt or not conversation_url:
             continue
         try:
-            focus = cdp.chatgpt_focus_state(tab.target_id)
+            companion_state = cdp.chatgpt_companion_state(tab.target_id)
+        except AttributeError:
+            companion_state = {}
+            try:
+                companion_state.update(cdp.chatgpt_focus_state(tab.target_id))
+            except CdpError:
+                pass
+            try:
+                ui = cdp.chatgpt_ui_state(tab.target_id)
+                companion_state["busy"] = bool(ui.get("response_pending")) or bool(ui.get("response_in_progress"))
+            except CdpError:
+                pass
         except CdpError:
-            focus = {}
-        try:
-            ui = cdp.chatgpt_ui_state(tab.target_id)
-        except CdpError:
-            ui = {}
+            companion_state = {}
         by_conversation.setdefault(conversation_url, []).append(
             {
                 "target_id": tab.target_id,
@@ -1021,9 +1029,9 @@ def _companion_tabs(cdp: ChromeCdp, store: HandoffStore) -> list[dict]:
                 "conversation_url": conversation_url,
                 "project_url": chatgpt_project_new_chat_url(tab.url),
                 "worker": tab.target_id == worker_id,
-                "focused": bool(focus.get("focused")),
-                "ghost": bool(focus.get("ghost")),
-                "busy": bool(ui.get("response_pending")) or bool(ui.get("response_in_progress")),
+                "focused": bool(companion_state.get("focused")),
+                "ghost": bool(companion_state.get("ghost")),
+                "busy": bool(companion_state.get("busy")),
             }
         )
 
@@ -1054,14 +1062,70 @@ def _companion_tabs(cdp: ChromeCdp, store: HandoffStore) -> list[dict]:
                 "state": state,
                 "target_count": len(candidates),
                 "target_ids": [row["target_id"] for row in candidates],
+                "local_open": True,
+                "account_recent": False,
+                "history_rank": 1_000_000,
             }
         )
+
+    by_url = {str(row["conversation_url"]): row for row in rows}
+    history_candidate_ids: list[str] = []
+    if worker_id and any(tab.target_id == worker_id for tab in targets):
+        history_candidate_ids.append(worker_id)
+    for row in rows:
+        target_id = str(row.get("target_id") or "")
+        if target_id and target_id not in history_candidate_ids:
+            history_candidate_ids.append(target_id)
+    for tab in targets:
+        if tab.target_type == "page" and tab.is_chatgpt and tab.target_id not in history_candidate_ids:
+            history_candidate_ids.append(tab.target_id)
+
+    history_records: list[dict] = []
+    for history_target_id in history_candidate_ids[:4]:
+        try:
+            history_records = cdp.conversation_records(history_target_id, reload=False, wait_timeout_s=0.6)
+        except (AttributeError, CdpError):
+            continue
+        if history_records:
+            break
+    for rank, record in enumerate(history_records):
+        conversation_url = normalize_chatgpt_conversation_url(str(record.get("url") or ""))
+        if not conversation_url:
+            continue
+        title = str(record.get("title") or "").strip()
+        row = by_url.get(conversation_url)
+        if row is not None:
+            row["account_recent"] = True
+            row["history_rank"] = rank
+            if title:
+                row["title"] = title
+            continue
+        row = {
+            "target_id": "",
+            "title": title or "Chat GPT",
+            "url": conversation_url,
+            "conversation_url": conversation_url,
+            "project_url": chatgpt_project_new_chat_url(conversation_url),
+            "worker": False,
+            "focused": False,
+            "ghost": False,
+            "busy": False,
+            "active": False,
+            "state": "recent",
+            "target_count": 0,
+            "target_ids": [],
+            "local_open": False,
+            "account_recent": True,
+            "history_rank": rank,
+        }
+        rows.append(row)
+        by_url[conversation_url] = row
+
     rows.sort(
         key=lambda row: (
             not bool(row["active"]),
-            not bool(row["busy"]),
-            not bool(row["worker"]),
-            not bool(row["focused"]),
+            int(row.get("history_rank", 1_000_000)),
+            not bool(row.get("local_open")),
             str(row["title"]).casefold(),
         )
     )
@@ -1088,28 +1152,86 @@ def _companion_target(cdp: ChromeCdp, target_id: str):
     return target
 
 
+def _companion_switch_blocker(cdp: ChromeCdp, tabs) -> str | None:
+    for tab in tabs:
+        if tab.target_type != "page" or not tab.is_chatgpt:
+            continue
+        try:
+            state = cdp.chatgpt_companion_state(tab.target_id)
+        except AttributeError:
+            try:
+                ui = cdp.chatgpt_ui_state(tab.target_id)
+            except CdpError:
+                continue
+            state = {
+                "busy": bool(ui.get("response_pending")) or bool(ui.get("response_in_progress")),
+                "composer_chars": int(ui.get("composer_chars") or 0),
+            }
+        except CdpError:
+            continue
+        if bool(state.get("ghost")):
+            continue
+        if bool(state.get("busy")):
+            return "worker_response_active"
+        if int(state.get("composer_chars") or 0) > 0:
+            return "unsent_composer_text"
+    return None
+
+
 def cmd_companion_activate(args: argparse.Namespace) -> int:
     cdp = ChromeCdp(args.endpoint)
     store = HandoffStore(args.state_dir)
     target = _companion_target(cdp, args.target_id)
-    if store.current_path.exists():
-        current = store.load_current()
-        current_id = str(current.get("source_chat") or "")
-        if current_id and current_id != target.target_id:
-            current_target = next((t for t in cdp.targets() if t.target_id == current_id), None)
-            if current_target is not None:
-                ui = cdp.chatgpt_ui_state(current_target.target_id)
-                if bool(ui.get("response_pending")) or bool(ui.get("response_in_progress")):
-                    _json({"ok": True, "action": "deferred", "reason": "worker_response_active"})
-                    return 0
-                if int(ui.get("composer_chars") or 0) > 0:
-                    _json({"ok": True, "action": "deferred", "reason": "unsent_composer_text"})
-                    return 0
+    tabs = [t for t in cdp.targets() if t.target_type == "page" and t.is_chatgpt]
+    blocker = _companion_switch_blocker(cdp, [tab for tab in tabs if tab.target_id != target.target_id])
+    if blocker:
+        _json({"ok": True, "action": "deferred", "reason": blocker})
+        return 0
     conversation_url = normalize_chatgpt_conversation_url(target.url)
     cdp.activate_target(target.target_id)
     cdp.install_human_input_target(target.target_id, target.url)
     store.update_source_chat(target.target_id, conversation_url, target.url)
     _json({"ok": True, "action": "activated", "target_id": target.target_id, "conversation_url": conversation_url})
+    return 0
+
+
+def cmd_companion_open(args: argparse.Namespace) -> int:
+    conversation_url = normalize_chatgpt_conversation_url(args.conversation_url)
+    if not conversation_url:
+        raise GptSessionError("companion_conversation_invalid")
+    cdp = ChromeCdp(args.endpoint)
+    store = HandoffStore(args.state_dir)
+    tabs = [t for t in cdp.targets() if t.target_type == "page" and t.is_chatgpt]
+    target = next((t for t in tabs if normalize_chatgpt_conversation_url(t.url) == conversation_url), None)
+    switch_from = [tab for tab in tabs if target is None or tab.target_id != target.target_id]
+    blocker = _companion_switch_blocker(cdp, switch_from)
+    if blocker:
+        _json({"ok": True, "action": "deferred", "reason": blocker})
+        return 0
+    created = False
+    if target is None:
+        target_id = cdp.create_chatgpt_target(clear_cache=False, background=True)
+        created = True
+        try:
+            cdp.navigate_chatgpt_conversation(target_id, conversation_url)
+            target = next((t for t in cdp.targets() if t.target_id == target_id), None)
+            if target is None:
+                raise CdpError("companion_open_target_missing")
+        except Exception:
+            try:
+                cdp.close_target(target_id)
+            except CdpError:
+                pass
+            raise
+    cdp.activate_target(target.target_id)
+    cdp.install_human_input_target(target.target_id, target.url)
+    store.update_source_chat(target.target_id, conversation_url, target.url)
+    _json({
+        "ok": True,
+        "action": "opened" if created else "activated",
+        "target_id": target.target_id,
+        "conversation_url": conversation_url,
+    })
     return 0
 
 
@@ -1547,6 +1669,10 @@ def build_parser() -> argparse.ArgumentParser:
     companion_activate.add_argument("--target-id", required=True)
     companion_activate.set_defaults(func=cmd_companion_activate)
 
+    companion_open = sub.add_parser("companion-open")
+    companion_open.add_argument("--conversation-url", required=True)
+    companion_open.set_defaults(func=cmd_companion_open)
+
     companion_send = sub.add_parser("companion-send")
     companion_send.add_argument("--target-id", required=True)
     companion_send.set_defaults(func=cmd_companion_send)
@@ -1581,7 +1707,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _requires_mutation_lock(args: argparse.Namespace) -> bool:
-    if args.command in {"checkpoint", "archive-cleanup", "adopt-external", "companion-activate", "companion-send", "sync-ui", "goal-check", "goal-complete", "shepherd"}:
+    if args.command in {"checkpoint", "archive-cleanup", "adopt-external", "companion-activate", "companion-open", "companion-send", "sync-ui", "goal-check", "goal-complete", "shepherd"}:
         return True
     if args.command == "rotate":
         return bool(getattr(args, "apply", False))

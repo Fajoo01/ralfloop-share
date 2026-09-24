@@ -630,6 +630,72 @@ class ChromeCdp:
             raise CdpError("conversation_scan_unauthenticated")
         raise CdpError("conversation_scan_timeout")
 
+    def conversation_records(
+        self,
+        target_id: str,
+        *,
+        reload: bool = False,
+        wait_timeout_s: float = 3.0,
+    ) -> list[dict[str, str]]:
+        target = self._wait_target(target_id)
+        if not target.is_chatgpt or not target.websocket_url:
+            raise CdpError("conversation_scan_target_invalid")
+        call_timeout = max(0.1, min(float(wait_timeout_s), self.timeout_s))
+        if reload:
+            self._page_call(target.websocket_url, "Page.enable", timeout_s=call_timeout)
+            self._page_call(
+                target.websocket_url,
+                "Page.reload",
+                {"ignoreCache": True},
+                timeout_s=call_timeout,
+            )
+        expression = r"""(() => {
+          const rows = [];
+          const seen = new Set();
+          const normalize = value => {
+            try {
+              const u = new URL(String(value || ''), location.origin);
+              const m = u.pathname.match(/^\/(?:g\/[^/]+\/)?c\/([A-Za-z0-9-]+)/);
+              return m ? `${u.origin}/c/${m[1]}` : '';
+            } catch (_) { return ''; }
+          };
+          const anchors = document.querySelectorAll('#history a[href], nav a[href]');
+          for (const anchor of anchors) {
+            const url = normalize(anchor.href);
+            if (!url || seen.has(url)) continue;
+            const title = String(anchor.innerText || anchor.textContent || anchor.getAttribute('aria-label') || '')
+              .replace(/\s+/g, ' ')
+              .trim();
+            if (!title || /^(?:vai ai contenuti|skip to content)$/i.test(title)) continue;
+            seen.add(url);
+            rows.push({url, title});
+          }
+          return JSON.stringify(rows);
+        })()"""
+        result = self._page_call(
+            target.websocket_url,
+            "Runtime.evaluate",
+            {"expression": expression, "returnByValue": True},
+            timeout_s=call_timeout,
+        )
+        raw = (result.get("result") or {}).get("value")
+        try:
+            values = json.loads(raw) if isinstance(raw, str) else []
+        except json.JSONDecodeError:
+            values = []
+        records: list[dict[str, str]] = []
+        seen: set[str] = set()
+        if isinstance(values, list):
+            for value in values:
+                if not isinstance(value, dict):
+                    continue
+                url = _canonical_chatgpt_conversation_url(str(value.get("url") or ""))
+                if not url or url in seen:
+                    continue
+                seen.add(url)
+                records.append({"url": url, "title": str(value.get("title") or "").strip()})
+        return records
+
     def create_chatgpt_target(self, *, clear_cache: bool = False, background: bool = False) -> str:
         target_id = self.create_target("about:blank", background=background)
         target = self._wait_target(target_id)
@@ -795,6 +861,54 @@ class ChromeCdp:
                 return {"archived": True, "already_archived": False, "conversation_url": normalized}
             time.sleep(0.1)
         raise CdpError("conversation_archive_not_confirmed")
+
+    def chatgpt_companion_state(self, target_id: str) -> dict[str, Any]:
+        target = self._wait_target(target_id)
+        if not target.websocket_url or not target.is_chatgpt:
+            raise CdpError("companion_state_target_invalid")
+        expression = r'''(() => {
+          const visible = (el) => {
+            if (!el) return false;
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && !el.disabled;
+          };
+          const stopSelectors = [
+            'button[data-testid="stop-button"]',
+            'button[aria-label*="Stop"]',
+            'button[aria-label*="stop"]',
+            'button[aria-label*="Interrompi"]',
+            'button[aria-label*="interrompi"]',
+          ];
+          const responseInProgress = stopSelectors.some((selector) => Array.from(document.querySelectorAll(selector)).some(visible));
+          const telemetry = window.__bottazziGptTelemetryV2;
+          const responsePending = Boolean(telemetry && telemetry.pending_started_ms !== null && telemetry.pending_started_ms !== undefined);
+          const composer = Array.from(document.querySelectorAll('#prompt-textarea, textarea, [contenteditable="true"]'))
+            .find((el) => visible(el) && el.id !== 'bottazzi-human-composer') || null;
+          const composerText = composer ? String(composer.value || composer.innerText || composer.textContent || '') : '';
+          return JSON.stringify({
+            focused: document.hasFocus() && document.visibilityState === 'visible',
+            visible: document.visibilityState === 'visible',
+            ghost: Boolean(window.__bottazziGhostTabV1),
+            ghost_close_at: Number((window.__bottazziGhostTabV1 || {}).close_at || 0),
+            busy: responseInProgress || responsePending,
+            composer_chars: composerText.length,
+          });
+        })()'''
+        result = self._page_call(
+            target.websocket_url,
+            "Runtime.evaluate",
+            {"expression": expression, "returnByValue": True},
+            timeout_s=0.35,
+        )
+        raw = (result.get("result") or {}).get("value")
+        try:
+            state = json.loads(raw) if isinstance(raw, str) else {}
+        except json.JSONDecodeError as exc:
+            raise CdpError("companion_state_invalid") from exc
+        if not isinstance(state, dict):
+            raise CdpError("companion_state_invalid")
+        return state
 
     def chatgpt_focus_state(self, target_id: str) -> dict[str, Any]:
         target = self._wait_target(target_id)
@@ -1671,21 +1785,36 @@ class ChromeCdp:
             raise CdpError("browser_websocket_missing")
         return self._rpc(websocket_url, method, params)
 
-    def _page_call(self, websocket_url: str, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self._rpc(websocket_url, method, params)
+    def _page_call(
+        self,
+        websocket_url: str,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout_s: float | None = None,
+    ) -> dict[str, Any]:
+        return self._rpc(websocket_url, method, params, timeout_s=timeout_s)
 
-    def _rpc(self, websocket_url: str, method: str, params: dict[str, Any] | None) -> dict[str, Any]:
+    def _rpc(
+        self,
+        websocket_url: str,
+        method: str,
+        params: dict[str, Any] | None,
+        *,
+        timeout_s: float | None = None,
+    ) -> dict[str, Any]:
         request_id = self._next_id
         self._next_id += 1
         ws = None
+        effective_timeout = self.timeout_s if timeout_s is None else max(0.05, float(timeout_s))
         try:
             ws = websocket.create_connection(
                 websocket_url,
-                timeout=self.timeout_s,
+                timeout=effective_timeout,
                 suppress_origin=True,
             )
             ws.send(json.dumps({"id": request_id, "method": method, "params": params or {}}))
-            deadline = time.monotonic() + self.timeout_s
+            deadline = time.monotonic() + effective_timeout
             while time.monotonic() < deadline:
                 raw = ws.recv()
                 message = json.loads(raw)

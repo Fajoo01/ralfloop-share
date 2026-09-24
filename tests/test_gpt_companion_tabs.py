@@ -25,10 +25,13 @@ class ExistingPath:
 
 
 class FakeCdp:
-    def __init__(self, tabs, focus=None, ui=None):
+    def __init__(self, tabs, focus=None, ui=None, records=None, records_by_target=None, record_errors=None):
         self._tabs = tabs
         self._focus = focus or {}
         self._ui = ui or {}
+        self._records = records or []
+        self._records_by_target = records_by_target or {}
+        self._record_errors = set(record_errors or [])
 
     def targets(self):
         return self._tabs
@@ -38,6 +41,11 @@ class FakeCdp:
 
     def chatgpt_ui_state(self, target_id):
         return self._ui.get(target_id, {})
+
+    def conversation_records(self, target_id, *, reload=False, wait_timeout_s=3.0):
+        if target_id in self._record_errors:
+            raise gpt_session_tool.CdpError("history_probe_failed")
+        return self._records_by_target.get(target_id, self._records)
 
 
 def tab(target_id: str, conversation_id: str, title: str):
@@ -87,6 +95,72 @@ def test_companion_tabs_deduplicates_targets_and_merges_real_activity():
     idle = next(row for row in rows if row["target_id"] == "open")
     assert idle["active"] is False
     assert idle["state"] == "open"
+
+
+def test_companion_tabs_merges_account_history_without_marking_recent_as_active():
+    open_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    recent_id = "11111111-2222-3333-4444-555555555555"
+    cdp = FakeCdp(
+        [tab("worker", open_id, "browser title")],
+        records=[
+            {"url": f"https://chatgpt.com/c/{recent_id}", "title": "Backtest formiche volumi"},
+            {"url": f"https://chatgpt.com/c/{open_id}", "title": "Ripresa rollover GPT"},
+        ],
+    )
+
+    rows = _companion_tabs(cdp, store("worker"))
+
+    assert len(rows) == 2
+    worker = next(row for row in rows if row["conversation_url"].endswith("eeeeeeeeeeee"))
+    assert worker["title"] == "Ripresa rollover GPT"
+    assert worker["worker"] is True
+    assert worker["local_open"] is True
+    assert worker["account_recent"] is True
+    recent = next(row for row in rows if row["conversation_url"].endswith("555555555555"))
+    assert recent["title"] == "Backtest formiche volumi"
+    assert recent["target_id"] == ""
+    assert recent["target_count"] == 0
+    assert recent["state"] == "recent"
+    assert recent["active"] is False
+    assert recent["local_open"] is False
+    assert recent["account_recent"] is True
+
+
+def test_companion_tabs_falls_back_when_worker_history_probe_fails():
+    worker_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    healthy_id = "99999999-8888-7777-6666-555555555555"
+    recent_id = "11111111-2222-3333-4444-555555555555"
+    cdp = FakeCdp(
+        [tab("stuck", worker_id, "worker"), tab("healthy", healthy_id, "healthy")],
+        records_by_target={
+            "healthy": [{"url": f"https://chatgpt.com/c/{recent_id}", "title": "Backtest formiche volumi"}],
+        },
+        record_errors={"stuck"},
+    )
+
+    rows = _companion_tabs(cdp, store("stuck"))
+
+    recent = next(row for row in rows if row["conversation_url"].endswith("555555555555"))
+    assert recent["title"] == "Backtest formiche volumi"
+    assert recent["state"] == "recent"
+    assert recent["active"] is False
+    assert recent["local_open"] is False
+    assert recent["account_recent"] is True
+
+
+def test_companion_switch_blocker_detects_busy_and_unsent_targets():
+    class SwitchCdp:
+        def __init__(self, states):
+            self.states = states
+
+        def chatgpt_companion_state(self, target_id):
+            return self.states[target_id]
+
+    busy_tabs = [tab("busy", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "busy")]
+    assert gpt_session_tool._companion_switch_blocker(SwitchCdp({"busy": {"busy": True}}), busy_tabs) == "worker_response_active"
+
+    draft_tabs = [tab("draft", "99999999-8888-7777-6666-555555555555", "draft")]
+    assert gpt_session_tool._companion_switch_blocker(SwitchCdp({"draft": {"busy": False, "composer_chars": 4}}), draft_tabs) == "unsent_composer_text"
 
 
 def test_companion_tabs_only_marks_logical_conversation_ghost_when_all_targets_are_ghosts():
