@@ -281,6 +281,139 @@ def _trim_response(text: str, limit: int) -> str:
     return cut.rsplit(" ", 1)[0].rstrip(" ,;:") + "."
 
 
+def _micro_check_suffix(mode: SessionMode, student_move: str) -> str:
+    if mode is SessionMode.LITERACY_L2:
+        return "Ripeti con parole tue?"
+    if student_move in {"counterexample", "correction", "claim_check"}:
+        return "Qual è la regola corretta in una frase?"
+    if student_move == "confusion":
+        return "Quale passaggio resta poco chiaro?"
+    return "Ti torna questo passaggio?"
+
+
+def _last_question(text: str) -> str:
+    matches = re.findall(r"(?:^|(?<=[.!]))\s*([^?]{1,220}\?)", text)
+    return matches[-1].strip() if matches else ""
+
+
+def _fit_response_contract(text: str, limit: int, *, suffix: str = "") -> str:
+    value = " ".join(text.split()).strip()
+    suffix = " ".join(suffix.split()).strip()
+    if not suffix:
+        return _trim_response(value, limit)
+    if len(suffix) >= limit:
+        return _trim_response(suffix, limit)
+    if value.endswith(suffix) and len(value) <= limit:
+        return value
+    if value.endswith(suffix):
+        value = value[:-len(suffix)].rstrip()
+    budget = max(1, limit - len(suffix) - 1)
+    body = _trim_response(value, budget) if value else ""
+    return (body + " " + suffix).strip() if body else suffix
+
+
+def _strip_forbidden_final_answer(text: str, payload: dict[str, Any]) -> tuple[str, bool]:
+    value = " ".join(text.split()).strip()
+    request = " ".join(
+        str(payload.get(key) or "")
+        for key in ("question", "concept", "exercise", "student_attempt", "student_answer")
+    ).strip()
+    expressions = re.findall(r"\b\d+(?:[.,]\d+)?\s*(?:[x×*+\-/÷])\s*\d+(?:[.,]\d+)?\b", request)
+    forbidden_cues = (
+        "la risposta è", "la risposta e", "il risultato è", "il risultato e",
+        "la soluzione è", "la soluzione e", "risultato finale", "soluzione finale",
+    )
+    pieces = re.split(r"(?<=[.!?])\s+", value)
+    kept: list[str] = []
+    changed = False
+    for piece in pieces:
+        low = piece.casefold()
+        direct = any(cue in low for cue in forbidden_cues)
+        if not direct:
+            for expr in expressions:
+                pattern = re.escape(expr).replace(r"\ ", r"\s*") + r"\s*=\s*[-+]?\d+(?:[.,]\d+)?"
+                if re.search(pattern, piece, flags=re.IGNORECASE):
+                    direct = True
+                    break
+        if direct:
+            changed = True
+            continue
+        kept.append(piece)
+    cleaned = " ".join(kept).strip()
+    if changed and not cleaned:
+        cleaned = "Fermiamoci un passo prima del risultato: prova tu il calcolo finale."
+    return cleaned or value, changed
+
+
+def _evidence_safe_response(
+    response: str,
+    concept_evidence: dict[str, Any] | None,
+    *,
+    student_text: str,
+) -> tuple[str, bool]:
+    if not isinstance(concept_evidence, dict):
+        return response, False
+    facts = str(concept_evidence.get("evidence") or "").strip()
+    if not facts:
+        return response, False
+    # Quando esiste evidence concettuale curata, il modello non è fonte di
+    # verità: può aiutare altrove con formulazione e dialogo, ma il corpo
+    # fattuale mostrato allo studente viene ricostruito dall'evidence stessa.
+    # Questo evita risposte che citano due parole corrette e aggiungono poi
+    # una falsa informazione non presente nella fonte deterministica.
+    targeted, _ = _targeted_concept_text(
+        facts, student_text, topic="", max_sentences=2, previous_response=""
+    )
+    safe = " ".join((targeted or facts).split()).strip()
+    original = " ".join(response.split()).strip()
+    return safe, safe != original
+
+
+def _enforce_model_output_contract(
+    response: str,
+    *,
+    decision: Any,
+    action: str,
+    payload: dict[str, Any],
+    student_move: str,
+    concept_evidence: dict[str, Any] | None,
+) -> tuple[str, dict[str, Any]]:
+    value = " ".join(response.replace("**", "").replace("__", "").split()).strip()
+    if not value:
+        raise RuntimeError("teacher_model_empty_response")
+    reasons: list[str] = []
+
+    guarded, evidence_replaced = _evidence_safe_response(
+        value, concept_evidence, student_text=_student_turn(payload)
+    )
+    if evidence_replaced:
+        value = guarded
+        reasons.append("concept_evidence_pinned")
+
+    if action == "hint" and not bool(decision.allow_final_solution):
+        value, stripped = _strip_forbidden_final_answer(value, payload)
+        if stripped:
+            reasons.append("final_answer_removed")
+
+    suffix = ""
+    if bool(decision.micro_check):
+        suffix = _last_question(value)
+        if not suffix:
+            suffix = _micro_check_suffix(decision.mode, student_move)
+            reasons.append("micro_check_added")
+
+    before = value
+    value = _fit_response_contract(value, int(decision.max_response_chars), suffix=suffix)
+    if value != before:
+        reasons.append("length_enforced")
+
+    return value, {
+        "applied": bool(reasons),
+        "reasons": reasons,
+        "max_response_chars": int(decision.max_response_chars),
+    }
+
+
 def _student_facing_guard(text: str) -> str:
     value = " ".join(text.split()).strip()
     low = value.casefold()
@@ -1582,6 +1715,7 @@ class TeacherService:
         if callable(ensure_session):
             ensure_session(session_id)
         final_result: dict[str, Any] | None = None
+        draft_chunks: list[str] = []
         try:
             streamer = getattr(self.model_call, "stream", None)
             if callable(streamer):
@@ -1598,7 +1732,9 @@ class TeacherService:
                 if event.get("type") == "delta":
                     text = event.get("text")
                     if isinstance(text, str) and text:
-                        yield {"type": "delta", "text": text}
+                        # Bufferiamo: nessun token del modello viene mostrato prima
+                        # della validazione deterministica del contratto d'uscita.
+                        draft_chunks.append(text)
                 elif event.get("type") == "done" and isinstance(event.get("result"), dict):
                     final_result = event["result"]
                 else:
@@ -1609,9 +1745,19 @@ class TeacherService:
             raise
         if final_result is None:
             raise RuntimeError("teacher_model_stream_missing_done")
-        response = str(final_result.get("response") or "").strip().replace("**", "").replace("__", "")
+        response = str(final_result.get("response") or "").strip()
+        if not response and draft_chunks:
+            response = "".join(draft_chunks).strip()
         if not response:
             raise RuntimeError("teacher_model_empty_response")
+        response, output_guard = _enforce_model_output_contract(
+            response,
+            decision=decision,
+            action=action,
+            payload=payload,
+            student_move=student_move,
+            concept_evidence=concept_evidence,
+        )
         output = {
             "ok": True,
             "action": action,
@@ -1623,6 +1769,8 @@ class TeacherService:
             ),
             "pedagogy": decision.model_dump(mode="json"),
         }
+        if output_guard["applied"]:
+            output["output_guard"] = output_guard
         self.store.event(
             session_id,
             action,
@@ -1635,8 +1783,10 @@ class TeacherService:
                 "mode": decision.mode.value,
                 "model_path": decision.model_path.value,
                 "streamed": True,
+                "output_guard": output_guard if output_guard["applied"] else None,
             },
         )
+        yield {"type": "delta", "text": response}
         yield {"type": "done", "result": output}
 
     def _teaching_call(
@@ -1763,7 +1913,15 @@ class TeacherService:
 
         quality_retry: dict[str, Any] | None = None
         previous_response = _last_tutor_response(history)
-        initial_similarity = _response_similarity(previous_response, response)
+        comparison_response, _ = _enforce_model_output_contract(
+            response,
+            decision=decision,
+            action=action,
+            payload=payload,
+            student_move=student_move,
+            concept_evidence=concept_evidence,
+        )
+        initial_similarity = _response_similarity(previous_response, comparison_response)
         if (
             previous_response
             and action in {"explain", "explain_differently"}
@@ -1799,7 +1957,17 @@ class TeacherService:
             retry_response = ""
             if isinstance(retry_result, dict):
                 retry_response = str(retry_result.get("response") or "").strip().replace("**", "").replace("__", "")
-            retry_similarity = _response_similarity(previous_response, retry_response)
+            comparison_retry = retry_response
+            if retry_response:
+                comparison_retry, _ = _enforce_model_output_contract(
+                    retry_response,
+                    decision=decision,
+                    action=action,
+                    payload=payload,
+                    student_move=student_move,
+                    concept_evidence=concept_evidence,
+                )
+            retry_similarity = _response_similarity(previous_response, comparison_retry)
             used_fallback = not retry_response or retry_similarity >= 0.90
             response = (
                 _repetition_fallback(student_move)
@@ -1814,6 +1982,15 @@ class TeacherService:
             }
             if isinstance(retry_result, dict) and not used_fallback:
                 result = retry_result
+
+        response, output_guard = _enforce_model_output_contract(
+            response,
+            decision=decision,
+            action=action,
+            payload=payload,
+            student_move=student_move,
+            concept_evidence=concept_evidence,
+        )
 
         output = {
             "ok": True,
@@ -1831,6 +2008,8 @@ class TeacherService:
             output["correct"] = result["correct"]
         if quality_retry is not None:
             output["quality_retry"] = quality_retry
+        if output_guard["applied"]:
+            output["output_guard"] = output_guard
 
         self.store.event(
             session_id,
@@ -1844,6 +2023,7 @@ class TeacherService:
                 "mode": decision.mode.value,
                 "model_path": decision.model_path.value,
                 "quality_retry": quality_retry,
+                "output_guard": output_guard if output_guard["applied"] else None,
             },
         )
 
