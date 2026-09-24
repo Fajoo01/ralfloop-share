@@ -86,12 +86,14 @@ def test_review_message_reopens_same_conversation(tmp_path: Path):
         conversation_context_url="https://chatgpt.com/g/g-p-test/c/current-chat",
         state=GptJobState.REVIEW,
     )
+    queue.set_last_assistant_text(job.job_id, "Risposta precedente")
     cdp = FakeCdp()
     controller = GptWorkController(queue, cdp)
     result = controller.send_message(job.job_id, "continua")
     rebound = queue.get_job(job.job_id)
     assert rebound.state is GptJobState.ACTIVE
     assert rebound.conversation_url == "https://chatgpt.com/c/current-chat"
+    assert rebound.last_assistant_text == ""
     assert cdp.messages[-1][2] == "continua"
     assert result["action"] == "queued"
 
@@ -113,6 +115,41 @@ def test_completed_reply_is_saved_before_tab_release(tmp_path: Path):
     assert saved.state is GptJobState.REVIEW
     assert saved.last_assistant_text == "Risposta finale"
     assert saved.target_id is None
+
+
+def test_streaming_reply_is_persisted_while_job_stays_active(tmp_path: Path):
+    class StreamingCdp(FakeCdp):
+        def chatgpt_ui_state(self, target_id):
+            return {"user_turns": 2, "assistant_turns": 1, "response_in_progress": True, "response_pending": True, "response_idle_ms": 1000}
+
+        def chatgpt_companion_state(self, target_id):
+            return {"focused": False, "busy": True, "composer_chars": 0, "last_assistant_text": "Nuovo testo live"}
+
+    queue = make_queue(tmp_path)
+    job = queue.create_job("Work", conversation_url="https://chatgpt.com/c/current-chat", conversation_context_url="https://chatgpt.com/c/current-chat", target_id="managed", state=GptJobState.ACTIVE)
+    cdp = StreamingCdp()
+    cdp._targets.append(BrowserTarget("managed", "page", "https://chatgpt.com/c/current-chat", "Work", "ws://managed"))
+    GptQueueShepherd(queue, cdp).run_once(auto_start=False)
+    saved = queue.get_job(job.job_id)
+    assert saved.state is GptJobState.ACTIVE
+    assert saved.last_assistant_text == "Nuovo testo live"
+
+
+def test_short_final_footer_does_not_replace_fuller_live_snapshot(tmp_path: Path):
+    class FooterCdp(FakeCdp):
+        def chatgpt_companion_state(self, target_id):
+            return {"focused": False, "busy": False, "composer_chars": 0, "last_assistant_text": "Elaborato per 6m\nStrumenti richiamati\n+1"}
+
+    queue = make_queue(tmp_path)
+    job = queue.create_job("Work", conversation_url="https://chatgpt.com/c/current-chat", conversation_context_url="https://chatgpt.com/c/current-chat", target_id="managed", state=GptJobState.ACTIVE)
+    fuller = "Testo live sostanziale. " * 40
+    queue.set_last_assistant_text(job.job_id, fuller)
+    cdp = FooterCdp()
+    cdp._targets.append(BrowserTarget("managed", "page", "https://chatgpt.com/c/current-chat", "Work", "ws://managed"))
+    GptQueueShepherd(queue, cdp).run_once(auto_start=False)
+    saved = queue.get_job(job.job_id)
+    assert saved.state is GptJobState.REVIEW
+    assert saved.last_assistant_text == fuller.strip()
 
 
 def test_project_history_loads_selected_project_chats(tmp_path: Path):

@@ -71,13 +71,18 @@ class GptQueueShepherd:
 
             focused = bool(companion.get("focused"))
             composer_chars = self._int(companion.get("composer_chars"))
+            response_text = str(companion.get("last_assistant_text") or "").strip()
+            response_in_progress = bool(ui.get("response_in_progress"))
+            response_pending = bool(ui.get("response_pending"))
+            if response_text and (response_in_progress or response_pending):
+                self.queue.set_last_assistant_text(job.job_id, response_text)
             if focused:
                 actions.append({"job_id": job.job_id, "action": "preserved", "reason": "focused"})
                 continue
             if composer_chars:
                 actions.append({"job_id": job.job_id, "action": "preserved", "reason": "composer_not_empty"})
                 continue
-            if bool(ui.get("response_in_progress")):
+            if response_in_progress:
                 actions.append({"job_id": job.job_id, "action": "preserved", "reason": "response_in_progress"})
                 continue
 
@@ -97,9 +102,11 @@ class GptQueueShepherd:
             )
 
             if completed:
-                response_text = str(companion.get("last_assistant_text") or "").strip()
+                saved_text = str(self.queue.get_job(job.job_id).last_assistant_text or "").strip()
                 if response_text:
-                    self.queue.set_last_assistant_text(job.job_id, response_text)
+                    minimum_final_chars = max(120, len(saved_text) // 2)
+                    if not saved_text or len(response_text) >= minimum_final_chars:
+                        self.queue.set_last_assistant_text(job.job_id, response_text)
                 self.controller.release_job(job.job_id)
                 actions.append(
                     {

@@ -572,6 +572,7 @@ class GptWorkController:
         result = self.cdp.queue_human_message(target.target_id, context_url, text)
         if not bool(result.get("queued")):
             raise CdpError(str(result.get("reason") or "message_not_queued"))
+        self.queue.set_last_assistant_text(job.job_id, "")
         return {"action": "queued", "job_id": job.job_id, "conversation_url": job.conversation_url}
 
     def activate_job(self, job_id: str) -> dict[str, Any]:
