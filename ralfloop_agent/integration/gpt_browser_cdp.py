@@ -493,16 +493,23 @@ class ChromeCdp:
         close_source: bool = True,
         target_created_hook: Callable[[str], None] | None = None,
         new_chat_url: str = CHATGPT_ORIGIN,
+        reuse_source_target: bool = False,
     ) -> dict[str, Any]:
         previous = [target for target in self.targets() if target.target_type == "page" and target.is_chatgpt]
+        source_target = None
         if source_target_id is None:
             if len(previous) != 1:
                 raise CdpError("handoff_source_ambiguous")
-            source_target_id = previous[0].target_id
-        elif not any(target.target_id == source_target_id for target in previous):
-            raise CdpError("handoff_source_not_found")
+            source_target = previous[0]
+            source_target_id = source_target.target_id
+        else:
+            source_target = next((target for target in previous if target.target_id == source_target_id), None)
+            if source_target is None:
+                raise CdpError("handoff_source_not_found")
         entry_url = _safe_chatgpt_new_chat_url(new_chat_url)
-        target_id = self.create_target("about:blank")
+        target_id = source_target_id if reuse_source_target else self.create_target("about:blank")
+        source_context_url = _safe_chatgpt_conversation_context_url(source_target.url)
+        cache_cleared = False
         try:
             if target_created_hook is not None:
                 target_created_hook(target_id)
@@ -510,15 +517,26 @@ class ChromeCdp:
             if not target.websocket_url:
                 raise CdpError("new_target_missing_websocket")
             self._page_call(target.websocket_url, "Network.enable")
-            self._page_call(target.websocket_url, "Network.clearBrowserCache")
+            if not reuse_source_target:
+                self._page_call(target.websocket_url, "Network.clearBrowserCache")
+                cache_cleared = True
             self._page_call(target.websocket_url, "Page.enable")
             self._page_call(target.websocket_url, "Page.navigate", {"url": entry_url})
             injected = self.inject_prompt(prompt, target_id=target_id, submit=submit)
         except Exception:
-            try:
-                self.close_target(target_id)
-            except CdpError:
-                pass
+            if reuse_source_target:
+                try:
+                    target = self._wait_target(target_id)
+                    if target.websocket_url:
+                        self._page_call(target.websocket_url, "Page.enable")
+                        self._page_call(target.websocket_url, "Page.navigate", {"url": source_context_url})
+                except CdpError:
+                    pass
+            else:
+                try:
+                    self.close_target(target_id)
+                except CdpError:
+                    pass
             raise
         closed: list[str] = []
         if close_source and source_target_id != target_id:
@@ -529,8 +547,9 @@ class ChromeCdp:
             "new_target_id": target_id,
             "closed_target_ids": closed,
             "server_chat_deleted": False,
-            "cache_cleared": True,
+            "cache_cleared": cache_cleared,
             "new_chat_entry_url": entry_url,
+            "reused_source_target": bool(reuse_source_target),
         }
 
     def conversation_urls(
@@ -968,11 +987,22 @@ class ChromeCdp:
             let held = false;
             try { held = Boolean(localStorage.getItem('__bottazziQueueHoldV1')); } catch (_) {}
             const pending = hasPendingDraft();
-            if (box && box.disabled !== pending) box.disabled = pending;
-            if (send && send.disabled !== pending) send.disabled = pending;
-            const label = held || pending ? 'Siamo in fila · attendi' : 'Invio umano → chat attiva';
+            const assigned = config.conversation_url;
+            const current = canonical(location.href);
+            const mismatch = !assigned || current !== assigned;
+            const disabled = pending || mismatch;
+            if (box && box.disabled !== disabled) box.disabled = disabled;
+            if (send && send.disabled !== disabled) send.disabled = disabled;
+            const shortId = String(assigned || '').split('/').pop().slice(0, 8) || '—';
+            const label = mismatch
+              ? `Chat non assegnata · ${shortId}`
+              : held || pending
+                ? `Siamo in fila · ${shortId}`
+                : `Invio umano → ${shortId}`;
             if (status && status.textContent !== label) status.textContent = label;
-            if (panel && panel.dataset.bottazziMode === 'active') panel.style.background = held ? '#6b5200' : 'rgba(30,30,30,.96)';
+            if (panel && panel.dataset.bottazziMode === 'active') {
+              panel.style.background = mismatch ? '#7a1f1f' : held ? '#6b5200' : 'rgba(30,30,30,.96)';
+            }
           };
           const importDraft = () => {
             const limitRe = /(?:temporarily limited access to (?:your )?conversations|temporaneamente (?:limitato )?l['’]?accesso alle conversazioni|attendere qualche minuto prima di riprovare|wait a few minutes before trying again)/i;
@@ -1026,6 +1056,10 @@ class ChromeCdp:
             const sendHuman = () => {
               const text = input.value.trim();
               if (!text || hasPendingDraft()) return;
+              if (canonical(location.href) !== config.conversation_url) {
+                updateHumanUi();
+                return;
+              }
               try {
                 localStorage.setItem(draftKey, JSON.stringify({draft_id:`${Date.now()}-${Math.random()}`, successor_url:config.context_url, text, submit:true, created_at:Date.now()}));
               } catch (_) { return; }
@@ -1145,6 +1179,8 @@ class ChromeCdp:
         target = self._wait_target(target_id)
         if not target.websocket_url or not target.is_chatgpt:
             raise CdpError("human_queue_target_invalid")
+        if _canonical_chatgpt_conversation_url(target.url) != normalized:
+            raise CdpError("human_queue_assignment_mismatch")
         config = json.dumps({"conversation_url": normalized, "context_url": context_url, "text": text.strip()}, ensure_ascii=False)
         expression = r'''(() => {
           const config = __CONFIG__;
@@ -1359,7 +1395,6 @@ class ChromeCdp:
               } catch (_) { return; }
               input.value = '';
               status.textContent = 'Siamo in fila · attendi';
-              window.open(config.active_url, 'bottazzi-active');
             };
             send.addEventListener('click', forward);
             input.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); forward(); } });
@@ -1487,7 +1522,6 @@ class ChromeCdp:
                 localStorage.setItem(draftKey, JSON.stringify({draft_id:`${Date.now()}-${Math.random()}`, successor_url:targetUrl, text:textValue, submit:true, created_at:Date.now()}));
               } catch (_) { return; }
               input.value = '';
-              window.open(targetUrl, 'bottazzi-active');
             };
             send.addEventListener('click', forward);
             input.addEventListener('keydown', event => {

@@ -558,9 +558,22 @@ def _recover_incomplete_mutation(
                         "source_archive_deferred": bool(archive_state.get("deferred")),
                         "source_chat_ghosted": bool(ghost_state.get("source_ghosted")),
                     }
-            cdp.close_target(successor.target_id)
             current = store.load_current()
             current_url = normalize_chatgpt_conversation_url(str(current.get("source_chat_url") or ""))
+            if successor.target_id == source_target_id:
+                if current_url == source_url:
+                    source_context = chatgpt_conversation_context_url(
+                        str(current.get("source_chat_context_url") or current.get("source_chat_url") or "")
+                    ) or source_url
+                    try:
+                        cdp.navigate_chatgpt_conversation(source_target_id, source_context)
+                    except CdpError as exc:
+                        raise GptSessionError(f"mutation_recovery_required:rollover:same_target_restore_failed:{exc}") from exc
+                    _unlock_rollover_source(cdp, source_target_id)
+                    journal.clear()
+                    return {"kind": kind, "outcome": "rolled_back", "phase": phase, "same_target": True}
+                raise GptSessionError("mutation_recovery_required:rollover:unconfirmed_same_target_successor")
+            cdp.close_target(successor.target_id)
             if current_url == source_url:
                 _unlock_rollover_source(cdp, source_target_id)
                 journal.clear()
@@ -1327,6 +1340,7 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
             close_source=False,
             target_created_hook=record_successor,
             new_chat_url=chatgpt_project_new_chat_url(source.url) or CHATGPT_ORIGIN,
+            reuse_source_target=True,
         )
     except (CdpError, GptSessionError, OSError) as exc:
         report["ok"] = False

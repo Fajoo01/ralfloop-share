@@ -697,6 +697,56 @@ def test_incomplete_rollover_recovers_confirmed_successor_and_ghosts_old_source(
     assert journal.load() is None
 
 
+def test_incomplete_rollover_recovers_confirmed_successor_on_same_target_without_ghost(tmp_path) -> None:
+    handoff = HandoffStore(tmp_path)
+    handoff.save(Handoff(goal="x", current_state="y"))
+    handoff.update_source_chat("source", "https://chatgpt.com/c/source")
+    adoption = ExternalChatAdoptionStore(tmp_path)
+    journal = MutationJournalStore(tmp_path)
+    journal.begin("rollover", source_target_id="source", source_url="https://chatgpt.com/c/source")
+    journal.update(phase="target_created", successor_target_id="source")
+    cdp = FakeRecoveryCdp(
+        [BrowserTarget("source", "page", "https://chatgpt.com/c/successor", "new", "ws://source")],
+        {"source": {"ready": True, "user_turns": 1}},
+    )
+
+    result = _recover_incomplete_mutation(cdp, handoff, adoption, journal)
+
+    assert result and result["outcome"] == "committed"
+    current = handoff.load_current()
+    assert current["source_chat"] == "source"
+    assert current["source_chat_url"] == "https://chatgpt.com/c/successor"
+    assert cdp.human_input_targets == [("source", "https://chatgpt.com/c/successor")]
+    assert cdp.ghosted == []
+    assert result["source_chat_ghosted"] is False
+    assert journal.load() is None
+
+
+def test_incomplete_same_target_rollover_restores_source_instead_of_closing_worker(tmp_path) -> None:
+    handoff = HandoffStore(tmp_path)
+    handoff.save(Handoff(goal="x", current_state="y"))
+    handoff.update_source_chat("source", "https://chatgpt.com/c/source")
+    adoption = ExternalChatAdoptionStore(tmp_path)
+    journal = MutationJournalStore(tmp_path)
+    journal.begin("rollover", source_target_id="source", source_url="https://chatgpt.com/c/source")
+    journal.update(phase="target_created", successor_target_id="source")
+    cdp = FakeRecoveryCdp(
+        [BrowserTarget("source", "page", "https://chatgpt.com/", "new", "ws://source")],
+        {"source": {"ready": True, "user_turns": 0}},
+    )
+
+    result = _recover_incomplete_mutation(cdp, handoff, adoption, journal)
+
+    assert result and result["outcome"] == "rolled_back"
+    assert result["same_target"] is True
+    assert cdp.closed == []
+    assert cdp.unlocked == ["source"]
+    restored = next(tab for tab in cdp.targets() if tab.target_id == "source")
+    assert restored.url == "https://chatgpt.com/c/source"
+    assert handoff.load_current()["source_chat_url"] == "https://chatgpt.com/c/source"
+    assert journal.load() is None
+
+
 class FakeGoalCdp:
     def __init__(self, *, active: bool = False, marked: bool = True) -> None:
         self.source = BrowserTarget("source", "page", "https://chatgpt.com/c/source", "Goal chat", "ws://source")
@@ -779,6 +829,7 @@ class FakeRateLimitedRolloverCdp:
         }
 
     def handoff_to_new_chat(self, prompt: str, **kwargs):
+        assert kwargs.get("reuse_source_target") is True
         hook = kwargs.get("target_created_hook")
         assert hook is not None
         hook("successor")
@@ -1567,6 +1618,40 @@ def test_handoff_can_defer_source_close_until_state_is_persisted() -> None:
     assert result["new_target_id"] == "new"
     assert result["closed_target_ids"] == []
     assert cdp.closed == []
+
+
+def test_handoff_can_reuse_selected_source_target_without_creating_or_closing_tabs() -> None:
+    cdp = MultiTabHandoffCdp()
+    result = cdp.handoff_to_new_chat(
+        "handoff",
+        source_target_id="old",
+        submit=True,
+        close_source=False,
+        reuse_source_target=True,
+    )
+    assert result["new_target_id"] == "old"
+    assert result["closed_target_ids"] == []
+    assert result["reused_source_target"] is True
+    assert result["cache_cleared"] is False
+    assert cdp.closed == []
+    assert ("ws://new", "Network.clearBrowserCache") not in cdp.calls
+
+
+def test_same_target_handoff_failure_restores_source_without_closing_it() -> None:
+    cdp = FailingHandoffCdp()
+    with pytest.raises(CdpError, match="interaction_required"):
+        cdp.handoff_to_new_chat(
+            "handoff",
+            source_target_id="old",
+            reuse_source_target=True,
+        )
+    assert cdp.closed == []
+    assert ("ws://old", "Page.navigate") in cdp.calls
+
+
+def test_human_relay_never_uses_window_open_for_active_assignment() -> None:
+    source = (Path(__file__).resolve().parents[1] / "ralfloop_agent" / "integration" / "gpt_browser_cdp.py").read_text(encoding="utf-8")
+    assert "window.open(" not in source
 
 
 def test_handoff_requires_source_when_multiple_chatgpt_tabs() -> None:
