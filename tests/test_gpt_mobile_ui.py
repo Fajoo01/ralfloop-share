@@ -210,6 +210,13 @@ def test_interrupt_saves_partial_response_and_keeps_job_active(tmp_path: Path):
     assert saved.last_assistant_text == "Risposta parziale"
 
 
+def test_new_job_form_starts_chat_immediately_and_surfaces_launch_errors() -> None:
+    html = (Path(__file__).resolve().parents[1] / "web" / "gpt_queue.html").read_text(encoding="utf-8")
+    assert "Crea e avvia nuova chat" in html
+    assert "auto_start:true" in html
+    assert "const launch=result.start||result.pump" in html
+
+
 def test_done_button_is_highlighted_for_completed_review_only() -> None:
     html = (Path(__file__).resolve().parents[1] / "web" / "gpt_queue.html").read_text(encoding="utf-8")
     assert ".done-ready{" in html

@@ -38,7 +38,7 @@ class CreateJob(ApiInput):
     prompt: str = Field(default="", max_length=32_000)
     project_name: str = Field(default="", max_length=300)
     project_url: str | None = Field(default=None, max_length=1200)
-    auto_start: bool = False
+    auto_start: bool = True
 
 
 class ImportChat(ApiInput):
@@ -1160,7 +1160,8 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
                     self._error(422, "release_body_must_be_empty")
                     return
                 job = controller.release_job(job_id)
-                self._send_json(200, {"ok": True, "action": "released", "job": job.model_dump(mode="json"), "server_chat_deleted": False})
+                start = controller.pump()
+                self._send_json(200, {"ok": True, "action": "released", "job": job.model_dump(mode="json"), "start": start, "server_chat_deleted": False})
                 return
             if action == "interrupt":
                 payload = self._read_json()
@@ -1182,8 +1183,10 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
             if payload is None:
                 return
             assert isinstance(payload, SetJobState)
+            start: dict[str, Any] | None = None
             if payload.state in {GptJobState.DONE, GptJobState.CANCELLED}:
                 job = controller.finish_job(job_id, payload.state)
+                start = controller.pump()
             elif payload.state is GptJobState.QUEUED:
                 current = queue.get_job(job_id)
                 if current.target_id:
@@ -1192,7 +1195,10 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
             else:
                 self._error(422, "state_not_user_settable")
                 return
-            self._send_json(200, {"ok": True, "job": job.model_dump(mode="json")})
+            response = {"ok": True, "job": job.model_dump(mode="json")}
+            if start is not None:
+                response["start"] = start
+            self._send_json(200, response)
         except KeyError:
             self._error(404, "job_not_found")
         except ValueError as exc:

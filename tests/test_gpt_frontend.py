@@ -248,7 +248,6 @@ def test_frontend_api_groups_projects_and_auto_starts(tmp_path: Path) -> None:
                 "prompt": "Riprendi Scholarly",
                 "project_name": "Indipendentemenza dai colletti bianchi",
                 "project_url": "https://chatgpt.com/g/g-p-colletti/project",
-                "auto_start": True,
             },
         )
         assert status == 200
@@ -261,6 +260,48 @@ def test_frontend_api_groups_projects_and_auto_starts(tmp_path: Path) -> None:
         assert project["project_url"] == "https://chatgpt.com/g/g-p-colletti/project"
         assert project["jobs"][0]["conversation_context_url"] == "https://chatgpt.com/g/g-p-colletti/c/chat-1"
         assert state["runtime"]["slots"]["used"] == 1
+
+
+def test_marking_done_immediately_starts_next_queued_job(tmp_path: Path) -> None:
+    queue = make_queue(tmp_path)
+    queue.set_max_open_chats(1)
+    cdp = FakeCdp()
+    with running_frontend(queue, cdp) as (port, origin):
+        status, first = request(
+            port,
+            "POST",
+            "/api/jobs",
+            origin=origin,
+            payload={"title": "First", "prompt": "Do first"},
+        )
+        assert status == 200
+        first_id = first["job"]["job_id"]
+        assert len(first["pump"]["started"]) == 1
+
+        status, second = request(
+            port,
+            "POST",
+            "/api/jobs",
+            origin=origin,
+            payload={"title": "Second", "prompt": "Do second", "auto_start": False},
+        )
+        assert status == 200
+        second_id = second["job"]["job_id"]
+        assert queue.get_job(second_id).state is GptJobState.QUEUED
+
+        status, finished = request(
+            port,
+            "POST",
+            f"/api/jobs/{first_id}/state",
+            origin=origin,
+            payload={"state": "done"},
+        )
+
+    assert status == 200
+    assert finished["job"]["state"] == "done"
+    assert len(finished["start"]["started"]) == 1
+    assert finished["start"]["started"][0]["job_id"] == second_id
+    assert queue.get_job(second_id).state is GptJobState.ACTIVE
 
 
 def test_frontend_rejects_cross_origin_mutation(tmp_path: Path) -> None:
@@ -395,6 +436,7 @@ def test_create_job_resolves_unique_name_from_native_catalog(tmp_path: Path) -> 
                 "prompt": "Continua il lavoro",
                 "project_name": "Indipendentemenza dai colletti bianchi",
                 "project_url": None,
+                "auto_start": False,
             },
         )
 
