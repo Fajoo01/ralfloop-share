@@ -187,3 +187,10 @@ def test_temporary_access_queue_hold_is_self_clearing() -> None:
     assert "previousHold.startsWith('rate:')" in source
     assert "localStorage.removeItem(holdKey)" in source
     assert "localStorage.setItem(key, `rate:${Date.now()}`)" in source
+
+
+def test_live_probe_reads_current_streaming_turn() -> None:
+    source = (Path(__file__).resolve().parents[1] / "ralfloop_agent" / "integration" / "gpt_browser_cdp.py").read_text(encoding="utf-8")
+    assert "section[data-turn=\"assistant\"]" in source
+    assert "[data-streaming-response-status]" in source
+    assert "responseInProgress && streamingNode" in source

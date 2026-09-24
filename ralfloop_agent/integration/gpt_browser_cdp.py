@@ -1311,10 +1311,14 @@ class ChromeCdp:
           const composer = Array.from(document.querySelectorAll('#prompt-textarea, textarea, [contenteditable="true"]'))
             .find((el) => visible(el) && el.id !== 'bottazzi-human-composer') || null;
           const composerText = composer ? String(composer.value || composer.innerText || composer.textContent || '') : '';
-          const assistantNodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+          const assistantSections = Array.from(document.querySelectorAll('section[data-turn="assistant"]'));
+          const assistantNodes = assistantSections.length
+            ? assistantSections
+            : Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
           const lastAssistant = assistantNodes.length ? assistantNodes[assistantNodes.length - 1] : null;
+          const streamingNode = lastAssistant ? lastAssistant.querySelector('[data-streaming-response-status]') : null;
           const lastAssistantText = lastAssistant
-            ? String(lastAssistant.innerText || lastAssistant.textContent || '').trim().slice(-24000)
+            ? String((responseInProgress && streamingNode ? streamingNode.innerText || streamingNode.textContent : lastAssistant.innerText || lastAssistant.textContent) || '').trim().slice(-24000)
             : '';
           return JSON.stringify({
             focused: document.hasFocus() && document.visibilityState === 'visible',
@@ -1364,10 +1368,14 @@ class ChromeCdp:
             stop = Array.from(document.querySelectorAll(selector)).find(visible) || null;
             if (stop) break;
           }
-          const assistantNodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+          const assistantSections = Array.from(document.querySelectorAll('section[data-turn="assistant"]'));
+          const assistantNodes = assistantSections.length
+            ? assistantSections
+            : Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
           const lastAssistant = assistantNodes.length ? assistantNodes[assistantNodes.length - 1] : null;
+          const streamingNode = lastAssistant ? lastAssistant.querySelector('[data-streaming-response-status]') : null;
           const lastAssistantText = lastAssistant
-            ? String(lastAssistant.innerText || lastAssistant.textContent || '').trim().slice(-24000)
+            ? String((streamingNode ? streamingNode.innerText || streamingNode.textContent : lastAssistant.innerText || lastAssistant.textContent) || '').trim().slice(-24000)
             : '';
           if (!stop) return JSON.stringify({stopped:false, reason:'not_running', last_assistant_text:lastAssistantText});
           stop.click();
