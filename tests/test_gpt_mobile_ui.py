@@ -15,6 +15,7 @@ class FakeCdp:
         self.messages = []
         self.installed = []
         self.created = 0
+        self.interrupted = []
 
     def targets(self):
         return list(self._targets)
@@ -50,6 +51,10 @@ class FakeCdp:
         self.messages.append((target_id, conversation_url, text))
         return {"queued": True}
 
+    def stop_chatgpt_response(self, target_id):
+        self.interrupted.append(target_id)
+        return {"stopped": True, "last_assistant_text": "Risposta parziale"}
+
     def create_target(self, url, *, background=False):
         self.created += 1
         tid = f"project-{self.created}"
@@ -63,7 +68,7 @@ class FakeCdp:
     def project_conversation_records(self, target_id, *, project_url, wait_timeout_s=8.0):
         return [{
             "url": "https://chatgpt.com/c/current-chat",
-            "context_url": "https://chatgpt.com/g/g-p-test/c/current-chat",
+            "context_url": "https://chatgpt.com/g/g-p-test-gpt-browser/c/current-chat",
             "title": "Stato browser GPT",
             "project_id": "g-p-test",
         }]
@@ -118,3 +123,51 @@ def test_project_history_loads_selected_project_chats(tmp_path: Path):
     assert result["count"] == 1
     assert result["chats"][0]["title"] == "Stato browser GPT"
     assert result["chats"][0]["project_name"] == "Gpt browser"
+    assert result["chats"][0]["conversation_context_url"] == "https://chatgpt.com/g/g-p-test-gpt-browser/c/current-chat"
+
+
+def test_failed_project_job_rebinds_exact_context_before_resume(tmp_path: Path):
+    queue = make_queue(tmp_path)
+    job = queue.create_job(
+        "Stato browser GPT",
+        project_name="Gpt browser",
+        project_url="https://chatgpt.com/g/g-p-test/project",
+        conversation_url="https://chatgpt.com/c/current-chat",
+        conversation_context_url="https://chatgpt.com/g/g-p-test/c/current-chat",
+        state=GptJobState.FAILED,
+    )
+    queue.set_state(job.job_id, GptJobState.FAILED, last_error="conversation_navigation_timeout")
+    cdp = FakeCdp()
+    controller = GptWorkController(queue, cdp)
+    result = controller.resume_history_chat(
+        "https://chatgpt.com/c/current-chat",
+        "Stato browser GPT",
+        conversation_context_url="https://chatgpt.com/g/g-p-test-gpt-browser/c/current-chat",
+        project_name="Gpt browser",
+        project_url="https://chatgpt.com/g/g-p-test/project",
+    )
+    rebound = queue.get_job(job.job_id)
+    assert rebound.state is GptJobState.ACTIVE
+    assert rebound.last_error is None
+    assert rebound.conversation_context_url == "https://chatgpt.com/g/g-p-test-gpt-browser/c/current-chat"
+    assert result["server_chat_created"] is False
+
+
+def test_interrupt_saves_partial_response_and_keeps_job_active(tmp_path: Path):
+    queue = make_queue(tmp_path)
+    job = queue.create_job(
+        "Work",
+        conversation_url="https://chatgpt.com/c/current-chat",
+        conversation_context_url="https://chatgpt.com/c/current-chat",
+        target_id="managed",
+        state=GptJobState.ACTIVE,
+    )
+    cdp = FakeCdp()
+    cdp._targets.append(BrowserTarget("managed", "page", "https://chatgpt.com/c/current-chat", "Work", "ws://managed"))
+    controller = GptWorkController(queue, cdp)
+    result = controller.interrupt_job(job.job_id)
+    saved = queue.get_job(job.job_id)
+    assert result["stopped"] is True
+    assert cdp.interrupted == ["managed"]
+    assert saved.state is GptJobState.ACTIVE
+    assert saved.last_assistant_text == "Risposta parziale"

@@ -953,12 +953,13 @@ class ChromeCdp:
             const projectSegment = m[1];
             if (!(projectSegment === projectId || projectSegment.startsWith(projectId + '-'))) continue;
             const url = `${u.origin}/c/${m[2]}`;
+            const contextUrl = `${u.origin}${u.pathname}`;
             if (seen.has(url)) continue;
             const rawTitle = String(anchor.innerText || anchor.textContent || anchor.getAttribute('aria-label') || '');
             const title = clean(rawTitle.split(/\n/)[0]);
             if (!title) continue;
             seen.add(url);
-            rows.push({url, title});
+            rows.push({url, context_url: contextUrl, title});
           }
           return JSON.stringify({ready: document.readyState === 'complete', rows});
         })()'''.replace("__PROJECT_ID__", json.dumps(project_id))
@@ -989,9 +990,12 @@ class ChromeCdp:
                     if not url or not title or any(row["url"] == url for row in rows):
                         continue
                     conversation_id = url.rsplit("/", 1)[-1]
+                    context_url = str(value.get("context_url") or "").strip()
+                    if not _canonical_chatgpt_conversation_url(context_url):
+                        context_url = f"{CHATGPT_ORIGIN}/g/{project_id}/c/{conversation_id}"
                     rows.append({
                         "url": url,
-                        "context_url": f"{CHATGPT_ORIGIN}/g/{project_id}/c/{conversation_id}",
+                        "context_url": context_url,
                         "title": title,
                         "project_id": project_id,
                     })
@@ -1307,6 +1311,11 @@ class ChromeCdp:
           const composer = Array.from(document.querySelectorAll('#prompt-textarea, textarea, [contenteditable="true"]'))
             .find((el) => visible(el) && el.id !== 'bottazzi-human-composer') || null;
           const composerText = composer ? String(composer.value || composer.innerText || composer.textContent || '') : '';
+          const assistantNodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+          const lastAssistant = assistantNodes.length ? assistantNodes[assistantNodes.length - 1] : null;
+          const lastAssistantText = lastAssistant
+            ? String(lastAssistant.innerText || lastAssistant.textContent || '').trim().slice(-24000)
+            : '';
           return JSON.stringify({
             focused: document.hasFocus() && document.visibilityState === 'visible',
             visible: document.visibilityState === 'visible',
@@ -1314,6 +1323,7 @@ class ChromeCdp:
             ghost_close_at: Number((window.__bottazziGhostTabV1 || {}).close_at || 0),
             busy: responseInProgress || responsePending,
             composer_chars: composerText.length,
+            last_assistant_text: lastAssistantText,
           });
         })()'''
         result = self._page_call(
@@ -1329,6 +1339,53 @@ class ChromeCdp:
             raise CdpError("companion_state_invalid") from exc
         if not isinstance(state, dict):
             raise CdpError("companion_state_invalid")
+        return state
+
+    def stop_chatgpt_response(self, target_id: str) -> dict[str, Any]:
+        target = self._wait_target(target_id)
+        if not target.websocket_url or not target.is_chatgpt:
+            raise CdpError("stop_response_target_invalid")
+        expression = r'''(() => {
+          const visible = (el) => {
+            if (!el) return false;
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && !el.disabled;
+          };
+          const selectors = [
+            'button[data-testid="stop-button"]',
+            'button[aria-label*="Stop"]',
+            'button[aria-label*="stop"]',
+            'button[aria-label*="Interrompi"]',
+            'button[aria-label*="interrompi"]',
+          ];
+          let stop = null;
+          for (const selector of selectors) {
+            stop = Array.from(document.querySelectorAll(selector)).find(visible) || null;
+            if (stop) break;
+          }
+          const assistantNodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+          const lastAssistant = assistantNodes.length ? assistantNodes[assistantNodes.length - 1] : null;
+          const lastAssistantText = lastAssistant
+            ? String(lastAssistant.innerText || lastAssistant.textContent || '').trim().slice(-24000)
+            : '';
+          if (!stop) return JSON.stringify({stopped:false, reason:'not_running', last_assistant_text:lastAssistantText});
+          stop.click();
+          return JSON.stringify({stopped:true, last_assistant_text:lastAssistantText});
+        })()'''
+        result = self._page_call(
+            target.websocket_url,
+            "Runtime.evaluate",
+            {"expression": expression, "returnByValue": True},
+            timeout_s=1.0,
+        )
+        raw = (result.get("result") or {}).get("value")
+        try:
+            state = json.loads(raw) if isinstance(raw, str) else {}
+        except json.JSONDecodeError as exc:
+            raise CdpError("stop_response_invalid") from exc
+        if not isinstance(state, dict):
+            raise CdpError("stop_response_invalid")
         return state
 
     def chatgpt_focus_state(self, target_id: str) -> dict[str, Any]:

@@ -542,6 +542,15 @@ class GptWorkController:
                 conversation_context_url=context_url,
                 state=GptJobState.REVIEW,
             )
+        elif existing.state in {GptJobState.REVIEW, GptJobState.BLOCKED, GptJobState.FAILED} and not existing.target_id:
+            existing = self.queue.bind_chat(
+                existing.job_id,
+                conversation_url=canonical,
+                conversation_context_url=context_url,
+                target_id=None,
+                state=GptJobState.REVIEW,
+                last_error=None,
+            )
         result = self.start_job(existing.job_id)
         return {"job": self.queue.get_job(existing.job_id).model_dump(mode="json"), "start": result, "server_chat_created": False}
 
@@ -567,6 +576,23 @@ class GptWorkController:
         target = self._exact_job_target(job)
         self.cdp.activate_target(target.target_id)
         return {"action": "activated", "target_id": target.target_id}
+
+    def interrupt_job(self, job_id: str) -> dict[str, Any]:
+        job = self.queue.get_job(job_id)
+        if job.state is not GptJobState.ACTIVE:
+            raise ValueError("job_not_active")
+        target = self._exact_job_target(job)
+        result = self.cdp.stop_chatgpt_response(target.target_id)
+        partial = str(result.get("last_assistant_text") or "").strip()
+        if partial:
+            self.queue.set_last_assistant_text(job.job_id, partial)
+        return {
+            "action": "interrupted" if bool(result.get("stopped")) else "not_running",
+            "job_id": job.job_id,
+            "target_id": target.target_id,
+            "stopped": bool(result.get("stopped")),
+            "reason": result.get("reason"),
+        }
 
     def release_job(self, job_id: str) -> GptWorkJob:
         job = self.queue.get_job(job_id)
@@ -979,7 +1005,7 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
                 self._send_json(200, {"ok": True, **result})
                 return
 
-            match = re.fullmatch(r"/api/jobs/([A-Za-z0-9-]+)/(move|rank|start|state|activate|release|message)", path)
+            match = re.fullmatch(r"/api/jobs/([A-Za-z0-9-]+)/(move|rank|start|state|activate|release|message|interrupt)", path)
             if not match:
                 self._error(404, "not_found")
                 return
@@ -1019,6 +1045,15 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
                     return
                 job = controller.release_job(job_id)
                 self._send_json(200, {"ok": True, "action": "released", "job": job.model_dump(mode="json"), "server_chat_deleted": False})
+                return
+            if action == "interrupt":
+                payload = self._read_json()
+                if payload is None:
+                    return
+                if payload:
+                    self._error(422, "interrupt_body_must_be_empty")
+                    return
+                self._send_json(200, {"ok": True, **controller.interrupt_job(job_id)})
                 return
             if action == "message":
                 payload = self._validated(SendMessage)
