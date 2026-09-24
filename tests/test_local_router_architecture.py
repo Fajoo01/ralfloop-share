@@ -129,6 +129,40 @@ def test_router_deterministic_algorithm(registry):
     assert result.route.a == "AF" and result.route.t == "shortest_path"
 
 
+def test_router_preflights_scanned_pdf_to_visual_rag_before_model(registry):
+    class WrongClient:
+        calls = 0
+        def health(self): return True
+        def classify(self, text, catalog):
+            self.calls += 1
+            return CompactRoute(1, "AB", "audiobook_factory", c=1.0)
+
+    client = WrongClient()
+    result = LocalRouter(registry, client).classify(
+        "richiesta su PDF scannerizzato con una tabella"
+    )
+    assert (result.route.a, result.route.t) == ("VR", "visual_rag")
+    assert result.source == "deterministic"
+    assert client.calls == 0
+
+
+def test_router_does_not_force_plain_pdf_audiobook_to_visual_rag(registry):
+    class AudiobookClient:
+        calls = 0
+        def health(self): return True
+        def classify(self, text, catalog):
+            self.calls += 1
+            return CompactRoute(1, "AB", "pdf", c=1.0)
+
+    client = AudiobookClient()
+    result = LocalRouter(registry, client).classify("crea un audiolibro dal PDF")
+    assert client.calls == 1
+    assert result.route.a != "VR"
+    # audiobook_factory è attualmente degraded: il fallback LM è il comportamento
+    # fail-closed già esistente, ma il nuovo preflight non deve alterare l'intento.
+    assert result.route.a == "LM"
+
+
 def test_router_approval_is_proposal_not_authorization(registry):
     route = LocalRouter(registry).classify("pubblica il post").route
     decision = RalfPolicy().evaluate(route, operation="social_publish")

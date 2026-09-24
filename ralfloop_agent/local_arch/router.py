@@ -417,6 +417,11 @@ class LocalRouter:
             return CompactRoute(1, "SM", "structured_extraction", c=0.98, r="DETERMINISTIC_MATCH")
         if "embedding" in text:
             return CompactRoute(1, "SM", "embeddings", c=0.98, r="DETERMINISTIC_MATCH")
+        visual_pdf = "pdf" in text and any(
+            term in text for term in ("scannerizz", "scansion", "tabella", "immagine")
+        )
+        if visual_pdf or any(term in text for term in ("screenshot", "visual rag")):
+            return CompactRoute(1, "VR", "visual_rag", c=0.99, r="DETERMINISTIC_MATCH")
         return None
 
     def _semantic_fallback(self, text: str) -> CompactRoute | None:
