@@ -5,9 +5,11 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.webkit.CookieManager;
+import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -15,6 +17,7 @@ import android.webkit.WebViewClient;
 
 public final class MainActivity extends Activity {
     private static final int NOTIFICATION_PERMISSION_REQUEST = 4101;
+    private static final int AUDIO_PERMISSION_REQUEST = 4102;
 
     private WebView webView;
 
@@ -41,10 +44,16 @@ public final class MainActivity extends Activity {
         cookies.setAcceptThirdPartyCookies(webView, false);
 
         webView.setWebViewClient(new WebViewClient());
-        webView.setWebChromeClient(new WebChromeClient());
+        webView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public void onPermissionRequest(PermissionRequest request) {
+                runOnUiThread(() -> handleWebPermissionRequest(request));
+            }
+        });
         webView.loadUrl(BuildConfig.APP_URL);
 
         requestNotificationPermission();
+        requestAudioPermission();
         startNotificationService();
     }
 
@@ -59,6 +68,39 @@ public final class MainActivity extends Activity {
                 NOTIFICATION_PERMISSION_REQUEST
             );
         }
+    }
+
+    private void requestAudioPermission() {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] {Manifest.permission.RECORD_AUDIO}, AUDIO_PERMISSION_REQUEST);
+        }
+    }
+
+    private void handleWebPermissionRequest(PermissionRequest request) {
+        if (!sameOrigin(BuildConfig.APP_URL, request.getOrigin())) {
+            request.deny();
+            return;
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            request.deny();
+            requestAudioPermission();
+            return;
+        }
+        String[] resources = request.getResources();
+        if (resources.length == 1 && PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resources[0])) {
+            request.grant(new String[] {PermissionRequest.RESOURCE_AUDIO_CAPTURE});
+        } else {
+            request.deny();
+        }
+    }
+
+    private boolean sameOrigin(String configuredUrl, Uri requestedOrigin) {
+        Uri configured = Uri.parse(configuredUrl);
+        return configured.getScheme() != null
+            && configured.getScheme().equalsIgnoreCase(requestedOrigin.getScheme())
+            && configured.getHost() != null
+            && configured.getHost().equalsIgnoreCase(requestedOrigin.getHost())
+            && configured.getPort() == requestedOrigin.getPort();
     }
 
     private void startNotificationService() {

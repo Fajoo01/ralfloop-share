@@ -100,6 +100,9 @@ def test_android_shell_has_no_source_hardcoded_backend() -> None:
     assert "BuildConfig.APP_URL" in activity
     assert "19090" not in activity
     assert 'android:label="Bot-tazzi"' in manifest
+    assert 'android.permission.RECORD_AUDIO' in manifest
+    assert 'PermissionRequest.RESOURCE_AUDIO_CAPTURE' in activity
+    assert 'sameOrigin(BuildConfig.APP_URL, request.getOrigin())' in activity
 
 
 def test_gateway_systemd_is_release_bound_and_secret_free() -> None:
