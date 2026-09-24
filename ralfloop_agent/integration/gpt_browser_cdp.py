@@ -954,7 +954,8 @@ class ChromeCdp:
             if (!(projectSegment === projectId || projectSegment.startsWith(projectId + '-'))) continue;
             const url = `${u.origin}/c/${m[2]}`;
             if (seen.has(url)) continue;
-            const title = clean(anchor.innerText || anchor.textContent || anchor.getAttribute('aria-label') || '');
+            const rawTitle = String(anchor.innerText || anchor.textContent || anchor.getAttribute('aria-label') || '');
+            const title = clean(rawTitle.split(/\n/)[0]);
             if (!title) continue;
             seen.add(url);
             rows.push({url, title});
@@ -962,7 +963,6 @@ class ChromeCdp:
           return JSON.stringify({ready: document.readyState === 'complete', rows});
         })()'''.replace("__PROJECT_ID__", json.dumps(project_id))
         deadline = time.monotonic() + max(1.0, float(wait_timeout_s))
-        saw_ready = False
         while time.monotonic() < deadline:
             target = self._wait_target(target_id)
             if not target.is_chatgpt or not target.websocket_url:
@@ -997,10 +997,6 @@ class ChromeCdp:
                     })
             if rows:
                 return rows
-            ready = bool(isinstance(payload, dict) and payload.get("ready"))
-            if ready and saw_ready:
-                return []
-            saw_ready = saw_ready or ready
             time.sleep(0.35)
         return []
 
