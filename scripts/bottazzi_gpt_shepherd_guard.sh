@@ -8,7 +8,8 @@ ENDPOINT="http://127.0.0.1:9238"
 SNOOZE_FILE="/run/user/1001/bottazzi-gpt-rollover-snooze-until"
 COUNTDOWN_SECONDS=30
 SNOOZE_SECONDS=600
-RATE_LIMIT_SNOOZE_SECONDS=300
+RATE_LIMIT_COOLDOWN_SECONDS=45
+RATE_LIMIT_RECOVERY_FILE="/run/user/1001/bottazzi-gpt-rate-limit-recovery"
 
 run_json() {
   local label="$1"
@@ -72,18 +73,43 @@ fi
 [[ "$goal_action" != "goal_complete" ]] || exit 0
 
 probe="$(run_json probe "$PY" "$TOOL" --endpoint "$ENDPOINT" shepherd)" || exit $?
-if ! probe_fields="$(printf '%s' "$probe" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); ui=d.get("ui") or {}; print(1 if d.get("ok") else 0, 1 if d.get("rollover") else 0, 1 if ui.get("ready") else 0, 1 if d.get("defer_latency_rollover") else 0, 1 if ui.get("temporary_access_limited") else 0)')"; then
+if ! probe_fields="$(printf '%s' "$probe" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); ui=d.get("ui") or {}; print(1 if d.get("ok") else 0, 1 if d.get("rollover") else 0, 1 if ui.get("ready") else 0, 1 if d.get("defer_latency_rollover") else 0, 1 if ui.get("temporary_access_limited") else 0, str(ui.get("target_id") or ""))')"; then
   printf 'bottazzi-gpt-shepherd[probe]: invalid JSON: %s\n' "$probe" >&2
   exit 70
 fi
-read -r probe_ok rollover ready defer_latency temporary_access_limited <<< "$probe_fields"
+read -r probe_ok rollover ready defer_latency temporary_access_limited source_target_id <<< "$probe_fields"
+recovery_target=""
+if [[ -f "$RATE_LIMIT_RECOVERY_FILE" ]]; then
+  read -r recovery_target < "$RATE_LIMIT_RECOVERY_FILE" || recovery_target=""
+fi
 if [[ "$temporary_access_limited" == "1" ]]; then
-  printf '%s\n' "$(( now + RATE_LIMIT_SNOOZE_SECONDS ))" > "$SNOOZE_FILE"
+  if [[ -n "$source_target_id" && "$recovery_target" == "$source_target_id" ]]; then
+    fallback_result="$(run_json rate_limit_new_chat "$PY" "$TOOL" --endpoint "$ENDPOINT" shepherd --apply --submit --source-target-id "$source_target_id" --force-access-limit-handoff)" || fallback_result=""
+    if [[ -n "$fallback_result" ]] && printf '%s' "$fallback_result" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); raise SystemExit(0 if d.get("ok") and d.get("applied") else 1)' >/dev/null 2>&1; then
+      rm -f "$RATE_LIMIT_RECOVERY_FILE" "$SNOOZE_FILE"
+      printf '%s\n' "$fallback_result"
+      exit 0
+    fi
+    printf '%s\n' "$(( now + RATE_LIMIT_COOLDOWN_SECONDS ))" > "$SNOOZE_FILE"
+    exit 0
+  fi
+  printf '%s\n' "$source_target_id" > "$RATE_LIMIT_RECOVERY_FILE"
+  printf '%s\n' "$(( now + RATE_LIMIT_COOLDOWN_SECONDS ))" > "$SNOOZE_FILE"
   exit 0
 fi
 if [[ "$probe_ok" != "1" ]]; then
   printf 'bottazzi-gpt-shepherd[probe]: controller returned error: %s\n' "$probe" >&2
   exit 1
+fi
+if [[ -n "$recovery_target" ]]; then
+  if [[ -n "$source_target_id" && "$recovery_target" == "$source_target_id" ]]; then
+    continue_result="$(printf '%s\n' 'prosegui' | run_json rate_limit_continue "$PY" "$TOOL" --endpoint "$ENDPOINT" companion-send --target-id "$source_target_id")" || continue_result=""
+    if [[ -n "$continue_result" ]]; then
+      printf '%s\n' "$continue_result"
+    fi
+  fi
+  rm -f "$RATE_LIMIT_RECOVERY_FILE" "$SNOOZE_FILE"
+  exit 0
 fi
 
 adoption="$(run_json adoption "$PY" "$TOOL" --endpoint "$ENDPOINT" adopt-external --apply --scan-interval-seconds 30)" || exit $?
@@ -93,7 +119,8 @@ if ! adoption_fields="$(printf '%s' "$adoption" | "$PY" -c 'import json,sys; d=j
 fi
 read -r adoption_ok adoption_action adoption_reason <<< "$adoption_fields"
 if [[ "$adoption_reason" == "temporary_access_limited" ]]; then
-  printf '%s\n' "$(( now + RATE_LIMIT_SNOOZE_SECONDS ))" > "$SNOOZE_FILE"
+  printf '%s\n' "$source_target_id" > "$RATE_LIMIT_RECOVERY_FILE"
+  printf '%s\n' "$(( now + RATE_LIMIT_COOLDOWN_SECONDS ))" > "$SNOOZE_FILE"
   exit 0
 fi
 if [[ "$adoption_ok" != "1" ]]; then
@@ -134,7 +161,8 @@ if (
   fi
   read -r apply_ok apply_action apply_reason <<< "$apply_fields"
   if [[ "$apply_reason" == "temporary_access_limited" ]]; then
-    printf '%s\n' "$(( $(date +%s) + RATE_LIMIT_SNOOZE_SECONDS ))" > "$SNOOZE_FILE"
+    printf '%s\n' "$source_target_id" > "$RATE_LIMIT_RECOVERY_FILE"
+    printf '%s\n' "$(( $(date +%s) + RATE_LIMIT_COOLDOWN_SECONDS ))" > "$SNOOZE_FILE"
     exit 0
   fi
   [[ "$apply_reason" != "mutation_locked" ]] || exit 0

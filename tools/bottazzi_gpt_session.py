@@ -1482,22 +1482,27 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
         max_idle_ms=args.max_stall_ms,
         max_active_idle_ms=args.max_active_stall_ms,
     )
+    force_access_limit_handoff = bool(
+        getattr(args, "force_access_limit_handoff", False)
+        and ui.get("temporary_access_limited")
+    )
     report = {
         "ok": True,
         "ui": ui,
-        "rollover": decision.rollover,
-        "reasons": list(decision.reasons),
+        "rollover": decision.rollover or force_access_limit_handoff,
+        "reasons": list(decision.reasons) + (["temporary_access_limited"] if force_access_limit_handoff else []),
         "defer_latency_rollover": defer_latency_rollover,
+        "forced_access_limit_handoff": force_access_limit_handoff,
         "applied": False,
     }
-    if not decision.rollover:
+    if not decision.rollover and not force_access_limit_handoff:
         _json(report)
         return 0
-    if defer_latency_rollover:
+    if defer_latency_rollover and not force_access_limit_handoff:
         report["blocked"] = "latency_deferred"
         _json(report)
         return 0
-    if not ui.get("ready"):
+    if not ui.get("ready") and not force_access_limit_handoff:
         report["blocked"] = "interaction_required" if ui.get("interaction_required") else "composer_not_ready"
         _json(report)
         return 0
@@ -1528,7 +1533,7 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
             close_source=False,
             target_created_hook=record_successor,
             new_chat_url=chatgpt_project_new_chat_url(source.url) or CHATGPT_ORIGIN,
-            reuse_source_target=True,
+            reuse_source_target=not force_access_limit_handoff,
         )
     except (CdpError, GptSessionError, OSError) as exc:
         report["ok"] = False
@@ -1759,6 +1764,7 @@ def build_parser() -> argparse.ArgumentParser:
     shepherd.add_argument("--max-latency-ms", type=int, default=30000)
     shepherd.add_argument("--max-stall-ms", type=int, default=60000)
     shepherd.add_argument("--max-active-stall-ms", type=int, default=600000)
+    shepherd.add_argument("--force-access-limit-handoff", action="store_true")
     shepherd.set_defaults(func=cmd_shepherd)
 
     rotate = sub.add_parser("rotate")

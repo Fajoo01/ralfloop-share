@@ -895,6 +895,15 @@ def test_guard_checks_goal_before_rollover_probe() -> None:
     assert guard.index("goal-check --apply") < guard.index('shepherd)')
 
 
+def test_guard_recovers_temporary_access_limit_after_short_cooldown() -> None:
+    repo = Path(__file__).resolve().parents[1]
+    guard = (repo / "scripts/bottazzi_gpt_shepherd_guard.sh").read_text(encoding="utf-8")
+    assert "RATE_LIMIT_COOLDOWN_SECONDS=45" in guard
+    assert "'prosegui'" in guard
+    assert "--force-access-limit-handoff" in guard
+    assert "RATE_LIMIT_SNOOZE_SECONDS=300" not in guard
+
+
 class FakeRateLimitedRolloverCdp:
     def __init__(self) -> None:
         self.source = BrowserTarget("source", "page", "https://chatgpt.com/c/source", "worker", "ws://source")
@@ -961,6 +970,61 @@ def test_rollover_rate_limit_rolls_back_journal_and_remains_operational(monkeypa
     assert fake.unlocked is True
     assert MutationJournalStore(tmp_path).load() is None
     assert handoff.load_current()["source_chat_url"] == "https://chatgpt.com/c/source"
+
+
+class FakeForcedAccessLimitCdp(FakeRateLimitedRolloverCdp):
+    def __init__(self) -> None:
+        super().__init__()
+        self.reuse_source_target = None
+
+    def chatgpt_ui_state(self, target_id: str):
+        assert target_id == "source"
+        return {
+            "ready": False,
+            "temporary_access_limited": True,
+            "interaction_required": True,
+            "target_id": "source",
+            "user_turns": 1,
+            "page_age_minutes": 1,
+            "consecutive_errors": 0,
+            "last_response_latency_ms": 0,
+            "current_response_latency_ms": 0,
+            "response_pending": False,
+            "response_in_progress": False,
+            "response_idle_ms": 0,
+        }
+
+    def handoff_to_new_chat(self, prompt: str, **kwargs):
+        self.reuse_source_target = kwargs.get("reuse_source_target")
+        raise CdpError("temporary_access_limited")
+
+
+def test_forced_access_limit_handoff_uses_fresh_target_after_cooldown(monkeypatch, tmp_path) -> None:
+    handoff = HandoffStore(tmp_path)
+    handoff.save(Handoff(goal="x", current_state="y"))
+    handoff.update_source_chat("source", "https://chatgpt.com/c/source")
+    fake = FakeForcedAccessLimitCdp()
+    monkeypatch.setattr(gpt_session_tool, "ChromeCdp", lambda endpoint: fake)
+    args = SimpleNamespace(
+        endpoint="http://127.0.0.1:9238",
+        state_dir=str(tmp_path),
+        source_target_id="source",
+        max_turns=36,
+        max_age_minutes=120,
+        max_errors=2,
+        max_latency_ms=30000,
+        max_stall_ms=60000,
+        max_active_stall_ms=600000,
+        force_access_limit_handoff=True,
+        apply=True,
+        submit=True,
+    )
+
+    assert gpt_session_tool.cmd_shepherd(args) == 0
+    assert fake.reuse_source_target is False
+    assert fake.locked is True
+    assert fake.unlocked is True
+    assert MutationJournalStore(tmp_path).load() is None
 
 
 def test_incomplete_rollover_rolls_back_unconfirmed_successor(tmp_path) -> None:
