@@ -931,8 +931,8 @@ class ChromeCdp:
     ) -> list[dict[str, str]]:
         """Read conversations from the currently open ChatGPT project page.
 
-        Only links outside navigation are considered, so recent-chat sidebar
-        entries cannot be mistaken for members of the selected project.
+        Only project-context conversation links are considered, so generic
+        recent-chat sidebar entries cannot be mistaken for project members.
         """
         canonical_project = _safe_chatgpt_new_chat_url(project_url)
         parsed = urllib.parse.urlparse(canonical_project)
@@ -941,16 +941,18 @@ class ChromeCdp:
             raise CdpError("project_url_invalid")
         project_id = parts[1]
         expression = r'''(() => {
+          const projectId = __PROJECT_ID__;
           const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
           const rows = [];
           const seen = new Set();
           for (const anchor of document.querySelectorAll('a[href]')) {
-            if (anchor.closest('nav')) continue;
             let u;
             try { u = new URL(anchor.href, location.origin); } catch (_) { continue; }
-            const m = u.pathname.match(new RegExp('^/(?:g/[^/]+/)?c/([A-Za-z0-9-]+)'));
+            const m = u.pathname.match(new RegExp('^/g/([^/]+)/c/([A-Za-z0-9-]+)'));
             if (!m) continue;
-            const url = `${u.origin}/c/${m[1]}`;
+            const projectSegment = m[1];
+            if (!(projectSegment === projectId || projectSegment.startsWith(projectId + '-'))) continue;
+            const url = `${u.origin}/c/${m[2]}`;
             if (seen.has(url)) continue;
             const title = clean(anchor.innerText || anchor.textContent || anchor.getAttribute('aria-label') || '');
             if (!title) continue;
@@ -958,7 +960,7 @@ class ChromeCdp:
             rows.push({url, title});
           }
           return JSON.stringify({ready: document.readyState === 'complete', rows});
-        })()'''
+        })()'''.replace("__PROJECT_ID__", json.dumps(project_id))
         deadline = time.monotonic() + max(1.0, float(wait_timeout_s))
         saw_ready = False
         while time.monotonic() < deadline:
