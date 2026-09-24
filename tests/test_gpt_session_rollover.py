@@ -1730,6 +1730,40 @@ def test_inject_prompt_can_submit_with_button() -> None:
     assert [method for _, method in cdp.calls].count("Input.dispatchKeyEvent") == 0
 
 
+class HistoryLimitedNewChatInjectCdp(FakeInjectCdp):
+    def __init__(self, url: str = "https://chatgpt.com/") -> None:
+        super().__init__()
+        self.url = url
+
+    def chatgpt_ui_state(self, target_id=None):
+        return {
+            "ready": False,
+            "target_id": target_id or self.new_id,
+            "url": self.url,
+            "user_turns": 1 if self.sent else 0,
+            "temporary_access_limited": True,
+            "composer_ready": True,
+            "authenticated": True,
+            "page_settled": True,
+            "interaction_required": True,
+        }
+
+    def _wait_target(self, target_id, *, attempts=20):
+        return BrowserTarget(target_id, "page", self.url, "new", "ws://new")
+
+
+def test_inject_prompt_allows_new_chat_when_only_history_is_temporarily_limited() -> None:
+    cdp = HistoryLimitedNewChatInjectCdp()
+    result = cdp.inject_prompt("nuova chat", target_id="new", submit=True)
+    assert result["submitted"] is True
+
+
+def test_inject_prompt_does_not_bypass_history_limit_on_existing_chat() -> None:
+    cdp = HistoryLimitedNewChatInjectCdp("https://chatgpt.com/c/existing")
+    with pytest.raises(CdpError, match="interaction_required"):
+        cdp.inject_prompt("continua", target_id="new", submit=False, wait_timeout_s=0.05)
+
+
 class FailingHandoffCdp(FakeCdp):
     def inject_prompt(self, prompt, *, target_id=None, submit=False, wait_timeout_s=20.0):
         raise CdpError("chatgpt_not_ready:interaction_required")

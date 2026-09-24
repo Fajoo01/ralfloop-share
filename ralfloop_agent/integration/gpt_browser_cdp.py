@@ -337,6 +337,22 @@ class ChromeCdp:
         state["target_id"] = target.target_id
         return state
 
+    @staticmethod
+    def _new_chat_entry_ready_under_history_limit(state: dict[str, Any]) -> bool:
+        if not bool(state.get("temporary_access_limited")):
+            return False
+        if not (
+            bool(state.get("composer_ready"))
+            and bool(state.get("authenticated"))
+            and bool(state.get("page_settled"))
+        ):
+            return False
+        try:
+            _safe_chatgpt_new_chat_url(str(state.get("url") or ""))
+        except CdpError:
+            return False
+        return True
+
     def inject_prompt(
         self,
         prompt: str,
@@ -349,12 +365,14 @@ class ChromeCdp:
             raise CdpError("empty_prompt")
         deadline = time.monotonic() + wait_timeout_s
         state: dict[str, Any] = {}
+        new_chat_entry_ready = False
         while time.monotonic() < deadline:
             state = self.chatgpt_ui_state(target_id)
-            if state.get("ready"):
+            new_chat_entry_ready = self._new_chat_entry_ready_under_history_limit(state)
+            if state.get("ready") or new_chat_entry_ready:
                 break
             time.sleep(0.25)
-        if not state.get("ready"):
+        if not state.get("ready") and not new_chat_entry_ready:
             reason = "interaction_required" if state.get("interaction_required") else "composer_not_ready"
             raise CdpError(f"chatgpt_not_ready:{reason}")
 
