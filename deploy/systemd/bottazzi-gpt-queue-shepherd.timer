@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Bot-tazzi GPT queue-aware lifecycle shepherd periodically
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=15s
+AccuracySec=2s
+Unit=bottazzi-gpt-queue-shepherd.service
+
+[Install]
+WantedBy=timers.target

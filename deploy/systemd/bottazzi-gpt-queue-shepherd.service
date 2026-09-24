@@ -1,0 +1,19 @@
+[Unit]
+Description=Bot-tazzi GPT queue-aware lifecycle shepherd
+After=bottazzi-gpt-browser.service bottazzi-gpt-queue.service network-online.target
+Wants=bottazzi-gpt-browser.service bottazzi-gpt-queue.service network-online.target
+
+[Service]
+Type=oneshot
+User=bandi
+Group=ralf-mcp
+Environment=HOME=/home/bandi
+Environment=BOTTAZZI_GPT_CDP_ENDPOINT=http://127.0.0.1:9238
+Environment=BOTTAZZI_GPT_WORK_QUEUE_DB=/home/bandi/.local/state/bottazzi/gpt-session/work-queue.sqlite3
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/bandi/.local/share/bottazzi-gpt-browser/runtime-current/tools/bottazzi_gpt_queue_shepherd.py
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/bandi/.local/state/bottazzi/gpt-session
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
