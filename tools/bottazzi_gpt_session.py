@@ -595,6 +595,25 @@ def _recover_incomplete_mutation(
                 journal.clear()
                 return {"kind": kind, "outcome": "rolled_back", "phase": phase}
             raise GptSessionError("mutation_recovery_required:rollover:unconfirmed_successor")
+        if (
+            phase == "target_created"
+            and successor_target_id == source_target_id
+            and source_tab is None
+            and not current_url
+        ):
+            # A same-target rollover can be interrupted after navigation started
+            # but before the successor URL was observed/persisted. If that CDP
+            # target later disappears and handoff state still has no URL, there
+            # is nothing left to commit or safely restore. Drop only the local
+            # transaction marker; never archive/delete a server conversation.
+            journal.clear()
+            return {
+                "kind": kind,
+                "outcome": "abandoned_local_transaction",
+                "phase": phase,
+                "same_target": True,
+                "server_chat_deleted": False,
+            }
         if phase in {"source_state_done", "archive_started", "source_archive_deferred", "source_archived", "source_ghosted", "source_closed", "committed"} and current_url and current_url != source_url:
             resolved, _, error = _resolve_stored_source(tabs, store)
             if error:

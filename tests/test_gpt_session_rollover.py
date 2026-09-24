@@ -799,6 +799,29 @@ def test_incomplete_rollover_recovers_confirmed_successor_on_same_target_without
     assert journal.load() is None
 
 
+def test_abandoned_same_target_rollover_clears_only_local_journal(tmp_path) -> None:
+    handoff = HandoffStore(tmp_path)
+    handoff.save(Handoff(goal="x", current_state="y"))
+    handoff.update_source_chat("stale-target")
+    adoption = ExternalChatAdoptionStore(tmp_path)
+    journal = MutationJournalStore(tmp_path)
+    journal.begin("rollover", source_target_id="stale-target", source_url="https://chatgpt.com/c/source")
+    journal.update(phase="target_created", successor_target_id="stale-target")
+    cdp = FakeRecoveryCdp(
+        [BrowserTarget("other", "page", "https://chatgpt.com/c/other", "other", "ws://other")]
+    )
+
+    result = _recover_incomplete_mutation(cdp, handoff, adoption, journal)
+
+    assert result and result["outcome"] == "abandoned_local_transaction"
+    assert result["server_chat_deleted"] is False
+    assert cdp.archived == []
+    assert cdp.closed == []
+    assert journal.load() is None
+    assert handoff.load_current()["source_chat"] == "stale-target"
+    assert handoff.load_current()["source_chat_url"] is None
+
+
 def test_incomplete_same_target_rollover_restores_source_instead_of_closing_worker(tmp_path) -> None:
     handoff = HandoffStore(tmp_path)
     handoff.save(Handoff(goal="x", current_state="y"))
