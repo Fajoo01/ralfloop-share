@@ -257,3 +257,34 @@ def test_oidc_callback_rejects_wrong_state(client: TestClient, monkeypatch: pyte
     callback = client.get("/oidc/callback?code=ok&state=wrong", follow_redirects=False)
     assert callback.status_code == 400
     assert callback.json()["detail"] == "portachiavi_callback_invalid"
+
+
+def test_filologo_module_is_present_in_private_app(client: TestClient) -> None:
+    client.post("/login", json={"password": "app-pass"})
+    ui = client.get("/")
+    assert 'id="filologo"' in ui.text
+    assert "app_scholarly" in ui.text
+
+
+def test_filologo_routes_only_chat_to_scholarly_backend(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    client.post("/login", json={"password": "app-pass"})
+    monkeypatch.setattr(app_gateway, "SCHOLARLY_BACKEND", "http://127.0.0.1:19120")
+    seen = {}
+
+    class FakeResponse:
+        status_code = 200
+        content = b'{"ok":true,"response":"scholarly"}'
+        headers = {"content-type": "application/json"}
+        ok = True
+
+    def fake_post(url, *, json, timeout):
+        seen.update(url=url, json=json, timeout=timeout)
+        return FakeResponse()
+
+    monkeypatch.setattr(app_gateway.requests, "post", fake_post)
+    response = client.post("/assistant/v1/chat", json={"message": "Confronta le fonti primarie", "allow_tools": False, "app_scholarly": True})
+    assert response.status_code == 200
+    assert seen["url"] == "http://127.0.0.1:19120/assistant/v1/chat"
+    assert seen["json"]["allow_tools"] is True
+    assert "app_scholarly" not in seen["json"]
+    assert seen["json"]["context"]["app_scholarly"] is True

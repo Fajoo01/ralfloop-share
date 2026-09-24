@@ -20,6 +20,7 @@ from ralfloop_agent.call_recordings import CallRecordingStore
 APP_NAME = "Bot-tazzi — App"
 UI_PATH = Path(__file__).with_name("bottazzi_ui.html")
 BACKEND = os.getenv("BOTTAZZI_APP_BACKEND", "http://127.0.0.1:19090").rstrip("/")
+SCHOLARLY_BACKEND = os.getenv("BOTTAZZI_APP_SCHOLARLY_BACKEND", "").rstrip("/")
 COOKIE = "bottazzi_app_session"
 OIDC_STATE_COOKIE = "bottazzi_oidc_state"
 SESSION_TTL = int(os.getenv("BOTTAZZI_APP_SESSION_TTL", "86400"))
@@ -230,7 +231,7 @@ def assistant_status() -> Response:
     if upstream.ok:
         try:
             payload = upstream.json()
-            payload.update({"app_gateway": True, "app_private": True, "app_modules": ["local_chat", "internet_agent", "tools", "fast", "deep"]})
+            payload.update({"app_gateway": True, "app_private": True, "app_modules": ["local_chat", "internet_agent", "scholarly", "tools", "fast", "deep"]})
             return JSONResponse(payload)
         except ValueError:
             pass
@@ -325,6 +326,7 @@ async def assistant_accounting_review(request: Request, rest_of_path: str = "") 
 def assistant_chat(payload: dict[str, Any]) -> Response:
     outgoing = dict(payload)
     internet_agent = bool(outgoing.pop("app_internet_agent", False))
+    scholarly = bool(outgoing.pop("app_scholarly", False))
     if internet_agent:
         original = str(outgoing.get("message") or "").strip()
         if original.casefold() in {"riprova", "riprovaci", "prova di nuovo", "di nuovo"}:
@@ -346,9 +348,17 @@ def assistant_chat(payload: dict[str, Any]) -> Response:
         context = dict(outgoing.get("context") or {})
         context["app_internet_agent"] = True
         outgoing["context"] = context
+    target_backend = SCHOLARLY_BACKEND if scholarly else BACKEND
+    if scholarly and not target_backend:
+        return JSONResponse({"detail": "scholarly_backend_unavailable"}, status_code=503)
+    if scholarly:
+        context = dict(outgoing.get("context") or {})
+        context["app_scholarly"] = True
+        outgoing["context"] = context
+        outgoing["allow_tools"] = True
     try:
         upstream = requests.post(
-            f"{BACKEND}/assistant/v1/chat",
+            f"{target_backend}/assistant/v1/chat",
             json=outgoing,
             timeout=int(os.getenv("BOTTAZZI_APP_BACKEND_TIMEOUT", "300")),
         )
