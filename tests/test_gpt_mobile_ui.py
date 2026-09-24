@@ -236,6 +236,11 @@ def test_send_feedback_voice_and_global_queue_order_are_visible() -> None:
     assert "state.drafts.delete(id);if(box)box.value=''" in html
     assert "data-action=\"voice\"" in html
     assert "/api/audio/transcribe" in html
+    assert "Tieni premuto per parlare" in html
+    assert "Registrazione… rilascia per inviare" in html
+    assert "document.addEventListener('pointerdown'" in html
+    assert "document.addEventListener('pointerup'" in html
+    assert "if(a==='voice')return;" in html
     assert "jobs=[...(s.jobs||[])].sort((a,b)=>Number(a.rank)-Number(b.rank))" in html
 
 
