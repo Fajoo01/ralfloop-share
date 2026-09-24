@@ -6,6 +6,7 @@ import json
 import os
 import re
 import tempfile
+import time
 import urllib.parse
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -366,6 +367,131 @@ class MutationJournalStore:
             self.path.unlink()
         except FileNotFoundError:
             pass
+
+
+class DeferredArchiveStore:
+    schema_version = "bottazzi_gpt_deferred_archives_v1"
+
+    def __init__(self, root: str | os.PathLike[str] | None = None) -> None:
+        self.root = Path(root).expanduser() if root else default_state_dir()
+        self.path = self.root / "deferred-archives.json"
+
+    def load(self) -> dict[str, Any]:
+        if not self.path.exists():
+            return {"schema_version": self.schema_version, "items": []}
+        if self.path.is_symlink():
+            raise GptSessionError("deferred_archive_symlink_rejected")
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise GptSessionError("deferred_archive_invalid") from exc
+        if not isinstance(data, dict) or data.get("schema_version") != self.schema_version:
+            raise GptSessionError("deferred_archive_invalid")
+        items = data.get("items")
+        if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+            raise GptSessionError("deferred_archive_invalid")
+        _reject_secret_keys(data)
+        return data
+
+    def save(self, data: Mapping[str, Any]) -> None:
+        payload = dict(data)
+        payload["schema_version"] = self.schema_version
+        items = payload.get("items")
+        if not isinstance(items, list):
+            raise GptSessionError("deferred_archive_invalid")
+        payload["items"] = items[-128:]
+        _reject_secret_keys(payload)
+        encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        if len(encoded.encode("utf-8")) > 128 * 1024:
+            raise GptSessionError("deferred_archive_too_large")
+        if self.root.is_symlink() or self.path.is_symlink():
+            raise GptSessionError("deferred_archive_path_invalid")
+        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(self.root, 0o700)
+        _atomic_write(self.path, encoded)
+
+    def get(self, conversation_url: str) -> dict[str, Any] | None:
+        normalized = normalize_chatgpt_conversation_url(conversation_url)
+        if not normalized:
+            return None
+        return next(
+            (
+                dict(item)
+                for item in self.load().get("items", [])
+                if normalize_chatgpt_conversation_url(str(item.get("conversation_url") or "")) == normalized
+            ),
+            None,
+        )
+
+    def defer(
+        self,
+        conversation_url: str,
+        *,
+        reason: str,
+        context_url: str | None = None,
+        now_epoch: int | None = None,
+    ) -> dict[str, Any]:
+        normalized = normalize_chatgpt_conversation_url(conversation_url)
+        if not normalized:
+            raise GptSessionError("deferred_archive_conversation_invalid")
+        context = chatgpt_conversation_context_url(context_url or "") or normalized
+        now = int(time.time()) if now_epoch is None else int(now_epoch)
+        data = self.load()
+        items = list(data.get("items") or [])
+        previous = next(
+            (
+                item
+                for item in items
+                if normalize_chatgpt_conversation_url(str(item.get("conversation_url") or "")) == normalized
+            ),
+            None,
+        )
+        attempts = int((previous or {}).get("attempts") or 0) + 1
+        delay = min(3600, 300 * (2 ** min(attempts - 1, 3)))
+        item = {
+            "conversation_url": normalized,
+            "context_url": context,
+            "reason": str(reason)[:512],
+            "attempts": attempts,
+            "first_deferred_at": str((previous or {}).get("first_deferred_at") or _now()),
+            "updated_at": _now(),
+            "next_retry_epoch": now + delay,
+        }
+        items = [
+            existing
+            for existing in items
+            if normalize_chatgpt_conversation_url(str(existing.get("conversation_url") or "")) != normalized
+        ]
+        items.append(item)
+        self.save({"schema_version": self.schema_version, "items": items})
+        return dict(item)
+
+    def due(self, *, now_epoch: int | None = None) -> list[dict[str, Any]]:
+        now = int(time.time()) if now_epoch is None else int(now_epoch)
+        return sorted(
+            [
+                dict(item)
+                for item in self.load().get("items", [])
+                if int(item.get("next_retry_epoch") or 0) <= now
+            ],
+            key=lambda item: int(item.get("next_retry_epoch") or 0),
+        )
+
+    def resolve(self, conversation_url: str) -> bool:
+        normalized = normalize_chatgpt_conversation_url(conversation_url)
+        if not normalized:
+            return False
+        data = self.load()
+        items = list(data.get("items") or [])
+        kept = [
+            item
+            for item in items
+            if normalize_chatgpt_conversation_url(str(item.get("conversation_url") or "")) != normalized
+        ]
+        if len(kept) == len(items):
+            return False
+        self.save({"schema_version": self.schema_version, "items": kept})
+        return True
 
 
 def normalize_chatgpt_conversation_url(value: str) -> str | None:

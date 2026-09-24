@@ -52,6 +52,13 @@ if [[ -f "$SNOOZE_FILE" ]]; then
   fi
 fi
 
+archive_cleanup="$(run_json archive_cleanup "$PY" "$TOOL" --endpoint "$ENDPOINT" archive-cleanup --apply)" || archive_cleanup=""
+if [[ -n "$archive_cleanup" ]]; then
+  if ! printf '%s' "$archive_cleanup" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); raise SystemExit(0 if d.get("ok") else 1)' >/dev/null; then
+    printf 'bottazzi-gpt-shepherd[archive_cleanup]: controller returned error: %s\n' "$archive_cleanup" >&2
+  fi
+fi
+
 goal_check="$(run_json goal_check "$PY" "$TOOL" --endpoint "$ENDPOINT" goal-check --apply)" || exit $?
 if ! goal_fields="$(printf '%s' "$goal_check" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); print(1 if d.get("ok") else 0, str(d.get("action") or ""), str(d.get("reason") or ""))')"; then
   printf 'bottazzi-gpt-shepherd[goal_check]: invalid JSON: %s\n' "$goal_check" >&2

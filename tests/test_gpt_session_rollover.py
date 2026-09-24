@@ -21,6 +21,7 @@ from tools.bottazzi_gpt_session import (
 )
 
 from ralfloop_agent.integration.gpt_session_rollover import (
+    DeferredArchiveStore,
     ExternalChatAdoptionStore,
     GOAL_REACHED_MARKER,
     GoalNotificationStore,
@@ -500,6 +501,129 @@ class FakeRecoveryCdp:
 
     def close_target(self, target_id: str) -> None:
         self.closed.append(target_id)
+
+
+class FailingArchiveRecoveryCdp(FakeRecoveryCdp):
+    def archive_chatgpt_conversation(
+        self,
+        target_id: str,
+        url: str,
+        *,
+        allow_absent: bool = False,
+        archive_started_hook=None,
+    ):
+        if archive_started_hook is not None:
+            archive_started_hook()
+        self.archived.append((target_id, url))
+        raise CdpError("conversation_archive_not_confirmed")
+
+
+def test_deferred_archive_store_backoff_and_resolve(tmp_path) -> None:
+    queue = DeferredArchiveStore(tmp_path)
+    first = queue.defer(
+        "https://chatgpt.com/c/source",
+        context_url="https://chatgpt.com/g/g-p-project/c/source",
+        reason="conversation_archive_not_confirmed",
+        now_epoch=1000,
+    )
+    assert first["attempts"] == 1
+    assert first["next_retry_epoch"] == 1300
+    second = queue.defer(
+        "https://chatgpt.com/c/source",
+        context_url="https://chatgpt.com/g/g-p-project/c/source",
+        reason="conversation_archive_not_confirmed",
+        now_epoch=1100,
+    )
+    assert second["attempts"] == 2
+    assert second["next_retry_epoch"] == 1700
+    assert queue.due(now_epoch=1699) == []
+    assert queue.due(now_epoch=1700)[0]["conversation_url"] == "https://chatgpt.com/c/source"
+    assert queue.resolve("https://chatgpt.com/c/source") is True
+    assert queue.load()["items"] == []
+
+
+def test_incomplete_rollover_commits_successor_when_archive_is_deferred(tmp_path) -> None:
+    handoff = HandoffStore(tmp_path)
+    handoff.save(Handoff(goal="x", current_state="y"))
+    handoff.update_source_chat(
+        "successor-current",
+        "https://chatgpt.com/c/successor",
+        "https://chatgpt.com/g/g-p-project/c/successor",
+    )
+    adoption = ExternalChatAdoptionStore(tmp_path)
+    journal = MutationJournalStore(tmp_path)
+    journal.begin(
+        "rollover",
+        source_target_id="stale-source",
+        source_url="https://chatgpt.com/c/source",
+    )
+    journal.update(
+        phase="archive_started",
+        successor_target_id="stale-successor",
+        successor_url="https://chatgpt.com/c/successor",
+    )
+    cdp = FailingArchiveRecoveryCdp(
+        [
+            BrowserTarget(
+                "source-copy",
+                "page",
+                "https://chatgpt.com/g/g-p-project/c/source",
+                "old",
+                "ws://source-copy",
+            ),
+            BrowserTarget(
+                "successor-current",
+                "page",
+                "https://chatgpt.com/g/g-p-project/c/successor",
+                "new",
+                "ws://successor-current",
+            ),
+        ]
+    )
+
+    result = _recover_incomplete_mutation(cdp, handoff, adoption, journal)
+
+    assert result and result["outcome"] == "committed"
+    assert result["source_chat_archived"] is False
+    assert result["source_archive_deferred"] is True
+    assert journal.load() is None
+    queued = DeferredArchiveStore(tmp_path).get("https://chatgpt.com/c/source")
+    assert queued is not None
+    assert queued["context_url"] == "https://chatgpt.com/g/g-p-project/c/source"
+    assert queued["reason"] == "conversation_archive_not_confirmed"
+    assert cdp.human_input_targets == [
+        ("successor-current", "https://chatgpt.com/g/g-p-project/c/successor")
+    ]
+
+
+def test_archive_cleanup_requeues_failure_without_failing_controller(monkeypatch, tmp_path, capsys) -> None:
+    queue = DeferredArchiveStore(tmp_path)
+    queue.defer(
+        "https://chatgpt.com/c/source",
+        context_url="https://chatgpt.com/g/g-p-project/c/source",
+        reason="initial",
+        now_epoch=0,
+    )
+    cdp = FailingArchiveRecoveryCdp(
+        [
+            BrowserTarget(
+                "source-copy",
+                "page",
+                "https://chatgpt.com/g/g-p-project/c/source",
+                "old",
+                "ws://source-copy",
+            )
+        ]
+    )
+    monkeypatch.setattr(gpt_session_tool, "ChromeCdp", lambda endpoint: cdp)
+    args = SimpleNamespace(endpoint="http://127.0.0.1:9238", state_dir=str(tmp_path), apply=True)
+
+    assert gpt_session_tool.cmd_archive_cleanup(args) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["action"] == "deferred"
+    assert payload["attempts"] == 2
+    assert DeferredArchiveStore(tmp_path).get("https://chatgpt.com/c/source") is not None
 
 
 def test_incomplete_adoption_recovers_after_browser_navigation(tmp_path) -> None:

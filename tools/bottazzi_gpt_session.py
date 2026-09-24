@@ -16,6 +16,7 @@ if str(REPO_ROOT) not in sys.path:
 from ralfloop_agent.integration.gpt_browser_cdp import CHATGPT_ORIGIN, ChromeCdp, CdpError
 from ralfloop_agent.integration.gpt_session_rollover import (
     EXTERNAL_UNVALIDATED_TTL_SECONDS,
+    DeferredArchiveStore,
     ExternalChatAdoptionStore,
     GoalNotificationStore,
     GptSessionError,
@@ -256,6 +257,7 @@ def _archive_source_conversation(
     source_target_id: str,
     source_url: str,
     *,
+    source_context_url: str | None = None,
     allow_already_archived: bool = False,
     archive_started_hook=None,
 ) -> dict:
@@ -271,11 +273,21 @@ def _archive_source_conversation(
         ),
         None,
     )
+    if target is None:
+        target = next(
+            (
+                tab
+                for tab in tabs
+                if normalize_chatgpt_conversation_url(tab.url) == normalized
+            ),
+            None,
+        )
     temporary_target_id = None
     try:
         if target is None:
+            context_url = chatgpt_conversation_context_url(source_context_url or "") or normalized
             temporary_target_id = cdp.create_chatgpt_target(clear_cache=False, background=True)
-            cdp.navigate_chatgpt_conversation(temporary_target_id, normalized)
+            cdp.navigate_chatgpt_conversation(temporary_target_id, context_url)
             target_id = temporary_target_id
         else:
             target_id = target.target_id
@@ -303,16 +315,65 @@ def _archive_source_with_journal(
     source_target_id: str,
     source_url: str,
 ) -> dict:
-    archive_may_have_started = phase in {"archive_started", "source_archived", "source_ghosted", "source_closed", "committed"}
+    archive_may_have_started = phase in {
+        "archive_started",
+        "source_archive_deferred",
+        "source_archived",
+        "source_ghosted",
+        "source_closed",
+        "committed",
+    }
+    deferred = DeferredArchiveStore(journal.root)
+    pending = deferred.get(source_url)
+    if (
+        phase == "source_archive_deferred"
+        and pending is not None
+        and int(pending.get("next_retry_epoch") or 0) > int(time.time())
+    ):
+        return {
+            "archived": False,
+            "deferred": True,
+            "conversation_url": source_url,
+            "reason": str(pending.get("reason") or "archive_deferred"),
+            "next_retry_epoch": int(pending.get("next_retry_epoch") or 0),
+        }
     started_hook = None if archive_may_have_started else lambda: journal.update(phase="archive_started")
-    result = _archive_source_conversation(
-        cdp,
-        source_target_id,
-        source_url,
-        allow_already_archived=archive_may_have_started,
-        archive_started_hook=started_hook,
-    )
-    journal.update(phase="source_archived")
+    try:
+        result = _archive_source_conversation(
+            cdp,
+            source_target_id,
+            source_url,
+            allow_already_archived=archive_may_have_started,
+            archive_started_hook=started_hook,
+        )
+    except CdpError as exc:
+        normalized = normalize_chatgpt_conversation_url(source_url)
+        context_url = next(
+            (
+                tab.url
+                for tab in cdp.targets()
+                if tab.target_type == "page"
+                and tab.is_chatgpt
+                and normalize_chatgpt_conversation_url(tab.url) == normalized
+                and chatgpt_conversation_context_url(tab.url)
+            ),
+            source_url,
+        )
+        queued = deferred.defer(source_url, reason=str(exc), context_url=context_url)
+        journal.update(
+            phase="source_archive_deferred",
+            archive_deferred=True,
+            archive_error=str(exc),
+        )
+        return {
+            "archived": False,
+            "deferred": True,
+            "conversation_url": source_url,
+            "reason": str(exc),
+            "next_retry_epoch": int(queued.get("next_retry_epoch") or 0),
+        }
+    deferred.resolve(source_url)
+    journal.update(phase="source_archived", archive_deferred=False, archive_error=None)
     return result
 
 
@@ -426,17 +487,31 @@ def _recover_incomplete_mutation(
                 raise GptSessionError(f"mutation_recovery_required:adopt_external:{error}")
             if resolved is None or normalize_chatgpt_conversation_url(resolved.url) != candidate_url:
                 raise GptSessionError("mutation_recovery_required:adopt_external:candidate_tab_missing")
-            _archive_source_with_journal(cdp, journal, phase, source_target_id, source_url)
+            archive_state = _archive_source_with_journal(cdp, journal, phase, source_target_id, source_url)
             _finalize_adoption_state(adoption, source_url=source_url, candidate_url=candidate_url, now=int(time.time()))
             journal.clear()
-            return {"kind": kind, "outcome": "committed", "phase": phase, "conversation_url": candidate_url, "source_chat_archived": True}
+            return {
+                "kind": kind,
+                "outcome": "committed",
+                "phase": phase,
+                "conversation_url": candidate_url,
+                "source_chat_archived": bool(archive_state.get("archived")),
+                "source_archive_deferred": bool(archive_state.get("deferred")),
+            }
         if target is not None and target_url == candidate_url:
             store.update_source_chat(target.target_id, candidate_url, target.url)
             journal.update(phase="source_state_done")
-            _archive_source_with_journal(cdp, journal, phase, source_target_id, source_url)
+            archive_state = _archive_source_with_journal(cdp, journal, phase, source_target_id, source_url)
             _finalize_adoption_state(adoption, source_url=source_url, candidate_url=candidate_url, now=int(time.time()))
             journal.clear()
-            return {"kind": kind, "outcome": "committed", "phase": phase, "conversation_url": candidate_url, "source_chat_archived": True}
+            return {
+                "kind": kind,
+                "outcome": "committed",
+                "phase": phase,
+                "conversation_url": candidate_url,
+                "source_chat_archived": bool(archive_state.get("archived")),
+                "source_archive_deferred": bool(archive_state.get("deferred")),
+            }
         if current_url == source_url:
             resolved, _, error = _resolve_stored_source(tabs, store)
             if error:
@@ -464,7 +539,7 @@ def _recover_incomplete_mutation(
                 if int(successor_ui.get("user_turns") or 0) >= 1:
                     store.update_source_chat(successor.target_id, successor_url, successor.url)
                     journal.update(phase="source_state_done", successor_url=successor_url)
-                    _archive_source_with_journal(cdp, journal, phase, source_target_id, source_url)
+                    archive_state = _archive_source_with_journal(cdp, journal, phase, source_target_id, source_url)
                     ghost_state = _install_rollover_ghost(
                         cdp,
                         journal,
@@ -479,7 +554,8 @@ def _recover_incomplete_mutation(
                         "outcome": "committed",
                         "phase": phase,
                         "source_chat_url": successor_url,
-                        "source_chat_archived": True,
+                        "source_chat_archived": bool(archive_state.get("archived")),
+                        "source_archive_deferred": bool(archive_state.get("deferred")),
                         "source_chat_ghosted": bool(ghost_state.get("source_ghosted")),
                     }
             cdp.close_target(successor.target_id)
@@ -490,12 +566,12 @@ def _recover_incomplete_mutation(
                 journal.clear()
                 return {"kind": kind, "outcome": "rolled_back", "phase": phase}
             raise GptSessionError("mutation_recovery_required:rollover:unconfirmed_successor")
-        if phase in {"source_state_done", "archive_started", "source_archived", "source_ghosted", "source_closed", "committed"} and current_url and current_url != source_url:
+        if phase in {"source_state_done", "archive_started", "source_archive_deferred", "source_archived", "source_ghosted", "source_closed", "committed"} and current_url and current_url != source_url:
             resolved, _, error = _resolve_stored_source(tabs, store)
             if error:
                 raise GptSessionError(f"mutation_recovery_required:rollover:{error}")
             if resolved is not None and normalize_chatgpt_conversation_url(resolved.url) == current_url:
-                _archive_source_with_journal(cdp, journal, phase, source_target_id, source_url)
+                archive_state = _archive_source_with_journal(cdp, journal, phase, source_target_id, source_url)
                 ghost_state = _install_rollover_ghost(
                     cdp,
                     journal,
@@ -510,7 +586,8 @@ def _recover_incomplete_mutation(
                     "outcome": "committed",
                     "phase": phase,
                     "source_chat_url": current_url,
-                    "source_chat_archived": True,
+                    "source_chat_archived": bool(archive_state.get("archived")),
+                    "source_archive_deferred": bool(archive_state.get("deferred")),
                     "source_chat_ghosted": bool(ghost_state.get("source_ghosted")),
                 }
         if current_url == source_url:
@@ -874,7 +951,7 @@ def cmd_adopt_external(args: argparse.Namespace) -> int:
         journal.update(phase="browser_done")
         store.update_source_chat(source.target_id, candidate)
         journal.update(phase="source_state_done")
-        _archive_source_with_journal(cdp, journal, "source_state_done", source.target_id, source_url)
+        archive_state = _archive_source_with_journal(cdp, journal, "source_state_done", source.target_id, source_url)
         _finalize_adoption_state(adoption, source_url=source_url, candidate_url=candidate, now=now)
         journal.update(phase="committed")
         journal.clear()
@@ -898,7 +975,9 @@ def cmd_adopt_external(args: argparse.Namespace) -> int:
             "conversation_url": candidate,
             "source_target_id": source.target_id,
             "user_turns": int(adopted_ui.get("user_turns") or 0),
-            "source_chat_archived": True,
+            "source_chat_archived": bool(archive_state.get("archived")),
+            "source_archive_deferred": bool(archive_state.get("deferred")),
+            "source_archive_next_retry_epoch": int(archive_state.get("next_retry_epoch") or 0),
             "server_chat_deleted": False,
         }
     )
@@ -1259,7 +1338,7 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
         _json(report)
         return 1
     try:
-        _archive_source_with_journal(cdp, journal, "source_state_done", source.target_id, source_url)
+        archive_state = _archive_source_with_journal(cdp, journal, "source_state_done", source.target_id, source_url)
     except (CdpError, GptSessionError, OSError) as exc:
         report["ok"] = False
         report["blocked"] = f"handoff_archive_incomplete:{exc}"
@@ -1285,17 +1364,79 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
     journal.update(phase="committed")
     journal.clear()
     handoff["closed_target_ids"] = []
-    handoff["source_chat_archived"] = True
+    handoff["source_chat_archived"] = bool(archive_state.get("archived"))
+    handoff["source_archive_deferred"] = bool(archive_state.get("deferred"))
+    handoff["source_archive_next_retry_epoch"] = int(archive_state.get("next_retry_epoch") or 0)
     handoff["source_chat_ghosted"] = bool(ghost_state.get("source_ghosted"))
     handoff["human_input_target"] = bool(ghost_state.get("human_input_target"))
     report["applied"] = True
     report["handoff"] = handoff
-    report["source_chat_archived"] = True
+    report["source_chat_archived"] = bool(archive_state.get("archived"))
+    report["source_archive_deferred"] = bool(archive_state.get("deferred"))
+    report["source_archive_next_retry_epoch"] = int(archive_state.get("next_retry_epoch") or 0)
     report["source_chat_ghosted"] = bool(ghost_state.get("source_ghosted"))
     report["human_input_target"] = bool(ghost_state.get("human_input_target"))
     report["worker_target_id"] = new_target_id
     _json(report)
     return 0
+
+
+def cmd_archive_cleanup(args: argparse.Namespace) -> int:
+    cdp = ChromeCdp(args.endpoint)
+    queue = DeferredArchiveStore(args.state_dir)
+    due = queue.due()
+    pending_count = len(queue.load().get("items") or [])
+    if not due:
+        _json({"ok": True, "action": "noop", "reason": "no_due_archives", "pending_count": pending_count})
+        return 0
+    item = due[0]
+    conversation_url = str(item.get("conversation_url") or "")
+    context_url = str(item.get("context_url") or conversation_url)
+    if not args.apply:
+        _json(
+            {
+                "ok": True,
+                "action": "would_retry",
+                "conversation_url": conversation_url,
+                "attempts": int(item.get("attempts") or 0),
+                "pending_count": pending_count,
+            }
+        )
+        return 0
+    try:
+        result = _archive_source_conversation(
+            cdp,
+            "",
+            conversation_url,
+            source_context_url=context_url,
+            allow_already_archived=True,
+        )
+    except (CdpError, GptSessionError, OSError) as exc:
+        queued = queue.defer(conversation_url, reason=str(exc), context_url=context_url)
+        _json(
+            {
+                "ok": True,
+                "action": "deferred",
+                "reason": str(exc),
+                "conversation_url": conversation_url,
+                "attempts": int(queued.get("attempts") or 0),
+                "next_retry_epoch": int(queued.get("next_retry_epoch") or 0),
+                "pending_count": len(queue.load().get("items") or []),
+            }
+        )
+        return 0
+    queue.resolve(conversation_url)
+    _json(
+        {
+            "ok": True,
+            "action": "archived",
+            "conversation_url": conversation_url,
+            "already_archived": bool(result.get("already_archived")),
+            "pending_count": len(queue.load().get("items") or []),
+        }
+    )
+    return 0
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Bot-tazzi dedicated GPT browser/session controller")
@@ -1325,6 +1466,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     render = sub.add_parser("render")
     render.set_defaults(func=cmd_render)
+
+    archive_cleanup = sub.add_parser("archive-cleanup")
+    archive_cleanup.add_argument("--apply", action="store_true")
+    archive_cleanup.set_defaults(func=cmd_archive_cleanup)
 
     adopt = sub.add_parser("adopt-external")
     adopt.add_argument("--apply", action="store_true")
@@ -1372,7 +1517,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _requires_mutation_lock(args: argparse.Namespace) -> bool:
-    if args.command in {"checkpoint", "adopt-external", "companion-activate", "companion-send", "sync-ui", "goal-check", "goal-complete", "shepherd"}:
+    if args.command in {"checkpoint", "archive-cleanup", "adopt-external", "companion-activate", "companion-send", "sync-ui", "goal-check", "goal-complete", "shepherd"}:
         return True
     if args.command == "rotate":
         return bool(getattr(args, "apply", False))
