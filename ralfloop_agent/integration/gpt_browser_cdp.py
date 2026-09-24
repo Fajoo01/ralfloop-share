@@ -708,6 +708,64 @@ class ChromeCdp:
         self._page_call(target.websocket_url, "Page.navigate", {"url": CHATGPT_ORIGIN})
         return target_id
 
+    def start_chatgpt_job(
+        self,
+        prompt: str,
+        *,
+        new_chat_url: str = CHATGPT_ORIGIN,
+        background: bool = True,
+        submit: bool = True,
+        wait_timeout_s: float = 30.0,
+    ) -> dict[str, Any]:
+        """Create an independent ChatGPT conversation for a queued job.
+
+        Unlike handoff_to_new_chat this does not require, reuse, archive or
+        close an existing worker tab. This makes it suitable for a bounded
+        multi-chat spooler where every job owns its own browser target.
+        """
+        if not prompt.strip():
+            raise CdpError("empty_prompt")
+        entry_url = _safe_chatgpt_new_chat_url(new_chat_url)
+        target_id = self.create_target("about:blank", background=background)
+        try:
+            target = self._wait_target(target_id)
+            if not target.websocket_url:
+                raise CdpError("new_target_missing_websocket")
+            self._page_call(target.websocket_url, "Network.enable")
+            self._page_call(target.websocket_url, "Page.enable")
+            self._page_call(target.websocket_url, "Page.navigate", {"url": entry_url})
+            injected = self.inject_prompt(
+                prompt,
+                target_id=target_id,
+                submit=submit,
+                wait_timeout_s=wait_timeout_s,
+            )
+            conversation_url = None
+            context_url = None
+            deadline = time.monotonic() + max(1.0, min(wait_timeout_s, 15.0))
+            while time.monotonic() < deadline:
+                current = self._wait_target(target_id)
+                context_url = current.url
+                conversation_url = _canonical_chatgpt_conversation_url(current.url)
+                if conversation_url:
+                    break
+                time.sleep(0.2)
+            return {
+                **injected,
+                "new_target_id": target_id,
+                "new_chat_entry_url": entry_url,
+                "conversation_url": conversation_url,
+                "conversation_context_url": context_url,
+                "background": bool(background),
+                "server_chat_deleted": False,
+            }
+        except Exception:
+            try:
+                self.close_target(target_id)
+            except CdpError:
+                pass
+            raise
+
     def navigate_chatgpt_conversation(
         self,
         target_id: str,

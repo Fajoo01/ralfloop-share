@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bot-tazzi GPT Browser</title>
+<style>
+:root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color:#f4f4f5;background:#111214;line-height:1.35}*{box-sizing:border-box}body{margin:0;background:#111214;color:#f4f4f5}button,input,textarea{font:inherit}.wrap{max-width:1500px;margin:0 auto;padding:18px}.top{display:flex;gap:14px;align-items:center;justify-content:space-between;margin-bottom:16px}.top h1{font-size:20px;margin:0}.meta{display:flex;gap:8px;flex-wrap:wrap}.pill{padding:5px 9px;border-radius:999px;background:#24262a;font-size:12px}.ok{background:#183b28}.warn{background:#5d4218}.err{background:#5b2323}.toolbar,.newjob{background:#181a1e;border:1px solid #2d3036;border-radius:14px;padding:12px;margin-bottom:14px}.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.toolbar input{width:64px}.newjob{display:grid;grid-template-columns:1fr 1fr 1.5fr;gap:10px}.newjob textarea{grid-column:1/-1;min-height:86px}.newjob .actions{grid-column:1/-1;display:flex;justify-content:flex-end}.field{background:#0f1012;border:1px solid #343840;color:#f4f4f5;border-radius:9px;padding:9px 10px}.btn{border:1px solid #3b4049;background:#25282e;color:#fff;border-radius:9px;padding:8px 10px;cursor:pointer}.btn:hover{background:#30343b}.primary{background:#155e3a;border-color:#1d7d4d}.danger{background:#5b2323}.grid{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(300px,.8fr);gap:14px}.panel{background:#181a1e;border:1px solid #2d3036;border-radius:14px;overflow:hidden}.panel h2{font-size:14px;margin:0;padding:12px 14px;border-bottom:1px solid #2d3036}.list{padding:10px}.project{margin:0 0 14px}.project-title{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#a1a1aa;margin:6px 4px}.job{border:1px solid #30343b;border-radius:12px;padding:11px;margin-bottom:9px;background:#141619}.job-head{display:flex;gap:10px;align-items:flex-start;justify-content:space-between}.job-title{font-weight:700}.small{font-size:12px;color:#a1a1aa}.state{font-size:11px;padding:3px 7px;border-radius:999px;background:#2b2f36}.state.active{background:#154c32}.state.queued{background:#3e3a1d}.state.blocked,.state.failed{background:#5a2525}.row{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}.composer{display:flex;gap:7px;margin-top:10px}.composer textarea{flex:1;min-height:58px;resize:vertical}.browser-card{border:1px solid #30343b;border-radius:12px;padding:10px;margin-bottom:8px}.browser-card.managed{border-color:#225f43}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:#c4c7ce}.empty{padding:18px;color:#9296a0;text-align:center}.errorbar{display:none;background:#5b2323;border:1px solid #8a3434;border-radius:10px;padding:9px 11px;margin-bottom:12px}.errorbar.show{display:block}@media(max-width:900px){.grid{grid-template-columns:1fr}.newjob{grid-template-columns:1fr}.newjob textarea,.newjob .actions{grid-column:1}.top{align-items:flex-start;flex-direction:column}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top"><h1>Bot-tazzi · GPT Browser</h1><div id="meta" class="meta"></div></div>
+  <div id="error" class="errorbar"></div>
+  <div class="toolbar">
+    <button class="btn primary" id="start-next">Avvia prossimo</button>
+    <label class="small">Slot gestiti <input class="field" id="slots" type="number" min="1" max="12"></label>
+    <button class="btn" id="save-slots">Salva slot</button>
+    <button class="btn" id="refresh">Aggiorna</button>
+  </div>
+  <form id="newjob" class="newjob">
+    <input class="field" name="title" placeholder="Titolo lavoro" required>
+    <input class="field" name="project_name" placeholder="Nome progetto">
+    <input class="field" name="project_url" placeholder="URL progetto ChatGPT">
+    <textarea class="field" name="prompt" placeholder="Prompt da inviare quando il lavoro parte"></textarea>
+    <div class="actions"><button class="btn primary" type="submit">Metti in coda</button></div>
+  </form>
+  <div class="grid">
+    <section class="panel"><h2>Coda lavori</h2><div id="jobs" class="list"></div></section>
+    <section class="panel"><h2>Chat aperte nel browser</h2><div id="browser" class="list"></div></section>
+  </div>
+</div>
+<script>
+const state={snapshot:null,drafts:new Map(),busy:false};
+const $=s=>document.querySelector(s);
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const short=v=>String(v||'').split('/').filter(Boolean).pop()?.slice(0,10)||'—';
+function rememberDrafts(){document.querySelectorAll('[data-draft-job]').forEach(el=>state.drafts.set(el.dataset.draftJob,el.value));}
+function error(msg=''){const box=$('#error');box.textContent=msg;box.classList.toggle('show',Boolean(msg));}
+async function api(path,opt={}){const res=await fetch(path,{headers:{'Content-Type':'application/json','X-Bottazzi-Frontend':'1'},...opt});let data={};try{data=await res.json()}catch{}if(!res.ok)throw new Error(typeof data.detail==='string'?data.detail:(data.error||`${res.status} ${res.statusText}`));return data;}
+async function act(path,body){if(state.busy)return;state.busy=true;error('');try{await api(path,{method:'POST',body:body===undefined?undefined:JSON.stringify(body)});await refresh();}catch(e){error(e.message)}finally{state.busy=false}}
+function jobActions(j){const parts=[];if(['queued','blocked','failed','review','starting'].includes(j.state))parts.push(`<button class="btn" data-action="start" data-id="${esc(j.job_id)}">Avvia</button>`);if(j.target_id)parts.push(`<button class="btn" data-action="activate" data-id="${esc(j.job_id)}">Apri</button>`);if(j.target_id)parts.push(`<button class="btn" data-action="release" data-id="${esc(j.job_id)}">Libera scheda</button>`);parts.push(`<button class="btn" data-action="up" data-id="${esc(j.job_id)}" data-rank="${j.rank}">↑</button><button class="btn" data-action="down" data-id="${esc(j.job_id)}" data-rank="${j.rank}">↓</button><button class="btn" data-action="done" data-id="${esc(j.job_id)}">Fatto</button>`);return parts.join('')}
+function renderJobs(s){const root=$('#jobs');const jobs=s.jobs||[];if(!jobs.length){root.innerHTML='<div class="empty">Nessun lavoro in coda</div>';return}const byId=new Map(jobs.map(j=>[j.job_id,j]));const sections=(s.projects||[]).map(p=>({name:p.project_name||'Senza progetto',ids:p.job_ids||[]}));root.innerHTML=sections.map(p=>`<div class="project"><div class="project-title">${esc(p.name)}</div>${p.ids.map(id=>{const j=byId.get(id);if(!j)return'';const draft=state.drafts.get(j.job_id)||'';const canSend=j.state==='active'&&j.target_id&&j.conversation_url;return `<article class="job"><div class="job-head"><div><div class="job-title">${esc(j.title)}</div><div class="small">#${j.rank} · ${esc(j.project_name||'Senza progetto')}</div></div><span class="state ${esc(j.state)}">${esc(j.state)}</span></div>${j.conversation_url?`<div class="mono">chat ${esc(short(j.conversation_url))} · target ${esc(short(j.target_id))}</div>`:''}${j.last_error?`<div class="small">Errore: ${esc(j.last_error)}</div>`:''}<div class="row">${jobActions(j)}</div>${canSend?`<div class="composer"><textarea class="field" data-draft-job="${esc(j.job_id)}" placeholder="Messaggio vincolato a questa chat">${esc(draft)}</textarea><button class="btn primary" data-action="send" data-id="${esc(j.job_id)}">Invia qui</button></div>`:''}</article>`}).join('')}</div>`).join('')}
+function renderBrowser(s){const root=$('#browser');const rows=s.browser?.open_chats||[];if(!rows.length){root.innerHTML='<div class="empty">Nessuna chat aperta rilevata</div>';return}root.innerHTML=rows.map(r=>`<div class="browser-card ${r.managed?'managed':''}"><div class="job-head"><div><div class="job-title">${esc(r.title||'Chat GPT')}</div><div class="mono">${esc(short(r.conversation_url))}</div></div><span class="state ${r.managed?'active':''}">${r.managed?'gestita':'esterna'}</span></div><div class="small">${r.focused?'in primo piano · ':''}${r.busy?'GPT occupato · ':''}${esc(r.project_name||'')}</div>${r.managed?`<div class="small">job ${esc(short(r.job_id))}</div>`:`<div class="row"><button class="btn" data-import="${esc(r.target_id)}">Importa nella coda</button></div>`}</div>`).join('')}
+function render(s){rememberDrafts();state.snapshot=s;const b=s.browser||{};$('#slots').value=s.settings?.max_open_chats||3;$('#meta').innerHTML=`<span class="pill ${b.error?'err':'ok'}">browser ${b.error?'errore':'online'}</span><span class="pill">slot ${b.managed_open_count||0}/${b.max_open_chats||s.settings?.max_open_chats||0}</span><span class="pill">schede ChatGPT ${b.open_chat_count||0}</span>${b.unmanaged_open_count?`<span class="pill warn">esterne ${b.unmanaged_open_count}</span>`:''}`;renderJobs(s);renderBrowser(s)}
+async function refresh(){try{render(await api('/api/snapshot'));error('')}catch(e){error(e.message)}}
+$('#newjob').addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.currentTarget);await act('/api/jobs',{title:f.get('title'),prompt:f.get('prompt'),project_name:f.get('project_name'),project_url:f.get('project_url')||null});if(!$('#error').classList.contains('show'))e.currentTarget.reset()});
+$('#start-next').onclick=()=>act('/api/start-next');$('#save-slots').onclick=()=>act('/api/settings',{max_open_chats:Number($('#slots').value)});$('#refresh').onclick=refresh;
+document.addEventListener('input',e=>{if(e.target.matches('[data-draft-job]'))state.drafts.set(e.target.dataset.draftJob,e.target.value)});
+document.addEventListener('click',e=>{const imp=e.target.closest('[data-import]');if(imp)return act('/api/jobs/import',{target_id:imp.dataset.import});const btn=e.target.closest('[data-action]');if(!btn)return;const id=btn.dataset.id,a=btn.dataset.action;if(a==='start')return act(`/api/jobs/${id}/start`);if(a==='activate')return act(`/api/jobs/${id}/activate`);if(a==='release')return act(`/api/jobs/${id}/release`);if(a==='done')return act(`/api/jobs/${id}/state`,{state:'done'});if(a==='up'||a==='down'){const rank=Math.max(1,Number(btn.dataset.rank)+(a==='up'?-1:1));return act(`/api/jobs/${id}/rank`,{rank})}if(a==='send'){const box=document.querySelector(`[data-draft-job="${CSS.escape(id)}"]`);const text=(box?.value||'').trim();if(!text)return;state.drafts.set(id,text);act(`/api/jobs/${id}/message`,{text}).then(()=>{if(!$('#error').classList.contains('show')){state.drafts.delete(id);if(box)box.value=''}})}});
+refresh();setInterval(()=>{if(!document.querySelector('textarea:focus,input:focus'))refresh()},2500);
+</script>
+</body>
+</html>
