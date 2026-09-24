@@ -10,10 +10,13 @@ from .gpt_frontend import GptWorkController
 from .gpt_work_queue import GptJobState, GptWorkQueue
 
 GOAL_MARKER = "[[BOTTAZZI_GOAL_REACHED]]"
+GOAL_BLOCKED_MARKER = "[[BOTTAZZI_GOAL_BLOCKED]]"
 GOAL_PROTOCOL = "BOT-TAZZI GOAL LOOP"
 GOAL_CONTINUATION = (
     "Continua automaticamente il lavoro verso il GOAL definito nel messaggio iniziale. "
     "Non chiedere conferme e non ripetere quanto già completato. "
+    "Verifica concretamente i criteri di accettazione prima di dichiarare il GOAL raggiunto; una fase, un piano o un risultato parziale non bastano. "
+    "Se sei realmente bloccato da un dato, permesso o intervento umano indispensabile, spiega cosa manca e termina con [[BOTTAZZI_GOAL_BLOCKED]]. "
     "Quando e solo quando il GOAL è davvero raggiunto, termina con una riga contenente esattamente [[BOTTAZZI_GOAL_REACHED]]."
 )
 
@@ -156,11 +159,30 @@ class GptQueueShepherd:
             if completed:
                 goal_managed = GOAL_PROTOCOL in str(job.prompt or "")
                 goal_reached = GOAL_MARKER in final_text
-                clean_final_text = final_text.replace(GOAL_MARKER, "").strip()
+                goal_blocked = GOAL_BLOCKED_MARKER in final_text
+                clean_final_text = (
+                    final_text.replace(GOAL_MARKER, "").replace(GOAL_BLOCKED_MARKER, "").strip()
+                )
                 if response_text:
                     minimum_final_chars = max(120, len(saved_text) // 2)
                     if not saved_text or len(response_text) >= minimum_final_chars:
                         self.queue.set_last_assistant_text(job.job_id, clean_final_text)
+                if goal_reached or goal_blocked:
+                    self.queue.set_last_assistant_text(job.job_id, clean_final_text)
+                if goal_managed and goal_blocked:
+                    self.controller.release_job(job.job_id)
+                    self.queue.set_state(job.job_id, GptJobState.REVIEW, last_error="goal_blocked")
+                    actions.append(
+                        {
+                            "job_id": job.job_id,
+                            "action": "released",
+                            "reason": "goal_blocked",
+                            "user_turns": user_turns,
+                            "assistant_turns": assistant_turns,
+                            "response_idle_ms": idle_ms,
+                        }
+                    )
+                    continue
                 if goal_managed and not goal_reached:
                     try:
                         continuation = self.controller.send_message(job.job_id, GOAL_CONTINUATION)

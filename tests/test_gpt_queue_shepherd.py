@@ -296,3 +296,39 @@ def test_goal_marker_releases_and_notifies(tmp_path: Path) -> None:
     assert "[[BOTTAZZI_GOAL_REACHED]]" not in saved.last_assistant_text
     assert notices==["Managed"]
     assert report["actions"][0]["reason"]=="goal_complete"
+
+
+def test_goal_blocked_marker_releases_without_completion_notification(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    with queue._connect() as conn:
+        conn.execute("UPDATE gpt_jobs SET prompt=? WHERE job_id=?", ("Fai il lavoro.\n\nBOT-TAZZI GOAL LOOP", job_id))
+    cdp = FakeCdp(
+        ui={
+            "user_turns": 1,
+            "assistant_turns": 1,
+            "response_in_progress": False,
+            "response_pending": False,
+            "response_idle_ms": 61_000,
+        },
+        companion={
+            "busy": False,
+            "last_assistant_text": "Mi serve un permesso umano indispensabile.\n[[BOTTAZZI_GOAL_BLOCKED]]",
+        },
+    )
+    notices = []
+    runner = GptQueueShepherd(
+        queue,
+        cdp,
+        policy=GptQueueShepherdPolicy(complete_idle_ms=60_000, stalled_idle_ms=180_000),
+        completion_notifier=lambda title: notices.append(title) or {"ok": True},
+    )
+
+    report = runner.run_once(auto_start=False)
+
+    saved = queue.get_job(job_id)
+    assert saved.state is GptJobState.REVIEW
+    assert saved.target_id is None
+    assert saved.last_error == "goal_blocked"
+    assert "[[BOTTAZZI_GOAL_BLOCKED]]" not in saved.last_assistant_text
+    assert notices == []
+    assert report["actions"][0]["reason"] == "goal_blocked"

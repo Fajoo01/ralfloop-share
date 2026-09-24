@@ -176,6 +176,8 @@ def test_pump_respects_limit_and_preserves_project_context(tmp_path: Path) -> No
     assert jobs[0].conversation_url == "https://chatgpt.com/c/chat-1"
     assert jobs[0].conversation_context_url == "https://chatgpt.com/g/g-p-colletti/c/chat-1"
     assert cdp.started[0]["new_chat_url"] == "https://chatgpt.com/g/g-p-colletti/project"
+    assert cdp.started[0]["prompt"].count("BOT-TAZZI GOAL LOOP") == 1
+    assert "[[BOTTAZZI_GOAL_REACHED]]" in cdp.started[0]["prompt"]
     assert result["slots"] == {"used": 2, "limit": 2, "free": 0}
 
 
