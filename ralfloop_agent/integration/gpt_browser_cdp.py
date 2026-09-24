@@ -1187,7 +1187,7 @@ class ChromeCdp:
         config = json.dumps({"mode": mode, "countdown_seconds": countdown_seconds}, ensure_ascii=False)
         expression = r'''(() => {
           const config = __CONFIG__;
-          const key = '__bottazziTabIdentityV2';
+          const key = '__bottazziTabIdentityV3';
           let state = window[key];
           if (!state || typeof state !== 'object') state = {base_title:'', original_title:'', timer:null, close_at:0};
           const canonical = value => {
@@ -1198,28 +1198,39 @@ class ChromeCdp:
             } catch (_) { return ''; }
           };
           const strip = value => String(value || '')
-            .replace(/^(?:🟢\s*ATTIVA|⚪\s*ALTRA|🟡\s*IN FILA|🟠\s*CHIUSURA(?:\s*\d+s)?|🔴\s*CHIUSURA(?:\s*\d+s)?)\s*·\s*/iu, '')
+            .replace(/^(?:🟢(?:\s*ATTIVA)?|⚪(?:\s*ALTRA)?|🟡(?:\s*IN FILA)?|🟠(?:\s*CHIUSURA)?(?:\s*\d+s)?|🔴(?:\s*CHIUSURA)?(?:\s*\d+s)?|📁|➕)\s*(?:·\s*)?/iu, '')
             .replace(/^ChatGPT\s*-\s*/i, '').trim();
           const compactWord = word => {
             const value = String(word || '');
-            return value.length > 10 ? `${value.slice(0, 9)}…` : value;
+            return value.length > 11 ? `${value.slice(0, 10)}…` : value;
           };
-          const compactPhrase = (value, maxChars) => {
-            const words = strip(value).split(/\s+/).filter(Boolean).slice(0, 5).map(compactWord);
-            let text = words.join(' ');
-            if (text.length > maxChars) text = `${text.slice(0, Math.max(1, maxChars - 1)).trimEnd()}…`;
+          const compactTopic = value => {
+            const stop = new Set(['riprendi','lavoro','verifica','aggiorna','creare','definire','test','il','lo','la','i','gli','le','di','del','della','dei','degli','delle','in','su','per','a','al','alla','ai','alle','da']);
+            const words = strip(value).split(/\s+/).filter(Boolean);
+            const useful = words.filter(word => !stop.has(word.toLowerCase())).slice(0, 3).map(compactWord);
+            const chosen = useful.length ? useful : words.slice(0, 3).map(compactWord);
+            let text = chosen.join(' ');
+            if (text.length > 28) text = `${text.slice(0, 27).trimEnd()}…`;
+            return text;
+          };
+          const compactProject = value => {
+            const stop = new Set(['progetto','indipendentemenza','dai','da','di','del','della','dei','degli','delle']);
+            const words = strip(value).split(/\s+/).filter(Boolean).filter(word => !stop.has(word.toLowerCase()));
+            const chosen = (words.length > 2 ? words.slice(-2) : words).map(compactWord);
+            let text = chosen.join(' ');
+            if (text.length > 22) text = `${text.slice(0, 21).trimEnd()}…`;
             return text;
           };
           const topicFromSidebar = () => {
             const wanted = canonical(location.href);
             if (!wanted) return '';
-            for (const a of document.querySelectorAll('#history a[href], nav a[href]')) {
+            for (const a of document.querySelectorAll('a[href]')) {
               const rawHref = String(a.getAttribute('href') || '').trim();
-              if (!rawHref || rawHref.startsWith('#')) continue;
-              if (canonical(a.href) !== wanted) continue;
+              if (!rawHref || rawHref.startsWith('#') || rawHref.startsWith('javascript:')) continue;
+              if (canonical(rawHref) !== wanted) continue;
               const text = strip(a.innerText || a.textContent || '');
               if (!text || text.length > 180) continue;
-              if (/^(?:vai ai contenuti|skip to content|main content|chatgpt)$/i.test(text)) continue;
+              if (/^(?:vai ai contenuti|skip to content|main content|chatgpt|new chat)$/i.test(text)) continue;
               return text;
             }
             return '';
@@ -1231,18 +1242,16 @@ class ChromeCdp:
             let slug = '';
             try { slug = decodeURIComponent(match[1]); } catch (_) { slug = match[1]; }
             slug = slug.replace(/^g-p-[A-Za-z0-9]+-?/i, '').replace(/[-_]+/g, ' ').trim();
-            return compactPhrase(slug, 16);
+            return compactProject(slug);
           };
           const derive = () => {
-            const current = state.original_title || 'Chat GPT';
-            const topic = topicFromSidebar();
+            const topic = compactTopic(topicFromSidebar());
+            if (topic) return topic;
+            if (location.pathname === '/' || location.pathname === '') return 'Nuova';
             const project = projectFromPath();
-            const parts = [];
-            if (project) parts.push(project);
-            const fallback = project ? '' : current;
-            const shortTopic = compactPhrase(topic || fallback, 24);
-            if (shortTopic && !parts.includes(shortTopic)) parts.push(shortTopic);
-            return parts.join(' · ').slice(0, 43).trim() || 'Chat GPT';
+            if (/\/project\/?$/.test(location.pathname) && project) return project;
+            const fallback = compactTopic(state.original_title || '');
+            return fallback || project || 'Chat';
           };
           if (!state.base_title) state.base_title = derive();
           state.mode = config.mode;
@@ -1252,13 +1261,19 @@ class ChromeCdp:
           if (config.mode !== 'closing') state.close_at = 0;
           const render = () => {
             const found = derive();
-            if (found && found !== 'Chat GPT') state.base_title = found;
-            let prefix = config.mode === 'active' ? '🟢 ATTIVA' : config.mode === 'queue' ? '🟡 IN FILA' : config.mode === 'closing' ? '🟠 CHIUSURA' : '⚪ ALTRA';
-            if (config.mode === 'closing' && state.close_at) {
+            if (found && found !== 'Chat') state.base_title = found;
+            const isConversation = Boolean(canonical(location.href));
+            let prefix = !isConversation
+              ? (/\/project\/?$/.test(location.pathname) ? '📁' : '➕')
+              : config.mode === 'active' ? '🟢'
+              : config.mode === 'queue' ? '🟡'
+              : config.mode === 'closing' ? '🟠'
+              : '⚪';
+            if (isConversation && config.mode === 'closing' && state.close_at) {
               const remaining = Math.max(0, Math.ceil((state.close_at - Date.now()) / 1000));
-              prefix = remaining <= 5 ? `🔴 CHIUSURA ${remaining}s` : `🟠 CHIUSURA ${remaining}s`;
+              prefix = remaining <= 5 ? `🔴${remaining}s` : `🟠${remaining}s`;
             }
-            document.title = `${prefix} · ${state.base_title}`;
+            document.title = `${prefix} ${state.base_title}`;
           };
           if (state.timer) clearInterval(state.timer);
           state.timer = setInterval(render, 750);
