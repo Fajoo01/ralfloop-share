@@ -171,3 +171,11 @@ def test_interrupt_saves_partial_response_and_keeps_job_active(tmp_path: Path):
     assert cdp.interrupted == ["managed"]
     assert saved.state is GptJobState.ACTIVE
     assert saved.last_assistant_text == "Risposta parziale"
+
+
+def test_done_button_is_highlighted_for_completed_review_only() -> None:
+    html = (Path(__file__).resolve().parents[1] / "web" / "gpt_queue.html").read_text(encoding="utf-8")
+    assert ".done-ready{" in html
+    assert "j.state==='review'&&!j.last_error&&!j.live_busy&&Boolean(completedText)" in html
+    assert "data-action=\"done\"" in html
+    assert "Risposta conclusa: premi tu per chiudere il lavoro" in html
