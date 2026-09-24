@@ -113,6 +113,20 @@ def test_unavailable_router_protected_operation_still_asks_approval(registry):
     assert not RalfPolicy().evaluate(result.route, operation="social_publish").allowed
 
 
+def test_healthy_router_protected_operation_bypasses_model(registry):
+    class Client:
+        def health(self): return True
+        def classify(self, text, catalog):
+            raise AssertionError("FunctionGemma must not see obvious protected actions")
+
+    result = LocalRouter(registry, Client()).classify("pubblica il post")
+    assert result.source == "deterministic"
+    assert result.route.a == "AP"
+    assert result.route.t == "external_action"
+    assert result.route.r == "PROTECTED_ACTION"
+    assert not RalfPolicy().evaluate(result.route, operation="social_publish").allowed
+
+
 def test_router_cache_requires_complete_binding(tmp_path):
     cache = VersionedCache(tmp_path)
     with pytest.raises(ValueError, match="incomplete"):

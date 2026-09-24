@@ -415,7 +415,7 @@ class LocalRouter:
             term in text for term in ("cerca", "trova", "leggi", "thread", "allegato", "risposta", "bozza")
         ):
             return CompactRoute(1, "ET", "google_workspace.gmail", c=1.0, r="MCP_GOOGLE_WORKSPACE")
-        if self.client is None and self._is_protected_request(text):
+        if self._is_protected_request(text):
             return CompactRoute(1, "AP", "external_action", c=1.0, r="PROTECTED_ACTION")
         if any(term in text for term in ("manca il file", "richiesta ambigua", "quale documento", "da chiarire")):
             return CompactRoute(1, "AU", "missing_or_ambiguous_input", c=1.0, r="MISSING_INPUT")
