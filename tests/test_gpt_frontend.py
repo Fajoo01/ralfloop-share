@@ -79,8 +79,9 @@ class FakeCdp:
     def conversation_records(self, target_id: str, *, reload: bool = False, wait_timeout_s: float = 3.0):
         return list(self.history_records)
 
-    def sidebar_catalog(self, target_id: str, *, wait_timeout_s: float = 5.0, max_records: int = 240):
-        return {"chats": list(self.history_records), "projects": list(self.history_projects)}
+    def account_catalog(self, target_id: str, **kwargs):
+        projects = self.history_projects or [{"title": name, "url": url, "project_id": url.split("/")[4]} for name, url in self.resolved_project_urls.items()]
+        return {"chats": list(self.history_records), "projects": list(projects), "complete": True, "projects_complete": True, "source": "chatgpt_query_client"}
 
     def start_chatgpt_job(self, prompt: str, *, new_chat_url: str, background: bool, submit: bool, wait_timeout_s: float = 30.0):
         number = len(self.started) + 1
@@ -378,9 +379,10 @@ def test_project_history_resume_preserves_project_context_without_new_chat(tmp_p
     assert cdp.started == []
 
 
-def test_create_job_resolves_name_only_project_and_closes_lookup_tab(tmp_path: Path) -> None:
+def test_create_job_resolves_unique_name_from_native_catalog(tmp_path: Path) -> None:
     queue = make_queue(tmp_path)
     cdp = FakeCdp()
+    cdp._targets.append(BrowserTarget("catalog", "page", "https://chatgpt.com/", "ChatGPT", "ws://catalog"))
     cdp.resolved_project_urls["Indipendentemenza dai colletti bianchi"] = "https://chatgpt.com/g/g-p-colletti/project"
     with running_frontend(queue, cdp) as (port, origin):
         status, created = request(
@@ -399,7 +401,7 @@ def test_create_job_resolves_name_only_project_and_closes_lookup_tab(tmp_path: P
     assert status == 200
     assert created["job"]["project_name"] == "Indipendentemenza dai colletti bianchi"
     assert created["job"]["project_url"] == "https://chatgpt.com/g/g-p-colletti/project"
-    assert any(target_id.startswith("temp-") for target_id in cdp.closed)
+    assert cdp.closed == []
     assert not any(target.target_id.startswith("temp-") for target in cdp._targets)
 
 

@@ -18,6 +18,7 @@ from .gpt_browser_cdp import (
     ChromeCdp,
     CdpError,
     _canonical_chatgpt_conversation_url,
+    _safe_chatgpt_new_chat_url,
 )
 from .gpt_session_rollover import chatgpt_project_new_chat_url
 from .gpt_work_queue import GptJobState, GptWorkJob, GptWorkQueue
@@ -50,6 +51,10 @@ class ResumeChat(ApiInput):
     title: str = Field(default="Chat GPT", min_length=1, max_length=300)
     project_name: str = Field(default="", max_length=300)
     project_url: str | None = Field(default=None, max_length=1200)
+
+
+class OpenProject(ApiInput):
+    project_url: str = Field(min_length=1, max_length=1200)
 
 
 class SendMessage(ApiInput):
@@ -136,7 +141,7 @@ class GptWorkController:
             if target is not None:
                 conversation = _canonical_chatgpt_conversation_url(target.url) or job.conversation_url
                 if conversation and (not job.conversation_url or conversation == job.conversation_url):
-                    context_url = target.url if _canonical_chatgpt_conversation_url(target.url) else job.conversation_context_url
+                    context_url = self._job_context(job, target.url)
                     if (
                         job.target_id != target.target_id
                         or job.conversation_url != conversation
@@ -157,6 +162,18 @@ class GptWorkController:
                 reason = "chat_target_ambiguous" if job.conversation_url in browser.ambiguous_conversations else "chat_not_open_locally"
                 self.queue.set_state(job.job_id, GptJobState.REVIEW, last_error=reason)
         return browser
+
+    @staticmethod
+    def _job_context(job: GptWorkJob, target_url: str) -> str | None:
+        if chatgpt_project_new_chat_url(target_url):
+            return target_url
+        return job.conversation_context_url or target_url or job.conversation_url
+
+    def _temporarily_limited(self, target_id: str) -> bool:
+        try:
+            return bool(self.cdp.chatgpt_ui_state(target_id).get("temporary_access_limited"))
+        except (AttributeError, CdpError):
+            return False
 
     def _occupied_job_ids(self, browser: BrowserSnapshot) -> set[str]:
         occupied: set[str] = set()
@@ -262,7 +279,22 @@ class GptWorkController:
                     target = refreshed.targets_by_id.get(created_target_id)
                     if target is None or _canonical_chatgpt_conversation_url(target.url) != job.conversation_url:
                         raise CdpError("job_target_assignment_mismatch")
-                context_url = target.url if _canonical_chatgpt_conversation_url(target.url) else (job.conversation_context_url or job.conversation_url)
+                context_url = self._job_context(job, target.url)
+                if self._temporarily_limited(target.target_id):
+                    held = self.queue.bind_chat(
+                        job.job_id,
+                        conversation_url=job.conversation_url,
+                        conversation_context_url=context_url,
+                        target_id=target.target_id,
+                        state=GptJobState.REVIEW,
+                        last_error="temporary_access_limited",
+                    )
+                    return {
+                        "started": [],
+                        "opened": [held.model_dump(mode="json")],
+                        "errors": [{"job_id": job.job_id, "error": "temporary_access_limited"}],
+                        **self.runtime_state(reconcile=False),
+                    }
                 self.cdp.install_human_input_target(target.target_id, context_url)
                 bound = self.queue.bind_chat(
                     job.job_id,
@@ -273,6 +305,28 @@ class GptWorkController:
                 )
                 return {"started": [bound.model_dump(mode="json")], "errors": [], **self.runtime_state(reconcile=False)}
             except (CdpError, OSError, RuntimeError, ValueError) as exc:
+                if created_target_id and str(exc) == "temporary_access_limited":
+                    refreshed = self.browser_snapshot()
+                    limited_target = refreshed.targets_by_id.get(created_target_id)
+                    if (
+                        limited_target is not None
+                        and _canonical_chatgpt_conversation_url(limited_target.url) == job.conversation_url
+                    ):
+                        context_url = self._job_context(job, limited_target.url)
+                        held = self.queue.bind_chat(
+                            job.job_id,
+                            conversation_url=job.conversation_url,
+                            conversation_context_url=context_url,
+                            target_id=created_target_id,
+                            state=GptJobState.REVIEW,
+                            last_error="temporary_access_limited",
+                        )
+                        return {
+                            "started": [],
+                            "opened": [held.model_dump(mode="json")],
+                            "errors": [{"job_id": job.job_id, "error": "temporary_access_limited"}],
+                            **self.runtime_state(reconcile=False),
+                        }
                 if created_target_id:
                     try:
                         self.cdp.close_target(created_target_id)
@@ -319,21 +373,11 @@ class GptWorkController:
         name = str(project_name or "").strip()
         if not name:
             raise ValueError("project_name_required")
-        cached = self._project_url_cache.get(name.casefold())
-        if cached:
-            return cached
-        if not hasattr(self.cdp, "resolve_project_url"):
-            raise CdpError("project_resolver_unavailable")
-        target_id = self.cdp.create_target("https://chatgpt.com/projects", background=True)
-        try:
-            url = self.cdp.resolve_project_url(target_id, name, wait_timeout_s=12.0)
-            self._project_url_cache[name.casefold()] = url
-            return url
-        finally:
-            try:
-                self.cdp.close_target(target_id)
-            except CdpError:
-                pass
+        catalog = self.account_history()
+        matches = [p for p in catalog["projects"] if p["title"].casefold() == name.casefold()]
+        if len(matches) != 1:
+            raise ValueError("project_name_ambiguous" if matches else "project_not_found")
+        return matches[0]["url"]
 
     def project_history(self, project_name: str) -> dict[str, Any]:
         name = str(project_name or "").strip()
@@ -395,7 +439,16 @@ class GptWorkController:
             "count": len(rows),
         }
 
-    def account_history(self) -> dict[str, Any]:
+    def open_project(self, project_url: str) -> dict[str, Any]:
+        url = _safe_chatgpt_new_chat_url(project_url)
+        if url == CHATGPT_ORIGIN or not urlparse(url).path.startswith("/g/g-p-"):
+            raise ValueError("project_url_invalid")
+        target = next((t for t in self.cdp.targets() if t.target_type == "page" and t.url.rstrip("/") == url), None)
+        target_id = target.target_id if target else self.cdp.create_target(url, background=True)
+        self.cdp.activate_target(target_id)
+        return {"target_id": target_id, "project_url": url, "server_chat_created": False}
+
+    def account_history(self, *, query: str = "", project_id: str = "", cursor: str = "") -> dict[str, Any]:
         jobs = self.queue.list_jobs()
         jobs_by_conversation: dict[str, GptWorkJob] = {}
         terminal = {GptJobState.DONE, GptJobState.CANCELLED}
@@ -416,53 +469,66 @@ class GptWorkController:
             for target in self.cdp.targets()
             if target.target_type == "page" and target.is_chatgpt
         ]
-        scored_targets: list[tuple[bool, Any]] = []
-        for target in targets:
-            focused = False
-            try:
-                focused = bool(self.cdp.chatgpt_companion_state(target.target_id).get("focused"))
-            except (AttributeError, CdpError):
-                pass
-            scored_targets.append((focused, target))
-        scored_targets.sort(key=lambda item: item[0])
-        for _, target in scored_targets[:4]:
-            try:
-                if hasattr(self.cdp, "sidebar_catalog"):
-                    catalog = self.cdp.sidebar_catalog(target.target_id, wait_timeout_s=20.0, max_records=240)
+        catalog: dict[str, Any] = {}
+        scoped_project = bool(project_id and project_id != "__none__")
+        if scoped_project:
+            directory_catalog: dict[str, Any] = {}
+            for target in targets[:4]:
+                try:
+                    directory_catalog = self.cdp.account_catalog(target.target_id)
+                    projects = list(directory_catalog.get("projects") or [])
+                    if projects:
+                        break
+                except (AttributeError, CdpError) as exc:
+                    scan_error = str(exc)
+            project = next((p for p in projects if p.get("project_id") == project_id), None)
+            if project is None:
+                scan_error = scan_error or directory_catalog.get("warning") or "project_not_found"
+                catalog = directory_catalog
+            else:
+                temporary = self.cdp.create_target(project["url"], background=True)
+                try:
+                    import time
+                    last_warning = "account_catalog_open_project_first"
+                    for _ in range(40):
+                        time.sleep(0.25)
+                        try:
+                            scoped = self.cdp.account_catalog(
+                                temporary, query=query, project_id=project_id, cursor=cursor
+                            )
+                        except CdpError as exc:
+                            last_warning = str(exc)
+                            continue
+                        last_warning = str(scoped.get("warning") or "")
+                        if last_warning in {
+                            "account_catalog_open_project_first",
+                            "account_catalog_query_unavailable",
+                        }:
+                            continue
+                        catalog = scoped
+                        records = list(scoped.get("chats") or [])
+                        scan_error = last_warning or None
+                        break
+                    else:
+                        scan_error = last_warning
+                    catalog["projects_complete"] = bool(directory_catalog.get("projects_complete"))
+                    catalog["source"] = catalog.get("source") or directory_catalog.get("source")
+                finally:
+                    self.cdp.close_target(temporary)
+        else:
+            for target in targets[:4]:
+                try:
+                    catalog = self.cdp.account_catalog(
+                        target.target_id, query=query, project_id=project_id, cursor=cursor
+                    )
                     records = list(catalog.get("chats") or [])
                     projects = list(catalog.get("projects") or [])
-                else:
-                    records = self.cdp.conversation_records(target.target_id, reload=False, wait_timeout_s=1.0)
-                    projects = []
-            except (AttributeError, CdpError) as exc:
-                scan_error = str(exc)
-                continue
-            if records or projects:
-                scan_error = None
-                break
-
-        project_scan_error: str | None = None
-        temporary_project_target: str | None = None
-        if hasattr(self.cdp, "project_records"):
-            try:
-                temporary_project_target = self.cdp.create_target("https://chatgpt.com/projects", background=True)
-                page_projects = self.cdp.project_records(temporary_project_target, wait_timeout_s=12.0)
-                merged_projects: dict[str, dict[str, str]] = {}
-                for project in [*projects, *page_projects]:
-                    url = str(project.get("url") or "").strip()
-                    title = str(project.get("title") or "").strip()
-                    key = url or (f"name:{title.casefold()}" if title else "")
-                    if key:
-                        merged_projects[key] = project
-                projects = list(merged_projects.values())
-            except (AttributeError, CdpError, OSError) as exc:
-                project_scan_error = str(exc)
-            finally:
-                if temporary_project_target:
-                    try:
-                        self.cdp.close_target(temporary_project_target)
-                    except CdpError:
-                        pass
+                    scan_error = catalog.get("warning") or None
+                    break
+                except (AttributeError, CdpError) as exc:
+                    scan_error = str(exc)
+        if not targets:
+            scan_error = "account_catalog_target_missing"
 
         projects_by_id = {
             str(project.get("project_id") or ""): project
@@ -481,6 +547,12 @@ class GptWorkController:
             project_id = str(record.get("project_id") or "")
             project = projects_by_id.get(project_id) or {}
             context_url = str(record.get("context_url") or (opened or {}).get("url") or conversation_url)
+            project_url = str(project.get("url") or "")
+            if project_url:
+                project_path = [part for part in urlparse(project_url).path.split("/") if part]
+                conversation_id = urlparse(conversation_url).path.rsplit("/", 1)[-1]
+                if len(project_path) >= 2 and project_path[0] == "g":
+                    context_url = f"{CHATGPT_ORIGIN.rstrip(chr(47))}/g/{project_path[1]}/c/{conversation_id}"
             rows.append({
                 "rank": rank,
                 "title": str(record.get("title") or "").strip() or (opened or {}).get("title") or "Chat GPT",
@@ -494,7 +566,7 @@ class GptWorkController:
                 "job_id": job.job_id if job and job.state not in terminal else None,
                 "job_state": job.state.value if job and job.state not in terminal else None,
             })
-        for opened in open_rows:
+        for opened in open_rows if not query and not project_id and not cursor else []:
             conversation_url = opened["conversation_url"]
             if conversation_url in seen:
                 continue
@@ -518,8 +590,14 @@ class GptWorkController:
             "count": len(rows),
             "projects": projects,
             "project_count": len(projects),
-            "project_error": project_scan_error,
-            "error": scan_error if not rows and not projects else None,
+            "project_error": None if catalog.get("projects_complete") else "account_catalog_projects_incomplete",
+            "error": scan_error,
+            "source": catalog.get("source"),
+            "search_scope": catalog.get("search_scope", "title"),
+            "complete": bool(catalog.get("complete")),
+            "projects_complete": bool(catalog.get("projects_complete")),
+            "next_cursor": catalog.get("next_cursor") or "",
+
         }
 
     def resume_history_chat(
@@ -535,7 +613,22 @@ class GptWorkController:
         if not canonical:
             raise ValueError("conversation_url_invalid")
         context_url = conversation_context_url or canonical
-        existing = next((job for job in self.queue.list_jobs() if job.conversation_url == canonical and job.state not in {GptJobState.DONE, GptJobState.CANCELLED}), None)
+        if _canonical_chatgpt_conversation_url(context_url) != canonical:
+            raise ValueError("conversation_context_mismatch")
+        inferred_project_url = chatgpt_project_new_chat_url(context_url)
+        project_url = project_url or inferred_project_url
+        if project_url and not project_name:
+            project_name = "Progetto ChatGPT"
+        existing = next((job for job in self.queue.list_jobs(include_terminal=True) if job.conversation_url == canonical), None)
+        if existing is not None:
+            existing = self.queue.update_history_metadata(
+                existing.job_id,
+                conversation_context_url=context_url,
+                project_name=project_name,
+                project_url=project_url,
+            )
+            if existing.state in {GptJobState.DONE, GptJobState.CANCELLED}:
+                existing = self.queue.set_state(existing.job_id, GptJobState.REVIEW)
         if existing is None:
             existing = self.queue.create_job(
                 str(title or "Chat GPT").strip() or "Chat GPT",
@@ -560,6 +653,8 @@ class GptWorkController:
     def send_message(self, job_id: str, text: str) -> dict[str, Any]:
         job = self.queue.get_job(job_id)
         if job.state is not GptJobState.ACTIVE:
+            if job.last_error == "temporary_access_limited":
+                raise ValueError("temporary_access_limited")
             if not job.conversation_url or job.state not in {GptJobState.REVIEW, GptJobState.BLOCKED, GptJobState.FAILED}:
                 raise ValueError("job_not_active")
             self.start_job(job_id)
@@ -696,6 +791,7 @@ class GptWorkController:
                     "focused": bool(companion.get("focused")),
                     "busy": bool(companion.get("busy")),
                     "composer_chars": int(companion.get("composer_chars") or 0),
+                    "assistant_turns": int(companion.get("assistant_turns") or 0),
                     "last_assistant_text": str(companion.get("last_assistant_text") or ""),
                     "sample_cached": sample_cached,
                     "managed": bool(job_id),
@@ -937,7 +1033,7 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/history":
             try:
-                self._send_json(200, {"ok": True, **self.server.controller.account_history()})
+                self._send_json(200, {"ok": True, **self.server.controller.account_history(**{key: parse_qs(urlparse(self.path).query).get(key, [""])[0] for key in ("query", "project_id", "cursor")})})
             except (CdpError, OSError) as exc:
                 self._error(503, str(exc))
             return
@@ -966,6 +1062,12 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
         queue = self.server.queue
         controller = self.server.controller
         try:
+            if path == "/api/projects/open":
+                payload = self._validated(OpenProject)
+                if payload is None:
+                    return
+                self._send_json(200, {"ok": True, **controller.open_project(payload.project_url)})
+                return
             if path == "/api/history/resume":
                 payload = self._validated(ResumeChat)
                 if payload is None:

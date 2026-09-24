@@ -31,6 +31,7 @@ include-package-data = true
 include = ["ralfloop_agent*"]
 
 [tool.setuptools.package-data]
+"ralfloop_agent.integration" = ["gpt_account_catalog.js"]
 "ralfloop_agent.teacher.web" = ["curriculum.json", "migrations/*.sql", "static/*"]
 
 [tool.pytest.ini_options]

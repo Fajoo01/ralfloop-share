@@ -7,6 +7,7 @@ import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 import websocket
@@ -697,6 +698,51 @@ class ChromeCdp:
         return records
 
 
+    def account_catalog(
+        self, target_id: str, *, query: str = "", project_id: str = "",
+        cursor: str = "", limit: int = 50,
+    ) -> dict[str, Any]:
+        """Read native ChatGPT query functions; credentials stay in the page.
+
+        The frontend owns authentication, account selection and pagination.
+        Only allowlisted catalog metadata is returned over CDP.
+        """
+        target = self._wait_target(target_id)
+        if not target.is_chatgpt or not target.websocket_url:
+            raise CdpError("account_catalog_target_invalid")
+        if project_id and project_id != "__none__" and not re.fullmatch(r"g-p-[A-Za-z0-9_-]+", project_id):
+            raise CdpError("account_catalog_project_invalid")
+        if len(cursor) > 8192 or len(query) > 500:
+            raise CdpError("account_catalog_input_invalid")
+        if cursor:
+            try:
+                decoded = json.loads(cursor)
+            except (TypeError, ValueError) as exc:
+                raise CdpError("account_catalog_cursor_invalid") from exc
+            if not isinstance(decoded, dict) or set(decoded) != {"page", "scope"} or not isinstance(decoded.get("scope"), str) or not isinstance(decoded["page"], (str, int)):
+                raise CdpError("account_catalog_cursor_invalid")
+        expression = Path(__file__).with_name("gpt_account_catalog.js").read_text().replace(
+            "__CATALOG_INPUT__", json.dumps({"query": query.strip(), "project_id": project_id,
+                                           "cursor": cursor, "limit": max(1, min(int(limit), 100))}))
+        result = self._page_call(target.websocket_url, "Runtime.evaluate",
+                                {"expression": expression, "awaitPromise": True, "returnByValue": True},
+                                timeout_s=max(self.timeout_s, 20.0))
+        try:
+            payload = json.loads((result.get("result") or {}).get("value", ""))
+        except (TypeError, ValueError) as exc:
+            raise CdpError("account_catalog_response_invalid") from exc
+        if not isinstance(payload, dict):
+            raise CdpError("account_catalog_response_invalid")
+        if payload.get("error"):
+            raise CdpError(payload["error"] if payload["error"] in {"account_catalog_source_unavailable", "account_catalog_cursor_scope_mismatch"} else "account_catalog_response_invalid")
+        for row in payload.get("chats", []):
+            if _canonical_chatgpt_conversation_url(row.get("url", "")) != _canonical_chatgpt_conversation_url(row.get("context_url", "")):
+                raise CdpError("account_catalog_context_mismatch")
+            _safe_chatgpt_conversation_context_url(row.get("context_url", ""))
+        for row in payload.get("projects", []):
+            _safe_chatgpt_new_chat_url(row.get("url", ""))
+        return payload
+
     def sidebar_catalog(
         self,
         target_id: str,
@@ -1165,6 +1211,8 @@ class ChromeCdp:
             except CdpError:
                 time.sleep(0.25)
                 continue
+            if last_state.get("temporary_access_limited"):
+                raise CdpError("temporary_access_limited")
             if last_state.get("ready"):
                 return last_state
             time.sleep(0.25)
@@ -1327,6 +1375,7 @@ class ChromeCdp:
             ghost_close_at: Number((window.__bottazziGhostTabV1 || {}).close_at || 0),
             busy: responseInProgress || responsePending,
             composer_chars: composerText.length,
+            "assistant_turns": assistantNodes.length,
             last_assistant_text: lastAssistantText,
           });
         })()'''

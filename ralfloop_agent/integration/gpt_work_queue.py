@@ -251,6 +251,8 @@ class GptWorkQueue:
         normalized_project = self._project_url(project_url)
         normalized_conversation = self._conversation_url(conversation_url)
         normalized_context = self._conversation_context_url(conversation_context_url or conversation_url)
+        if self._conversation_url(normalized_context) != normalized_conversation:
+            raise ValueError("conversation_context_mismatch")
         state_value = GptJobState(str(state))
         now = int(self.clock())
         job_id = str(uuid4())
@@ -331,6 +333,8 @@ class GptWorkQueue:
     ) -> GptWorkJob:
         normalized_conversation = self._conversation_url(conversation_url)
         normalized_context = self._conversation_context_url(conversation_context_url or conversation_url)
+        if self._conversation_url(normalized_context) != normalized_conversation:
+            raise ValueError("conversation_context_mismatch")
         state_value = GptJobState(str(state))
         now = int(self.clock())
         try:
@@ -351,6 +355,36 @@ class GptWorkQueue:
                     raise KeyError(job_id)
         except sqlite3.IntegrityError as exc:
             raise ValueError("conversation_already_queued") from exc
+        return self.get_job(job_id)
+
+    def update_history_metadata(
+        self,
+        job_id: str,
+        *,
+        conversation_context_url: str | None,
+        project_name: str = "",
+        project_url: str | None = None,
+    ) -> GptWorkJob:
+        current = self.get_job(job_id)
+        if not current.conversation_url:
+            raise ValueError("conversation_url_required")
+        normalized_context = self._conversation_context_url(
+            conversation_context_url or current.conversation_url
+        )
+        if self._conversation_url(normalized_context) != current.conversation_url:
+            raise ValueError("conversation_context_mismatch")
+        normalized_project = self._project_url(project_url)
+        normalized_name = str(project_name or "").strip()
+        if len(normalized_name) > 300:
+            raise ValueError("job_field_too_large")
+        now = int(self.clock())
+        with self._connect() as conn:
+            result = conn.execute(
+                "UPDATE gpt_jobs SET conversation_context_url=?, project_name=?, project_url=?, updated_at=? WHERE job_id=?",
+                (normalized_context, normalized_name, normalized_project, now, job_id),
+            )
+            if result.rowcount != 1:
+                raise KeyError(job_id)
         return self.get_job(job_id)
 
     def set_state(
