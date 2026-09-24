@@ -938,7 +938,7 @@ class FakeRateLimitedRolloverCdp:
         }
 
     def handoff_to_new_chat(self, prompt: str, **kwargs):
-        assert kwargs.get("reuse_source_target") is True
+        assert kwargs.get("reuse_source_target") is False
         hook = kwargs.get("target_created_hook")
         assert hook is not None
         hook("successor")

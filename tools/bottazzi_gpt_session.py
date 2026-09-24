@@ -1530,7 +1530,10 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
             close_source=False,
             target_created_hook=record_successor,
             new_chat_url=chatgpt_project_new_chat_url(source.url) or CHATGPT_ORIGIN,
-            reuse_source_target=not force_access_limit_handoff,
+            # Keep the source target immutable during ordinary rollover. A distinct successor
+            # makes rollback/recovery unambiguous and prevents a failed navigation from
+            # stranding the queue worker on a project/new-chat page.
+            reuse_source_target=False,
         )
     except (CdpError, GptSessionError, OSError) as exc:
         report["ok"] = False
