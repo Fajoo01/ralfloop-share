@@ -45,9 +45,16 @@ def _tiny_db(path: Path) -> None:
         (6,"perché","perché","congiunzione","approved","bulk_morphit"),
         (7,"città","città","nome_comune","approved","bulk_morphit"),
         (8,"po'","po'","pronome","approved","bulk_morphit"),
+        (9,"andare","andare","verbo","approved","bulk_morphit"),
+        (10,"andato","andato","verbo","approved","bulk_morphit"),
     ]
     db.executemany("INSERT INTO lexemes VALUES(?,?,?,?,?,?)", rows)
-    db.executemany("INSERT INTO features VALUES(?,?,?)", [(2,"lemma","essere"),(3,"lemma","dare")])
+    db.executemany("INSERT INTO features VALUES(?,?,?)", [
+        (2,"lemma","essere"),(3,"lemma","dare"),
+        (9,"lemma","andare"),(9,"modo","infinito"),(9,"tempo","presente"),
+        (10,"lemma","andare"),(10,"modo","participio"),(10,"tempo","passato"),
+        (10,"genere","maschile"),(10,"numero","singolare"),
+    ])
     db.commit(); db.close()
 
 
@@ -82,10 +89,16 @@ def test_c_grammar_mcp_handles_unicode_and_never_collapses_accents(tmp_path: Pat
     argv = [str(BINARY), "--db", str(db), "--stdio"]
     with MCPClientSession(StdioMCPTransport(argv), timeout=3, client_name="grammar-test") as session:
         assert {tool.name for tool in session.list_tools()} == {
-            "grammar.lookup_token", "grammar.lookup_valency", "grammar.health"
+            "grammar.lookup_token", "grammar.lookup_lemma", "grammar.lookup_valency", "grammar.health"
         }
         def lookup(token: str) -> dict:
             return session.call_tool("grammar.lookup_token", {"token": token})["structuredContent"]
+        forms = session.call_tool(
+            "grammar.lookup_lemma",
+            {"lemma": "ANDARE", "modo": "PARTICIPIO", "tempo": "PASSATO"},
+        )["structuredContent"]
+        assert [row["token"] for row in forms["forms"]] == ["andato"]
+        assert forms["filters"] == {"modo": "participio", "tempo": "passato"}
         assert lookup("È")["analyses"][0]["category"] == "verbo"
         assert lookup("E")["analyses"][0]["category"] == "congiunzione"
         assert lookup("DÀ")["analyses"][0]["features"]["lemma"] == "dare"

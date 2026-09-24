@@ -9,6 +9,7 @@ from src.mcp_transport import MCPClientSession, UnixMCPTransport
 
 TOOLS = {
     "grammar.lookup_token",
+    "grammar.lookup_lemma",
     "grammar.lookup_valency",
     "grammar.health",
 }

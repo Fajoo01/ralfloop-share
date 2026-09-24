@@ -161,6 +161,8 @@ static void write_tools(FILE *out, const char *js, const jsmntok_t *id) {
     fputs("{\"tools\":[", out);
     fputs("{\"name\":\"grammar.lookup_token\",\"description\":\"Read-only Italian morphological lookup. Returns bounded approved analyses without resolving context ambiguity.\",\"inputSchema\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"token\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":96}},\"required\":[\"token\"]}}", out);
     fputs(",", out);
+    fputs("{\"name\":\"grammar.lookup_lemma\",\"description\":\"Read-only bounded Italian inflection lookup for one lemma, optionally filtered by mood and tense. Morphology evidence only; does not resolve contextual correctness.\",\"inputSchema\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"lemma\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":96},\"modo\":{\"type\":\"string\",\"maxLength\":32},\"tempo\":{\"type\":\"string\",\"maxLength\":32}},\"required\":[\"lemma\"]}}", out);
+    fputs(",", out);
     fputs("{\"name\":\"grammar.lookup_valency\",\"description\":\"Read-only school valency frames plus bounded T-PAS evidence for one verb lemma.\",\"inputSchema\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"lemma\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":96}},\"required\":[\"lemma\"]}}", out);
     fputs(",", out);
     fputs("{\"name\":\"grammar.health\",\"description\":\"Return read-only grammar data health metadata.\",\"inputSchema\":{\"type\":\"object\",\"additionalProperties\":false}}", out);
@@ -202,6 +204,35 @@ static int write_lookup_token(FILE *out, const char *token) {
     sqlite3_bind_text(q, 1, token, -1, SQLITE_TRANSIENT);
     fputs("{\"ok\":true,\"token\":", out); json_text(out, (const unsigned char *)token);
     fputs(",\"analyses\":[", out); int first = 1;
+    while (sqlite3_step(q) == SQLITE_ROW) {
+        if (!first) fputc(',', out);
+        first = 0;
+        fputs("{\"token\":", out); json_text(out, col(q, 1));
+        fputs(",\"category\":", out); json_text(out, col(q, 2));
+        fputs(",\"features\":", out); if (write_features(out, sqlite3_column_int(q, 0)) != 0) { sqlite3_finalize(q); return -1; }
+        fputs(",\"source\":", out); json_text(out, col(q, 3)); fputc('}', out);
+    }
+    fputs("],\"writes\":0,\"external_side_effects\":0}", out); sqlite3_finalize(q); return 0;
+}
+
+static int write_lookup_lemma(FILE *out, const char *lemma, const char *modo, const char *tempo) {
+    sqlite3_stmt *q = NULL;
+    const char *sql =
+        "SELECT DISTINCT l.id,l.token,l.categoria,l.source FROM lexemes l "
+        "JOIN features f ON f.lexeme_id=l.id "
+        "WHERE f.key='lemma' AND lower(f.value)=? AND l.status='approved' "
+        "AND (?='' OR EXISTS(SELECT 1 FROM features m WHERE m.lexeme_id=l.id AND m.key='modo' AND lower(m.value)=?)) "
+        "AND (?='' OR EXISTS(SELECT 1 FROM features t WHERE t.lexeme_id=l.id AND t.key='tempo' AND lower(t.value)=?)) "
+        "ORDER BY CASE l.source WHEN 'proposal' THEN 0 WHEN 'bulk_morphit' THEN 0 ELSE 2 END,l.token,l.id LIMIT 32";
+    if (prepare(&q, sql) != SQLITE_OK) return -1;
+    sqlite3_bind_text(q, 1, lemma, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(q, 2, modo, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(q, 3, modo, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(q, 4, tempo, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(q, 5, tempo, -1, SQLITE_TRANSIENT);
+    fputs("{\"ok\":true,\"lemma\":", out); json_text(out, (const unsigned char *)lemma);
+    fputs(",\"filters\":{\"modo\":", out); json_text(out, (const unsigned char *)modo);
+    fputs(",\"tempo\":", out); json_text(out, (const unsigned char *)tempo); fputs("},\"forms\":[", out); int first = 1;
     while (sqlite3_step(q) == SQLITE_ROW) {
         if (!first) fputc(',', out);
         first = 0;
@@ -280,11 +311,12 @@ static void tool_error(FILE *out, const char *js, const jsmntok_t *id, const cha
     fputs(",\"writes\":0,\"external_side_effects\":0},\"isError\":true}}\n", out); fflush(out);
 }
 
-static void tool_result(FILE *out, const char *js, const jsmntok_t *id, const char *name, const char *value) {
+static void tool_result(FILE *out, const char *js, const jsmntok_t *id, const char *name, const char *value, const char *modo, const char *tempo) {
     result_start(out, js, id);
     fputs("{\"content\":[{\"type\":\"text\",\"text\":\"read-only grammar evidence\"}],\"structuredContent\":", out);
     int rc = 0;
     if (strcmp(name, "grammar.lookup_token") == 0) rc = write_lookup_token(out, value);
+    else if (strcmp(name, "grammar.lookup_lemma") == 0) rc = write_lookup_lemma(out, value, modo, tempo);
     else if (strcmp(name, "grammar.lookup_valency") == 0) rc = write_valency(out, value);
     else if (strcmp(name, "grammar.health") == 0) write_health(out);
     else rc = -2;
@@ -319,13 +351,28 @@ static void dispatch(FILE *out, const char *line) {
     int params_i = obj_get(line, toks, 0, "params");
     int name_i = obj_get(line, toks, params_i, "name");
     int args_i = obj_get(line, toks, params_i, "arguments");
-    char name[96], value[MAX_INPUT], key[MAX_KEY]; value[0] = 0; key[0] = 0;
+    char name[96], value[MAX_INPUT], key[MAX_KEY];
+    char modo[MAX_INPUT], tempo[MAX_INPUT], modo_key[MAX_KEY], tempo_key[MAX_KEY];
+    value[0] = 0; key[0] = 0; modo[0] = 0; tempo[0] = 0; modo_key[0] = 0; tempo_key[0] = 0;
     if (name_i < 0 || copy_string(line, &toks[name_i], name, sizeof name) != 0 || args_i < 0 || toks[args_i].type != JSMN_OBJECT) {
         tool_error(out, line, id_i >= 0 ? &toks[id_i] : NULL, "INVALID_INPUT"); return;
     }
     if (strcmp(name, "grammar.lookup_token") == 0) {
         int value_i = obj_get(line, toks, args_i, "token");
         if (value_i < 0 || copy_string(line, &toks[value_i], value, sizeof value) != 0) {
+            tool_error(out, line, id_i >= 0 ? &toks[id_i] : NULL, "INVALID_INPUT"); return;
+        }
+    } else if (strcmp(name, "grammar.lookup_lemma") == 0) {
+        int value_i = obj_get(line, toks, args_i, "lemma");
+        int modo_i = obj_get(line, toks, args_i, "modo");
+        int tempo_i = obj_get(line, toks, args_i, "tempo");
+        if (value_i < 0 || copy_string(line, &toks[value_i], value, sizeof value) != 0) {
+            tool_error(out, line, id_i >= 0 ? &toks[id_i] : NULL, "INVALID_INPUT"); return;
+        }
+        if (modo_i >= 0 && copy_string(line, &toks[modo_i], modo, sizeof modo) != 0) {
+            tool_error(out, line, id_i >= 0 ? &toks[id_i] : NULL, "INVALID_INPUT"); return;
+        }
+        if (tempo_i >= 0 && copy_string(line, &toks[tempo_i], tempo, sizeof tempo) != 0) {
             tool_error(out, line, id_i >= 0 ? &toks[id_i] : NULL, "INVALID_INPUT"); return;
         }
     } else if (strcmp(name, "grammar.lookup_valency") == 0) {
@@ -341,7 +388,13 @@ static void dispatch(FILE *out, const char *line) {
             tool_error(out, line, id_i >= 0 ? &toks[id_i] : NULL, "INVALID_INPUT"); return;
         }
     }
-    tool_result(out, line, id_i >= 0 ? &toks[id_i] : NULL, name, key);
+    if (modo[0] && normalize_key(modo, modo_key, sizeof modo_key) != 0) {
+        tool_error(out, line, id_i >= 0 ? &toks[id_i] : NULL, "INVALID_INPUT"); return;
+    }
+    if (tempo[0] && normalize_key(tempo, tempo_key, sizeof tempo_key) != 0) {
+        tool_error(out, line, id_i >= 0 ? &toks[id_i] : NULL, "INVALID_INPUT"); return;
+    }
+    tool_result(out, line, id_i >= 0 ? &toks[id_i] : NULL, name, key, modo_key, tempo_key);
 }
 
 static int serve_stream(FILE *in, FILE *out) {

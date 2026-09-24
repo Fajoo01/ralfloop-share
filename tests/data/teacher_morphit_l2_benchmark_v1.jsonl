@@ -1,0 +1,10 @@
+{"id":"rt10_real_aux_inf","text":"io ieri sono andare lavoro?","should_flag":true,"lemma":"andare","preferred":["andato","andata"],"source":"teacher_redteam_v1:rt10"}
+{"id":"synthetic_avere_mangiare","text":"ieri ho mangiare pizza","should_flag":true,"lemma":"mangiare","preferred":["mangiato"]}
+{"id":"synthetic_avere_vedere","text":"noi abbiamo vedere un film","should_flag":true,"lemma":"vedere","preferred":["visto"]}
+{"id":"control_copular_infinitive","text":"il problema è andare via","should_flag":false}
+{"id":"control_copular_nominal","text":"la cosa migliore è studiare","should_flag":false}
+{"id":"control_modal","text":"devo andare al lavoro","should_flag":false}
+{"id":"control_volitional","text":"voglio vedere il film","should_flag":false}
+{"id":"control_quoted_error","text":"la frase sono andare è sbagliata","should_flag":false}
+{"id":"control_valid_passato","text":"ieri sono andato al lavoro","should_flag":false}
+{"id":"control_valid_avere","text":"ieri ho mangiato la pizza","should_flag":false}
