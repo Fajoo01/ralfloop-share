@@ -64,7 +64,7 @@ class SetLimit(ApiInput):
 
 
 class SetJobState(ApiInput):
-    state: GptJobState
+    state: GptJobState = Field(strict=False)
 
 
 @dataclass(frozen=True)
