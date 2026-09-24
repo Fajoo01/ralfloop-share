@@ -437,6 +437,83 @@ class FakeAdoptionCdp:
         self.closed.append(target_id)
 
 
+class FocusedRecoveryCdp:
+    def __init__(self) -> None:
+        self.foreground = BrowserTarget("foreground", "page", "https://chatgpt.com/c/fresh", "fresh", "ws://foreground")
+        self.other = BrowserTarget("other", "page", "https://chatgpt.com/c/other", "other", "ws://other")
+        self.human_input_targets: list[tuple[str, str]] = []
+
+    def targets(self):
+        return [self.foreground, self.other]
+
+    def chatgpt_focus_state(self, target_id: str):
+        return {"focused": target_id == "foreground", "ghost": False, "handoff_locked": False}
+
+    def chatgpt_ui_state(self, target_id: str):
+        return {
+            "authenticated": True,
+            "ready": True,
+            "user_turns": 1,
+            "page_age_minutes": 1,
+            "consecutive_errors": 0,
+            "last_response_latency_ms": 0,
+            "current_response_latency_ms": 0,
+            "response_pending": False,
+            "response_in_progress": False,
+            "response_idle_ms": 0,
+            "composer_chars": 0,
+        }
+
+    def install_human_input_target(self, target_id: str, conversation_url: str):
+        self.human_input_targets.append((target_id, conversation_url))
+        return {"ok": True, "human_input_target": True, "conversation_url": conversation_url}
+
+
+def test_external_adoption_recovers_stale_worker_from_focused_chat(monkeypatch, tmp_path) -> None:
+    handoff = HandoffStore(tmp_path)
+    handoff.save(Handoff(goal="x", current_state="y"))
+    handoff.update_source_chat("stale-target")
+    adoption = ExternalChatAdoptionStore(tmp_path)
+    adoption.save({"seen_conversations": [], "watcher_target_id": None, "last_adopted_conversation": None, "last_scan_epoch": 0})
+    fake = FocusedRecoveryCdp()
+    monkeypatch.setattr(gpt_session_tool, "ChromeCdp", lambda endpoint: fake)
+
+    assert gpt_session_tool.cmd_adopt_external(_adoption_args(tmp_path)) == 0
+
+    current = handoff.load_current()
+    assert current["source_chat"] == "foreground"
+    assert current["source_chat_url"] == "https://chatgpt.com/c/fresh"
+    assert fake.human_input_targets == [("foreground", "https://chatgpt.com/c/fresh")]
+    assert adoption.load()["last_adopted_conversation"] == "https://chatgpt.com/c/fresh"
+
+
+def test_shepherd_probe_uses_focused_chat_when_worker_state_is_stale(monkeypatch, tmp_path, capsys) -> None:
+    handoff = HandoffStore(tmp_path)
+    handoff.save(Handoff(goal="x", current_state="y"))
+    handoff.update_source_chat("stale-target")
+    fake = FocusedRecoveryCdp()
+    monkeypatch.setattr(gpt_session_tool, "ChromeCdp", lambda endpoint: fake)
+    args = SimpleNamespace(
+        endpoint="http://127.0.0.1:9238",
+        state_dir=str(tmp_path),
+        source_target_id=None,
+        max_turns=36,
+        max_age_minutes=120,
+        max_errors=2,
+        max_latency_ms=30000,
+        max_stall_ms=60000,
+        max_active_stall_ms=600000,
+        apply=False,
+        submit=False,
+    )
+
+    assert gpt_session_tool.cmd_shepherd(args) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["ui"]["ready"] is True
+    assert handoff.load_current()["source_chat"] == "stale-target"
+
+
 def _adoption_args(tmp_path):
     return SimpleNamespace(endpoint="http://127.0.0.1:9238", state_dir=str(tmp_path), scan_interval_seconds=0, apply=True)
 

@@ -169,6 +169,22 @@ def cmd_rotate(args: argparse.Namespace) -> int:
 
 
 
+def _focused_human_chats(cdp: ChromeCdp, tabs):
+    focused = []
+    if not hasattr(cdp, "chatgpt_focus_state"):
+        return focused
+    for tab in tabs:
+        if not normalize_chatgpt_conversation_url(tab.url):
+            continue
+        try:
+            focus_state = cdp.chatgpt_focus_state(tab.target_id)
+        except CdpError:
+            continue
+        if focus_state.get("focused") and not focus_state.get("ghost") and not focus_state.get("handoff_locked"):
+            focused.append(tab)
+    return focused
+
+
 def _resolve_stored_source(tabs, store: HandoffStore):
     if not store.current_path.exists():
         return None, {}, None
@@ -644,6 +660,32 @@ def cmd_adopt_external(args: argparse.Namespace) -> int:
     try:
         source, source_resolution, source_error = _resolve_stored_source(tabs, store)
         if source_error:
+            foreground_tabs = _focused_human_chats(cdp, tabs)
+            if len(foreground_tabs) == 1:
+                foreground = foreground_tabs[0]
+                foreground_url = normalize_chatgpt_conversation_url(foreground.url)
+                foreground_ui = cdp.chatgpt_ui_state(foreground.target_id)
+                if foreground_url and foreground_ui.get("authenticated"):
+                    if not args.apply:
+                        _json({"ok": True, "action": "candidate", "reason": "foreground_chat_recovery", "conversation_url": foreground_url, "source_target_id": foreground.target_id})
+                        return 0
+                    cdp.install_human_input_target(foreground.target_id, foreground.url)
+                    store.update_source_chat(foreground.target_id, foreground_url, foreground.url)
+                    seen = list(adoption_state.get("seen_conversations") or [])
+                    if foreground_url not in seen:
+                        seen.append(foreground_url)
+                    pending = normalize_chatgpt_conversation_url(str(adoption_state.get("pending_conversation") or ""))
+                    adoption_state.update({
+                        "seen_conversations": seen,
+                        "last_adopted_conversation": foreground_url,
+                        "watcher_target_id": None if str(adoption_state.get("watcher_target_id") or "") == foreground.target_id else adoption_state.get("watcher_target_id"),
+                        "pending_conversation": None if pending == foreground_url else adoption_state.get("pending_conversation"),
+                        "pending_detected_epoch": 0 if pending == foreground_url else int(adoption_state.get("pending_detected_epoch") or 0),
+                    })
+                    adoption.save(adoption_state)
+                    _json({"ok": True, "action": "recovered", "reason": "foreground_chat", "conversation_url": foreground_url, "source_target_id": foreground.target_id})
+                    return 0
+        if source_error:
             recovered_source, source_resolution, source_error = _recover_stored_source_home_tab(
                 cdp, tabs, store, source_resolution, source_error
             )
@@ -685,17 +727,7 @@ def cmd_adopt_external(args: argparse.Namespace) -> int:
     # interactive input. Background watcher/recovery tabs never have focus, and
     # ghost tabs are explicitly excluded so clicking an old ghost cannot make it
     # the worker again.
-    foreground_tabs = []
-    if hasattr(cdp, "chatgpt_focus_state"):
-        for tab in tabs:
-            if not normalize_chatgpt_conversation_url(tab.url):
-                continue
-            try:
-                focus_state = cdp.chatgpt_focus_state(tab.target_id)
-            except CdpError:
-                continue
-            if focus_state.get("focused") and not focus_state.get("ghost") and not focus_state.get("handoff_locked"):
-                foreground_tabs.append(tab)
+    foreground_tabs = _focused_human_chats(cdp, tabs)
     if len(foreground_tabs) == 1 and foreground_tabs[0].target_id != source.target_id:
         foreground = foreground_tabs[0]
         foreground_url = normalize_chatgpt_conversation_url(foreground.url)
@@ -1380,6 +1412,16 @@ def cmd_shepherd(args: argparse.Namespace) -> int:
     else:
         try:
             source, source_resolution, source_error = _resolve_stored_source(tabs, store)
+            if source_error:
+                foreground_tabs = _focused_human_chats(cdp, tabs)
+                if len(foreground_tabs) == 1:
+                    foreground = foreground_tabs[0]
+                    if args.apply:
+                        _json({"ok": True, "action": "deferred", "reason": "foreground_source_recovery_required", "source_target_id": foreground.target_id})
+                        return 0
+                    source = foreground
+                    source_error = None
+                    source_resolution = {"source_recovery_pending": "foreground_chat", "source_target_id": foreground.target_id}
             if source_error:
                 recovered_source, source_resolution, source_error = _recover_stored_source_home_tab(
                     cdp, tabs, store, source_resolution, source_error
