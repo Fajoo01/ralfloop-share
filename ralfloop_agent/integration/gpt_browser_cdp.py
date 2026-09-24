@@ -1599,8 +1599,15 @@ class ChromeCdp:
           const importDraft = () => {
             const limitRe = /(?:temporarily limited access to (?:your )?conversations|temporaneamente (?:limitato )?l['’]?accesso alle conversazioni|attendere qualche minuto prima di riprovare|wait a few minutes before trying again)/i;
             try {
-              if (limitRe.test(String(document.body ? document.body.innerText || '' : ''))) localStorage.setItem('__bottazziQueueHoldV1', String(Date.now()));
-              if (localStorage.getItem('__bottazziQueueHoldV1')) { updateHumanUi(); return false; }
+              const holdKey = '__bottazziQueueHoldV1';
+              const limited = limitRe.test(String(document.body ? document.body.innerText || '' : ''));
+              const previousHold = String(localStorage.getItem(holdKey) || '');
+              if (limited) {
+                localStorage.setItem(holdKey, `rate:${Date.now()}`);
+              } else if (previousHold && (/^\d+$/.test(previousHold) || previousHold.startsWith('rate:'))) {
+                localStorage.removeItem(holdKey);
+              }
+              if (localStorage.getItem(holdKey)) { updateHumanUi(); return false; }
             } catch (_) {}
             let raw = null;
             try { raw = localStorage.getItem(draftKey); } catch (_) { return false; }
@@ -1731,7 +1738,7 @@ class ChromeCdp:
           const key = '__bottazziQueueHoldV1';
           const limitRe = /(?:temporarily limited access to (?:your )?conversations|temporaneamente (?:limitato )?l['’]?accesso alle conversazioni|attendere qualche minuto prima di riprovare|wait a few minutes before trying again)/i;
           try {
-            if (config.held) localStorage.setItem(key, String(Date.now()));
+            if (config.held) localStorage.setItem(key, `rate:${Date.now()}`);
             else localStorage.removeItem(key);
           } catch (_) {}
           for (const el of document.querySelectorAll('[role="alert"],[role="dialog"],[data-testid*="error"]')) {

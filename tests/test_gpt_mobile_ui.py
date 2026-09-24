@@ -179,3 +179,11 @@ def test_done_button_is_highlighted_for_completed_review_only() -> None:
     assert "j.state==='review'&&!j.last_error&&!j.live_busy&&Boolean(completedText)" in html
     assert "data-action=\"done\"" in html
     assert "Risposta conclusa: premi tu per chiudere il lavoro" in html
+
+
+def test_temporary_access_queue_hold_is_self_clearing() -> None:
+    source = (Path(__file__).resolve().parents[1] / "ralfloop_agent" / "integration" / "gpt_browser_cdp.py").read_text(encoding="utf-8")
+    assert "localStorage.setItem(holdKey, `rate:${Date.now()}`)" in source
+    assert "previousHold.startsWith('rate:')" in source
+    assert "localStorage.removeItem(holdKey)" in source
+    assert "localStorage.setItem(key, `rate:${Date.now()}`)" in source
