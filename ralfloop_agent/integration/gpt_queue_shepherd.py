@@ -323,6 +323,7 @@ class GptQueueShepherd:
             companion_busy = bool(companion.get("busy"))
             composer_chars = self._int(companion.get("composer_chars"))
             human_composer_chars = self._int(companion.get("human_composer_chars"))
+            human_composer_active = bool(companion.get("human_composer_active"))
             response_text = self._substantive_response_text(companion.get("last_assistant_text"))
             response_in_progress = bool(ui.get("response_in_progress"))
             pending = bool(ui.get("response_pending"))
@@ -435,7 +436,7 @@ class GptQueueShepherd:
                     })
                 continue
 
-            if focused and human_composer_chars:
+            if human_composer_active and human_composer_chars:
                 actions.append({
                     "job_id": job.job_id,
                     "action": "preserved",

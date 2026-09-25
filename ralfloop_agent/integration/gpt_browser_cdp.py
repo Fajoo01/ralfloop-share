@@ -1743,6 +1743,7 @@ class ChromeCdp:
             streaming_current: Boolean(responseInProgress && streamingNode && lastAssistantText),
             composer_chars: composerText.length,
             human_composer_chars: humanComposerText.length,
+            human_composer_active: Boolean(humanComposer && document.activeElement === humanComposer),
             user_turns: userNodes.length,
             assistant_turns: assistantNodes.length,
             tool_activity_count: toolActivityCount,

@@ -322,7 +322,7 @@ def test_focused_chat_is_never_released(tmp_path: Path) -> None:
             "response_pending": False,
             "response_idle_ms": 999_999,
         },
-        companion={"focused": True, "human_composer_chars": 7},
+        companion={"focused": True, "human_composer_chars": 7, "human_composer_active": True},
     )
 
     report = shepherd(queue, cdp).run_once(auto_start=False)
@@ -330,6 +330,30 @@ def test_focused_chat_is_never_released(tmp_path: Path) -> None:
     assert queue.get_job(job_id).state is GptJobState.ACTIVE
     assert cdp.closed == []
     assert report["actions"][0]["reason"] == "focused_human_draft"
+
+
+def test_inactive_human_draft_does_not_block_stall_recovery(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    cdp = FakeCdp(
+        ui={
+            "user_turns": 4,
+            "assistant_turns": 0,
+            "response_in_progress": True,
+            "response_pending": True,
+            "response_idle_ms": 76_000,
+            "progress_idle_ms": 76_000,
+            "tool_activity_count": 0,
+        },
+        companion={"focused": True, "human_composer_chars": 19, "human_composer_active": False, "busy": True, "last_assistant_text": ""},
+    )
+
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    assert queue.get_job(job_id).state is GptJobState.ACTIVE
+    assert cdp.stopped == ["managed"]
+    assert len(cdp.messages) == 1
+    assert queue.watchdog_state(job_id)["recovery_count"] == 1
+    assert report["actions"][0]["reason"] == "stalled_stream_restarted"
 
 
 def test_silent_pending_job_recovers_without_human_wakeup(tmp_path: Path) -> None:
