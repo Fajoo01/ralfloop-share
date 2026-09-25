@@ -721,6 +721,80 @@ class TeacherService:
         except Exception:
             return None
 
+    def _l2_grammar_reply(
+        self,
+        session_id: str,
+        action: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if action not in {"explain", "explain_differently"}:
+            return None
+        session = self.store.session(session_id)
+        student = self.store.student(session["student_id"])
+        learner = profile_from_student(student)
+        decision = select_pedagogy(
+            learner,
+            action=action,
+            subject=session["subject"],
+            topic=session["topic"],
+            material_supplied=False,
+            show_solution=False,
+            student_move="correction",
+        )
+        if decision.mode is not SessionMode.LITERACY_L2:
+            return None
+        grammar_context = self._grammar_context(session, payload)
+        contextual = (
+            grammar_context.get("contextual_l2")
+            if isinstance(grammar_context, dict)
+            else None
+        )
+        issues = contextual.get("issues") if isinstance(contextual, dict) else None
+        if not isinstance(issues, list) or not issues:
+            return None
+        issue = issues[0]
+        auxiliary = str(issue.get("auxiliary") or "").strip()
+        infinitive = str(issue.get("infinitive") or "").strip()
+        lemma = str(issue.get("lemma") or infinitive).strip()
+        candidates = [
+            str(value).strip()
+            for value in (issue.get("candidate_participles") or [])
+            if str(value).strip()
+        ][:2]
+        if not auxiliary or not infinitive:
+            return None
+        response = (
+            f"No: dopo «{auxiliary}» qui non usare l'infinito «{infinitive}». "
+            f"Serve il participio passato di «{lemma}»."
+        )
+        if candidates:
+            if len(candidates) == 1:
+                response += f" Una forma possibile è «{candidates[0]}»."
+            else:
+                response += f" Puoi avere «{candidates[0]}» o «{candidates[1]}», secondo la concordanza."
+        response += " Prova a riscrivere solo il verbo nella forma corretta."
+        response = _trim_response(response, decision.max_response_chars)
+        output = {
+            "ok": True,
+            "action": action,
+            "response": response,
+            "source_mode": "deterministic_grammar",
+            "deterministic": True,
+            "grammar_evidence": grammar_context,
+            "pedagogy": decision.model_dump(mode="json"),
+        }
+        self.store.event(session_id, action, {
+            "response": response,
+            "request": _bounded_request(payload),
+            "source_mode": "deterministic_grammar",
+            "strategy": decision.strategy.value,
+            "student_move": "correction",
+            "mode": decision.mode.value,
+            "model_path": "none",
+            "core_tool": "grammar.contextual_l2",
+        })
+        return output
+
     def _decision_for(
         self,
         session: dict[str, Any],
@@ -1263,6 +1337,11 @@ class TeacherService:
                 core_tool="policy.reference_clarification",
                 student_move="question",
             )
+        grammar_reply = self._l2_grammar_reply(
+            session_id, "explain", payload
+        )
+        if grammar_reply is not None:
+            return grammar_reply
         deterministic = self._core_concept_reply(
             session_id, "explain", payload
         )
@@ -1297,6 +1376,11 @@ class TeacherService:
                 "e lo rispiego senza indovinare il riferimento.",
                 core_tool="policy.reference_clarification",
             )
+        grammar_reply = self._l2_grammar_reply(
+            session_id, "explain_differently", payload
+        )
+        if grammar_reply is not None:
+            return grammar_reply
         deterministic = self._core_concept_reply(
             session_id, "explain_differently", payload
         )
@@ -1575,6 +1659,13 @@ class TeacherService:
             yield {"type": "delta", "text": deterministic["response"]}
             yield {"type": "done", "result": deterministic}
             return
+        grammar_reply = self._l2_grammar_reply(
+            session_id, "explain", payload
+        )
+        if grammar_reply is not None:
+            yield {"type": "delta", "text": grammar_reply["response"]}
+            yield {"type": "done", "result": grammar_reply}
+            return
         deterministic = self._core_concept_reply(
             session_id, "explain", payload
         )
@@ -1605,6 +1696,13 @@ class TeacherService:
             )
             yield {"type": "delta", "text": deterministic["response"]}
             yield {"type": "done", "result": deterministic}
+            return
+        grammar_reply = self._l2_grammar_reply(
+            session_id, "explain_differently", payload
+        )
+        if grammar_reply is not None:
+            yield {"type": "delta", "text": grammar_reply["response"]}
+            yield {"type": "done", "result": grammar_reply}
             return
         deterministic = self._core_concept_reply(
             session_id, "explain_differently", payload

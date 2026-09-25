@@ -828,3 +828,128 @@ def test_content_pipeline_enforces_provenance_and_bounded_evidence():
     assert pack["source"]["source_id"] == "oer:demo"
     with pytest.raises(ValidationError):
         ContentSource(source_id="bad", title="No license", text="x", source_class="oer")
+
+
+def test_l2_contextual_grammar_bypasses_model_before_curated_topic(tmp_path):
+    def model(*_):
+        raise AssertionError("LLM should not run for a high-confidence L2 morphology issue")
+
+    def grammar(_text):
+        return {
+            "source": "internal_read_only_grammar_mcp",
+            "purpose": "morphology_and_valency_evidence_not_contextual_truth",
+            "tokens": [],
+            "valency": [],
+            "contextual_l2": {
+                "policy": "morphology_candidates_plus_context_not_contextual_truth",
+                "issues": [{
+                    "kind": "finite_auxiliary_plus_infinitive",
+                    "auxiliary": "sono",
+                    "auxiliary_lemma": "essere",
+                    "infinitive": "andare",
+                    "lemma": "andare",
+                    "subject": "io",
+                    "candidate_participles": ["andato", "andata"],
+                    "reason": "compound_tense_requires_participle",
+                }],
+                "ambiguous": [],
+                "suppressed": [],
+            },
+        }
+
+    store = TeacherStore(tmp_path / "teacher-l2-grammar.sqlite3")
+    service = TeacherService(store, model_call=model, grammar_evidence=grammar)
+    profile = low_literacy_profile().model_dump(mode="json")
+    student = service.login("CARD-L2-GRAMMAR", "adulto", "", learner_profile=profile)["student"]
+    session = service.start_session(student["student_id"], "italiano L2", "Azioni quotidiane")["session"]
+
+    result = service.explain(session["session_id"], "io ieri sono andare lavoro?")
+
+    assert result["deterministic"] is True
+    assert result["source_mode"] == "deterministic_grammar"
+    assert result["pedagogy"]["mode"] == "literacy_l2"
+    assert "participio passato" in result["response"].casefold()
+    assert "andato" in result["response"].casefold()
+    assert "andata" in result["response"].casefold()
+    assert "riscrivere solo il verbo" in result["response"].casefold()
+
+
+def test_l2_ambiguous_grammar_evidence_does_not_autocorrect(tmp_path):
+    calls = {"model": 0}
+
+    def model(*_):
+        calls["model"] += 1
+        return {"response": "Qui la costruzione dipende dal contesto. Qual è il soggetto?"}
+
+    def grammar(_text):
+        return {
+            "source": "internal_read_only_grammar_mcp",
+            "purpose": "morphology_and_valency_evidence_not_contextual_truth",
+            "tokens": [],
+            "valency": [],
+            "contextual_l2": {
+                "policy": "morphology_candidates_plus_context_not_contextual_truth",
+                "issues": [],
+                "ambiguous": [{
+                    "kind": "finite_auxiliary_plus_infinitive",
+                    "auxiliary": "è",
+                    "auxiliary_lemma": "essere",
+                    "infinitive": "andare",
+                    "lemma": "andare",
+                    "reason": "copular_infinitive_possible",
+                }],
+                "suppressed": [],
+            },
+        }
+
+    store = TeacherStore(tmp_path / "teacher-l2-ambiguous.sqlite3")
+    service = TeacherService(store, model_call=model, grammar_evidence=grammar)
+    profile = low_literacy_profile().model_dump(mode="json")
+    student = service.login("CARD-L2-AMBIG", "adulto", "", learner_profile=profile)["student"]
+    session = service.start_session(student["student_id"], "italiano L2", "tema libero")["session"]
+
+    result = service.explain(session["session_id"], "il problema è andare via")
+
+    assert calls["model"] == 1
+    assert result["source_mode"] == "general_model_knowledge"
+    assert result.get("deterministic") is not True
+
+
+def test_stream_l2_contextual_grammar_never_exposes_model_draft(tmp_path):
+    def model(*_):
+        raise AssertionError("streaming LLM should not run for deterministic grammar")
+
+    def grammar(_text):
+        return {
+            "source": "internal_read_only_grammar_mcp",
+            "purpose": "morphology_and_valency_evidence_not_contextual_truth",
+            "tokens": [],
+            "valency": [],
+            "contextual_l2": {
+                "policy": "morphology_candidates_plus_context_not_contextual_truth",
+                "issues": [{
+                    "kind": "finite_auxiliary_plus_infinitive",
+                    "auxiliary": "ho",
+                    "auxiliary_lemma": "avere",
+                    "infinitive": "mangiare",
+                    "lemma": "mangiare",
+                    "subject": "io",
+                    "candidate_participles": ["mangiato"],
+                    "reason": "compound_tense_requires_participle",
+                }],
+                "ambiguous": [],
+                "suppressed": [],
+            },
+        }
+
+    store = TeacherStore(tmp_path / "teacher-l2-grammar-stream.sqlite3")
+    service = TeacherService(store, model_call=model, grammar_evidence=grammar)
+    profile = low_literacy_profile().model_dump(mode="json")
+    student = service.login("CARD-L2-GRAMMAR-STREAM", "adulto", "", learner_profile=profile)["student"]
+    session = service.start_session(student["student_id"], "italiano L2", "azioni quotidiane")["session"]
+
+    events = list(service.stream_explain(session["session_id"], "ieri ho mangiare pizza"))
+
+    assert [event["type"] for event in events] == ["delta", "done"]
+    assert "mangiato" in events[0]["text"].casefold()
+    assert events[1]["result"]["source_mode"] == "deterministic_grammar"
