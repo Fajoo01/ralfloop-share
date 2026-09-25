@@ -190,8 +190,8 @@ class GptQueueShepherd:
         rebound = False
         try:
             new_target_id = self.cdp.create_chatgpt_target(clear_cache=False, background=True)
-            self.cdp.navigate_chatgpt_conversation(new_target_id, job.conversation_url)
-            self.cdp.install_human_input_target(new_target_id, job.conversation_url)
+            self.cdp.navigate_chatgpt_conversation(new_target_id, context_url)
+            self.cdp.install_human_input_target(new_target_id, context_url)
             self.cdp.close_target(old_target_id)
             self.queue.bind_chat(
                 job.job_id,
@@ -263,6 +263,55 @@ class GptQueueShepherd:
     def run_once(self, *, auto_start: bool = True) -> dict[str, Any]:
         self.controller.reconcile()
         actions: list[dict[str, Any]] = []
+
+        # If an ACTIVE chat tab was closed externally, reconcile() demotes it to
+        # REVIEW with chat_not_open_locally. Recover that exact conversation
+        # automatically instead of leaving a false-finished row in the queue.
+        for job in list(self.queue.list_jobs()):
+            if (
+                job.state is GptJobState.REVIEW
+                and job.last_error == "chat_not_open_locally"
+                and job.conversation_url
+                and not job.target_id
+            ):
+                gate, watchdog = self._recovery_gate(job.job_id)
+                if gate == "cooldown":
+                    actions.append({
+                        "job_id": job.job_id,
+                        "action": "preserved",
+                        "reason": "closed_chat_recovery_cooldown",
+                        "watchdog": watchdog,
+                    })
+                    continue
+                if gate == "exhausted":
+                    actions.append({
+                        "job_id": job.job_id,
+                        "action": "preserved",
+                        "reason": "closed_chat_recovery_exhausted",
+                        "watchdog": watchdog,
+                    })
+                    continue
+                try:
+                    result = self.controller.start_job(job.job_id, reset_watchdog=False)
+                    current = self.queue.get_job(job.job_id)
+                    if current.state is not GptJobState.ACTIVE or not current.target_id:
+                        raise RuntimeError("closed_chat_resume_not_active")
+                    watchdog = self.queue.mark_watchdog_recovery(job.job_id)
+                    actions.append({
+                        "job_id": job.job_id,
+                        "action": "recovered",
+                        "reason": "closed_chat_reopened",
+                        "target_id": current.target_id,
+                        "watchdog": watchdog,
+                        "recovery": result,
+                    })
+                except (CdpError, OSError, RuntimeError, ValueError) as exc:
+                    actions.append({
+                        "job_id": job.job_id,
+                        "action": "preserved",
+                        "reason": f"closed_chat_reopen_failed:{str(exc)[:160]}",
+                        "watchdog": self.queue.watchdog_state(job.job_id),
+                    })
 
         for job in list(self.queue.list_jobs()):
             if job.state is not GptJobState.ACTIVE or not job.target_id or not job.conversation_url:

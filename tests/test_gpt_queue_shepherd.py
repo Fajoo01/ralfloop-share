@@ -148,6 +148,37 @@ def test_completed_reply_with_stale_pending_is_released(tmp_path: Path) -> None:
     assert any(target.target_id == "unmanaged" for target in cdp.targets())
 
 
+def test_closed_active_chat_is_reopened_on_exact_conversation(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+
+    class ReopenCdp(FakeCdp):
+        def chatgpt_ui_state(self, target_id: str):
+            return {
+                "user_turns": 1,
+                "assistant_turns": 1,
+                "response_in_progress": False,
+                "response_pending": False,
+                "response_idle_ms": 1_000,
+                "progress_idle_ms": 1_000,
+                "temporary_access_limited": False,
+            }
+
+        def chatgpt_companion_state(self, target_id: str):
+            return {"focused": False, "busy": False, "composer_chars": 0, "last_assistant_text": "Risposta precedente"}
+
+    cdp = ReopenCdp(ui={})
+    cdp._targets = [target for target in cdp._targets if target.target_id != "managed"]
+
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    saved = queue.get_job(job_id)
+    assert saved.state is GptJobState.ACTIVE
+    assert saved.target_id is not None and saved.target_id.startswith("fresh-")
+    target = next(target for target in cdp.targets() if target.target_id == saved.target_id)
+    assert target.url == "https://chatgpt.com/c/job"
+    assert report["actions"][0]["reason"] == "closed_chat_reopened"
+
+
 def test_fresh_streaming_reply_is_never_recovered(tmp_path: Path) -> None:
     queue, job_id = queue_with_active(tmp_path)
     cdp = FakeCdp(
@@ -471,6 +502,50 @@ def test_retry_budget_escalates_to_fresh_target_before_review(tmp_path: Path) ->
     assert len(cdp.messages) == 1
     assert cdp.messages[0][0] == "fresh-1"
     assert queue.watchdog_state(job_id)["recovery_count"] == 3
+    assert report["actions"][0]["reason"] == "unanswered_fresh_target"
+
+
+def test_fresh_target_rebind_preserves_project_context_url(tmp_path: Path) -> None:
+    queue = GptWorkQueue(tmp_path / "queue.sqlite3", clock=lambda: 1_000_000)
+    context_url = "https://chatgpt.com/g/g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-demo/c/job"
+    job = queue.create_job(
+        "Project managed",
+        conversation_url="https://chatgpt.com/c/job",
+        conversation_context_url=context_url,
+        target_id="managed",
+        state=GptJobState.ACTIVE,
+    )
+    queue.mark_watchdog_recovery(job.job_id)
+    queue.mark_watchdog_recovery(job.job_id)
+    with queue._connect() as conn:
+        conn.execute("UPDATE gpt_job_watchdog SET last_recovery_at=? WHERE job_id=?", (999_000, job.job_id))
+
+    class ProjectCdp(FakeCdp):
+        def __init__(self):
+            super().__init__(
+                ui={
+                    "user_turns": 2,
+                    "assistant_turns": 1,
+                    "response_in_progress": False,
+                    "response_pending": False,
+                    "response_idle_ms": 0,
+                    "progress_idle_ms": 181_000,
+                }
+            )
+            self.navigated = []
+
+        def navigate_chatgpt_conversation(self, target_id: str, url: str):
+            self.navigated.append((target_id, url))
+            return super().navigate_chatgpt_conversation(target_id, url)
+
+    cdp = ProjectCdp()
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    saved = queue.get_job(job.job_id)
+    assert saved.state is GptJobState.ACTIVE
+    assert saved.target_id == "fresh-1"
+    assert cdp.navigated[-1] == ("fresh-1", context_url)
+    assert cdp.messages[-1][1] == context_url
     assert report["actions"][0]["reason"] == "unanswered_fresh_target"
 
 
