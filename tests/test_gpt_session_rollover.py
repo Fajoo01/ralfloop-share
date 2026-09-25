@@ -90,6 +90,10 @@ def test_chatgpt_ui_telemetry_uses_polling_not_persistent_mutation_observer(monk
     assert "new MutationObserver" not in expressions[0]
     assert "existingObserver.disconnect()" in expressions[0]
     assert "telemetry_observer_active: false" in expressions[0]
+    assert "pairedAssistantTurns" in expressions[0]
+    assert "child.parentElement.children" in expressions[0]
+    assert '[class*="MarkdownRoot"]' in expressions[0]
+    assert 'article[data-turn="assistant"]' in expressions[0]
 
 
 def test_rollover_turn_limit() -> None:

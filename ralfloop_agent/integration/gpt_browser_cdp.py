@@ -165,26 +165,52 @@ class ChromeCdp:
           const temporaryAccessLimited = temporaryAccessLimitRe.test(pageText);
           const sampleTelemetry = () => {
             const nowMs = performance.now();
-            const labelledTurns = (kind) => {
-              const labels = Array.from(document.querySelectorAll('h4.sr-only'));
-              const matcher = kind === 'user'
-                ? /^(?:hai detto|you said|tu hai detto)\s*:?$/i
-                : /^(?:chatgpt ha detto|chatgpt said)\s*:?$/i;
-              return labels.filter((el) => matcher.test(String(el.textContent || '').trim())).map((el) => {
-                let node = el.parentElement;
-                for (let i = 0; node && i < 8; i++, node = node.parentElement) {
-                  if (node.classList && node.classList.contains('group')) return node;
+            const userLabelRe = /^(?:hai detto|you said|tu hai detto)\s*:?$/i;
+            const assistantLabelRe = /^(?:chatgpt ha detto|chatgpt said)\s*:?$/i;
+            const roleLabelRe = /^(?:hai detto|you said|tu hai detto|chatgpt ha detto|chatgpt said)\s*:?$/i;
+            const labelledTurns = (matcher) => Array.from(document.querySelectorAll('h4.sr-only'))
+              .filter((el) => matcher.test(String(el.textContent || '').trim()));
+            const labelledAssistantTurns = () => labelledTurns(assistantLabelRe).map((el) => {
+              let node = el.parentElement;
+              let best = node;
+              for (let i = 0; node && i < 8; i++, node = node.parentElement) {
+                const roleLabels = Array.from(node.querySelectorAll('h4.sr-only'))
+                  .filter((item) => roleLabelRe.test(String(item.textContent || '').trim()));
+                if (roleLabels.length > 1) break;
+                best = node;
+              }
+              return best || el.parentElement || el;
+            });
+            const pairedAssistantTurns = () => {
+              const turns = [];
+              for (const label of labelledTurns(userLabelRe)) {
+                let child = label.parentElement;
+                for (let i = 0; child && child.parentElement && i < 8; i++, child = child.parentElement) {
+                  const siblings = Array.from(child.parentElement.children || []);
+                  const index = siblings.indexOf(child);
+                  if (index < 0) continue;
+                  const candidate = siblings.slice(index + 1).find((node) => {
+                    const hasUserLabel = Array.from(node.querySelectorAll('h4.sr-only'))
+                      .some((item) => userLabelRe.test(String(item.textContent || '').trim()));
+                    return !hasUserLabel && Boolean(node.querySelector('[class*="MarkdownRoot"], [data-streaming-response-status]'));
+                  });
+                  if (candidate) {
+                    if (!turns.includes(candidate)) turns.push(candidate);
+                    break;
+                  }
                 }
-                return el.parentElement || el;
-              });
+              }
+              return turns;
             };
-            const userSections = Array.from(document.querySelectorAll('section[data-turn="user"]'));
+            const userSections = Array.from(document.querySelectorAll('article[data-turn="user"], section[data-turn="user"]'));
             const userRoleNodes = Array.from(document.querySelectorAll('[data-message-author-role="user"]'));
-            const userNodes = userSections.length ? userSections : (userRoleNodes.length ? userRoleNodes : labelledTurns('user'));
+            const userLabelNodes = labelledTurns(userLabelRe);
+            const userNodes = userSections.length ? userSections : (userRoleNodes.length ? userRoleNodes : userLabelNodes);
             const userTurns = userNodes.length;
-            const assistantSections = Array.from(document.querySelectorAll('section[data-turn="assistant"]'));
+            const assistantSections = Array.from(document.querySelectorAll('article[data-turn="assistant"], section[data-turn="assistant"]'));
             const assistantRoleNodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
-            const assistantNodes = assistantSections.length ? assistantSections : (assistantRoleNodes.length ? assistantRoleNodes : labelledTurns('assistant'));
+            const assistantLabelNodes = labelledAssistantTurns();
+            const assistantNodes = assistantSections.length ? assistantSections : (assistantRoleNodes.length ? assistantRoleNodes : (assistantLabelNodes.length ? assistantLabelNodes : pairedAssistantTurns()));
             const assistantTurns = assistantNodes.length;
             const stopSelectors = [
               'button[data-testid="stop-button"]',
@@ -1697,23 +1723,51 @@ class ChromeCdp:
           const composerText = composer ? String(composer.value || composer.innerText || composer.textContent || '').trim() : '';
           const humanComposer = document.getElementById('bottazzi-human-composer');
           const humanComposerText = humanComposer ? String(humanComposer.value || humanComposer.innerText || humanComposer.textContent || '').trim() : '';
-          const userSections = Array.from(document.querySelectorAll('section[data-turn="user"]'));
-          const userRoleNodes = Array.from(document.querySelectorAll('[data-message-author-role="user"]'));
-          const userLabelNodes = Array.from(document.querySelectorAll('h4.sr-only'))
-            .filter((el) => /^(?:hai detto|you said|tu hai detto)\s*:?$/i.test(String(el.textContent || '').trim()));
-          const userNodes = userSections.length ? userSections : (userRoleNodes.length ? userRoleNodes : userLabelNodes);
-          const assistantSections = Array.from(document.querySelectorAll('section[data-turn="assistant"]'));
-          const assistantRoleNodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
-          const assistantLabelNodes = Array.from(document.querySelectorAll('h4.sr-only'))
-            .filter((el) => /^(?:chatgpt ha detto|chatgpt said)\s*:?$/i.test(String(el.textContent || '').trim()))
+          const userLabelRe = /^(?:hai detto|you said|tu hai detto)\s*:?$/i;
+          const assistantLabelRe = /^(?:chatgpt ha detto|chatgpt said)\s*:?$/i;
+          const roleLabelRe = /^(?:hai detto|you said|tu hai detto|chatgpt ha detto|chatgpt said)\s*:?$/i;
+          const allRoleLabels = Array.from(document.querySelectorAll('h4.sr-only'));
+          const userLabelNodes = allRoleLabels.filter((el) => userLabelRe.test(String(el.textContent || '').trim()));
+          const assistantLabelNodes = allRoleLabels
+            .filter((el) => assistantLabelRe.test(String(el.textContent || '').trim()))
             .map((el) => {
               let node = el.parentElement;
+              let best = node;
               for (let i = 0; node && i < 8; i++, node = node.parentElement) {
-                if (node.classList && node.classList.contains('group')) return node;
+                const roleLabels = Array.from(node.querySelectorAll('h4.sr-only'))
+                  .filter((item) => roleLabelRe.test(String(item.textContent || '').trim()));
+                if (roleLabels.length > 1) break;
+                best = node;
               }
-              return el.parentElement || el;
+              return best || el.parentElement || el;
             });
-          const assistantNodes = assistantSections.length ? assistantSections : (assistantRoleNodes.length ? assistantRoleNodes : assistantLabelNodes);
+          const pairedAssistantTurns = () => {
+            const turns = [];
+            for (const label of userLabelNodes) {
+              let child = label.parentElement;
+              for (let i = 0; child && child.parentElement && i < 8; i++, child = child.parentElement) {
+                const siblings = Array.from(child.parentElement.children || []);
+                const index = siblings.indexOf(child);
+                if (index < 0) continue;
+                const candidate = siblings.slice(index + 1).find((node) => {
+                  const hasUserLabel = Array.from(node.querySelectorAll('h4.sr-only'))
+                    .some((item) => userLabelRe.test(String(item.textContent || '').trim()));
+                  return !hasUserLabel && Boolean(node.querySelector('[class*="MarkdownRoot"], [data-streaming-response-status]'));
+                });
+                if (candidate) {
+                  if (!turns.includes(candidate)) turns.push(candidate);
+                  break;
+                }
+              }
+            }
+            return turns;
+          };
+          const userSections = Array.from(document.querySelectorAll('article[data-turn="user"], section[data-turn="user"]'));
+          const userRoleNodes = Array.from(document.querySelectorAll('[data-message-author-role="user"]'));
+          const userNodes = userSections.length ? userSections : (userRoleNodes.length ? userRoleNodes : userLabelNodes);
+          const assistantSections = Array.from(document.querySelectorAll('article[data-turn="assistant"], section[data-turn="assistant"]'));
+          const assistantRoleNodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+          const assistantNodes = assistantSections.length ? assistantSections : (assistantRoleNodes.length ? assistantRoleNodes : (assistantLabelNodes.length ? assistantLabelNodes : pairedAssistantTurns()));
           const lastAssistant = assistantNodes.length ? assistantNodes[assistantNodes.length - 1] : null;
           const streamingNode = lastAssistant ? lastAssistant.querySelector('[data-streaming-response-status]') : null;
           const toolActivityCount = lastAssistant ? lastAssistant.querySelectorAll('[data-testid="cot-v5-native-tool-icon"]').length : 0;
@@ -1865,18 +1919,47 @@ class ChromeCdp:
             stop = Array.from(document.querySelectorAll(selector)).find(visible) || null;
             if (stop) break;
           }
-          const assistantSections = Array.from(document.querySelectorAll('section[data-turn="assistant"]'));
-          const assistantRoleNodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
-          const assistantLabelNodes = Array.from(document.querySelectorAll('h4.sr-only'))
-            .filter((el) => /^(?:chatgpt ha detto|chatgpt said)\s*:?$/i.test(String(el.textContent || '').trim()))
+          const userLabelRe = /^(?:hai detto|you said|tu hai detto)\s*:?$/i;
+          const assistantLabelRe = /^(?:chatgpt ha detto|chatgpt said)\s*:?$/i;
+          const roleLabelRe = /^(?:hai detto|you said|tu hai detto|chatgpt ha detto|chatgpt said)\s*:?$/i;
+          const allRoleLabels = Array.from(document.querySelectorAll('h4.sr-only'));
+          const assistantLabelNodes = allRoleLabels
+            .filter((el) => assistantLabelRe.test(String(el.textContent || '').trim()))
             .map((el) => {
               let node = el.parentElement;
+              let best = node;
               for (let i = 0; node && i < 8; i++, node = node.parentElement) {
-                if (node.classList && node.classList.contains('group')) return node;
+                const roleLabels = Array.from(node.querySelectorAll('h4.sr-only'))
+                  .filter((item) => roleLabelRe.test(String(item.textContent || '').trim()));
+                if (roleLabels.length > 1) break;
+                best = node;
               }
-              return el.parentElement || el;
+              return best || el.parentElement || el;
             });
-          const assistantNodes = assistantSections.length ? assistantSections : (assistantRoleNodes.length ? assistantRoleNodes : assistantLabelNodes);
+          const pairedAssistantTurns = () => {
+            const turns = [];
+            for (const label of allRoleLabels.filter((el) => userLabelRe.test(String(el.textContent || '').trim()))) {
+              let child = label.parentElement;
+              for (let i = 0; child && child.parentElement && i < 8; i++, child = child.parentElement) {
+                const siblings = Array.from(child.parentElement.children || []);
+                const index = siblings.indexOf(child);
+                if (index < 0) continue;
+                const candidate = siblings.slice(index + 1).find((node) => {
+                  const hasUserLabel = Array.from(node.querySelectorAll('h4.sr-only'))
+                    .some((item) => userLabelRe.test(String(item.textContent || '').trim()));
+                  return !hasUserLabel && Boolean(node.querySelector('[class*="MarkdownRoot"], [data-streaming-response-status]'));
+                });
+                if (candidate) {
+                  if (!turns.includes(candidate)) turns.push(candidate);
+                  break;
+                }
+              }
+            }
+            return turns;
+          };
+          const assistantSections = Array.from(document.querySelectorAll('article[data-turn="assistant"], section[data-turn="assistant"]'));
+          const assistantRoleNodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+          const assistantNodes = assistantSections.length ? assistantSections : (assistantRoleNodes.length ? assistantRoleNodes : (assistantLabelNodes.length ? assistantLabelNodes : pairedAssistantTurns()));
           const lastAssistant = assistantNodes.length ? assistantNodes[assistantNodes.length - 1] : null;
           const streamingNode = lastAssistant ? lastAssistant.querySelector('[data-streaming-response-status]') : null;
           const lastAssistantText = lastAssistant
