@@ -99,15 +99,17 @@ Shadow flags:
 
 The shadow service uses Spark-X2.5-4B Q4_K_M with Vulkan and `--ctx 1024`: point-click requests are only a few hundred tokens, and reducing the context lowered observed GPU use from about 4.0 GiB to about 3.0 GiB while keeping warm Rizzo selection around 0.64 s median on the sanitized replay. The production click path does not wait for this inference.
 
-Tests: selector, shadow privacy/fail-open and Browser MCP adapter/approval regressions are green.
+GPU coexistence with Bot-tazzi Motor/DS4 is handled in the existing privileged DS4 lifecycle broker rather than by a second arbiter. If Rizzo shadow is active when DS4 must start, the broker stops it and writes a marker under its existing `/run/ralf-bottazzi-ds4-lifecycle` runtime directory; after DS4 stops it restores Rizzo only when that marker exists. A failed DS4 start restores Rizzo transactionally. The Rizzo service remains optional: hosts without it keep the original DS4 behavior.
+
+Tests: selector, shadow privacy/fail-open, DS4 lifecycle handoff and Browser MCP adapter/approval regressions are green.
 
 ## Promotion criteria
 
-Do not enable in production yet. Before promotion:
+Shadow observation is live; do not enable Rizzo-selected live targets yet. Before promotion:
 
 - expand the sanitized corpus substantially with duplicate labels, icon-only controls, nested menus, dialogs, stale refs and scrolling;
 - measure target accuracy separately from click execution latency;
 - require zero safety regressions in disabled/stale target cases;
 - compare against the current semantic target selection on exactly the same snapshots;
 - test CUDA when a compatible runtime/driver path is available;
-- activate first as shadow mode, logging only resolver proposals, then canary behind the feature flag.
+- accumulate sufficient shadow-mode evidence before any canary that lets the selector influence a live target; keep `RALFLOOP_BROWSER_RIZZO_TARGETING=0` until those criteria are met.

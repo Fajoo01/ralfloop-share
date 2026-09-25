@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +12,7 @@ from scripts.ralf_bottazzi_ds4_lifecycle_broker import (
     BrokerError,
     MAX_REQUEST_BYTES,
     MODEL,
+    RIZZO_SHADOW_UNIT,
     UNIT,
     parse_request,
     peer_uid_allowed,
@@ -27,22 +29,29 @@ def good_http(*_args, **_kwargs):
 
 
 class FakeSystemctl:
-    def __init__(self, active: bool = False):
+    def __init__(self, active: bool = False, shadow_active: bool = False, shadow_missing: bool = False):
         self.active = active
+        self.shadow_active = shadow_active
+        self.shadow_missing = shadow_missing
         self.calls = []
 
     def __call__(self, command, **kwargs):
         self.calls.append((command, kwargs))
         assert command[0] == "systemctl"
-        assert command[-1] == UNIT or command[2] == UNIT
+        unit = command[2]
+        assert unit in {UNIT, RIZZO_SHADOW_UNIT}
+        if unit == RIZZO_SHADOW_UNIT and self.shadow_missing:
+            raise subprocess.CalledProcessError(1, command)
+        attr = "active" if unit == UNIT else "shadow_active"
         if command[1] == "start":
-            self.active = True
+            setattr(self, attr, True)
         elif command[1] == "stop":
-            self.active = False
+            setattr(self, attr, False)
+        active = bool(getattr(self, attr))
         stdout = (
-            f"ActiveState={'active' if self.active else 'inactive'}\n"
-            f"SubState={'running' if self.active else 'dead'}\n"
-            f"MainPID={1439 if self.active else 0}\n"
+            f"ActiveState={'active' if active else 'inactive'}\n"
+            f"SubState={'running' if active else 'dead'}\n"
+            f"MainPID={(1439 if unit == UNIT else 2440) if active else 0}\n"
         )
         return SimpleNamespace(stdout=stdout)
 
@@ -71,6 +80,69 @@ def test_fixed_unit_start_stop_are_idempotent():
     stop_count = [call[0][1] for call in systemctl.calls].count("stop")
     assert controller.dispatch("stop")["active"] is False
     assert [call[0][1] for call in systemctl.calls].count("stop") == stop_count
+
+
+def test_ds4_start_pauses_rizzo_and_stop_restores_it(tmp_path):
+    systemctl = FakeSystemctl(active=False, shadow_active=True)
+    marker = tmp_path / "rizzo-paused"
+    controller = BottazziDs4Controller(
+        run=systemctl,
+        http_get=state_http(systemctl),
+        sleep=lambda _delay: None,
+        shadow_marker=marker,
+    )
+    started = controller.dispatch("start")
+    assert started["active"] is True
+    assert started["rizzo_shadow_paused"] is True
+    assert systemctl.shadow_active is False
+    assert marker.exists()
+
+    transitions = [(call[0][1], call[0][2]) for call in systemctl.calls if call[0][1] in {"start", "stop"}]
+    assert transitions[:2] == [("stop", RIZZO_SHADOW_UNIT), ("start", UNIT)]
+
+    stopped = controller.dispatch("stop")
+    assert stopped["active"] is False
+    assert stopped["rizzo_shadow_restored"] is True
+    assert stopped["rizzo_shadow_paused"] is False
+    assert systemctl.shadow_active is True
+    assert not marker.exists()
+    transitions = [(call[0][1], call[0][2]) for call in systemctl.calls if call[0][1] in {"start", "stop"}]
+    assert transitions[-2:] == [("stop", UNIT), ("start", RIZZO_SHADOW_UNIT)]
+
+
+def test_ds4_start_failure_restores_rizzo(tmp_path):
+    class FailingSystemctl(FakeSystemctl):
+        def __call__(self, command, **kwargs):
+            if command[1] == "start" and command[2] == UNIT:
+                self.calls.append((command, kwargs))
+                raise OSError("ds4 start failed")
+            return super().__call__(command, **kwargs)
+
+    systemctl = FailingSystemctl(active=False, shadow_active=True)
+    marker = tmp_path / "rizzo-paused"
+    controller = BottazziDs4Controller(
+        run=systemctl,
+        http_get=state_http(systemctl),
+        sleep=lambda _delay: None,
+        shadow_marker=marker,
+    )
+    with pytest.raises(OSError, match="ds4 start failed"):
+        controller.dispatch("start")
+    assert systemctl.shadow_active is True
+    assert not marker.exists()
+
+
+def test_ds4_start_works_when_rizzo_service_is_not_installed(tmp_path):
+    systemctl = FakeSystemctl(active=False, shadow_missing=True)
+    controller = BottazziDs4Controller(
+        run=systemctl,
+        http_get=state_http(systemctl),
+        sleep=lambda _delay: None,
+        shadow_marker=tmp_path / "rizzo-paused",
+    )
+    result = controller.dispatch("start")
+    assert result["active"] is True
+    assert result["rizzo_shadow_paused"] is False
 
 
 def test_peer_policy_allows_only_backend_and_bandi_users():
