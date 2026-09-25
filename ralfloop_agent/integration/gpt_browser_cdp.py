@@ -1896,6 +1896,103 @@ class ChromeCdp:
             time.sleep(0.2)
         raise CdpError("composer_submit_not_confirmed")
 
+    def wake_stalled_chatgpt(self, target_id: str, *, text: str = "prosegui", wait_timeout_s: float = 4.0) -> dict[str, Any]:
+        """Probe a stale Stop state by typing a short continuation and submit only if Send becomes available."""
+        target = self._wait_target(target_id)
+        if not target.websocket_url or not target.is_chatgpt:
+            raise CdpError("wake_stalled_target_invalid")
+        before = self.chatgpt_ui_state(target_id)
+        baseline_user_turns = int(before.get("user_turns") or 0)
+        payload = json.dumps(str(text or "prosegui").strip(), ensure_ascii=False)
+        expression = r'''(async () => {
+          const text = __TEXT__;
+          const visible = (el) => {
+            if (!el || el.disabled) return false;
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const composer = Array.from(document.querySelectorAll('#prompt-textarea, textarea, [contenteditable="true"]'))
+            .find((el) => visible(el) && el.id !== 'bottazzi-human-composer') || null;
+          if (!composer) return JSON.stringify({submitted:false, reason:'composer_missing'});
+          const existing = String(composer.value || composer.innerText || composer.textContent || '');
+          if (existing.trim()) return JSON.stringify({submitted:false, reason:'composer_not_empty', composer_chars:existing.length});
+          const stopSelectors = [
+            'button[data-testid="stop-button"]',
+            'button[aria-label*="Stop"]',
+            'button[aria-label*="stop"]',
+            'button[aria-label*="Interrompi"]',
+            'button[aria-label*="interrompi"]',
+          ];
+          const hadStop = stopSelectors.some((selector) => Array.from(document.querySelectorAll(selector)).some(visible));
+          const setText = (value) => {
+            composer.focus();
+            if (composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement) {
+              const proto = composer instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+              const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+              if (!descriptor || !descriptor.set) return false;
+              descriptor.set.call(composer, value);
+              composer.dispatchEvent(new Event('input', {bubbles:true}));
+            } else {
+              composer.innerHTML = '';
+              composer.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'deleteContentBackward'}));
+              if (value) {
+                const sel = window.getSelection();
+                const range = document.createRange();
+                range.selectNodeContents(composer);
+                sel.removeAllRanges();
+                sel.addRange(range);
+                document.execCommand('insertText', false, value);
+                composer.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText', data:value}));
+              }
+            }
+            return true;
+          };
+          if (!setText(text)) return JSON.stringify({submitted:false, reason:'composer_write_failed', had_stop:hadStop});
+          await new Promise((resolve) => setTimeout(resolve, 180));
+          const sendSelectors = [
+            'button[data-testid="send-button"]',
+            'button[aria-label*="Send"]',
+            'button[aria-label*="send"]',
+            'button[aria-label*="Invia"]',
+            'button[aria-label*="invia"]',
+          ];
+          let send = null;
+          for (const selector of sendSelectors) {
+            send = Array.from(document.querySelectorAll(selector)).find(visible) || null;
+            if (send) break;
+          }
+          if (!send) {
+            setText('');
+            return JSON.stringify({submitted:false, reason:'send_missing_after_wake', had_stop:hadStop});
+          }
+          send.click();
+          return JSON.stringify({submitted:true, woke:true, had_stop:hadStop, text});
+        })()
+'''.replace('__TEXT__', payload)
+        result = self._page_call(
+            target.websocket_url,
+            "Runtime.evaluate",
+            {"expression": expression, "awaitPromise": True, "returnByValue": True},
+            timeout_s=max(2.0, min(self.timeout_s, 6.0)),
+        )
+        raw = (result.get("result") or {}).get("value")
+        try:
+            state = json.loads(raw) if isinstance(raw, str) else {}
+        except json.JSONDecodeError as exc:
+            raise CdpError("wake_stalled_invalid") from exc
+        if not isinstance(state, dict):
+            raise CdpError("wake_stalled_invalid")
+        if not state.get("submitted"):
+            return state
+        deadline = time.monotonic() + max(1.0, float(wait_timeout_s))
+        while time.monotonic() < deadline:
+            current = self.chatgpt_ui_state(target_id)
+            if int(current.get("user_turns") or 0) > baseline_user_turns:
+                return {**state, "confirmed": True, "confirm_reason": "user_turn_advanced"}
+            time.sleep(0.2)
+        return {**state, "confirmed": False, "confirm_reason": "submit_clicked_unconfirmed"}
+
     def stop_chatgpt_response(self, target_id: str) -> dict[str, Any]:
         target = self._wait_target(target_id)
         if not target.websocket_url or not target.is_chatgpt:

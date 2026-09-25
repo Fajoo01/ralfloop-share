@@ -18,6 +18,7 @@ class FakeCdp:
         self.closed: list[str] = []
         self.messages: list[tuple[str, str, str]] = []
         self.submitted_composers: list[str] = []
+        self.wake_calls: list[str] = []
         self.stopped: list[str] = []
         self.created = 0
         self._targets = [
@@ -62,6 +63,10 @@ class FakeCdp:
     def submit_chatgpt_composer(self, target_id: str, *, wait_timeout_s: float = 8.0):
         self.submitted_composers.append(target_id)
         return {"submitted": True, "confirmed": True}
+
+    def wake_stalled_chatgpt(self, target_id: str, *, text: str = "prosegui", wait_timeout_s: float = 4.0):
+        self.wake_calls.append(target_id)
+        return {"submitted": False, "reason": "send_missing_after_wake"}
 
     def stop_chatgpt_response(self, target_id: str):
         self.stopped.append(target_id)
@@ -571,6 +576,37 @@ def test_stale_nonempty_composer_is_resubmitted(tmp_path: Path) -> None:
     assert cdp.submitted_composers == ["managed"]
     assert queue.watchdog_state(job_id)["recovery_count"] == 1
     assert report["actions"][0]["reason"] == "composer_resubmitted"
+
+
+
+def test_stale_stop_is_woken_by_typing_prosegui_before_hard_restart(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+
+    class WakeCdp(FakeCdp):
+        def wake_stalled_chatgpt(self, target_id: str, *, text: str = "prosegui", wait_timeout_s: float = 4.0):
+            self.wake_calls.append(target_id)
+            return {"submitted": True, "confirmed": True, "text": text}
+
+    cdp = WakeCdp(
+        ui={
+            "user_turns": 2,
+            "assistant_turns": 2,
+            "response_in_progress": True,
+            "response_pending": False,
+            "response_idle_ms": 0,
+            "progress_idle_ms": 181_000,
+        },
+        companion={"busy": True, "last_assistant_text": "Risposta parziale"},
+    )
+
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    assert queue.get_job(job_id).state is GptJobState.ACTIVE
+    assert cdp.wake_calls == ["managed"]
+    assert cdp.stopped == []
+    assert cdp.messages == []
+    assert queue.watchdog_state(job_id)["recovery_count"] == 1
+    assert report["actions"][0]["reason"] == "stalled_stream_woken"
 
 
 def test_stale_stream_is_stopped_and_restarted_in_same_chat(tmp_path: Path) -> None:

@@ -615,6 +615,18 @@ class GptQueueShepherd:
                     self._rebind_stalled(job, actions, reason="stalled_stream_fresh_target", idle_ms=idle_ms)
                     continue
                 try:
+                    wake = self.cdp.wake_stalled_chatgpt(job.target_id)
+                    if bool(wake.get("submitted")):
+                        watchdog = self.queue.mark_watchdog_recovery(job.job_id)
+                        actions.append({
+                            "job_id": job.job_id,
+                            "action": "recovered",
+                            "reason": "stalled_stream_woken",
+                            "progress_idle_ms": idle_ms,
+                            "watchdog": watchdog,
+                            "wake": wake,
+                        })
+                        continue
                     stopped = self.cdp.stop_chatgpt_response(job.target_id)
                     partial = self._substantive_response_text(stopped.get("last_assistant_text"))
                     if partial:
@@ -627,6 +639,7 @@ class GptQueueShepherd:
                         "reason": "stalled_stream_restarted",
                         "progress_idle_ms": idle_ms,
                         "watchdog": watchdog,
+                        "wake": wake,
                         "stopped": stopped,
                         "continuation": continuation,
                     })
