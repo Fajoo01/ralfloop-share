@@ -12,7 +12,7 @@ RuntimeDirectory=ralf-mobile-use-mcp
 RuntimeDirectoryMode=0750
 Environment=HOME=/home/bandi
 Environment=PATH=/usr/bin:/bin:/home/bandi/android-harness/sdk/platform-tools
-ExecStart=/usr/bin/python3 /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_google_workspace_mcp_broker.py --socket /run/ralf-mobile-use-mcp/mcp.sock --allow-uid 1000 --command /home/bandi/.local/share/ralf-mobile-use-mcp/.venv/bin/mobile-use-mcp --idle-timeout 300
+ExecStart=/usr/bin/python3 /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_arci_mcp_broker.py --socket /run/ralf-mobile-use-mcp/mcp.sock --allow-group ralf-mcp --command /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_mobile_use_mcp_server.py --idle-timeout 300 --max-clients 2
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=true

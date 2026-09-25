@@ -120,6 +120,8 @@ def mobile_control_adapter(
         package = str(args.get("package") or "").strip()
         if not package or len(package) > 255 or any(ch.isspace() for ch in package):
             raise ValueError("android_mobile_package_invalid")
+        if package not in _ALLOWED_CONTROL_PACKAGES:
+            raise ValueError("android_mobile_package_not_allowed")
         action = gateway.invoke("android_launch_app", package=package)
     elif operation == "type":
         text = str(args.get("text") or "")

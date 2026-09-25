@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 
+import pytest
+
 from ralfloop_agent.unified_assistant.mobile_use_mcp_adapter import mobile_control_adapter, mobile_read_adapter
 from ralfloop_agent.unified_assistant.planner import UnifiedPlanner
 from ralfloop_agent.unified_assistant.registry import UnifiedRegistryFacade
@@ -67,3 +69,12 @@ def test_mobile_read_is_zero_write():
     assert artifact.status == "completed"
     assert artifact.payload["writes"] == 0
     assert artifact.payload["sends"] == 0
+
+
+def test_mobile_control_rejects_unallowlisted_launch_package():
+    planner = UnifiedPlanner(UnifiedRegistryFacade())
+    base = planner.validate(planner.plan("Sul Redmi tocca Installa")).assignments[0]
+    assignment = base.model_copy(update={"arguments": {"operation": "launch", "package": "com.example.untrusted"}})
+    fake = FakeGateway()
+    with pytest.raises(ValueError, match="android_mobile_package_not_allowed"):
+        mobile_control_adapter(assignment, {"user.goal": assignment.objective}, gateway_factory=lambda: fake)
