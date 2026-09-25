@@ -30,6 +30,23 @@ def _canonical_chatgpt_conversation_url(value: str) -> str | None:
     return f"https://chatgpt.com/c/{match.group(1)}"
 
 
+def _chatgpt_project_conversation_parts(value: str) -> tuple[str, str] | None:
+    try:
+        parsed = urllib.parse.urlparse(str(value or ""))
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").lower()
+    if host != "chatgpt.com" and not host.endswith(".chatgpt.com"):
+        return None
+    match = re.fullmatch(
+        r"/g/(g-p-[A-Za-z0-9]{32})(?:-[^/]+)?/c/([A-Za-z0-9-]+)",
+        parsed.path.rstrip("/"),
+    )
+    if not match:
+        return None
+    return match.group(1), match.group(2)
+
+
 def _safe_chatgpt_conversation_context_url(value: str) -> str:
     try:
         parsed = urllib.parse.urlparse(str(value or ""))
@@ -1220,6 +1237,82 @@ class ChromeCdp:
                 pass
             raise
 
+    def _navigate_chatgpt_conversation_via_project(
+        self,
+        target_id: str,
+        context_url: str,
+        *,
+        wait_timeout_s: float = 12.0,
+    ) -> dict[str, Any]:
+        parts = _chatgpt_project_conversation_parts(context_url)
+        normalized = _canonical_chatgpt_conversation_url(context_url)
+        if parts is None or not normalized:
+            raise CdpError("conversation_project_context_invalid")
+        project_id, conversation_id = parts
+        project_url = f"https://chatgpt.com/g/{project_id}/project"
+        target = self._wait_target(target_id)
+        if not target.websocket_url:
+            raise CdpError("conversation_navigation_target_invalid")
+        self._page_call(target.websocket_url, "Page.enable")
+        self._page_call(target.websocket_url, "Page.navigate", {"url": project_url})
+        rows = self.project_conversation_records(
+            target_id,
+            project_url=project_url,
+            wait_timeout_s=max(2.0, min(float(wait_timeout_s), 10.0)),
+        )
+        row = next((item for item in rows if item.get("url") == normalized), None)
+        if row is None:
+            raise CdpError("conversation_project_entry_missing")
+        target = self._wait_target(target_id)
+        if not target.websocket_url:
+            raise CdpError("conversation_navigation_target_invalid")
+        expression = r'''(() => {
+          const wanted = __WANTED__;
+          const anchor = [...document.querySelectorAll('a[href]')].find((item) => {
+            try {
+              const u = new URL(item.href, location.origin);
+              return u.pathname.includes('/c/' + wanted);
+            } catch (_) { return false; }
+          });
+          if (!anchor) return JSON.stringify({clicked:false});
+          anchor.click();
+          return JSON.stringify({clicked:true, href:anchor.href});
+        })()'''.replace("__WANTED__", json.dumps(conversation_id))
+        clicked = self._page_call(
+            target.websocket_url,
+            "Runtime.evaluate",
+            {"expression": expression, "returnByValue": True},
+            timeout_s=max(1.0, min(self.timeout_s, 5.0)),
+        )
+        raw = (clicked.get("result") or {}).get("value")
+        try:
+            click_state = json.loads(raw) if isinstance(raw, str) else {}
+        except json.JSONDecodeError:
+            click_state = {}
+        if not click_state.get("clicked"):
+            raise CdpError("conversation_project_click_missing")
+        deadline = time.monotonic() + max(2.0, float(wait_timeout_s))
+        last_state: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            current = self._wait_target(target_id)
+            if _canonical_chatgpt_conversation_url(current.url) != normalized:
+                time.sleep(0.25)
+                continue
+            last_state = self.chatgpt_ui_state(target_id)
+            if last_state.get("temporary_access_limited"):
+                raise CdpError("temporary_access_limited")
+            if (
+                last_state.get("user_turns", 0) > 0
+                or last_state.get("assistant_turns", 0) > 0
+                or last_state.get("response_in_progress")
+                or last_state.get("response_pending")
+            ):
+                last_state["recovered_via_project"] = True
+                last_state["conversation_context_url"] = current.url
+                return last_state
+            time.sleep(0.25)
+        raise CdpError(f"conversation_project_click_timeout:{normalized}")
+
     def navigate_chatgpt_conversation(
         self,
         target_id: str,
@@ -1242,6 +1335,8 @@ class ChromeCdp:
         self._page_call(target.websocket_url, "Page.navigate", {"url": context_url})
         deadline = time.monotonic() + wait_timeout_s
         last_state: dict[str, Any] = {}
+        project_context = _chatgpt_project_conversation_parts(context_url) is not None
+        empty_since: float | None = None
         while time.monotonic() < deadline:
             try:
                 current = self._wait_target(target_id)
@@ -1254,9 +1349,33 @@ class ChromeCdp:
                 continue
             if last_state.get("temporary_access_limited"):
                 raise CdpError("temporary_access_limited")
-            if last_state.get("ready"):
+            has_content = bool(
+                last_state.get("user_turns", 0) > 0
+                or last_state.get("assistant_turns", 0) > 0
+                or last_state.get("response_in_progress")
+                or last_state.get("response_pending")
+            )
+            if last_state.get("ready") and (not project_context or has_content):
                 return last_state
+            if (
+                project_context
+                and not has_content
+                and last_state.get("authenticated")
+                and last_state.get("page_settled")
+            ):
+                empty_since = empty_since or time.monotonic()
+                grace = min(1.5, max(0.25, float(wait_timeout_s) / 8.0))
+                if time.monotonic() - empty_since >= grace:
+                    break
+            else:
+                empty_since = None
             time.sleep(0.25)
+        if project_context:
+            return self._navigate_chatgpt_conversation_via_project(
+                target_id,
+                context_url,
+                wait_timeout_s=max(4.0, min(float(wait_timeout_s), 12.0)),
+            )
         raise CdpError(f"conversation_navigation_timeout:{normalized}")
 
     def archive_chatgpt_conversation(
@@ -1435,7 +1554,7 @@ class ChromeCdp:
             target.websocket_url,
             "Runtime.evaluate",
             {"expression": expression, "returnByValue": True},
-            timeout_s=0.35,
+            timeout_s=max(1.5, min(self.timeout_s, 3.0)),
         )
         raw = (result.get("result") or {}).get("value")
         try:

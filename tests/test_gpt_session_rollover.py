@@ -1661,6 +1661,44 @@ def test_conversation_navigation_preserves_project_context(monkeypatch) -> None:
     assert ("Page.navigate", {"url": project_url}) in calls
 
 
+def test_conversation_navigation_recovers_empty_project_deeplink_via_project(monkeypatch) -> None:
+    cdp = ChromeCdp("http://127.0.0.1:1")
+    project_id = "g-p-" + "a" * 32
+    context_url = f"https://chatgpt.com/g/{project_id}-demo/c/abc"
+    target = BrowserTarget("target", "page", context_url, "Nuova chat", "ws://target")
+    calls = []
+    recovered = {"ready": True, "user_turns": 2, "assistant_turns": 1, "recovered_via_project": True}
+    seen = {}
+
+    monkeypatch.setattr(cdp, "_wait_target", lambda target_id, **kwargs: target)
+    monkeypatch.setattr(cdp, "_page_call", lambda websocket_url, method, params=None, **kwargs: calls.append((method, params or {})) or {})
+    monkeypatch.setattr(
+        cdp,
+        "chatgpt_ui_state",
+        lambda target_id: {
+            "ready": True,
+            "authenticated": True,
+            "page_settled": True,
+            "user_turns": 0,
+            "assistant_turns": 0,
+            "response_in_progress": False,
+            "response_pending": False,
+        },
+    )
+
+    def recover(target_id, url, *, wait_timeout_s=12.0):
+        seen.update(target_id=target_id, url=url, wait_timeout_s=wait_timeout_s)
+        return recovered
+
+    monkeypatch.setattr(cdp, "_navigate_chatgpt_conversation_via_project", recover)
+    result = cdp.navigate_chatgpt_conversation("target", context_url, wait_timeout_s=0.1)
+
+    assert result is recovered
+    assert seen["target_id"] == "target"
+    assert seen["url"] == context_url
+    assert ("Page.navigate", {"url": context_url}) in calls
+
+
 class FakeCdp(ChromeCdp):
     def __init__(self) -> None:
         super().__init__("http://127.0.0.1:1")
