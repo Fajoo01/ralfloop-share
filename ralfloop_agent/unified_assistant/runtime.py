@@ -13,7 +13,8 @@ from ralfloop_agent.domains.storage import append_jsonl
 
 from .contracts import AssistantFeatureFlags, PolicyClass
 from .conversation import (
-    CONFIRM_WORDS, PENDING_DOMAINS, SessionConversationAdapter, payload_matches,
+    CONFIRM_WORDS, PENDING_DOMAINS, ConversationManager, SessionConversationAdapter,
+    payload_matches,
 )
 from .core import UnifiedAssistantCore
 from .email import EmailWorkingMemoryBuilder
@@ -499,6 +500,39 @@ def unified_route_probe(
     }
 
 
+def _read_only_session_degradation_allowed(route: Mapping[str, Any] | None) -> bool:
+    if not isinstance(route, Mapping):
+        return False
+    return (
+        route.get("task_mode") == "tool_backed_read"
+        and route.get("write_policy") == "no_write"
+        and route.get("requires_confirmation") is False
+    )
+
+
+def _audit_session_persistence_degraded(
+    *,
+    phase: str,
+    error: BaseException,
+    context: Mapping[str, Any],
+) -> None:
+    path = Path(os.getenv(
+        "RALF_AUDIT_PATH",
+        str(Path.home() / ".local" / "state" / "ralfloop" / "audit.jsonl"),
+    ))
+    try:
+        append_jsonl(path, {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "event": "unified_session_persistence_degraded",
+            "phase": phase,
+            "error": type(error).__name__,
+            "detail": str(error)[:160],
+            "source": str(context.get("source") or "")[:80],
+        })
+    except OSError:
+        pass
+
+
 def run_unified_telegram(
     text: str,
     context: Mapping[str, Any],
@@ -547,14 +581,29 @@ def run_unified_telegram(
         return result
 
     flags = flags_override or AssistantFeatureFlags.from_env()
+    session_route = unified_route_probe(text, context, flags_override=flags)
+    session_read_only = _read_only_session_degradation_allowed(session_route)
+    session_persistence_error: BaseException | None = None
     session_id = _session_id(context)
     store = SessionStore(os.getenv(
         "RALFLOOP_UNIFIED_SESSION_DIR",
         str(Path.home() / ".local" / "state" / "ralf" / "unified-sessions"),
     ))
-    _ensure_session(store, session_id)
-    session_adapter = SessionConversationAdapter(store)
-    conversation = session_adapter.load(session_id)
+    try:
+        _ensure_session(store, session_id)
+        session_adapter: SessionConversationAdapter | None = SessionConversationAdapter(store)
+        conversation = session_adapter.load(session_id)
+    except (OSError, SessionStoreError) as exc:
+        if not session_read_only:
+            raise
+        session_adapter = None
+        conversation = ConversationManager()
+        session_persistence_error = exc
+        _audit_session_persistence_degraded(
+            phase="load",
+            error=exc,
+            context=context,
+        )
     registry = UnifiedRegistryFacade()
     profile = Path(__file__).resolve().parents[2] / "config" / "reply_context_profiles.json"
     memory_items = tiremm_profile_items(profile) if profile.exists() else ()
@@ -1338,7 +1387,21 @@ def run_unified_telegram(
         approval_transition = browser_approval_coordinator.cancel(previous_browser)
     if approval_transition:
         result.data["approval_transition"] = dict(approval_transition)
-    session_adapter.save(session_id, conversation)
+    if session_adapter is not None:
+        try:
+            session_adapter.save(session_id, conversation)
+        except (OSError, SessionStoreError) as exc:
+            if not session_read_only:
+                raise
+            session_persistence_error = exc
+            _audit_session_persistence_degraded(
+                phase="save",
+                error=exc,
+                context=context,
+            )
+    if session_persistence_error is not None:
+        result.data["session_persistence"] = "degraded"
+        result.data["session_persistence_error"] = str(session_persistence_error)[:160]
     artifacts: list[dict[str, Any]] = []
     if result.data.get("selected_skill") == "email.search":
         artifacts.append({

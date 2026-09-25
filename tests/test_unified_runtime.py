@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import pytest
+
 from ralfloop_agent.unified_assistant import runtime
 from ralfloop_agent.unified_assistant.core import EmailPipelineResult
 from ralfloop_agent.unified_assistant.email_search import GoogleWorkspaceEmailSearch
 from ralfloop_agent.unified_assistant.fastweb_portal import FastwebPortalResult
 from ralfloop_agent.unified_assistant.runtime import is_unified_telegram_request, unified_route_probe
-from ralfloop_agent.cli.session_store import SessionStore
+from ralfloop_agent.cli.session_store import SessionStore, SessionStoreError
 from ralfloop_agent.unified_assistant.contracts import PolicyClass
 from ralfloop_agent.unified_assistant.conversation import SessionConversationAdapter
 
@@ -133,6 +135,113 @@ def test_standalone_gps_phrase_does_not_force_atm_without_context(monkeypatch, t
 
     assert is_unified_telegram_request("Sì usa il GPS", context) is False
     assert unified_route_probe("Sì usa il GPS", context) is None
+
+
+def test_read_only_atm_survives_invalid_session_without_rewriting_it(monkeypatch, tmp_path):
+    class ATM:
+        def read(self, request):
+            return {
+                "ok": True,
+                "status": "OK",
+                "response": "Percorso ATM per piscina Suzzani.",
+                "tool": "atm_realtime_waits",
+                "payload": {
+                    "destination": {"label": "piscina Suzzani"},
+                    "route_mode": "test",
+                    "source": "ATM test",
+                },
+                "read_operations": ["atm_realtime_waits"],
+                "location_source": "telegram_gps_cache",
+            }
+
+    root = tmp_path / "sessions"
+    root.mkdir()
+    broken = root / "telegram-22-11.json"
+    broken.write_text("{broken", encoding="utf-8")
+    monkeypatch.setenv("RALFLOOP_UNIFIED_ASSISTANT", "1")
+    monkeypatch.setenv("RALFLOOP_UNIFIED_SESSION_DIR", str(root))
+    monkeypatch.setenv("RALF_AUDIT_PATH", str(tmp_path / "audit.jsonl"))
+    monkeypatch.setattr(runtime, "ATMMCPReadOnly", lambda context: ATM())
+    context = {
+        "source": "telegram_natural",
+        "telegram_user_id": 11,
+        "telegram_chat_id": 22,
+        "telegram_message_id": 1,
+    }
+
+    result = runtime.run_unified_telegram("Portami in piscina Suzzani", context)
+
+    assert result["ok"] is True
+    assert result["capability"] == "atm.route"
+    assert result["response"] == "Percorso ATM per piscina Suzzani."
+    assert result["writes"] == 0
+    assert result["sends"] == 0
+    assert result["metadata"]["session_persistence"] == "degraded"
+    assert result["metadata"]["session_persistence_error"] == "session_invalid"
+    assert broken.read_text(encoding="utf-8") == "{broken"
+    assert "unified_session_persistence_degraded" in (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+
+
+def test_read_only_atm_survives_session_save_failure(monkeypatch, tmp_path):
+    class ATM:
+        def read(self, request):
+            return {
+                "ok": True,
+                "status": "OK",
+                "response": "Percorso ATM pronto.",
+                "tool": "atm_realtime_waits",
+                "payload": {"destination": {"label": "Coop"}, "route_mode": "test"},
+                "read_operations": ["atm_realtime_waits"],
+                "location_source": "telegram_gps_cache",
+            }
+
+    root = tmp_path / "sessions"
+    monkeypatch.setenv("RALFLOOP_UNIFIED_ASSISTANT", "1")
+    monkeypatch.setenv("RALFLOOP_UNIFIED_SESSION_DIR", str(root))
+    monkeypatch.setenv("RALF_AUDIT_PATH", str(tmp_path / "audit.jsonl"))
+    store = SessionStore(root)
+    runtime._ensure_session(store, "telegram-22-11")
+    monkeypatch.setattr(runtime, "ATMMCPReadOnly", lambda context: ATM())
+
+    def fail_save(self, session_id, manager):
+        raise SessionStoreError("session_invalid")
+
+    monkeypatch.setattr(SessionConversationAdapter, "save", fail_save)
+    result = runtime.run_unified_telegram(
+        "Portami alla Coop",
+        {
+            "source": "telegram_natural",
+            "telegram_user_id": 11,
+            "telegram_chat_id": 22,
+            "telegram_message_id": 1,
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["capability"] == "atm.route"
+    assert result["response"] == "Percorso ATM pronto."
+    assert result["metadata"]["session_persistence"] == "degraded"
+    assert result["metadata"]["session_persistence_error"] == "session_invalid"
+
+
+def test_write_request_remains_fail_closed_when_session_is_invalid(monkeypatch, tmp_path):
+    root = tmp_path / "sessions"
+    root.mkdir()
+    (root / "telegram-22-11.json").write_text("{broken", encoding="utf-8")
+    monkeypatch.setenv("RALFLOOP_UNIFIED_ASSISTANT", "1")
+    monkeypatch.setenv("RALFLOOP_UNIFIED_SESSION_DIR", str(root))
+    context = {
+        "source": "telegram_natural",
+        "telegram_user_id": 11,
+        "telegram_chat_id": 22,
+        "telegram_message_id": 1,
+    }
+
+    with pytest.raises(SessionStoreError, match="session_invalid"):
+        runtime.run_unified_telegram(
+            "Scrivi a Marco che abbiamo ricevuto i documenti",
+            context,
+        )
 
 
 def test_telegram_bridge_is_feature_flagged_and_legacy_first(monkeypatch):
