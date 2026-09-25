@@ -336,7 +336,9 @@
       ],
       "description": "Allowlisted inspection and protected operational workflows.",
       "supported_skills": [
-        "infrastructure.inspect"
+        "infrastructure.inspect",
+        "android.mobile.read",
+        "android.mobile.control"
       ],
       "allowed_memory_namespaces": [
         "infrastructure"
@@ -1207,6 +1209,38 @@
       "workflow": "ralfloop_agent.integration.system_inspection",
       "verification_method": "observed health/state",
       "status": "constrained"
+    },
+    {
+      "id": "android.mobile.read",
+      "domains": [
+        "infrastructure"
+      ],
+      "required_arguments": [
+        "operation"
+      ],
+      "required_capabilities": [
+        "android.mobile.observe"
+      ],
+      "classification": "READ",
+      "workflow": "ralfloop_agent.unified_assistant.mobile_use_mcp_adapter.mobile_read_adapter",
+      "verification_method": "ADB/UIAutomator MCP observation with structured snapshot",
+      "status": "ready"
+    },
+    {
+      "id": "android.mobile.control",
+      "domains": [
+        "infrastructure"
+      ],
+      "required_arguments": [
+        "operation"
+      ],
+      "required_capabilities": [
+        "android.mobile.control"
+      ],
+      "classification": "AUTO_WRITE",
+      "workflow": "ralfloop_agent.unified_assistant.mobile_use_mcp_adapter.mobile_control_adapter",
+      "verification_method": "observe -> semantic action -> observe; no arbitrary ADB shell",
+      "status": "ready"
     },
     {
       "id": "code.inspect",

@@ -1,0 +1,27 @@
+[Unit]
+Description=Ralf Mobile Use MCP broker (Android ADB/UIAutomator)
+After=network-online.target local-fs.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bandi
+Group=ralf-mcp
+UMask=0007
+RuntimeDirectory=ralf-mobile-use-mcp
+RuntimeDirectoryMode=0750
+Environment=HOME=/home/bandi
+Environment=PATH=/usr/bin:/bin:/home/bandi/android-harness/sdk/platform-tools
+ExecStart=/usr/bin/python3 /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_google_workspace_mcp_broker.py --socket /run/ralf-mobile-use-mcp/mcp.sock --allow-uid 1000 --command /home/bandi/.local/share/ralf-mobile-use-mcp/.venv/bin/mobile-use-mcp --idle-timeout 300
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/home/bandi/.local/share/ralf-mobile-use-mcp /home/sibilla-cumana/ralfloop-production/current
+ReadWritePaths=-/home/bandi/.android -/home/bandi/.cache -/home/bandi/.uiautomator2
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

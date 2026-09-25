@@ -203,6 +203,10 @@ class UnifiedRegistryFacade:
         )
         gmail_socket = Path("/run/ralf-google-workspace-mcp/mcp.sock")
         github_socket = Path(os.getenv("RALF_GITHUB_MCP_SOCKET", "/run/ralf-github-mcp/mcp.sock"))
+        mobile_use_entrypoint = Path(os.getenv(
+            "RALF_MOBILE_USE_MCP_COMMAND",
+            "/home/bandi/.local/share/ralf-mobile-use-mcp/.venv/bin/mobile-use-mcp",
+        ))
         whatsapp_scopes = json.loads(self.whatsapp_scopes_path.read_text(encoding="utf-8"))
         whatsapp_work_profile = (
             whatsapp_scopes.get("profile") == "work"
@@ -319,6 +323,34 @@ class UnifiedRegistryFacade:
             health="validated MCP tool schema + broker socket",
             verification_method="search/read-only allowlist + Gmail message provenance",
             source_registry=str(PROJECT_ROOT / "src" / "google_workspace.py"),
+        ), UnifiedToolSpec(
+            id="android.mobile.mcp.read",
+            capabilities=("android.mobile.observe",),
+            input_schema="semantic Android device observation; no arbitrary ADB shell",
+            output_schema="structured ADB/UIAutomator device state, foreground app, or compact snapshot",
+            classification=PolicyClass.READ,
+            side_effect_class="none",
+            availability=(
+                "available" if _observable_path_exists(mobile_use_entrypoint)
+                else "constrained:mobile_use_mcp_unavailable"
+            ),
+            health="persistent local stdio MCP session over ADB + uiautomator2",
+            verification_method="structured read result; writes=0; no shell passthrough",
+            source_registry=str(PROJECT_ROOT / "src" / "mobile_use_mcp.py"),
+        ), UnifiedToolSpec(
+            id="android.mobile.mcp.control",
+            capabilities=("android.mobile.control",),
+            input_schema="allowlisted semantic tap/key/type/launch action from deterministic planner",
+            output_schema="action result plus post-action compact snapshot",
+            classification=PolicyClass.AUTO_WRITE,
+            side_effect_class="reversible_local_ui_action",
+            availability=(
+                "available" if _observable_path_exists(mobile_use_entrypoint)
+                else "constrained:mobile_use_mcp_unavailable"
+            ),
+            health="persistent local stdio MCP session; no arbitrary ADB shell or package uninstall",
+            verification_method="observe -> semantic action -> observe",
+            source_registry=str(PROJECT_ROOT / "src" / "mobile_use_mcp.py"),
         ), UnifiedToolSpec(
             id="github.mcp.read_only",
             capabilities=(

@@ -48,6 +48,7 @@ from .pec_write_mcp_adapter import PecWriteMCPContext
 from .digital_signing import ArubaSignApprovalWorkflow, DigitalSigningError
 from .meteo_mcp_adapter import MeteoMCPReadOnly
 from .github_mcp_adapter import github_read_adapter
+from .mobile_use_mcp_adapter import mobile_control_adapter, mobile_read_adapter
 from .planner import UnifiedPlanner
 from .capability_rag_router import CapabilityRAGRouter
 from .recipient import GoogleWorkspaceRecipientResolver
@@ -101,7 +102,7 @@ _SUPPORTED = re.compile(
     r"volantin[oi]|flyer|locandin[ae]|manifest[oi]|poster|"
     r"come\s+(?:arrivo|vado|posso\s+andare)|"
     r"mezzi\s+(?:per|verso)|percorso\s+(?:atm|con\s+i\s+mezzi)|home\s+assistant|domotica|stato\s+(?:della\s+)?luce|"
-    r"runts|arci|github|jellyfin|baffo\s*flix|baffoflix|browser|playwright|snapshot\s+(?:browser|pagina)|schede?\s+browser|bandi|bando|grant|finanziament[oi]|contribut[oi]|insegnante|tutor|quiz|esercizio\s+didattico|memoria\s+operativa|firma|firmare|digitalmente|arubasign|p7m|"
+    r"runts|arci|github|redmi|xiaomi|hyperos|telefono|cellulare|smartphone|dispositivo\s+android|android\s+device|jellyfin|baffo\s*flix|baffoflix|browser|playwright|snapshot\s+(?:browser|pagina)|schede?\s+browser|bandi|bando|grant|finanziament[oi]|contribut[oi]|insegnante|tutor|quiz|esercizio\s+didattico|memoria\s+operativa|firma|firmare|digitalmente|arubasign|p7m|"
     r"commercialista|contabilit[aà]|bilancio\s+ets|rendiconto(?:\s+ets|\s+per\s+cassa)?|prima\s+nota|riconciliazion[ei]|fattur[ae]|ricevut[ae]|f24|iva|scadenz[ae]\s+fiscal[ei])\b",
     re.I,
 )
@@ -440,6 +441,10 @@ def unified_route_probe(
         connectors.append("mailchimp.marketing")
     if "github.read" in skills:
         connectors.append("github.mcp.read_only")
+    if "android.mobile.read" in skills:
+        connectors.append("android.mobile.mcp.read")
+    if "android.mobile.control" in skills:
+        connectors.append("android.mobile.mcp.control")
     if "meteo.read" in skills:
         connectors.append("meteo.radar.mcp")
     if "atm.route" in skills:
@@ -1146,6 +1151,8 @@ def run_unified_telegram(
 
     core.dag_executor = UnifiedDAGExecutor(registry, {
         "github.read": github_read_adapter,
+        "android.mobile.read": mobile_read_adapter,
+        "android.mobile.control": mobile_control_adapter,
         "bandi.research": bandi_adapter,
         "bandi.read": bandi_adapter,
         "bandi.eligibility": bandi_adapter,

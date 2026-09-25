@@ -237,6 +237,29 @@ _GITHUB_LIST_ISSUES_RE = re.compile(r"\b(?:lista|elenca|mostra|leggi|controlla)\
 _GITHUB_LIST_PRS_RE = re.compile(r"\b(?:lista|elenca|mostra|leggi|controlla)\b.*\b(?:pr|pull\s+request)\b", re.I)
 _GITHUB_MUTATION_RE = re.compile(r"\b(?:crea|apri|commenta|scrivi|merge|chiudi|modifica|elimina)\b", re.I)
 
+_ANDROID_DEVICE_RE = re.compile(
+    r"\b(?:redmi|xiaomi|hyperos|telefono|cellulare|smartphone|dispositivo\s+android|android\s+device)\b",
+    re.I,
+)
+_ANDROID_LAUNCH_RE = re.compile(
+    r"\b(?:apri|avvia|lancia)\s+(?P<app>baffoflix|grande\s+timoniere|bot[- ]?tazzi)\b",
+    re.I,
+)
+_ANDROID_TAP_RE = re.compile(
+    r"\b(?:clicca|tocca|tap|premi)(?:\s+(?:su|il|la|lo|l['’]))?\s+(?P<target>[^.!?]{1,120})",
+    re.I,
+)
+_ANDROID_KEY_RE = re.compile(
+    r"\b(?:tasto|premi)\s+(?P<key>home|indietro|back|invio|enter|tab|menu|volume\s+su|volume\s+giu|volume\s+gi[uù])\b",
+    re.I,
+)
+_ANDROID_READ_RE = re.compile(
+    r"\b(?:controlla|guarda|ispeziona|leggi|mostra|snapshot|schermo|foreground|app\s+aperta|stato)\b",
+    re.I,
+)
+_ANDROID_FOREGROUND_RE = re.compile(r"\b(?:foreground|app\s+aperta|app\s+in\s+primo\s+piano)\b", re.I)
+_ANDROID_APPS_RE = re.compile(r"\b(?:lista|elenca|mostra)\b.*\bapps?\b", re.I)
+
 _WHATSAPP_RE = re.compile(r"\b(?:whatsapp|whatsapp\s+web|wapp)\b", re.I)
 _WHATSAPP_COMPOSE_RE = re.compile(
     r"\b(?:scrivi|manda|invia)\s+(?:un\s+messaggio\s+)?(?:su\s+)?(?:whatsapp|wapp)\s+a\s+"
@@ -401,6 +424,85 @@ class UnifiedPlanner:
                     },
                 ),),
             )
+
+        if _ANDROID_DEVICE_RE.search(goal):
+            launch_match = _ANDROID_LAUNCH_RE.search(goal)
+            key_match = _ANDROID_KEY_RE.search(goal)
+            tap_match = _ANDROID_TAP_RE.search(goal)
+            if launch_match:
+                app = " ".join(launch_match.group("app").casefold().replace("-", " ").split())
+                package = {
+                    "baffoflix": "org.tiremminnanz.baffoflix",
+                    "grande timoniere": "org.tiremminnanz.remoteagent",
+                    "bot tazzi": "org.tiremminnanz.remoteagent",
+                    "bottazzi": "org.tiremminnanz.remoteagent",
+                }.get(app)
+                if package is None:
+                    return self._clarification("android_mobile_app_not_allowed")
+                return AssistantPlan(
+                    intent="android.mobile.control",
+                    domains=("infrastructure",),
+                    assignments=(self._assignment(
+                        domain="infrastructure", skill="android.mobile.control", objective=goal,
+                        input_refs=("user.goal",), output_ref="artifact.android_mobile_action",
+                        policy=PolicyClass.AUTO_WRITE,
+                        arguments={"operation": "launch", "package": package},
+                    ),),
+                )
+            if key_match:
+                raw_key = " ".join(key_match.group("key").casefold().split())
+                key = {
+                    "indietro": "back",
+                    "back": "back",
+                    "home": "home",
+                    "invio": "enter",
+                    "enter": "enter",
+                    "tab": "tab",
+                    "menu": "menu",
+                    "volume su": "volume_up",
+                    "volume giu": "volume_down",
+                    "volume giù": "volume_down",
+                }[raw_key]
+                return AssistantPlan(
+                    intent="android.mobile.control",
+                    domains=("infrastructure",),
+                    assignments=(self._assignment(
+                        domain="infrastructure", skill="android.mobile.control", objective=goal,
+                        input_refs=("user.goal",), output_ref="artifact.android_mobile_action",
+                        policy=PolicyClass.AUTO_WRITE,
+                        arguments={"operation": "key", "key": key},
+                    ),),
+                )
+            if tap_match:
+                target = " ".join(tap_match.group("target").strip(" ,:;\"'’").split())
+                if not target:
+                    return self._clarification("android_mobile_target_required")
+                return AssistantPlan(
+                    intent="android.mobile.control",
+                    domains=("infrastructure",),
+                    assignments=(self._assignment(
+                        domain="infrastructure", skill="android.mobile.control", objective=goal,
+                        input_refs=("user.goal",), output_ref="artifact.android_mobile_action",
+                        policy=PolicyClass.AUTO_WRITE,
+                        arguments={"operation": "tap", "target_text": target},
+                    ),),
+                )
+            if _ANDROID_READ_RE.search(goal):
+                operation = (
+                    "foreground" if _ANDROID_FOREGROUND_RE.search(goal)
+                    else "apps" if _ANDROID_APPS_RE.search(goal)
+                    else "snapshot"
+                )
+                return AssistantPlan(
+                    intent="android.mobile.read",
+                    domains=("infrastructure",),
+                    assignments=(self._assignment(
+                        domain="infrastructure", skill="android.mobile.read", objective=goal,
+                        input_refs=("user.goal",), output_ref="artifact.android_mobile_read",
+                        policy=PolicyClass.READ,
+                        arguments={"operation": operation},
+                    ),),
+                )
 
         if _GITHUB_RE.search(goal):
             if _GITHUB_MUTATION_RE.search(goal):

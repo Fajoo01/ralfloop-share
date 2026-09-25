@@ -56,6 +56,10 @@
     {
       "id": "browser_playwright",
       "socket": "/run/ralf-browser-playwright-mcp/mcp.sock"
+    },
+    {
+      "id": "mobile_use",
+      "socket": "/run/ralf-mobile-use-mcp/mcp.sock"
     }
   ],
   "provider_globs": [
@@ -92,7 +96,8 @@
       "navigate"
     ],
     "clicca": [
-      "click"
+      "click",
+      "tap"
     ],
     "click": [
       "click"
@@ -115,6 +120,40 @@
     ],
     "carica": [
       "upload"
+    ],
+    "telefono": [
+      "android",
+      "mobile",
+      "device",
+      "snapshot",
+      "tap"
+    ],
+    "cellulare": [
+      "android",
+      "mobile",
+      "device",
+      "snapshot",
+      "tap"
+    ],
+    "redmi": [
+      "android",
+      "device",
+      "snapshot",
+      "tap"
+    ],
+    "xiaomi": [
+      "android",
+      "device",
+      "snapshot",
+      "tap"
+    ],
+    "tocca": [
+      "tap",
+      "target"
+    ],
+    "schermo": [
+      "screenshot",
+      "snapshot"
     ]
   }
 }
