@@ -1458,12 +1458,27 @@ class ChromeCdp:
           send.click();
           return JSON.stringify({submitted:true, composer_chars:text.length});
         })()'''
-        result = self._page_call(
-            target.websocket_url,
-            "Runtime.evaluate",
-            {"expression": expression, "returnByValue": True},
-            timeout_s=1.0,
-        )
+        try:
+            result = self._page_call(
+                target.websocket_url,
+                "Runtime.evaluate",
+                {"expression": expression, "returnByValue": True},
+                timeout_s=5.0,
+            )
+        except CdpError as exc:
+            if "cdp_timeout:Runtime.evaluate" not in str(exc) and "cdp_transport_error:Runtime.evaluate:WebSocketTimeoutException" not in str(exc):
+                raise
+            deadline = time.monotonic() + max(1.0, float(wait_timeout_s))
+            while time.monotonic() < deadline:
+                current = self.chatgpt_ui_state(target_id)
+                if int(current.get("user_turns") or 0) > baseline_user_turns:
+                    return {"submitted": True, "confirmed": True, "confirm_reason": "user_turn_advanced_after_submit_timeout"}
+                if int(current.get("composer_chars") or 0) == 0 and (
+                    bool(current.get("response_in_progress")) or bool(current.get("response_pending"))
+                ):
+                    return {"submitted": True, "confirmed": True, "confirm_reason": "generation_started_after_submit_timeout"}
+                time.sleep(0.2)
+            raise
         raw = (result.get("result") or {}).get("value")
         try:
             state = json.loads(raw) if isinstance(raw, str) else {}
