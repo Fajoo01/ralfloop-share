@@ -848,8 +848,8 @@ class GptWorkController:
         context_url = job.conversation_context_url or job.conversation_url
         new_target_id = self.cdp.create_chatgpt_target(clear_cache=False, background=True)
         try:
-            self.cdp.navigate_chatgpt_conversation(new_target_id, context_url)
-            self.cdp.install_human_input_target(new_target_id, context_url)
+            self.cdp.navigate_chatgpt_conversation(new_target_id, job.conversation_url)
+            self.cdp.install_human_input_target(new_target_id, job.conversation_url)
             rebound = self.queue.bind_chat(
                 job.job_id,
                 conversation_url=job.conversation_url,

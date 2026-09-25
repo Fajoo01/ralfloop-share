@@ -187,8 +187,8 @@ class GptQueueShepherd:
         rebound = False
         try:
             new_target_id = self.cdp.create_chatgpt_target(clear_cache=False, background=True)
-            self.cdp.navigate_chatgpt_conversation(new_target_id, context_url)
-            self.cdp.install_human_input_target(new_target_id, context_url)
+            self.cdp.navigate_chatgpt_conversation(new_target_id, job.conversation_url)
+            self.cdp.install_human_input_target(new_target_id, job.conversation_url)
             self.cdp.close_target(old_target_id)
             self.queue.bind_chat(
                 job.job_id,
@@ -286,6 +286,7 @@ class GptQueueShepherd:
             focused = bool(companion.get("focused"))
             companion_busy = bool(companion.get("busy"))
             composer_chars = self._int(companion.get("composer_chars"))
+            human_composer_chars = self._int(companion.get("human_composer_chars"))
             response_text = self._substantive_response_text(companion.get("last_assistant_text"))
             response_in_progress = bool(ui.get("response_in_progress"))
             pending = bool(ui.get("response_pending"))
@@ -349,8 +350,13 @@ class GptQueueShepherd:
                     })
                 continue
 
-            if focused:
-                actions.append({"job_id": job.job_id, "action": "preserved", "reason": "focused"})
+            if focused and human_composer_chars:
+                actions.append({
+                    "job_id": job.job_id,
+                    "action": "preserved",
+                    "reason": "focused_human_draft",
+                    "human_composer_chars": human_composer_chars,
+                })
                 continue
 
             if composer_chars:

@@ -242,14 +242,14 @@ def test_focused_chat_is_never_released(tmp_path: Path) -> None:
             "response_pending": False,
             "response_idle_ms": 999_999,
         },
-        companion={"focused": True},
+        companion={"focused": True, "human_composer_chars": 7},
     )
 
     report = shepherd(queue, cdp).run_once(auto_start=False)
 
     assert queue.get_job(job_id).state is GptJobState.ACTIVE
     assert cdp.closed == []
-    assert report["actions"][0]["reason"] == "focused"
+    assert report["actions"][0]["reason"] == "focused_human_draft"
 
 
 def test_stalled_unanswered_job_is_recovered_before_review(tmp_path: Path) -> None:

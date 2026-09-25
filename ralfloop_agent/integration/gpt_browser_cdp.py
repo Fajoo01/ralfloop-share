@@ -148,15 +148,26 @@ class ChromeCdp:
           const temporaryAccessLimited = temporaryAccessLimitRe.test(pageText);
           const sampleTelemetry = () => {
             const nowMs = performance.now();
+            const labelledTurns = (kind) => {
+              const labels = Array.from(document.querySelectorAll('h4.sr-only'));
+              const matcher = kind === 'user'
+                ? /^(?:hai detto|you said|tu hai detto)\s*:?$/i
+                : /^(?:chatgpt ha detto|chatgpt said)\s*:?$/i;
+              return labels.filter((el) => matcher.test(String(el.textContent || '').trim())).map((el) => {
+                let node = el.parentElement;
+                for (let i = 0; node && i < 8; i++, node = node.parentElement) {
+                  if (node.classList && node.classList.contains('group')) return node;
+                }
+                return el.parentElement || el;
+              });
+            };
             const userSections = Array.from(document.querySelectorAll('section[data-turn="user"]'));
-            const userNodes = userSections.length
-              ? userSections
-              : Array.from(document.querySelectorAll('[data-message-author-role="user"]'));
+            const userRoleNodes = Array.from(document.querySelectorAll('[data-message-author-role="user"]'));
+            const userNodes = userSections.length ? userSections : (userRoleNodes.length ? userRoleNodes : labelledTurns('user'));
             const userTurns = userNodes.length;
             const assistantSections = Array.from(document.querySelectorAll('section[data-turn="assistant"]'));
-            const assistantNodes = assistantSections.length
-              ? assistantSections
-              : Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+            const assistantRoleNodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+            const assistantNodes = assistantSections.length ? assistantSections : (assistantRoleNodes.length ? assistantRoleNodes : labelledTurns('assistant'));
             const assistantTurns = assistantNodes.length;
             const stopSelectors = [
               'button[data-testid="stop-button"]',
@@ -1389,10 +1400,20 @@ class ChromeCdp:
           const composer = Array.from(document.querySelectorAll('#prompt-textarea, textarea, [contenteditable="true"]'))
             .find((el) => visible(el) && el.id !== 'bottazzi-human-composer') || null;
           const composerText = composer ? String(composer.value || composer.innerText || composer.textContent || '').trim() : '';
+          const humanComposer = document.getElementById('bottazzi-human-composer');
+          const humanComposerText = humanComposer ? String(humanComposer.value || humanComposer.innerText || humanComposer.textContent || '').trim() : '';
           const assistantSections = Array.from(document.querySelectorAll('section[data-turn="assistant"]'));
-          const assistantNodes = assistantSections.length
-            ? assistantSections
-            : Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+          const assistantRoleNodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+          const assistantLabelNodes = Array.from(document.querySelectorAll('h4.sr-only'))
+            .filter((el) => /^(?:chatgpt ha detto|chatgpt said)\s*:?$/i.test(String(el.textContent || '').trim()))
+            .map((el) => {
+              let node = el.parentElement;
+              for (let i = 0; node && i < 8; i++, node = node.parentElement) {
+                if (node.classList && node.classList.contains('group')) return node;
+              }
+              return el.parentElement || el;
+            });
+          const assistantNodes = assistantSections.length ? assistantSections : (assistantRoleNodes.length ? assistantRoleNodes : assistantLabelNodes);
           const lastAssistant = assistantNodes.length ? assistantNodes[assistantNodes.length - 1] : null;
           const streamingNode = lastAssistant ? lastAssistant.querySelector('[data-streaming-response-status]') : null;
           const lastAssistantText = lastAssistant
@@ -1405,6 +1426,7 @@ class ChromeCdp:
             ghost_close_at: Number((window.__bottazziGhostTabV1 || {}).close_at || 0),
             busy: responseInProgress || responsePending,
             composer_chars: composerText.length,
+            human_composer_chars: humanComposerText.length,
             "assistant_turns": assistantNodes.length,
             last_assistant_text: lastAssistantText,
           });
@@ -1522,9 +1544,17 @@ class ChromeCdp:
             if (stop) break;
           }
           const assistantSections = Array.from(document.querySelectorAll('section[data-turn="assistant"]'));
-          const assistantNodes = assistantSections.length
-            ? assistantSections
-            : Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+          const assistantRoleNodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+          const assistantLabelNodes = Array.from(document.querySelectorAll('h4.sr-only'))
+            .filter((el) => /^(?:chatgpt ha detto|chatgpt said)\s*:?$/i.test(String(el.textContent || '').trim()))
+            .map((el) => {
+              let node = el.parentElement;
+              for (let i = 0; node && i < 8; i++, node = node.parentElement) {
+                if (node.classList && node.classList.contains('group')) return node;
+              }
+              return el.parentElement || el;
+            });
+          const assistantNodes = assistantSections.length ? assistantSections : (assistantRoleNodes.length ? assistantRoleNodes : assistantLabelNodes);
           const lastAssistant = assistantNodes.length ? assistantNodes[assistantNodes.length - 1] : null;
           const streamingNode = lastAssistant ? lastAssistant.querySelector('[data-streaming-response-status]') : null;
           const lastAssistantText = lastAssistant
@@ -1668,9 +1698,29 @@ class ChromeCdp:
           const relayState = window.__bottazziHumanRelayV1;
           if (relayState && relayState.observer) relayState.observer.disconnect();
           try { delete window.__bottazziHumanRelayV1; } catch (_) { window.__bottazziHumanRelayV1 = null; }
-          const stateKey = '__bottazziHumanInputTargetV2';
-          const draftKey = '__bottazziHumanDraftV2';
-          const activeKey = '__bottazziActiveConversationV2';
+          const oldState = window.__bottazziHumanInputTargetV2;
+          if (oldState && oldState.observer) oldState.observer.disconnect();
+          if (oldState && oldState.onStorage) window.removeEventListener('storage', oldState.onStorage);
+          if (oldState && oldState.onFocus) window.removeEventListener('focus', oldState.onFocus);
+          try { delete window.__bottazziHumanInputTargetV2; } catch (_) { window.__bottazziHumanInputTargetV2 = null; }
+          const priorState = window.__bottazziHumanInputTargetV3;
+          if (priorState && priorState.observer) priorState.observer.disconnect();
+          if (priorState && priorState.onStorage) window.removeEventListener('storage', priorState.onStorage);
+          if (priorState && priorState.onFocus) window.removeEventListener('focus', priorState.onFocus);
+          try { delete window.__bottazziHumanInputTargetV3; } catch (_) { window.__bottazziHumanInputTargetV3 = null; }
+          const stateKey = '__bottazziHumanInputTargetV3';
+          const draftKey = `__bottazziHumanDraftV3:${config.conversation_url}`;
+          const activeKey = '__bottazziActiveConversationV3';
+          const legacyDraftKey = '__bottazziHumanDraftV2';
+          try {
+            const legacyRaw = localStorage.getItem(legacyDraftKey);
+            if (legacyRaw) {
+              let legacy = null;
+              try { legacy = JSON.parse(legacyRaw); } catch (_) {}
+              const createdAt = Number((legacy || {}).created_at || 0);
+              if (!createdAt || Date.now() - createdAt > 300000) localStorage.removeItem(legacyDraftKey);
+            }
+          } catch (_) {}
           const panelId = 'bottazzi-human-panel';
           const humanBoxId = 'bottazzi-human-composer';
           const sendId = 'bottazzi-human-send';
@@ -1857,8 +1907,7 @@ class ChromeCdp:
           };
           window.name = 'bottazzi-active';
           try { localStorage.setItem(activeKey, config.context_url); } catch (_) {}
-          let state = window[stateKey];
-          if (!state || typeof state !== 'object') state = {version:2};
+          let state = {version:3};
           if (!state.onStorage) {
             state.onStorage = event => { if (event.key === draftKey) setTimeout(importDraft, 0); };
             window.addEventListener('storage', state.onStorage);
@@ -1938,7 +1987,7 @@ class ChromeCdp:
               el.style.display = 'none';
             }
           }
-          const state = window.__bottazziHumanInputTargetV2;
+          const state = window.__bottazziHumanInputTargetV3 || window.__bottazziHumanInputTargetV2;
           if (state && typeof state.updateHumanUi === 'function') state.updateHumanUi();
           if (!config.held && state && typeof state.importDraft === 'function') setTimeout(state.importDraft, 0);
           return JSON.stringify({ok:true, held:Boolean(config.held)});
@@ -1966,8 +2015,8 @@ class ChromeCdp:
         config = json.dumps({"conversation_url": normalized, "context_url": context_url, "text": text.strip()}, ensure_ascii=False)
         expression = r'''(() => {
           const config = __CONFIG__;
-          const draftKey = '__bottazziHumanDraftV2';
-          const activeKey = '__bottazziActiveConversationV2';
+          const draftKey = `__bottazziHumanDraftV3:${config.conversation_url}`;
+          const activeKey = '__bottazziActiveConversationV3';
           let existing = null;
           try { existing = localStorage.getItem(draftKey); } catch (_) {}
           if (existing) return JSON.stringify({ok:true, queued:false, reason:'queue_busy'});
@@ -1981,7 +2030,7 @@ class ChromeCdp:
               created_at:Date.now(),
             }));
           } catch (_) { return JSON.stringify({ok:false, reason:'queue_storage_failed'}); }
-          const state = window.__bottazziHumanInputTargetV2;
+          const state = window.__bottazziHumanInputTargetV3 || window.__bottazziHumanInputTargetV2;
           if (state && typeof state.updateHumanUi === 'function') state.updateHumanUi();
           if (state && typeof state.importDraft === 'function') setTimeout(state.importDraft, 0);
           return JSON.stringify({ok:true, queued:true});
