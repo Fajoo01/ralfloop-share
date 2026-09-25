@@ -315,6 +315,14 @@ def test_mobile_composer_tracks_visual_viewport_keyboard() -> None:
     assert "visualViewport.addEventListener('resize',syncVisualViewport)" in ui
 
 
+def test_gpt_mobile_ui_exposes_manual_done_button() -> None:
+    ui = (Path(__file__).resolve().parents[1] / "openshell_backend" / "bottazzi_gpt_mobile_ui.html").read_text(encoding="utf-8")
+    assert 'id="doneBtn"' in ui
+    assert "j.state==='review'&&!j.last_error&&!j.live_busy&&Boolean(answer)" in ui
+    assert "$('#doneBtn').onclick=markDone" in ui
+    assert "body:JSON.stringify({state:'done'})" in ui
+
+
 def test_scholarly_concept_question_auto_routes_to_filologo(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     client.post("/login", json={"password": "app-pass"})
     monkeypatch.setattr(app_gateway, "SCHOLARLY_BACKEND", "http://127.0.0.1:19120")
