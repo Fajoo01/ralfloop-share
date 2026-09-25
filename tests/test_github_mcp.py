@@ -5,6 +5,7 @@ import os
 from unittest.mock import patch
 
 from scripts.ralf_github_mcp_server import GitHubMCPServer
+from src.github_mcp import GitHubGateway
 from ralfloop_agent.core.capability_router import route_task
 
 
@@ -53,3 +54,33 @@ def test_github_repo_allowlist_denies_other_owners(monkeypatch):
     server = GitHubMCPServer()
     result = server.call("github_repo_get", {"repo": "someone/else"})
     assert result["structuredContent"]["status"] == "POLICY_DENIED"
+
+
+def test_github_gateway_decodes_transport_mapping_result():
+    class Tool:
+        def __init__(self, name):
+            self.name = name
+
+    class Session:
+        def list_tools(self):
+            return [Tool(name) for name in sorted({
+                "github_repo_get", "github_issue_list", "github_issue_get",
+                "github_pr_list", "github_pr_get", "github_issue_create",
+                "github_issue_comment",
+            })]
+
+        def call_tool(self, name, arguments):
+            return {
+                "structuredContent": {
+                    "ok": True,
+                    "operation": name,
+                    "data": {"full_name": arguments.get("repo")},
+                    "writes": 0,
+                }
+            }
+
+    gateway = GitHubGateway(Session())
+    gateway.discover()
+    result = gateway.invoke("github_repo_get", repo="Fajoo01/ralfloop-bottazzi")
+    assert result["ok"] is True
+    assert result["data"]["full_name"] == "Fajoo01/ralfloop-bottazzi"

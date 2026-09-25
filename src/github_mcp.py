@@ -35,7 +35,7 @@ class GitHubGateway:
         if not self.tools:
             self.discover()
         result = self.session.call_tool(name, arguments)
-        payload = result.structured_content
+        payload = result.get("structuredContent") if isinstance(result, Mapping) else None
         if not isinstance(payload, Mapping):
             raise MCPProtocolError("github_mcp_invalid_payload")
         return dict(payload)
