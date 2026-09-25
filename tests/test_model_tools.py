@@ -117,6 +117,7 @@ def test_versioned_registry_contains_first_four_typed_tools(tmp_path: Path) -> N
         "sandboxed_remote_code",
     }
     assert registry.get("document_to_markdown_v1").status == "runtime_cpu_timeout"
+    assert "adaptive_routing" in registry.get("deep_web_research_agentcpm_v1").output_schema["properties"]
     assert all(spec.revision for spec in registry.specs.values())
     assert all(spec.local_files_only is True for spec in registry.specs.values())
     assert all(spec.trust_remote_code is False for spec in registry.specs.values())

@@ -256,7 +256,8 @@
           "partial": {"type": "boolean"},
           "errors": {"type": "array", "items": {"type": "string"}},
           "network_mode": {"type": "string"},
-          "trace_path": {"type": "string"}
+          "trace_path": {"type": "string"},
+          "adaptive_routing": {"type": "object"}
         }
       }
     }
