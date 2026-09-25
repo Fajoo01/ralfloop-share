@@ -1,0 +1,12 @@
+[Unit]
+Description=Poll WhatsApp for Bot-tazzi Agenda
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Persistent=true
+Unit=ralf-whatsapp-agenda.service
+
+[Install]
+WantedBy=timers.target

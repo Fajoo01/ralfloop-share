@@ -11,7 +11,7 @@ from ralfloop_agent.unified_assistant.agenda import (
     AgendaPipeline,
     AgendaSource,
     AgendaStore,
-    LocalIcsCalendarProvider,
+    calendar_provider_from_env,
 )
 from ralfloop_agent.unified_assistant.memory_service import MemoryService
 from ralfloop_agent.unified_assistant.task_queue import BotTazziTaskQueue
@@ -23,7 +23,7 @@ def main() -> int:
     memory = MemoryService(state_root / "operational-memory.sqlite3")
     store = AgendaStore(state_root / "agenda.sqlite3")
     queue = BotTazziTaskQueue.from_env()
-    calendar = LocalIcsCalendarProvider(state_root / "calendar")
+    calendar = calendar_provider_from_env()
     pipeline = AgendaPipeline(store=store, queue=queue, memory=memory, calendar=calendar)
     now = datetime.now(ZoneInfo("Europe/Rome"))
     stamp = now.date().isoformat()

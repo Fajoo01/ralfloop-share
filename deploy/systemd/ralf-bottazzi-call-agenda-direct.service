@@ -1,0 +1,33 @@
+[Unit]
+Description=Bot-tazzi phone-call transcript direct Agenda bridge
+After=network.target ralf-bottazzi-call-stt.service
+Wants=ralf-bottazzi-call-stt.service
+
+[Service]
+Type=simple
+User=sibilla-cumana
+Group=sibilla-cumana
+WorkingDirectory=/home/bandi/ralfloop-bottazzi-agenda-20260923
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/home/bandi/ralfloop-bottazzi-agenda-20260923
+Environment=RALFLOOP_OPERATIONAL_MEMORY_PATH=/home/bandi/.local/share/bottazzi/runtime-production/operational-memory.sqlite3
+Environment=XDG_DATA_HOME=/home/bandi/.local/share
+Environment=BOTTAZZI_TASK_QUEUE_DB=/home/sibilla-cumana/.local/state/ralfloop/bottazzi-task-queue.sqlite3
+Environment=BOTTAZZI_AGENDA_CALENDAR_DIR=/var/lib/ralfloop-bottazzi-agenda/calendar
+Environment=BOTTAZZI_CALL_RECORDINGS_DIR=/var/lib/ralfloop-bottazzi-call-recordings
+Environment=BOTTAZZI_CALL_AGENDA_STATE=/var/lib/ralfloop-bottazzi-call-agenda/state.json
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python scripts/ralf_bottazzi_call_agenda_direct.py --interval 10
+Restart=on-failure
+RestartSec=5
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+StateDirectory=ralfloop-bottazzi-call-agenda
+ReadOnlyPaths=/var/lib/ralfloop-bottazzi-call-recordings
+ReadWritePaths=/var/lib/ralfloop-bottazzi-call-agenda /home/sibilla-cumana/.local/state/ralfloop /home/bandi/.local/share/bottazzi/runtime-production /var/lib/ralfloop-bottazzi-agenda
+
+[Install]
+WantedBy=multi-user.target

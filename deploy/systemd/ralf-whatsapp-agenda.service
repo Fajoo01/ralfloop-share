@@ -1,0 +1,23 @@
+[Unit]
+Description=Bot-tazzi WhatsApp to Agenda trigger
+After=network-online.target ralf-whatsapp-mcp-broker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=sibilla-cumana
+Group=sibilla-cumana
+WorkingDirectory=/home/bandi/ralfloop-bottazzi-agenda-20260923
+Environment=PYTHONPATH=/home/bandi/ralfloop-bottazzi-agenda-20260923:/home/bandi/bot-tazzi
+Environment=RALFLOOP_OPERATIONAL_MEMORY_PATH=/home/bandi/.local/share/bottazzi/runtime-production/operational-memory.sqlite3
+Environment=XDG_DATA_HOME=/home/bandi/.local/share
+Environment=BOTTAZZI_TASK_QUEUE_DB=/home/sibilla-cumana/.local/state/ralfloop/bottazzi-task-queue.sqlite3
+Environment=BOTTAZZI_AGENDA_CALENDAR_DIR=/var/lib/ralfloop-bottazzi-agenda/calendar
+Environment=BOTTAZZI_WHATSAPP_AGENDA_STATE=/home/sibilla-cumana/.local/state/ralf/whatsapp-agenda-trigger.json
+Environment=RALF_WHATSAPP_MCP_SOCKET=/run/ralf-whatsapp-mcp/mcp.sock
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python scripts/ralf_whatsapp_agenda_trigger.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/sibilla-cumana/.local/state/ralf /home/sibilla-cumana/.local/state/ralfloop /home/bandi/.local/share/bottazzi/runtime-production /var/lib/ralfloop-bottazzi-agenda

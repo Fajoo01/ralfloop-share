@@ -1,0 +1,12 @@
+[Unit]
+Description=Poll Gmail read-only for Bot-tazzi Agenda
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Persistent=true
+Unit=ralf-gmail-agenda.service
+
+[Install]
+WantedBy=timers.target
