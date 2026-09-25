@@ -884,6 +884,38 @@ def test_repair_repo_policy_uses_exact_resolved_paths(
             )
 
 
+def test_repair_repo_policy_accepts_git_worktree_of_allowed_repo(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from ralfloop_agent.repair.approval import (
+        _repair_repo_policy,
+        _select_repair_repo,
+    )
+
+    canonical = tmp_path / "canonical"
+    worktree = tmp_path / "worktree"
+    canonical.mkdir()
+    assert _run(["git", "init"], canonical).returncode == 0
+    (canonical / "README.md").write_text("test\n", encoding="utf-8")
+    assert _run(["git", "add", "README.md"], canonical).returncode == 0
+    assert _run([
+        "git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+        "commit", "-m", "init",
+    ], canonical).returncode == 0
+    assert _run(["git", "worktree", "add", "-b", "repair-test", str(worktree)], canonical).returncode == 0
+
+    monkeypatch.setenv("RALF_REPAIR_SOURCE_REPO", str(canonical))
+    monkeypatch.delenv("RALF_REPAIR_ALLOWED_REPOS", raising=False)
+    configured_canonical, allowed = _repair_repo_policy()
+
+    assert _select_repair_repo(
+        {"repo": str(worktree)},
+        canonical=configured_canonical,
+        allowed=allowed,
+    ) == worktree.resolve()
+
+
 def test_backend_registers_repair_control_plane_routes(
     monkeypatch,
     tmp_path: Path,

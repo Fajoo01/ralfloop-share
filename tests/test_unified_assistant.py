@@ -1065,3 +1065,17 @@ def test_research_deep_adapter_requires_cited_read_only_evidence():
         "lavoro.gov.it", "normattiva.it", "gazzettaufficiale.it", "def.finanze.it"
     ]
     assert manager.calls[0][1]["seed_urls"]
+
+
+def test_long_goal_is_compacted_in_plan_assignment_without_http_500():
+    planner = UnifiedPlanner(UnifiedRegistryFacade())
+    goal = "Controlla il repository. " + ("vincolo tecnico molto dettagliato. " * 80)
+
+    plan = planner.plan(goal)
+
+    assert plan.assignments
+    assignment = plan.assignments[0]
+    assert len(assignment.objective) <= 1000
+    assert assignment.objective.startswith("Controlla il repository.")
+    assert "objective compacted" in assignment.objective
+    assert assignment.task_id.startswith("task.")

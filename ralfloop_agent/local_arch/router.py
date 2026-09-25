@@ -256,15 +256,26 @@ class FunctionGemmaClient:
             if name not in candidate_actions:
                 continue
             matching = [item for item in catalog if item["a"] == name]
-            targets = sorted({value for item in matching for value in (item["t"], *item["cap"])})
+            # Function targets are executable registry names, never free-form capability labels.
+            # Exposing capabilities in the enum encouraged FunctionGemma to echo user text as a
+            # target, producing oversized/truncated native calls (malformed_native_braces).
+            targets = sorted({item["t"] for item in matching})
+            unique_target = registry.unique_available_target(name) if registry is not None else None
+            properties: dict[str, Any] = {
+                "confidence": {"type": "number", "enum": [0.5, 1.0]},
+            }
+            required = ["confidence"]
+            # When the registry has more than one executable target, the model must select one.
+            # With a unique target Ralf fills it deterministically after the macro choice; asking
+            # FunctionGemma to echo it caused long free-form target hallucinations and truncation.
+            if unique_target is None:
+                properties["target"] = {"type": "string", "enum": targets}
+                required.insert(0, "target")
             tools.append({"type": "function", "function": {
                 "name": name,
                 "description": descriptions[name],
                 "parameters": {"type": "object", "additionalProperties": False,
-                    "required": ["target", "confidence"], "properties": {
-                        "target": {"type": "string", "enum": targets},
-                        "confidence": {"type": "number", "enum": [0.5, 1.0]},
-                    }},
+                    "required": required, "properties": properties},
             }})
         payload = {
             "model": "functiongemma-router",
@@ -411,6 +422,11 @@ class LocalRouter:
         if ("finisci" in text.split() or
                 any(term in text for term in ("task completato", "nessuna altra azione", "chiudi il piano"))):
             return CompactRoute(1, "FN", "result", c=1.0, r="COMPLETE")
+        if any(term in text for term in (
+            "architettura", "architecture", "architecture review", "multi-step", "multi step",
+            "problema nuovo", "novel problem", "stagnation", "stagnazione",
+        )):
+            return CompactRoute(1, "LM", "bottazzi_motor", c=0.99, r="DETERMINISTIC_MATCH")
         if any(term in text for term in ("graph solver", "tool tradizionale", "convertitore locale", "cache validata")):
             return CompactRoute(1, "ET", "graph_solver", c=0.98, r="DETERMINISTIC_MATCH")
         if any(term in text for term in ("classifica", "estrai campi", "identifica la lingua")):

@@ -740,11 +740,21 @@ class UnifiedPlanner:
         digest = hashlib.sha256(
             (domain + "\x00" + skill + "\x00" + objective + "\x00" + "|".join(input_refs)).encode()
         ).hexdigest()[:16]
+        # PlanAssignment intentionally bounds objective to 1000 chars. Preserve the full
+        # user goal outside the assignment, and keep both the beginning and the end here so
+        # long agent requests cannot turn a validation constraint into an HTTP 500.
+        bounded_objective = objective
+        if len(bounded_objective) > 1000:
+            bounded_objective = (
+                bounded_objective[:680]
+                + "\n[... objective compacted ...]\n"
+                + bounded_objective[-280:]
+            )
         return PlanAssignment(
             task_id=f"task.{digest}",
             domain=domain,
             skill=skill,
-            objective=objective,
+            objective=bounded_objective,
             input_refs=input_refs,
             output_ref=output_ref,
             depends_on=depends_on,

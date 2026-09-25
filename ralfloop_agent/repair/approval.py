@@ -52,6 +52,49 @@ def _repair_repo_policy() -> tuple[Path, frozenset[Path]]:
     return canonical, frozenset(allowed)
 
 
+def _git_common_dir(repo: Path) -> Path | None:
+    if not repo.is_dir():
+        return None
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=repo,
+            text=True,
+            capture_output=True,
+            shell=False,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    raw = completed.stdout.strip()
+    if not raw:
+        return None
+    common = Path(raw)
+    if not common.is_absolute():
+        common = repo / common
+    try:
+        return common.resolve()
+    except (OSError, RuntimeError):
+        return None
+
+
+def _repair_repo_allowed(repo: Path, allowed: frozenset[Path]) -> bool:
+    if repo in allowed:
+        return True
+    requested_common = _git_common_dir(repo)
+    if requested_common is None:
+        return False
+    allowed_common = {
+        common
+        for candidate in allowed
+        if (common := _git_common_dir(candidate)) is not None
+    }
+    return requested_common in allowed_common
+
+
 def _select_repair_repo(
     payload: Mapping[str, Any] | None,
     *,
@@ -63,7 +106,7 @@ def _select_repair_repo(
         return canonical
 
     resolved = _resolve_repair_repo(requested)
-    if resolved not in allowed:
+    if not _repair_repo_allowed(resolved, allowed):
         raise ValueError("repair_repo_forbidden")
 
     return resolved
@@ -231,7 +274,7 @@ class RepairApprovalService:
             raise ValueError("repair_paths_missing")
 
         _, allowed_repos = _repair_repo_policy()
-        if source not in allowed_repos:
+        if not _repair_repo_allowed(source, allowed_repos):
             raise ValueError("repair_repo_forbidden")
 
         source_status = _run(

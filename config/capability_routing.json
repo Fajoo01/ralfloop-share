@@ -53,13 +53,14 @@
     "check_only": ["leggi", "controlla", "log", "audit", "mostra", "review", "diagnosi", "solo lettura", "sola lettura", "soltanto un elenco"],
     "read_only_system_inspection": ["spazio", "spazio disco", "occupa spazio", "occupando spazio", "directory grandi", "file oltre", "file temporanei", "cache", "df", "du", "find", "processi", "memoria ram", "uso ram", "uptime", "nvidia-smi", "uso gpu"],
     "patch_allowed": ["correggi", "fix", "patch", "risolvi bug", "bugfix", "ripara"],
-    "external_action": ["invia", "manda", "scrivi su drive", "posta", "telegram", "browser", "portale", "compila candidatura", "carica allegato", "carica allegati", "email", "gmail", "drive", "cancella", "cancellare", "elimina", "eliminare", "sposta", "spostare", "rimuovi", "rimuovere"],
-    "external_action_verbs": ["invia", "manda", "scrivi su drive", "pubblica", "apri", "attiva", "compila candidatura", "carica allegato", "carica allegati", "cancella", "cancellare", "elimina", "eliminare", "sposta", "spostare", "rimuovi", "rimuovere", "riavvia", "arresta", "termina processo", "kill", "chmod", "chown", "prune", "vacuum"]
+    "external_action": ["invia", "manda", "scrivi su drive", "posta", "telegram", "browser", "portale", "compila candidatura", "carica allegato", "carica allegati", "email", "gmail", "drive", "crea issue", "apri issue", "commenta issue", "crea pull request", "apri pull request", "merge pull request", "cancella", "cancellare", "elimina", "eliminare", "sposta", "spostare", "rimuovi", "rimuovere"],
+    "external_action_verbs": ["invia", "manda", "scrivi su drive", "pubblica", "apri", "attiva", "compila candidatura", "carica allegato", "carica allegati", "crea issue", "commenta issue", "crea pull request", "merge pull request", "cancella", "cancellare", "elimina", "eliminare", "sposta", "spostare", "rimuovi", "rimuovere", "riavvia", "arresta", "termina processo", "kill", "chmod", "chown", "prune", "vacuum"]
   },
   "mcp_keywords": [
     {"name": "google_workspace.gmail", "triggers": ["email", "gmail", "mail", "posta", "invia", "manda"]},
     {"name": "telegram", "triggers": ["telegram"]},
     {"name": "google_workspace.drive", "triggers": ["drive", "docs", "scrivi su drive"]},
+    {"name": "github", "triggers": ["github", "github issue", "issue #", "pull request", "pr github"]},
     {"name": "browser", "triggers": ["browser", "portale", "pagina", "url", "compila candidatura", "carica allegato", "carica allegati"]}
   ],
   "read_mcp_keywords": [

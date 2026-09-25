@@ -96,6 +96,7 @@ DOMAIN_SKILLS = (
 
 READ_ONLY_MCP_CONNECTORS = frozenset({
     "mailchimp.marketing",
+    "github",
 })
 
 EXTERNAL_MUTATION_MARKERS = (
@@ -118,6 +119,15 @@ EXTERNAL_MUTATION_MARKERS = (
     "disiscrivi contatto",
     "subscribe",
     "unsubscribe",
+    "crea issue",
+    "apri issue",
+    "commenta issue",
+    "commento issue",
+    "crea pull request",
+    "apri pull request",
+    "apri pr",
+    "merge pull request",
+    "merge pr",
 )
 
 MCP_CONNECTORS = (
@@ -128,6 +138,7 @@ MCP_CONNECTORS = (
     ),
     ("telegram.bot", ("telegram",)),
     ("google_workspace.drive", ("drive", "google drive", "documento condiviso")),
+    ("github", ("github", "github issue", "issue #", "pull request", "pr github")),
     ("browser", ("browser", "sito", "pagina web")),
 )
 

@@ -1,0 +1,27 @@
+[Unit]
+Description=Ralf GitHub MCP broker
+After=network-online.target local-fs.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bandi
+Group=ralf-mcp
+UMask=0007
+RuntimeDirectory=ralf-github-mcp
+RuntimeDirectoryMode=0750
+Environment=RALF_GITHUB_ALLOWED_REPOS=Fajoo01/
+Environment=RALF_GITHUB_MCP_WRITE_ENABLED=0
+Environment=GH_PAGER=cat
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_arci_mcp_broker.py --socket /run/ralf-github-mcp/mcp.sock --allow-group ralf-mcp --command /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_github_mcp_server.py --idle-timeout 60
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/home/bandi/.config/gh /home/sibilla-cumana/ralfloop-production/current /home/sibilla-cumana/ralfloop_agent_scaffold/.venv
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

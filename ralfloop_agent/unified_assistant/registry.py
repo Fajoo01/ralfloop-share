@@ -202,6 +202,7 @@ class UnifiedRegistryFacade:
             else "constrained:not_selected"
         )
         gmail_socket = Path("/run/ralf-google-workspace-mcp/mcp.sock")
+        github_socket = Path(os.getenv("RALF_GITHUB_MCP_SOCKET", "/run/ralf-github-mcp/mcp.sock"))
         whatsapp_scopes = json.loads(self.whatsapp_scopes_path.read_text(encoding="utf-8"))
         whatsapp_work_profile = (
             whatsapp_scopes.get("profile") == "work"
@@ -318,6 +319,34 @@ class UnifiedRegistryFacade:
             health="validated MCP tool schema + broker socket",
             verification_method="search/read-only allowlist + Gmail message provenance",
             source_registry=str(PROJECT_ROOT / "src" / "google_workspace.py"),
+        ), UnifiedToolSpec(
+            id="github.mcp.read_only",
+            capabilities=(
+                "github.repo.read",
+                "github.issue.list",
+                "github.issue.read",
+                "github.pr.list",
+                "github.pr.read",
+            ),
+            input_schema="strict GitHub repository/issue/PR identifiers",
+            output_schema="GitHub API objects with stable repository and issue/PR ids",
+            classification=PolicyClass.READ,
+            side_effect_class="none",
+            availability="available" if _observable_path_exists(github_socket) else "constrained:broker_unavailable",
+            health="Unix MCP broker over authenticated gh CLI; Fajoo01 repository allowlist",
+            verification_method="read-only gh API; exact tool allowlist; writes=0; sends=0",
+            source_registry=str(PROJECT_ROOT / "src" / "github_mcp.py"),
+        ), UnifiedToolSpec(
+            id="github.mcp.approval_bound",
+            capabilities=("github.issue.create", "github.issue.comment"),
+            input_schema="exact repository + issue/title/body scope bound to explicit approval",
+            output_schema="created issue/comment GitHub object and stable id",
+            classification=PolicyClass.CONFIRM_WRITE,
+            side_effect_class="confirmation_required",
+            availability="constrained:approval_bound_write_broker_required",
+            health="read broker refuses mutations by default",
+            verification_method="write broker must be enabled only after hash-bound approval; GitHub id readback",
+            source_registry=str(PROJECT_ROOT / "src" / "github_mcp.py"),
         ), UnifiedToolSpec(
             id="fastweb.portal.read_only",
             capabilities=("fastweb.portal.read_only",),
