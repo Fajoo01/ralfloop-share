@@ -1305,9 +1305,9 @@ def test_render_reply_local_atm_realtime_route():
     assert "precotto" in text.lower()
     assert "gorla" in text.lower()
 
-    # 418 s ~= 7 minuti: il primo boarding usa il realtime.
-    assert "attesa live" in text.lower()
-    assert "7 min" in text.lower()
+    # 418 s ~= 7 minuti: il primo boarding usa il realtime e mostra anche l'ora.
+    assert "🚌 51 arriva tra 7 min" in text
+    assert "circa 10:53" in text
 
     # Un tratto senza realtime deve dichiararlo esplicitamente;
     # l'orario GTFS non va presentato come live.
@@ -1316,12 +1316,63 @@ def test_render_reply_local_atm_realtime_route():
 
     # 119 s ~= 2 minuti per raggiungere la prima fermata.
     assert "2 min" in text.lower()
+    assert "🚶 fermata" in text.lower()
 
     # 1244 s ~= 21 minuti complessivi.
     assert "21 min" in text.lower()
+    assert "🏁 arrivo a destinazione" in text.lower()
 
     # Non deve cadere nel renderer legacy GiroMilano.
     assert "Prendi: 73" not in text
+
+
+def _catchability_plan(*, walk_s: int, wait_s: int) -> dict:
+    return {
+        "route_mode": "local_atm_realtime",
+        "destination": {"name": "casa", "label": "casa"},
+        "local_atm_route": {
+            "status": "ok",
+            "query_departure_s": 11 * 3600 + 30 * 60,
+            "arrival_s": 12 * 3600,
+            "total_seconds": 1800,
+            "origin_stop": "v.le suzzani v.le berbera",
+            "origin_walk_seconds": walk_s,
+            "final_walk_seconds": 60,
+            "legs": [{
+                "mode": "transit",
+                "route": "51",
+                "live": True,
+                "live_wait_seconds": wait_s,
+                "from": "v.le suzzani v.le berbera",
+                "to": "via p.te nuovo via asiago",
+            }],
+        },
+        "official_route_url": "https://example.test/atm",
+    }
+
+
+def test_render_reply_tight_live_bus_says_run_or_wait_next():
+    text = atm.render_reply(_catchability_plan(walk_s=180, wait_s=180))
+
+    assert "🚌 51 arriva tra 3 min (circa 11:33)" in text
+    assert "🏃 CORRI ORA per il 51" in text
+    assert "⏭️ aspetta la prossima corsa" in text
+
+
+def test_render_reply_uncatchable_live_bus_says_wait_next():
+    text = atm.render_reply(_catchability_plan(walk_s=180, wait_s=60))
+
+    assert "🚌 51 arriva tra 1 min (circa 11:31)" in text
+    assert "⏭️ Questo 51 arriva troppo presto" in text
+    assert "Aspetta la prossima corsa" in text
+
+
+def test_render_reply_comfortable_live_bus_shows_margin():
+    text = atm.render_reply(_catchability_plan(walk_s=120, wait_s=420))
+
+    assert "🚌 51 arriva tra 7 min (circa 11:37)" in text
+    assert "✅ Hai circa 5 min di margine per il 51" in text
+    assert "🏃 CORRI ORA" not in text
 
 
 # LOCAL_ATM_REALTIME_INTEGRATION_TESTS_END

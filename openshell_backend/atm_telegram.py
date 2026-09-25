@@ -4208,6 +4208,15 @@ def render_reply(plan: dict[str, Any]) -> str:
 
             return f"{minutes} min"
 
+        def route_clock_after(wait_seconds: int) -> str:
+            try:
+                query_s = int(route.get("query_departure_s"))
+            except Exception:
+                return ""
+
+            seconds = (query_s + max(0, int(wait_seconds))) % (24 * 3600)
+            return f"{seconds // 3600:02d}:{(seconds % 3600) // 60:02d}"
+
         origin_walk = route.get(
             "origin_walk_seconds"
         )
@@ -4224,16 +4233,16 @@ def render_reply(plan: dict[str, Any]) -> str:
             origin_walk_i = 0
 
         if origin_walk_i > 0:
-            text = (
-                "A piedi "
-                + minute_text(origin_walk_i)
-            )
-
             if origin_stop:
-                text += (
-                    " fino a "
+                text = (
+                    "🚶 Fermata "
                     + origin_stop
+                    + ": "
+                    + minute_text(origin_walk_i)
+                    + " a piedi"
                 )
+            else:
+                text = "🚶 " + minute_text(origin_walk_i) + " a piedi fino alla fermata"
 
             out.append(text)
 
@@ -4293,13 +4302,14 @@ def render_reply(plan: dict[str, Any]) -> str:
                 leg.get("to") or ""
             ).strip()
 
+            vehicle_icon = "🚇" if line.upper().startswith("M") else "🚌"
             prefix = (
                 "Prendi"
                 if first_transit
                 else "Poi prendi"
             )
 
-            text = prefix
+            text = f"{vehicle_icon} {prefix}"
 
             if line:
                 text += f" {line}"
@@ -4324,23 +4334,48 @@ def render_reply(plan: dict[str, Any]) -> str:
                 except Exception:
                     wait_i = -1
 
+                arrival_clock = route_clock_after(wait_i) if wait_i >= 0 else ""
+
                 if wait_i == 0:
-                    out.append(
-                        f"Attesa live {line}: "
-                        "in arrivo"
-                    )
+                    live_text = f"{vehicle_icon} {line} è in arrivo adesso"
+                    if arrival_clock:
+                        live_text += f" (circa {arrival_clock})"
+                    out.append(live_text)
                 elif wait_i > 0:
-                    out.append(
-                        f"Attesa live {line}: "
-                        + minute_text(wait_i)
-                    )
+                    live_text = f"{vehicle_icon} {line} arriva tra {minute_text(wait_i)}"
+                    if arrival_clock:
+                        live_text += f" (circa {arrival_clock})"
+                    out.append(live_text)
                 else:
                     out.append(
-                        "Attesa live non disponibile"
+                        "🕒 Attesa live non disponibile"
                     )
+
+                if first_transit and origin_walk_i > 0 and wait_i >= 0:
+                    margin_i = wait_i - origin_walk_i
+                    walk_text = minute_text(origin_walk_i)
+
+                    if margin_i < -30:
+                        out.append(
+                            f"⏭️ Questo {line} arriva troppo presto: la fermata è a {walk_text} a piedi. "
+                            "Aspetta la prossima corsa."
+                        )
+                    elif margin_i <= 90:
+                        out.append(
+                            f"🏃 CORRI ORA per il {line}: la fermata è a {walk_text} a piedi. "
+                            "Se non parti subito, ⏭️ aspetta la prossima corsa."
+                        )
+                    elif margin_i <= 180:
+                        out.append(
+                            f"🚶 Parti subito: hai circa {minute_text(margin_i)} di margine per il {line}."
+                        )
+                    else:
+                        out.append(
+                            f"✅ Hai circa {minute_text(margin_i)} di margine per il {line} dopo il tratto a piedi."
+                        )
             else:
                 out.append(
-                    "Attesa live non disponibile"
+                    "🕒 Attesa live non disponibile"
                 )
                 if line:
                     out.append(
@@ -4363,7 +4398,7 @@ def render_reply(plan: dict[str, Any]) -> str:
 
         if final_walk_i > 0:
             out.append(
-                "A piedi fino a destinazione: "
+                "🚶 A piedi fino a destinazione: "
                 + minute_text(final_walk_i)
             )
 
@@ -4376,7 +4411,7 @@ def render_reply(plan: dict[str, Any]) -> str:
 
         if total_i > 0:
             out.append(
-                "Tempo totale stimato: "
+                "⏱️ Tempo totale stimato: "
                 + minute_text(total_i)
             )
 
@@ -4396,7 +4431,7 @@ def render_reply(plan: dict[str, Any]) -> str:
             ) // 60
 
             out.append(
-                f"Arrivo stimato: "
+                f"🏁 Arrivo a destinazione: "
                 f"{hour:02d}:{minute:02d}"
             )
 
