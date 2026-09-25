@@ -1419,14 +1419,14 @@ class ChromeCdp:
           const normalize = value => {
             try {
               const u = new URL(String(value || ''), location.origin);
-              const m = u.pathname.match(/^\\/(?:g\\/[^/]+\\/)?c\\/([A-Za-z0-9-]+)/);
+              const m = u.pathname.match(/^\/(?:g\/[^/]+\/)?c\/([A-Za-z0-9-]+)/);
               return m ? `${u.origin}/c/${m[1]}` : '';
             } catch (_) { return ''; }
           };
-          const clean = value => String(value || '').replace(/\\s+/g, ' ').trim();
+          const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
           const openSidebar = [...document.querySelectorAll('button')].find(button => {
             const label = clean(button.getAttribute('aria-label') || button.innerText || button.textContent || '');
-            return /^(?:open sidebar|apri barra laterale)$/i.test(label);
+            return /^(?:(?:open|show) sidebar|(?:apri|mostra|visualizza) barra laterale)$/i.test(label);
           });
           if (openSidebar) {
             openSidebar.click();
