@@ -24,8 +24,8 @@ public final class BotTazziNotifyService extends Service {
     private static final String LINK_CHANNEL = "bottazzi_link";
     private static final String TASK_CHANNEL = "bottazzi_tasks";
     private static final int LINK_NOTIFICATION_ID = 4700;
-    private static final long POLL_INTERVAL_MS = 30_000L;
-    private static final String PREFS = "bottazzi_notifications_v1";
+    private static final long POLL_INTERVAL_MS = 10_000L;
+    private static final String PREFS = "bottazzi_gpt_notifications_v2";
 
     private volatile boolean running;
     private Thread worker;
@@ -72,13 +72,13 @@ public final class BotTazziNotifyService extends Service {
             "Connessione Bot-tazzi",
             NotificationManager.IMPORTANCE_LOW
         );
-        link.setDescription("Mantiene attive le notifiche della coda Bot-tazzi.");
+        link.setDescription("Mantiene attive le notifiche dei lavori GPT Bot-tazzi.");
         NotificationChannel tasks = new NotificationChannel(
             TASK_CHANNEL,
-            "Compiti Bot-tazzi",
+            "Lavori Bot-tazzi",
             NotificationManager.IMPORTANCE_DEFAULT
         );
-        tasks.setDescription("Priorità JEV, richieste di conferma e conflitti della coda.");
+        tasks.setDescription("Fine lavoro, blocchi e richieste di attenzione della coda GPT.");
         notifications.createNotificationChannel(link);
         notifications.createNotificationChannel(tasks);
     }
@@ -88,10 +88,11 @@ public final class BotTazziNotifyService extends Service {
             try {
                 JSONObject snapshot = fetchQueue();
                 processSnapshot(snapshot);
-                int count = snapshot.optInt("count", 0);
+                JSONArray jobs = snapshot.optJSONArray("jobs");
+                int count = jobs == null ? 0 : jobs.length();
                 notifications.notify(
                     LINK_NOTIFICATION_ID,
-                    linkNotification("JEV attivo · " + count + " compiti in coda")
+                    linkNotification("GPT attivo · " + count + " lavori")
                 );
             } catch (SecurityException exc) {
                 notifications.notify(
@@ -114,7 +115,7 @@ public final class BotTazziNotifyService extends Service {
     }
 
     private JSONObject fetchQueue() throws Exception {
-        URL url = new URL(tasksUrl());
+        URL url = new URL(gptSnapshotUrl());
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
         connection.setRequestMethod("GET");
         connection.setConnectTimeout(5_000);
@@ -136,15 +137,15 @@ public final class BotTazziNotifyService extends Service {
         }
     }
 
-    private String tasksUrl() {
+    private String gptSnapshotUrl() {
         String base = BuildConfig.APP_URL;
         while (base.endsWith("/")) {
             base = base.substring(0, base.length() - 1);
         }
         if (base.endsWith("/assistant/v1")) {
-            return base + "/tasks";
+            return base + "/gpt";
         }
-        return base + "/assistant/v1/tasks";
+        return base + "/assistant/v1/gpt";
     }
 
     private static String readAll(InputStream input) throws Exception {
@@ -161,42 +162,56 @@ public final class BotTazziNotifyService extends Service {
     }
 
     private void processSnapshot(JSONObject snapshot) {
-        processPriorityConflict(snapshot.optJSONArray("priority_conflicts"));
-        JSONArray tasks = snapshot.optJSONArray("tasks");
-        if (tasks == null) {
+        JSONArray jobs = snapshot.optJSONArray("jobs");
+        if (jobs == null) {
             return;
         }
-
-        for (int i = 0; i < tasks.length(); ++i) {
-            JSONObject entry = tasks.optJSONObject(i);
-            if (entry == null) {
+        boolean initialized = prefs.getBoolean("gpt.initialized", false);
+        SharedPreferences.Editor editor = prefs.edit();
+        for (int i = 0; i < jobs.length(); ++i) {
+            JSONObject job = jobs.optJSONObject(i);
+            if (job == null) {
                 continue;
             }
-            JSONObject task = entry.optJSONObject("task");
-            if (task == null || !"blocked".equals(task.optString("state"))) {
+            String jobId = job.optString("job_id", "").trim();
+            if (jobId.isEmpty()) {
                 continue;
             }
-            int kind = decision(entry, task);
-            if (kind == NativeCore.NOTIFY_APPROVAL_REQUIRED) {
-                notifyTaskOnce(kind, entry, task);
-            }
-        }
-
-        String nextId = snapshot.optString("next_runnable_task_id", "");
-        if (nextId.isEmpty()) {
-            return;
-        }
-        for (int i = 0; i < tasks.length(); ++i) {
-            JSONObject entry = tasks.optJSONObject(i);
-            JSONObject task = entry == null ? null : entry.optJSONObject("task");
-            if (task != null && nextId.equals(task.optString("task_id"))) {
-                int kind = decision(entry, task);
-                if (kind != NativeCore.NOTIFY_NONE) {
-                    notifyTaskOnce(kind, entry, task);
+            String current = job.optString("state", "").trim();
+            String previous = prefs.getString("gpt.state." + jobId, "");
+            String text = job.optString("last_assistant_text", "").trim();
+            String textHash = Integer.toHexString(text.hashCode());
+            String previousHash = prefs.getString("gpt.answer." + jobId, "");
+            String error = job.optString("last_error", "").trim();
+            String previousError = prefs.getString("gpt.error." + jobId, "");
+            if (initialized) {
+                boolean newReview = "review".equals(current)
+                    && (!"review".equals(previous) || !textHash.equals(previousHash));
+                if (newReview && error.isEmpty() && !text.isEmpty()) {
+                    notifyUser(
+                        (jobId + ":review:" + textHash).hashCode(),
+                        "Lavoro finito",
+                        job.optString("title", "Bot-tazzi ha finito il lavoro")
+                    );
+                } else if (
+                    ("failed".equals(current) || "blocked".equals(current) || ("review".equals(current) && !error.isEmpty()))
+                    && (!current.equals(previous) || !error.equals(previousError))
+                ) {
+                    notifyUser(
+                        (jobId + ":attention:" + current + ":" + error).hashCode(),
+                        "Bot-tazzi richiede attenzione",
+                        job.optString("title", "Controlla il lavoro")
+                    );
                 }
-                return;
             }
+            editor.putString("gpt.state." + jobId, current);
+            editor.putString("gpt.answer." + jobId, textHash);
+            editor.putString("gpt.error." + jobId, error);
         }
+        if (!initialized) {
+            editor.putBoolean("gpt.initialized", true);
+        }
+        editor.apply();
     }
 
     private int decision(JSONObject entry, JSONObject task) {

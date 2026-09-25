@@ -16,6 +16,7 @@ class FakeCdp:
         self.installed = []
         self.created = 0
         self.interrupted = []
+        self.attachments = []
 
     def targets(self):
         return list(self._targets)
@@ -54,6 +55,10 @@ class FakeCdp:
     def stop_chatgpt_response(self, target_id):
         self.interrupted.append(target_id)
         return {"stopped": True, "last_assistant_text": "Risposta parziale"}
+
+    def attach_chatgpt_file(self, target_id, conversation_url, path, *, image_only=False):
+        self.attachments.append((target_id, conversation_url, path.name, path.read_bytes(), image_only))
+        return {"attached": True}
 
     def create_target(self, url, *, background=False):
         self.created += 1
@@ -96,6 +101,28 @@ def test_review_message_reopens_same_conversation(tmp_path: Path):
     assert rebound.last_assistant_text == ""
     assert cdp.messages[-1][2] == "continua"
     assert result["action"] == "queued"
+
+
+def test_attachment_reopens_review_chat_and_attaches_to_same_conversation(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BOTTAZZI_GPT_UPLOAD_DIR", str(tmp_path / "uploads"))
+    queue = make_queue(tmp_path)
+    job = queue.create_job(
+        "Allegati",
+        conversation_url="https://chatgpt.com/c/current-chat",
+        conversation_context_url="https://chatgpt.com/g/g-p-test/c/current-chat",
+        state=GptJobState.REVIEW,
+    )
+    cdp = FakeCdp()
+    controller = GptWorkController(queue, cdp)
+    result = controller.attach_file(job.job_id, b"pdf-bytes", "documento.pdf", "application/pdf")
+    rebound = queue.get_job(job.job_id)
+    assert rebound.state is GptJobState.ACTIVE
+    assert rebound.conversation_url == "https://chatgpt.com/c/current-chat"
+    assert result["action"] == "attached"
+    assert cdp.attachments[-1][0].startswith("reopen-")
+    assert cdp.attachments[-1][1] == "https://chatgpt.com/g/g-p-test/c/current-chat"
+    assert cdp.attachments[-1][2].endswith("documento.pdf")
+    assert cdp.attachments[-1][3] == b"pdf-bytes"
 
 
 def test_completed_reply_is_saved_before_tab_release(tmp_path: Path):

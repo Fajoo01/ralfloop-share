@@ -826,7 +826,12 @@ class GptWorkController:
             raise ValueError("attachment_too_large")
         job = self.queue.get_job(job_id)
         if job.state is not GptJobState.ACTIVE:
-            raise ValueError("job_not_active")
+            if not job.conversation_url or job.state not in {GptJobState.REVIEW, GptJobState.BLOCKED, GptJobState.FAILED}:
+                raise ValueError("job_not_active")
+            self.start_job(job_id)
+            job = self.queue.get_job(job_id)
+            if job.state is not GptJobState.ACTIVE:
+                raise ValueError("job_resume_failed")
         target = self._exact_job_target(job)
         safe_name = re.sub(r"[^A-Za-z0-9._ -]+", "_", Path(filename or "allegato").name).strip(" .")[:180] or "allegato"
         mime = str(content_type or "application/octet-stream").split(";", 1)[0].strip().lower()
