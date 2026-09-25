@@ -221,14 +221,35 @@ class GptQueueShepherd:
                 current = self.queue.get_job(job.job_id)
                 self._transport_failure(current, actions, phase="fresh_target_rebind", exc=exc)
             else:
-                actions.append(
-                    {
-                        "job_id": job.job_id,
-                        "action": "preserved",
-                        "reason": f"fresh_target_rebind_failed:{str(exc)[:160]}",
-                        "progress_idle_ms": idle_ms,
-                    }
-                )
+                try:
+                    rollover = self.controller.restart_job_in_new_chat(
+                        job.job_id,
+                        reason=reason,
+                    )
+                    actions.append(
+                        {
+                            "job_id": job.job_id,
+                            "action": "recovered",
+                            "reason": "stalled_rollover_new_chat",
+                            "progress_idle_ms": idle_ms,
+                            "old_target_id": old_target_id,
+                            "new_target_id": rollover.get("new_target_id"),
+                            "rollover": rollover,
+                        }
+                    )
+                    return True
+                except (CdpError, OSError, RuntimeError, ValueError) as rollover_exc:
+                    actions.append(
+                        {
+                            "job_id": job.job_id,
+                            "action": "preserved",
+                            "reason": (
+                                f"fresh_target_rebind_failed:{str(exc)[:80]};"
+                                f"rollover_failed:{str(rollover_exc)[:80]}"
+                            ),
+                            "progress_idle_ms": idle_ms,
+                        }
+                    )
             return False
 
     def _release_stalled(self, job_id: str, actions: list[dict[str, Any]], *, reason: str, idle_ms: int) -> None:
@@ -247,6 +268,45 @@ class GptQueueShepherd:
     def run_once(self, *, auto_start: bool = True) -> dict[str, Any]:
         self.controller.reconcile()
         actions: list[dict[str, Any]] = []
+
+        # Jobs released only because their old server conversation could not be
+        # hydrated are rolled into a fresh continuation chat automatically.
+        for job in list(self.queue.list_jobs()):
+            if (
+                job.state is GptJobState.REVIEW
+                and not job.target_id
+                and job.last_error in {
+                    "conversation_content_unavailable_after_retries",
+                    "worker_stalled_after_retries",
+                }
+                and job.prompt.strip()
+            ):
+                try:
+                    rollover = self.controller.restart_job_in_new_chat(
+                        job.job_id,
+                        reason=job.last_error or "worker_stalled",
+                    )
+                    actions.append(
+                        {
+                            "job_id": job.job_id,
+                            "action": "recovered",
+                            "reason": "review_rollover_new_chat",
+                            "rollover": rollover,
+                        }
+                    )
+                except (CdpError, OSError, RuntimeError, ValueError) as exc:
+                    self.queue.set_state(
+                        job.job_id,
+                        GptJobState.REVIEW,
+                        last_error=f"rollover_failed:{str(exc)[:180]}",
+                    )
+                    actions.append(
+                        {
+                            "job_id": job.job_id,
+                            "action": "preserved",
+                            "reason": f"review_rollover_failed:{str(exc)[:160]}",
+                        }
+                    )
 
         # If an ACTIVE chat tab was closed externally, reconcile() demotes it to
         # REVIEW with chat_not_open_locally. Recover that exact conversation

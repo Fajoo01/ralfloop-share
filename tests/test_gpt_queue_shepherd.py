@@ -148,6 +148,86 @@ def test_completed_reply_with_stale_pending_is_released(tmp_path: Path) -> None:
     assert any(target.target_id == "unmanaged" for target in cdp.targets())
 
 
+def test_review_content_unavailable_rolls_into_new_chat_without_human_wakeup(tmp_path: Path) -> None:
+    queue = GptWorkQueue(tmp_path / "queue.sqlite3", clock=lambda: 1_000_000)
+    job = queue.create_job(
+        "Managed",
+        prompt="Completa il GOAL",
+        conversation_url="https://chatgpt.com/c/old-job",
+        conversation_context_url="https://chatgpt.com/c/old-job",
+        state=GptJobState.REVIEW,
+    )
+    queue.set_state(
+        job.job_id,
+        GptJobState.REVIEW,
+        last_error="conversation_content_unavailable_after_retries",
+    )
+
+    class RolloverCdp(FakeCdp):
+        def start_chatgpt_job(
+            self,
+            prompt: str,
+            *,
+            new_chat_url: str,
+            background: bool,
+            submit: bool,
+            wait_timeout_s: float = 30.0,
+        ):
+            self._targets.append(
+                BrowserTarget(
+                    "rolled",
+                    "page",
+                    "https://chatgpt.com/c/rolled",
+                    "Rolled",
+                    "ws://rolled",
+                )
+            )
+            self.ui = {
+                "user_turns": 1,
+                "assistant_turns": 0,
+                "response_in_progress": True,
+                "response_pending": True,
+                "response_idle_ms": 1_000,
+                "progress_idle_ms": 1_000,
+                "tool_activity_count": 0,
+            }
+            self.companion = {
+                "focused": False,
+                "composer_chars": 0,
+                "busy": True,
+                "last_assistant_text": "",
+            }
+            return {
+                "new_target_id": "rolled",
+                "conversation_url": "https://chatgpt.com/c/rolled",
+                "conversation_context_url": "https://chatgpt.com/c/rolled",
+                "server_chat_deleted": False,
+            }
+
+        def chatgpt_ui_state(self, target_id: str):
+            assert target_id == "rolled"
+            return dict(self.ui)
+
+        def chatgpt_companion_state(self, target_id: str):
+            assert target_id == "rolled"
+            return dict(self.companion)
+
+    cdp = RolloverCdp(ui={})
+    cdp._targets = [target for target in cdp._targets if target.target_id != "managed"]
+    runner = shepherd(queue, cdp)
+
+    report = runner.run_once(auto_start=False)
+
+    rebound = queue.get_job(job.job_id)
+    assert rebound.state is GptJobState.ACTIVE
+    assert rebound.conversation_url == "https://chatgpt.com/c/rolled"
+    assert rebound.target_id == "rolled"
+    assert any(
+        action.get("reason") == "review_rollover_new_chat"
+        for action in report["actions"]
+    )
+
+
 def test_closed_active_chat_is_reopened_on_exact_conversation(tmp_path: Path) -> None:
     queue, job_id = queue_with_active(tmp_path)
 

@@ -1681,10 +1681,21 @@ def test_conversation_navigation_waits_for_initial_blank(monkeypatch) -> None:
 
     monkeypatch.setattr(cdp, "_wait_target", wait_target)
     monkeypatch.setattr(cdp, "_page_call", lambda *args, **kwargs: {})
-    monkeypatch.setattr(cdp, "chatgpt_ui_state", lambda target_id: {"ready": True, "target_id": target_id})
+    monkeypatch.setattr(cdp, "chatgpt_ui_state", lambda target_id: {"ready": True, "user_turns": 1, "target_id": target_id})
 
     result = cdp.navigate_chatgpt_conversation("target", "https://chatgpt.com/c/abc", wait_timeout_s=1.0)
     assert result["ready"] is True
+
+
+def test_plain_conversation_navigation_rejects_empty_shell(monkeypatch) -> None:
+    cdp = ChromeCdp("http://127.0.0.1:1")
+    target = BrowserTarget("target", "page", "https://chatgpt.com/c/abc", "Nuova chat", "ws://target")
+    monkeypatch.setattr(cdp, "_wait_target", lambda target_id, **kwargs: target)
+    monkeypatch.setattr(cdp, "_page_call", lambda *args, **kwargs: {})
+    monkeypatch.setattr(cdp, "chatgpt_ui_state", lambda target_id: {"ready": True, "authenticated": True, "page_settled": True, "user_turns": 0, "assistant_turns": 0, "response_in_progress": False, "response_pending": False})
+
+    with pytest.raises(CdpError, match="conversation_navigation_timeout"):
+        cdp.navigate_chatgpt_conversation("target", "https://chatgpt.com/c/abc", wait_timeout_s=0.1)
 
 
 def test_conversation_navigation_preserves_project_context(monkeypatch) -> None:
@@ -1694,7 +1705,7 @@ def test_conversation_navigation_preserves_project_context(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(cdp, "_wait_target", lambda target_id, **kwargs: target)
     monkeypatch.setattr(cdp, "_page_call", lambda websocket_url, method, params=None: calls.append((method, params or {})) or {})
-    monkeypatch.setattr(cdp, "chatgpt_ui_state", lambda target_id: {"ready": True, "target_id": target_id})
+    monkeypatch.setattr(cdp, "chatgpt_ui_state", lambda target_id: {"ready": True, "user_turns": 1, "target_id": target_id})
 
     result = cdp.navigate_chatgpt_conversation("target", project_url, wait_timeout_s=1.0)
 

@@ -351,6 +351,71 @@ def test_recycle_job_target_preserves_project_context(tmp_path: Path) -> None:
     assert rebound.conversation_context_url == "https://chatgpt.com/g/g-p-demo-project/c/chat-project"
 
 
+def test_restart_job_in_new_chat_preserves_old_server_chat(tmp_path: Path) -> None:
+    queue = make_queue(tmp_path)
+    job = queue.create_job(
+        "Stalled",
+        prompt="Completa il lavoro",
+        conversation_url="https://chatgpt.com/c/old-chat",
+        conversation_context_url="https://chatgpt.com/c/old-chat",
+        target_id="old-target",
+        state=GptJobState.ACTIVE,
+    )
+    cdp = FakeCdp()
+    cdp._targets = [
+        BrowserTarget("old-target", "page", job.conversation_context_url, "Old", "ws://old-target")
+    ]
+    controller = GptWorkController(queue, cdp)
+
+    result = controller.restart_job_in_new_chat(job.job_id, reason="worker_stalled_after_retries")
+
+    rebound = queue.get_job(job.job_id)
+    assert result["action"] == "rolled_over"
+    assert result["server_chat_deleted"] is False
+    assert result["old_conversation_url"] == "https://chatgpt.com/c/old-chat"
+    assert rebound.state is GptJobState.ACTIVE
+    assert rebound.conversation_url == "https://chatgpt.com/c/chat-1"
+    assert rebound.target_id == "target-1"
+    assert "old-target" in cdp.closed
+    assert "Non ripartire da zero" in cdp.started[0]["prompt"]
+    assert "https://chatgpt.com/c/old-chat" in cdp.started[0]["prompt"]
+    assert "Completa il lavoro" in cdp.started[0]["prompt"]
+
+
+def test_restart_job_in_new_chat_is_transactional_before_rebind(tmp_path: Path) -> None:
+    queue = make_queue(tmp_path)
+    job = queue.create_job(
+        "Stalled",
+        prompt="Completa il lavoro",
+        conversation_url="https://chatgpt.com/c/old-chat",
+        conversation_context_url="https://chatgpt.com/c/old-chat",
+        target_id="old-target",
+        state=GptJobState.ACTIVE,
+    )
+
+    class FailingInstallCdp(FakeCdp):
+        def install_human_input_target(self, target_id: str, conversation_url: str):
+            if target_id.startswith("target-"):
+                raise CdpError("install_failed")
+            return super().install_human_input_target(target_id, conversation_url)
+
+    cdp = FailingInstallCdp()
+    cdp._targets = [
+        BrowserTarget("old-target", "page", job.conversation_context_url, "Old", "ws://old-target")
+    ]
+    controller = GptWorkController(queue, cdp)
+
+    with pytest.raises(CdpError, match="install_failed"):
+        controller.restart_job_in_new_chat(job.job_id, reason="worker_stalled_after_retries")
+
+    preserved = queue.get_job(job.job_id)
+    assert preserved.state is GptJobState.ACTIVE
+    assert preserved.conversation_url == "https://chatgpt.com/c/old-chat"
+    assert preserved.target_id == "old-target"
+    assert "old-target" not in cdp.closed
+    assert "target-1" in cdp.closed
+
+
 def test_start_job_recovers_project_chat_on_fresh_target_when_deeplink_fails(tmp_path: Path) -> None:
     queue = make_queue(tmp_path)
     project_id = "g-p-" + "a" * 32

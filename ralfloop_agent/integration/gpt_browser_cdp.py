@@ -1532,11 +1532,10 @@ class ChromeCdp:
                 or last_state.get("response_in_progress")
                 or last_state.get("response_pending")
             )
-            if last_state.get("ready") and (not project_context or has_content):
+            if last_state.get("ready") and has_content:
                 return last_state
             if (
-                project_context
-                and not has_content
+                not has_content
                 and last_state.get("authenticated")
                 and last_state.get("page_settled")
             ):

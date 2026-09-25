@@ -219,6 +219,26 @@ class GptWorkController:
             + "Non omettere il marker: senza un esito esplicito Bot-tazzi fermerà il ciclo invece di inviare continuazioni alla cieca."
         )
 
+    @staticmethod
+    def _stalled_rollover_prompt(job: GptWorkJob, reason: str) -> str:
+        parts = [
+            "Riprendi automaticamente questo lavoro dopo il blocco della chat precedente. Non ripartire da zero. "
+            "Prima verifica il repository/issue GitHub associato, i commit, i test e lo stato runtime reale; "
+            "la chat precedente non è la fonte di verità.",
+            f"Motivo tecnico del rollover: {str(reason or 'worker_stalled')[:240]}",
+            f"Titolo del lavoro: {job.title}",
+        ]
+        if job.conversation_url:
+            parts.append(f"Chat precedente (non cancellata): {job.conversation_url}")
+        if job.last_assistant_text.strip():
+            parts.append("Ultimo testo assistente salvato:\n" + job.last_assistant_text.strip()[-12000:])
+        parts.append("GOAL da continuare:\n" + job.prompt.strip())
+        parts.append(
+            "Verifica lo stato reale prima di fare modifiche. Alla fine usa esattamente uno dei marker "
+            "[[BOTTAZZI_GOAL_CONTINUE]], [[BOTTAZZI_GOAL_BLOCKED]] o [[BOTTAZZI_GOAL_REACHED]]."
+        )
+        return "\n\n".join(parts)
+
     def _occupied_job_ids(self, browser: BrowserSnapshot) -> set[str]:
         occupied: set[str] = set()
         for job in self.queue.list_jobs():
@@ -974,6 +994,83 @@ class GptWorkController:
             "old_target_id": old_target_id,
             "new_target_id": new_target_id,
             "conversation_url": rebound.conversation_url,
+        }
+
+    def restart_job_in_new_chat(self, job_id: str, *, reason: str = "worker_stalled") -> dict[str, Any]:
+        """Roll a stuck job into a fresh server chat without deleting the old chat."""
+        job = self.queue.get_job(job_id)
+        if job.state not in {
+            GptJobState.ACTIVE,
+            GptJobState.REVIEW,
+            GptJobState.BLOCKED,
+            GptJobState.FAILED,
+        }:
+            raise ValueError("job_not_restartable")
+        if not job.prompt.strip():
+            raise ValueError("prompt_required")
+
+        old_target_id = job.target_id
+        old_conversation_url = job.conversation_url
+        new_target_id: str | None = None
+        new_chat_url = (
+            job.project_url
+            or chatgpt_project_new_chat_url(job.conversation_context_url or "")
+            or CHATGPT_ORIGIN
+        )
+        prompt = self._stalled_rollover_prompt(job, reason)
+
+        try:
+            result = self.cdp.start_chatgpt_job(
+                prompt,
+                new_chat_url=new_chat_url,
+                background=True,
+                submit=True,
+            )
+            new_target_id = str(result.get("new_target_id") or "") or None
+            conversation_url = _canonical_chatgpt_conversation_url(
+                str(result.get("conversation_url") or "")
+            )
+            context_url = str(result.get("conversation_context_url") or "") or conversation_url
+            if not new_target_id or not conversation_url:
+                raise CdpError("rollover_binding_missing")
+            if _canonical_chatgpt_conversation_url(context_url) != conversation_url:
+                raise CdpError("rollover_context_mismatch")
+            self.cdp.install_human_input_target(new_target_id, context_url)
+            rebound = self.queue.bind_chat(
+                job.job_id,
+                conversation_url=conversation_url,
+                conversation_context_url=context_url,
+                target_id=new_target_id,
+                state=GptJobState.ACTIVE,
+                last_error=None,
+            )
+        except Exception:
+            if new_target_id:
+                try:
+                    self.cdp.close_target(new_target_id)
+                except (AttributeError, CdpError):
+                    pass
+            raise
+
+        try:
+            self.queue.reset_watchdog(job.job_id)
+        except Exception:
+            pass
+        if old_target_id and old_target_id != new_target_id:
+            try:
+                self.cdp.close_target(old_target_id)
+            except (AttributeError, CdpError):
+                pass
+
+        return {
+            "action": "rolled_over",
+            "job_id": rebound.job_id,
+            "old_conversation_url": old_conversation_url,
+            "conversation_url": rebound.conversation_url,
+            "conversation_context_url": rebound.conversation_context_url,
+            "new_target_id": rebound.target_id,
+            "server_chat_deleted": False,
+            "reason": reason,
         }
 
     def release_job(self, job_id: str) -> GptWorkJob:
