@@ -362,3 +362,102 @@ def test_teacher_releases_model_lease_on_model_error(tmp_path):
 
     assert model.released is True
     assert model.active is None
+
+
+def test_mindmap_generate_update_and_explain_stay_grounded(tmp_path):
+    def model(system_prompt, user_prompt):
+        data = json.loads(user_prompt)
+        action = data["action"]
+        if action == "mindmap_generate":
+            return {"response": json.dumps({
+                "title": "Fotosintesi",
+                "nodes": [
+                    {"id": "luce", "label": "Luce", "summary": "Energia luminosa", "importance": "high"},
+                    {"id": "zucchero", "label": "Glucosio", "summary": "Prodotto", "importance": "medium"},
+                ],
+                "edges": [{"source": "luce", "target": "zucchero", "label": "contribuisce"}],
+            }, ensure_ascii=False)}
+        if action == "mindmap_update":
+            current = data["request"]["mindmap"]
+            current["nodes"][1]["label"] = "Zuccheri"
+            return {"response": json.dumps(current, ensure_ascii=False)}
+        if action == "mindmap_explain":
+            assert data["request"]["source_mode"] == "provided_material"
+            return {"response": "La luce è collegata al nodo Zuccheri nella mappa fornita."}
+        return {"response": "ok"}
+
+    teacher = TeacherService(TeacherStore(tmp_path / "teacher.sqlite3"), model_call=model)
+    student = teacher.login("CARD-MAP")["student"]
+    session_id = teacher.start_session(student["student_id"], "scienze", "fotosintesi")["session"]["session_id"]
+
+    created = teacher.mindmap_generate(
+        session_id,
+        "La luce fornisce energia. Il processo produce glucosio.",
+        max_nodes=6,
+    )
+    assert created["mindmap"]["title"] == "Fotosintesi"
+    assert len(created["mindmap"]["nodes"]) == 2
+
+    updated = teacher.mindmap_update(
+        session_id,
+        created["mindmap"],
+        "Rinomina glucosio in zuccheri",
+    )
+    assert updated["mindmap"]["nodes"][1]["label"] == "Zuccheri"
+
+    explained = teacher.mindmap_explain(session_id, updated["mindmap"], "luce")
+    assert explained["source_mode"] == "provided_material"
+    assert "luce" in explained["response"].casefold()
+
+
+def test_audio_and_documentary_use_bounded_media_handoff(tmp_path, monkeypatch):
+    from ralfloop_agent.teacher import service as teacher_service
+
+    calls = []
+
+    def model(system_prompt, user_prompt):
+        data = json.loads(user_prompt)
+        action = data["action"]
+        if action == "study_audio_generate":
+            return {"response": "La fotosintesi usa l'energia della luce. Fermati e prova a ricordarlo."}
+        if action == "documentary_generate":
+            return {"response": "Perché la luce conta? Nel materiale fornito alimenta il processo. Riepilogo finale."}
+        return {"response": "ok"}
+
+    def handoff(script, *, title, output_format="m4b"):
+        calls.append((script, title, output_format))
+        return {
+            "status": "queued",
+            "project_id": f"book_{len(calls)}",
+            "job_id": f"job_{len(calls)}",
+            "format": output_format,
+            "source": "ralf_media_studio",
+        }
+
+    monkeypatch.setattr(teacher_service, "_media_tts_handoff", handoff)
+    teacher = TeacherService(TeacherStore(tmp_path / "teacher.sqlite3"), model_call=model)
+    student = teacher.login("CARD-AUDIO")["student"]
+    session_id = teacher.start_session(student["student_id"], "scienze", "fotosintesi")["session"]["session_id"]
+    mindmap = {
+        "title": "Fotosintesi",
+        "nodes": [{"id": "luce", "label": "Luce", "summary": "Energia", "importance": "high"}],
+        "edges": [],
+    }
+
+    audio = teacher.study_audio_generate(session_id, "La luce fornisce energia.", mindmap)
+    documentary = teacher.documentary_generate(session_id, "La luce fornisce energia.", mindmap, 5)
+
+    assert audio["media"]["job_id"] == "job_1"
+    assert documentary["media"]["job_id"] == "job_2"
+    assert audio["learning_cycle"]["review_schedule_days"] == [1, 3, 7, 14]
+    assert audio["learning_cycle"]["retrieval_prompts"]
+    assert audio["external_side_effects"] == 1
+    assert documentary["external_side_effects"] == 1
+    assert all(call[2] == "m4b" for call in calls)
+
+
+def test_teacher_public_catalog_never_exposes_media_admin_tools():
+    assert all(not name.startswith("media_") for name in ALL_TOOLS)
+    assert "teacher.mindmap_generate" in ALL_TOOLS
+    assert "teacher.study_audio_generate" in ALL_TOOLS
+    assert "teacher.documentary_generate" in ALL_TOOLS

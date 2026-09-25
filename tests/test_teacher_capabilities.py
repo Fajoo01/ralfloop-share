@@ -17,7 +17,7 @@ def test_teacher_descriptors_exactly_match_public_mcp_tools():
     rows = capability_descriptors()
 
     assert tuple(row.capability_id for row in rows) == ALL_TOOLS
-    assert len(rows) == 13
+    assert len(rows) == len(ALL_TOOLS) == 18
 
     for row in rows:
         assert row.server_id == "teacher.mcp"

@@ -9,6 +9,11 @@ from .models import (
     HintInput,
     LoginInput,
     PrepareReadingInput,
+    MindMapGenerateInput,
+    MindMapUpdateInput,
+    MindMapExplainInput,
+    StudyAudioGenerateInput,
+    DocumentaryGenerateInput,
     QuizInput,
     StartSessionInput,
     StudentProgressInput,
@@ -25,6 +30,11 @@ from src.teacher import (
     HINT,
     LOGIN,
     PREPARE_READING,
+    MINDMAP_GENERATE,
+    MINDMAP_UPDATE,
+    MINDMAP_EXPLAIN,
+    STUDY_AUDIO_GENERATE,
+    DOCUMENTARY_GENERATE,
     QUIZ,
     START_SESSION,
     STUDENT_PROGRESS,
@@ -47,6 +57,11 @@ TOOL_MODELS = {
     STUDENT_PROGRESS: StudentProgressInput,
     END_SESSION: EndSessionInput,
     PREPARE_READING: PrepareReadingInput,
+    MINDMAP_GENERATE: MindMapGenerateInput,
+    MINDMAP_UPDATE: MindMapUpdateInput,
+    MINDMAP_EXPLAIN: MindMapExplainInput,
+    STUDY_AUDIO_GENERATE: StudyAudioGenerateInput,
+    DOCUMENTARY_GENERATE: DocumentaryGenerateInput,
 }
 
 
@@ -77,6 +92,16 @@ DESCRIPTIONS = {
         "End an active teaching session.",
     PREPARE_READING:
         "Prepare supplied material for future TTS/audiobook reading.",
+    MINDMAP_GENERATE:
+        "Generate a bounded editable mind map only from supplied study material.",
+    MINDMAP_UPDATE:
+        "Revise an existing mind map according to the student's instruction.",
+    MINDMAP_EXPLAIN:
+        "Explain one selected node of an existing mind map.",
+    STUDY_AUDIO_GENERATE:
+        "Create a dyslexia-friendly narrated study script and bounded audio handoff.",
+    DOCUMENTARY_GENERATE:
+        "Create a short educational documentary script and bounded audio handoff.",
 }
 
 
