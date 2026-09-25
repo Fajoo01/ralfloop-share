@@ -274,6 +274,8 @@ class GptWorkController:
     def start_job(self, job_id: str) -> dict[str, Any]:
         browser = self.reconcile()
         job = self.queue.get_job(job_id)
+        if job.state is not GptJobState.ACTIVE:
+            self.queue.reset_watchdog(job_id)
         if job.state is GptJobState.ACTIVE:
             try:
                 self._exact_job_target(job, browser)

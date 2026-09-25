@@ -18,18 +18,29 @@ GOAL_CONTINUATION = (
     "Se sei realmente bloccato da un dato, permesso o intervento umano indispensabile, spiega cosa manca e termina con [[BOTTAZZI_GOAL_BLOCKED]]. "
     "Quando e solo quando il GOAL è davvero raggiunto, termina con una riga contenente esattamente [[BOTTAZZI_GOAL_REACHED]]."
 )
+STALL_RECOVERY = (
+    "Riprendi automaticamente dall'ultimo messaggio utente rimasto senza una risposta completa. "
+    "Non ripartire da zero e non chiedere conferme. Continua il lavoro verso il GOAL già definito, "
+    "verifica lo stato reale e porta a termine ciò che manca."
+)
 
 
 @dataclass(frozen=True)
 class GptQueueShepherdPolicy:
     complete_idle_ms: int = 60_000
     stalled_idle_ms: int = 180_000
+    recovery_cooldown_ms: int = 90_000
+    max_recoveries: int = 2
 
     def __post_init__(self) -> None:
         if self.complete_idle_ms < 5_000:
             raise ValueError("complete_idle_ms_too_small")
         if self.stalled_idle_ms < self.complete_idle_ms:
             raise ValueError("stalled_idle_ms_before_complete_idle_ms")
+        if self.recovery_cooldown_ms < 5_000:
+            raise ValueError("recovery_cooldown_ms_too_small")
+        if self.max_recoveries < 1:
+            raise ValueError("max_recoveries_too_small")
 
 
 class GptQueueShepherd:
@@ -89,6 +100,36 @@ class GptQueueShepherd:
             return {"ok": False, "error": type(exc).__name__}
         return {"ok": True, "message": message}
 
+    def _idle_ms(self, ui: dict[str, Any]) -> int:
+        return max(
+            self._int(ui.get("response_idle_ms")),
+            self._int(ui.get("progress_idle_ms")),
+        )
+
+    def _recovery_gate(self, job_id: str) -> tuple[str, dict[str, int]]:
+        state = self.queue.watchdog_state(job_id)
+        if state["recovery_count"] >= self.policy.max_recoveries:
+            return "exhausted", state
+        last = state["last_recovery_at"]
+        if last:
+            elapsed_ms = max(0, int(self.queue.clock()) - last) * 1000
+            if elapsed_ms < self.policy.recovery_cooldown_ms:
+                return "cooldown", state
+        return "ready", state
+
+    def _release_stalled(self, job_id: str, actions: list[dict[str, Any]], *, reason: str, idle_ms: int) -> None:
+        self.controller.release_job(job_id)
+        self.queue.set_state(job_id, GptJobState.REVIEW, last_error="worker_stalled_after_retries")
+        actions.append(
+            {
+                "job_id": job_id,
+                "action": "released",
+                "reason": reason,
+                "progress_idle_ms": idle_ms,
+                "watchdog": self.queue.watchdog_state(job_id),
+            }
+        )
+
     def run_once(self, *, auto_start: bool = True) -> dict[str, Any]:
         self.controller.reconcile()
         actions: list[dict[str, Any]] = []
@@ -117,28 +158,123 @@ class GptQueueShepherd:
             composer_chars = self._int(companion.get("composer_chars"))
             response_text = self._substantive_response_text(companion.get("last_assistant_text"))
             response_in_progress = bool(ui.get("response_in_progress"))
-            response_pending = bool(ui.get("response_pending"))
-            if response_text and (response_in_progress or response_pending):
-                self.queue.set_last_assistant_text(job.job_id, response_text)
+            pending = bool(ui.get("response_pending"))
+            user_turns = self._int(ui.get("user_turns"))
+            assistant_turns = max(
+                self._int(ui.get("assistant_turns")),
+                self._int(companion.get("assistant_turns")),
+            )
+            idle_ms = self._idle_ms(ui)
+            current_job = self.queue.get_job(job.job_id)
+            saved_text = self._substantive_response_text(current_job.last_assistant_text)
+            if response_text and response_text != saved_text:
+                self.queue.reset_watchdog(job.job_id)
+                if response_in_progress or pending:
+                    self.queue.set_last_assistant_text(job.job_id, response_text)
+                    saved_text = response_text
+            final_text = response_text or saved_text
+            answered = user_turns > 0 and assistant_turns >= user_turns
+
             if focused:
                 actions.append({"job_id": job.job_id, "action": "preserved", "reason": "focused"})
                 continue
+
             if composer_chars:
-                actions.append({"job_id": job.job_id, "action": "preserved", "reason": "composer_not_empty"})
-                continue
-            if response_in_progress:
-                actions.append({"job_id": job.job_id, "action": "preserved", "reason": "response_in_progress"})
+                if idle_ms < self.policy.complete_idle_ms:
+                    actions.append({
+                        "job_id": job.job_id,
+                        "action": "preserved",
+                        "reason": "composer_not_empty_fresh",
+                        "progress_idle_ms": idle_ms,
+                    })
+                    continue
+                gate, watchdog = self._recovery_gate(job.job_id)
+                if gate == "exhausted":
+                    self._release_stalled(job.job_id, actions, reason="composer_stalled_after_retries", idle_ms=idle_ms)
+                    continue
+                if gate == "cooldown":
+                    actions.append({
+                        "job_id": job.job_id,
+                        "action": "preserved",
+                        "reason": "recovery_cooldown",
+                        "progress_idle_ms": idle_ms,
+                        "watchdog": watchdog,
+                    })
+                    continue
+                watchdog = self.queue.mark_watchdog_recovery(job.job_id)
+                try:
+                    submitted = self.cdp.submit_chatgpt_composer(job.target_id)
+                    if not bool(submitted.get("submitted")):
+                        raise CdpError(str(submitted.get("reason") or "composer_submit_failed"))
+                    actions.append({
+                        "job_id": job.job_id,
+                        "action": "recovered",
+                        "reason": "composer_resubmitted",
+                        "progress_idle_ms": idle_ms,
+                        "watchdog": watchdog,
+                        "recovery": submitted,
+                    })
+                except (CdpError, OSError, RuntimeError, ValueError) as exc:
+                    if watchdog["recovery_count"] >= self.policy.max_recoveries:
+                        self._release_stalled(job.job_id, actions, reason="composer_recovery_failed", idle_ms=idle_ms)
+                    else:
+                        actions.append({
+                            "job_id": job.job_id,
+                            "action": "preserved",
+                            "reason": f"composer_recovery_failed:{str(exc)[:160]}",
+                            "watchdog": watchdog,
+                        })
                 continue
 
-            user_turns = self._int(ui.get("user_turns"))
-            assistant_turns = self._int(ui.get("assistant_turns"))
-            pending = bool(ui.get("response_pending"))
-            idle_ms = self._int(ui.get("response_idle_ms"))
-            answered = user_turns > 0 and assistant_turns >= user_turns
-            saved_text = self._substantive_response_text(
-                self.queue.get_job(job.job_id).last_assistant_text
-            )
-            final_text = response_text or saved_text
+            if response_in_progress:
+                if idle_ms < self.policy.stalled_idle_ms:
+                    actions.append({
+                        "job_id": job.job_id,
+                        "action": "preserved",
+                        "reason": "response_in_progress",
+                        "progress_idle_ms": idle_ms,
+                    })
+                    continue
+                gate, watchdog = self._recovery_gate(job.job_id)
+                if gate == "exhausted":
+                    self._release_stalled(job.job_id, actions, reason="stream_stalled_after_retries", idle_ms=idle_ms)
+                    continue
+                if gate == "cooldown":
+                    actions.append({
+                        "job_id": job.job_id,
+                        "action": "preserved",
+                        "reason": "recovery_cooldown",
+                        "progress_idle_ms": idle_ms,
+                        "watchdog": watchdog,
+                    })
+                    continue
+                watchdog = self.queue.mark_watchdog_recovery(job.job_id)
+                try:
+                    stopped = self.cdp.stop_chatgpt_response(job.target_id)
+                    partial = self._substantive_response_text(stopped.get("last_assistant_text"))
+                    if partial:
+                        self.queue.set_last_assistant_text(job.job_id, partial)
+                    continuation = self.controller.send_message(job.job_id, GOAL_CONTINUATION)
+                    actions.append({
+                        "job_id": job.job_id,
+                        "action": "recovered",
+                        "reason": "stalled_stream_restarted",
+                        "progress_idle_ms": idle_ms,
+                        "watchdog": watchdog,
+                        "stopped": stopped,
+                        "continuation": continuation,
+                    })
+                except (CdpError, OSError, RuntimeError, ValueError) as exc:
+                    if watchdog["recovery_count"] >= self.policy.max_recoveries:
+                        self._release_stalled(job.job_id, actions, reason="stream_recovery_failed", idle_ms=idle_ms)
+                    else:
+                        actions.append({
+                            "job_id": job.job_id,
+                            "action": "preserved",
+                            "reason": f"stream_recovery_failed:{str(exc)[:160]}",
+                            "watchdog": watchdog,
+                        })
+                continue
 
             if companion_busy and idle_ms < self.policy.complete_idle_ms:
                 actions.append({"job_id": job.job_id, "action": "preserved", "reason": "companion_busy"})
@@ -150,9 +286,8 @@ class GptQueueShepherd:
                 and idle_ms >= self.policy.complete_idle_ms
             )
             stalled = (
-                pending
-                and idle_ms >= self.policy.stalled_idle_ms
-                and (user_turns > assistant_turns or not final_text)
+                idle_ms >= self.policy.stalled_idle_ms
+                and (pending or user_turns > assistant_turns or not final_text)
             )
 
             if completed:
@@ -226,22 +361,46 @@ class GptQueueShepherd:
                 continue
 
             if stalled:
-                self.controller.release_job(job.job_id)
-                self.queue.set_state(
-                    job.job_id,
-                    GptJobState.REVIEW,
-                    last_error="worker_stalled_without_reply",
-                )
-                actions.append(
-                    {
+                gate, watchdog = self._recovery_gate(job.job_id)
+                if gate == "exhausted":
+                    self._release_stalled(job.job_id, actions, reason="unanswered_stalled_after_retries", idle_ms=idle_ms)
+                    continue
+                if gate == "cooldown":
+                    actions.append({
                         "job_id": job.job_id,
-                        "action": "released",
-                        "reason": "worker_stalled_without_reply",
-                        "user_turns": user_turns,
-                        "assistant_turns": assistant_turns,
-                        "response_idle_ms": idle_ms,
-                    }
-                )
+                        "action": "preserved",
+                        "reason": "recovery_cooldown",
+                        "progress_idle_ms": idle_ms,
+                        "watchdog": watchdog,
+                    })
+                    continue
+                watchdog = self.queue.mark_watchdog_recovery(job.job_id)
+                try:
+                    recovery = self.controller.send_message(job.job_id, STALL_RECOVERY)
+                    actions.append(
+                        {
+                            "job_id": job.job_id,
+                            "action": "recovered",
+                            "reason": "unanswered_restarted",
+                            "user_turns": user_turns,
+                            "assistant_turns": assistant_turns,
+                            "progress_idle_ms": idle_ms,
+                            "watchdog": watchdog,
+                            "recovery": recovery,
+                        }
+                    )
+                except (CdpError, OSError, RuntimeError, ValueError) as exc:
+                    if watchdog["recovery_count"] >= self.policy.max_recoveries:
+                        self._release_stalled(job.job_id, actions, reason="unanswered_recovery_failed", idle_ms=idle_ms)
+                    else:
+                        actions.append(
+                            {
+                                "job_id": job.job_id,
+                                "action": "preserved",
+                                "reason": f"unanswered_recovery_failed:{str(exc)[:160]}",
+                                "watchdog": watchdog,
+                            }
+                        )
                 continue
 
             actions.append(

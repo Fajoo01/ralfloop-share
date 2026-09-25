@@ -59,6 +59,21 @@ def test_queue_persists_slot_limit_and_chat_binding(tmp_path: Path) -> None:
     assert loaded.target_id == "target-1"
 
 
+def test_watchdog_recovery_counter_is_durable(tmp_path: Path) -> None:
+    path = tmp_path / "queue.sqlite3"
+    first = GptWorkQueue(path, clock=lambda: 1_000_000)
+    job = first.create_job("Watchdog", prompt="continua")
+    assert first.watchdog_state(job.job_id)["recovery_count"] == 0
+    first.mark_watchdog_recovery(job.job_id)
+    second = GptWorkQueue(path, clock=lambda: 1_000_100)
+    assert second.watchdog_state(job.job_id) == {
+        "recovery_count": 1,
+        "last_recovery_at": 1_000_000,
+    }
+    second.reset_watchdog(job.job_id)
+    assert first.watchdog_state(job.job_id)["recovery_count"] == 0
+
+
 def test_terminal_job_leaves_active_queue(tmp_path: Path) -> None:
     q = queue(tmp_path)
     first = q.create_job("Uno", prompt="1")

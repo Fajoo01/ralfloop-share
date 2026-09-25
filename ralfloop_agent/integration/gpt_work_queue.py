@@ -129,6 +129,16 @@ class GptWorkQueue:
                 "INSERT OR IGNORE INTO gpt_queue_settings(setting_key, setting_value) VALUES('max_open_chats', ?)",
                 (str(self.DEFAULT_MAX_OPEN_CHATS),),
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS gpt_job_watchdog (
+                    job_id TEXT PRIMARY KEY,
+                    recovery_count INTEGER NOT NULL DEFAULT 0,
+                    last_recovery_at INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY(job_id) REFERENCES gpt_jobs(job_id) ON DELETE CASCADE
+                )
+                """
+            )
 
     @staticmethod
     def _project_url(value: str | None) -> str | None:
@@ -413,6 +423,39 @@ class GptWorkQueue:
             if result.rowcount != 1:
                 raise KeyError(job_id)
         return self.get_job(job_id)
+
+    def watchdog_state(self, job_id: str) -> dict[str, int]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT recovery_count, last_recovery_at FROM gpt_job_watchdog WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            return {"recovery_count": 0, "last_recovery_at": 0}
+        return {
+            "recovery_count": max(0, int(row["recovery_count"] or 0)),
+            "last_recovery_at": max(0, int(row["last_recovery_at"] or 0)),
+        }
+
+    def mark_watchdog_recovery(self, job_id: str) -> dict[str, int]:
+        self.get_job(job_id)
+        now = int(self.clock())
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO gpt_job_watchdog(job_id, recovery_count, last_recovery_at)
+                VALUES(?, 1, ?)
+                ON CONFLICT(job_id) DO UPDATE SET
+                    recovery_count=gpt_job_watchdog.recovery_count + 1,
+                    last_recovery_at=excluded.last_recovery_at
+                """,
+                (job_id, now),
+            )
+        return self.watchdog_state(job_id)
+
+    def reset_watchdog(self, job_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM gpt_job_watchdog WHERE job_id=?", (job_id,))
 
     def next_queued(self) -> GptWorkJob | None:
         with self._connect() as conn:

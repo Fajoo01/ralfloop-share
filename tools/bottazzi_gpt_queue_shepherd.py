@@ -25,6 +25,8 @@ def main() -> int:
     parser.add_argument("--db", default=os.getenv("BOTTAZZI_GPT_WORK_QUEUE_DB", "/home/bandi/.local/state/bottazzi/gpt-session/work-queue.sqlite3"))
     parser.add_argument("--complete-idle-ms", type=int, default=int(os.getenv("BOTTAZZI_GPT_COMPLETE_IDLE_MS", "60000")))
     parser.add_argument("--stalled-idle-ms", type=int, default=int(os.getenv("BOTTAZZI_GPT_STALLED_IDLE_MS", "180000")))
+    parser.add_argument("--recovery-cooldown-ms", type=int, default=int(os.getenv("BOTTAZZI_GPT_RECOVERY_COOLDOWN_MS", "90000")))
+    parser.add_argument("--max-recoveries", type=int, default=int(os.getenv("BOTTAZZI_GPT_MAX_RECOVERIES", "2")))
     parser.add_argument("--no-auto-start", action="store_true")
     args = parser.parse_args()
 
@@ -33,6 +35,8 @@ def main() -> int:
     policy = GptQueueShepherdPolicy(
         complete_idle_ms=args.complete_idle_ms,
         stalled_idle_ms=args.stalled_idle_ms,
+        recovery_cooldown_ms=args.recovery_cooldown_ms,
+        max_recoveries=args.max_recoveries,
     )
     report = GptQueueShepherd(queue, cdp, policy=policy).run_once(
         auto_start=not args.no_auto_start

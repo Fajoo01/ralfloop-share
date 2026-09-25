@@ -16,6 +16,9 @@ class FakeCdp:
         self.ui = dict(ui)
         self.companion = {"focused": False, "composer_chars": 0, **(companion or {})}
         self.closed: list[str] = []
+        self.messages: list[tuple[str, str, str]] = []
+        self.submitted_composers: list[str] = []
+        self.stopped: list[str] = []
         self._targets = [
             BrowserTarget(
                 "managed",
@@ -47,6 +50,21 @@ class FakeCdp:
     def close_target(self, target_id: str):
         self.closed.append(target_id)
         self._targets = [target for target in self._targets if target.target_id != target_id]
+
+    def install_human_input_target(self, target_id: str, conversation_url: str):
+        return {"ok": True}
+
+    def queue_human_message(self, target_id: str, conversation_url: str, text: str):
+        self.messages.append((target_id, conversation_url, text))
+        return {"queued": True}
+
+    def submit_chatgpt_composer(self, target_id: str, *, wait_timeout_s: float = 8.0):
+        self.submitted_composers.append(target_id)
+        return {"submitted": True, "confirmed": True}
+
+    def stop_chatgpt_response(self, target_id: str):
+        self.stopped.append(target_id)
+        return {"stopped": True, "last_assistant_text": self.companion.get("last_assistant_text", "")}
 
 
 def queue_with_active(tmp_path: Path) -> tuple[GptWorkQueue, str]:
@@ -116,7 +134,7 @@ def test_completed_reply_with_stale_pending_is_released(tmp_path: Path) -> None:
     assert any(target.target_id == "unmanaged" for target in cdp.targets())
 
 
-def test_streaming_reply_is_never_released(tmp_path: Path) -> None:
+def test_fresh_streaming_reply_is_never_recovered(tmp_path: Path) -> None:
     queue, job_id = queue_with_active(tmp_path)
     cdp = FakeCdp(
         ui={
@@ -124,7 +142,8 @@ def test_streaming_reply_is_never_released(tmp_path: Path) -> None:
             "assistant_turns": 1,
             "response_in_progress": True,
             "response_pending": True,
-            "response_idle_ms": 999_999,
+            "response_idle_ms": 1_000,
+            "progress_idle_ms": 1_000,
         }
     )
 
@@ -132,6 +151,7 @@ def test_streaming_reply_is_never_released(tmp_path: Path) -> None:
 
     assert queue.get_job(job_id).state is GptJobState.ACTIVE
     assert cdp.closed == []
+    assert cdp.stopped == []
     assert report["actions"][0]["reason"] == "response_in_progress"
 
 
@@ -218,29 +238,32 @@ def test_focused_chat_is_never_released(tmp_path: Path) -> None:
     assert report["actions"][0]["reason"] == "focused"
 
 
-def test_stalled_unanswered_job_moves_to_review_with_error(tmp_path: Path) -> None:
+def test_stalled_unanswered_job_is_recovered_before_review(tmp_path: Path) -> None:
     queue, job_id = queue_with_active(tmp_path)
     cdp = FakeCdp(
         ui={
             "user_turns": 2,
             "assistant_turns": 1,
             "response_in_progress": False,
-            "response_pending": True,
-            "response_idle_ms": 181_000,
+            "response_pending": False,
+            "response_idle_ms": 0,
+            "progress_idle_ms": 181_000,
         }
     )
 
     report = shepherd(queue, cdp).run_once(auto_start=False)
 
     job = queue.get_job(job_id)
-    assert job.state is GptJobState.REVIEW
-    assert job.target_id is None
-    assert job.last_error == "worker_stalled_without_reply"
-    assert cdp.closed == ["managed"]
-    assert report["actions"][0]["reason"] == "worker_stalled_without_reply"
+    assert job.state is GptJobState.ACTIVE
+    assert job.target_id == "managed"
+    assert cdp.closed == []
+    assert len(cdp.messages) == 1
+    assert "Riprendi automaticamente" in cdp.messages[0][2]
+    assert queue.watchdog_state(job_id)["recovery_count"] == 1
+    assert report["actions"][0]["reason"] == "unanswered_restarted"
 
 
-def test_nonempty_composer_is_never_released(tmp_path: Path) -> None:
+def test_stale_nonempty_composer_is_resubmitted(tmp_path: Path) -> None:
     queue, job_id = queue_with_active(tmp_path)
     cdp = FakeCdp(
         ui={
@@ -248,7 +271,8 @@ def test_nonempty_composer_is_never_released(tmp_path: Path) -> None:
             "assistant_turns": 1,
             "response_in_progress": False,
             "response_pending": False,
-            "response_idle_ms": 999_999,
+            "response_idle_ms": 0,
+            "progress_idle_ms": 61_000,
         },
         companion={"composer_chars": 12},
     )
@@ -257,7 +281,79 @@ def test_nonempty_composer_is_never_released(tmp_path: Path) -> None:
 
     assert queue.get_job(job_id).state is GptJobState.ACTIVE
     assert cdp.closed == []
-    assert report["actions"][0]["reason"] == "composer_not_empty"
+    assert cdp.submitted_composers == ["managed"]
+    assert queue.watchdog_state(job_id)["recovery_count"] == 1
+    assert report["actions"][0]["reason"] == "composer_resubmitted"
+
+
+def test_stale_stream_is_stopped_and_restarted_in_same_chat(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    cdp = FakeCdp(
+        ui={
+            "user_turns": 2,
+            "assistant_turns": 2,
+            "response_in_progress": True,
+            "response_pending": False,
+            "response_idle_ms": 0,
+            "progress_idle_ms": 181_000,
+        },
+        companion={"busy": True, "last_assistant_text": "Risposta parziale"},
+    )
+
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    assert queue.get_job(job_id).state is GptJobState.ACTIVE
+    assert cdp.stopped == ["managed"]
+    assert len(cdp.messages) == 1
+    assert "Continua automaticamente il lavoro verso il GOAL" in cdp.messages[0][2]
+    assert queue.watchdog_state(job_id)["recovery_count"] == 1
+    assert report["actions"][0]["reason"] == "stalled_stream_restarted"
+
+
+def test_progress_idle_settles_reply_even_when_response_idle_was_reset(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    cdp = FakeCdp(
+        ui={
+            "user_turns": 1,
+            "assistant_turns": 1,
+            "response_in_progress": False,
+            "response_pending": False,
+            "response_idle_ms": 0,
+            "progress_idle_ms": 61_000,
+        },
+        companion={"busy": False, "last_assistant_text": "Finito.\n[[BOTTAZZI_GOAL_REACHED]]"},
+    )
+
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    saved = queue.get_job(job_id)
+    assert saved.state is GptJobState.REVIEW
+    assert saved.target_id is None
+    assert report["actions"][0]["reason"] == "goal_complete"
+
+
+def test_exhausted_watchdog_releases_instead_of_arenating_forever(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    queue.mark_watchdog_recovery(job_id)
+    queue.mark_watchdog_recovery(job_id)
+    cdp = FakeCdp(
+        ui={
+            "user_turns": 2,
+            "assistant_turns": 1,
+            "response_in_progress": False,
+            "response_pending": False,
+            "response_idle_ms": 0,
+            "progress_idle_ms": 181_000,
+        }
+    )
+
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    saved = queue.get_job(job_id)
+    assert saved.state is GptJobState.REVIEW
+    assert saved.target_id is None
+    assert saved.last_error == "worker_stalled_after_retries"
+    assert report["actions"][0]["reason"] == "unanswered_stalled_after_retries"
 
 
 def test_goal_managed_reply_auto_continues_same_chat_without_notification(tmp_path: Path) -> None:

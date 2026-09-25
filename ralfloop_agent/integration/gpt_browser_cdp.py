@@ -140,16 +140,23 @@ class ChromeCdp:
           const authenticatedHint = loginControls.length === 0;
           const pageAgeMs = Math.max(0, Math.floor(performance.now()));
           const pageSettled = document.readyState === 'complete' && pageAgeMs >= 3000;
-          const telemetryKey = '__bottazziGptTelemetryV2';
-          const observerKey = '__bottazziGptTelemetryObserverV2';
+          const telemetryKey = '__bottazziGptTelemetryV3';
+          const observerKey = '__bottazziGptTelemetryObserverV3';
           const responseErrorRe = /(?:something went wrong|error generating|network error|there was an error|si è verificato un errore|errore (?:di rete|durante|nella|nel)|riprova|try again)/i;
           const temporaryAccessLimitRe = /(?:temporarily limited access to (?:your )?conversations|temporaneamente (?:limitato )?l['’]?accesso alle conversazioni|attendere qualche minuto prima di riprovare|wait a few minutes before trying again)/i;
           const pageText = String(document.body ? document.body.innerText || '' : '');
           const temporaryAccessLimited = temporaryAccessLimitRe.test(pageText);
           const sampleTelemetry = () => {
             const nowMs = performance.now();
-            const userTurns = document.querySelectorAll('[data-message-author-role="user"]').length;
-            const assistantNodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+            const userSections = Array.from(document.querySelectorAll('section[data-turn="user"]'));
+            const userNodes = userSections.length
+              ? userSections
+              : Array.from(document.querySelectorAll('[data-message-author-role="user"]'));
+            const userTurns = userNodes.length;
+            const assistantSections = Array.from(document.querySelectorAll('section[data-turn="assistant"]'));
+            const assistantNodes = assistantSections.length
+              ? assistantSections
+              : Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
             const assistantTurns = assistantNodes.length;
             const stopSelectors = [
               'button[data-testid="stop-button"]',
@@ -182,12 +189,12 @@ class ChromeCdp:
                 toolHash = Math.imul(toolHash, 16777619);
               }
             }
-            const progressSignature = [assistantProgressSignature, toolIcons.length, toolHash >>> 0].join(':');
+            const progressSignature = [userTurns, assistantProgressSignature, toolIcons.length, toolHash >>> 0, responseInProgress ? 1 : 0].join(':');
             let telemetry = window[telemetryKey];
-            const resetTelemetry = !telemetry || typeof telemetry !== 'object' || telemetry.version !== 2 || telemetry.url !== location.href || userTurns < Number(telemetry.last_user_turns || 0) || assistantTurns < Number(telemetry.last_assistant_turns || 0);
+            const resetTelemetry = !telemetry || typeof telemetry !== 'object' || telemetry.version !== 3 || telemetry.url !== location.href || userTurns < Number(telemetry.last_user_turns || 0) || assistantTurns < Number(telemetry.last_assistant_turns || 0);
             if (resetTelemetry) {
               telemetry = {
-                version: 2,
+                version: 3,
                 url: location.href,
                 last_user_turns: userTurns,
                 last_assistant_turns: assistantTurns,
@@ -244,12 +251,15 @@ class ChromeCdp:
             const responseIdleMs = telemetry.pending_started_ms === null
               ? 0
               : Math.max(0, Math.floor(nowMs - Number(telemetry.last_progress_ms || telemetry.pending_started_ms || nowMs)));
+            const progressIdleMs = Math.max(0, Math.floor(nowMs - Number(telemetry.last_progress_ms || nowMs)));
             return {
               user_turns: userTurns,
               assistant_turns: assistantTurns,
               response_in_progress: responseInProgress,
               response_pending: telemetry.pending_started_ms !== null,
               response_idle_ms: responseIdleMs,
+              progress_idle_ms: progressIdleMs,
+              progress_signature: progressSignature,
               tool_activity_count: toolIcons.length,
               current_response_latency_ms: currentLatencyMs,
               last_response_latency_ms: Math.max(0, Number(telemetry.last_response_latency_ms || 0)),
@@ -277,6 +287,8 @@ class ChromeCdp:
             response_in_progress: telemetry.response_in_progress,
             response_pending: telemetry.response_pending,
             response_idle_ms: telemetry.response_idle_ms,
+            progress_idle_ms: telemetry.progress_idle_ms,
+            progress_signature: telemetry.progress_signature,
             tool_activity_count: telemetry.tool_activity_count,
             current_response_latency_ms: telemetry.current_response_latency_ms,
             last_response_latency_ms: telemetry.last_response_latency_ms,
@@ -1411,6 +1423,65 @@ class ChromeCdp:
         if not isinstance(state, dict):
             raise CdpError("companion_state_invalid")
         return state
+
+    def submit_chatgpt_composer(self, target_id: str, *, wait_timeout_s: float = 8.0) -> dict[str, Any]:
+        """Submit an already-populated native ChatGPT composer without altering its text."""
+        target = self._wait_target(target_id)
+        if not target.websocket_url or not target.is_chatgpt:
+            raise CdpError("composer_submit_target_invalid")
+        before = self.chatgpt_ui_state(target_id)
+        baseline_user_turns = int(before.get("user_turns") or 0)
+        expression = r'''(() => {
+          const visible = (el) => {
+            if (!el || el.disabled) return false;
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const composer = Array.from(document.querySelectorAll('#prompt-textarea, textarea, [contenteditable="true"]'))
+            .find((el) => visible(el) && el.id !== 'bottazzi-human-composer') || null;
+          const text = composer ? String(composer.value || composer.innerText || composer.textContent || '') : '';
+          if (!composer || !text.trim()) return JSON.stringify({submitted:false, reason:'composer_empty', composer_chars:text.length});
+          const selectors = [
+            'button[data-testid="send-button"]',
+            'button[aria-label*="Send"]',
+            'button[aria-label*="send"]',
+            'button[aria-label*="Invia"]',
+            'button[aria-label*="invia"]',
+          ];
+          let send = null;
+          for (const selector of selectors) {
+            send = Array.from(document.querySelectorAll(selector)).find(visible) || null;
+            if (send) break;
+          }
+          if (!send) return JSON.stringify({submitted:false, reason:'send_missing', composer_chars:text.length});
+          send.click();
+          return JSON.stringify({submitted:true, composer_chars:text.length});
+        })()'''
+        result = self._page_call(
+            target.websocket_url,
+            "Runtime.evaluate",
+            {"expression": expression, "returnByValue": True},
+            timeout_s=1.0,
+        )
+        raw = (result.get("result") or {}).get("value")
+        try:
+            state = json.loads(raw) if isinstance(raw, str) else {}
+        except json.JSONDecodeError as exc:
+            raise CdpError("composer_submit_invalid") from exc
+        if not isinstance(state, dict) or not state.get("submitted"):
+            return state if isinstance(state, dict) else {"submitted": False, "reason": "invalid"}
+        deadline = time.monotonic() + max(1.0, float(wait_timeout_s))
+        while time.monotonic() < deadline:
+            current = self.chatgpt_ui_state(target_id)
+            if int(current.get("user_turns") or 0) > baseline_user_turns:
+                return {**state, "confirmed": True, "confirm_reason": "user_turn_advanced"}
+            if int(current.get("composer_chars") or 0) == 0 and (
+                bool(current.get("response_in_progress")) or bool(current.get("response_pending"))
+            ):
+                return {**state, "confirmed": True, "confirm_reason": "generation_started"}
+            time.sleep(0.2)
+        raise CdpError("composer_submit_not_confirmed")
 
     def stop_chatgpt_response(self, target_id: str) -> dict[str, Any]:
         target = self._wait_target(target_id)
