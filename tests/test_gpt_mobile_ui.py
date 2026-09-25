@@ -303,3 +303,18 @@ def test_live_sample_cache_masks_single_probe_failure() -> None:
     assert 'job["live_cached"]' in frontend
     assert "ultimo campione valido" in html
     assert "aggiornamento in ritardo" in html
+
+
+def test_gpt_browser_mobile_surface_is_distinct_from_bottazzi_chat_app() -> None:
+    root = Path(__file__).resolve().parents[1]
+    html = (root / "openshell_backend" / "bottazzi_gpt_mobile_ui.html").read_text(encoding="utf-8")
+    bot_main = (root / "android" / "bottazzi-app" / "app" / "src" / "main" / "java" / "org" / "tiremminnanz" / "bottazzi" / "MainActivity.java").read_text(encoding="utf-8")
+    gpt_gradle = (root / "android" / "gpt-browser-app" / "app" / "build.gradle").read_text(encoding="utf-8")
+    gpt_manifest = (root / "android" / "gpt-browser-app" / "app" / "src" / "main" / "AndroidManifest.xml").read_text(encoding="utf-8")
+    assert "GPT Browser" in html
+    assert "Peppone" not in html
+    assert "Bot-tazzi" not in html
+    assert "webView.loadUrl(BuildConfig.APP_URL);" in bot_main
+    assert "gptUiUrl()" not in bot_main
+    assert "applicationId 'org.tiremminnanz.gptbrowser'" in gpt_gradle
+    assert 'android:label="GPT Browser"' in gpt_manifest

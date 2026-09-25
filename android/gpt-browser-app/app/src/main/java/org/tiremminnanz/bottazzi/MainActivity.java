@@ -61,14 +61,30 @@ public final class MainActivity extends Activity {
         settings.setAllowContentAccess(true);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         settings.setUserAgentString(
-            settings.getUserAgentString() + " BotTazzi/" + NativeCore.nativeVersion()
+            settings.getUserAgentString() + " GPTBrowser/" + NativeCore.nativeVersion()
         );
 
         CookieManager cookies = CookieManager.getInstance();
         cookies.setAcceptCookie(true);
         cookies.setAcceptThirdPartyCookies(webView, false);
 
-        webView.setWebViewClient(new WebViewClient());
+        webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                Uri current = Uri.parse(url);
+                Uri base = Uri.parse(BuildConfig.APP_URL);
+                String currentPath = current.getPath() == null ? "" : current.getPath();
+                String basePath = base.getPath() == null ? "" : base.getPath();
+                if (
+                    sameOrigin(BuildConfig.APP_URL, current)
+                    && ("/".equals(currentPath) || basePath.equals(currentPath))
+                    && !gptUiUrl().equals(url)
+                ) {
+                    view.loadUrl(gptUiUrl());
+                }
+            }
+        });
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onPermissionRequest(PermissionRequest request) {
@@ -90,11 +106,19 @@ public final class MainActivity extends Activity {
             }
         });
         webView.addJavascriptInterface(new SpeechBridge(), "BotTazziNative");
-        webView.loadUrl(BuildConfig.APP_URL);
+        webView.loadUrl(gptUiUrl());
 
         requestNotificationPermission();
         requestAudioPermission();
         startNotificationService();
+    }
+
+    private String gptUiUrl() {
+        String base = BuildConfig.APP_URL;
+        while (base.endsWith("/")) {
+            base = base.substring(0, base.length() - 1);
+        }
+        return base + "/gpt-ui";
     }
 
     @SuppressWarnings("deprecation")
