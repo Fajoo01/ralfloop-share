@@ -19,6 +19,7 @@ class FakeCdp:
         self.messages: list[tuple[str, str, str]] = []
         self.submitted_composers: list[str] = []
         self.stopped: list[str] = []
+        self.created = 0
         self._targets = [
             BrowserTarget(
                 "managed",
@@ -65,6 +66,19 @@ class FakeCdp:
     def stop_chatgpt_response(self, target_id: str):
         self.stopped.append(target_id)
         return {"stopped": True, "last_assistant_text": self.companion.get("last_assistant_text", "")}
+
+    def create_chatgpt_target(self, *, clear_cache: bool = False, background: bool = True):
+        self.created += 1
+        target_id = f"fresh-{self.created}"
+        self._targets.append(BrowserTarget(target_id, "page", "https://chatgpt.com/", "Fresh", f"ws://{target_id}"))
+        return target_id
+
+    def navigate_chatgpt_conversation(self, target_id: str, url: str):
+        for index, target in enumerate(self._targets):
+            if target.target_id == target_id:
+                self._targets[index] = BrowserTarget(target_id, "page", url, "Fresh", target.websocket_url)
+                return {"authenticated": True, "ready": True}
+        raise RuntimeError("missing_target")
 
 
 def queue_with_active(tmp_path: Path) -> tuple[GptWorkQueue, str]:
@@ -332,10 +346,42 @@ def test_progress_idle_settles_reply_even_when_response_idle_was_reset(tmp_path:
     assert report["actions"][0]["reason"] == "goal_complete"
 
 
+def test_retry_budget_escalates_to_fresh_target_before_review(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    queue.mark_watchdog_recovery(job_id)
+    queue.mark_watchdog_recovery(job_id)
+    with queue._connect() as conn:
+        conn.execute("UPDATE gpt_job_watchdog SET last_recovery_at=? WHERE job_id=?", (999_000, job_id))
+    cdp = FakeCdp(
+        ui={
+            "user_turns": 2,
+            "assistant_turns": 1,
+            "response_in_progress": False,
+            "response_pending": False,
+            "response_idle_ms": 0,
+            "progress_idle_ms": 181_000,
+        }
+    )
+
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    saved = queue.get_job(job_id)
+    assert saved.state is GptJobState.ACTIVE
+    assert saved.target_id == "fresh-1"
+    assert "managed" in cdp.closed
+    assert len(cdp.messages) == 1
+    assert cdp.messages[0][0] == "fresh-1"
+    assert queue.watchdog_state(job_id)["recovery_count"] == 3
+    assert report["actions"][0]["reason"] == "unanswered_fresh_target"
+
+
 def test_exhausted_watchdog_releases_instead_of_arenating_forever(tmp_path: Path) -> None:
     queue, job_id = queue_with_active(tmp_path)
     queue.mark_watchdog_recovery(job_id)
     queue.mark_watchdog_recovery(job_id)
+    queue.mark_watchdog_recovery(job_id)
+    with queue._connect() as conn:
+        conn.execute("UPDATE gpt_job_watchdog SET last_recovery_at=? WHERE job_id=?", (999_000, job_id))
     cdp = FakeCdp(
         ui={
             "user_turns": 2,

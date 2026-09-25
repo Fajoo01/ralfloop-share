@@ -108,14 +108,68 @@ class GptQueueShepherd:
 
     def _recovery_gate(self, job_id: str) -> tuple[str, dict[str, int]]:
         state = self.queue.watchdog_state(job_id)
-        if state["recovery_count"] >= self.policy.max_recoveries:
-            return "exhausted", state
         last = state["last_recovery_at"]
         if last:
             elapsed_ms = max(0, int(self.queue.clock()) - last) * 1000
             if elapsed_ms < self.policy.recovery_cooldown_ms:
                 return "cooldown", state
-        return "ready", state
+        if state["recovery_count"] < self.policy.max_recoveries:
+            return "ready", state
+        if state["recovery_count"] == self.policy.max_recoveries:
+            return "rebind", state
+        return "exhausted", state
+
+    def _rebind_stalled(self, job: Any, actions: list[dict[str, Any]], *, reason: str, idle_ms: int) -> bool:
+        context_url = job.conversation_context_url or job.conversation_url
+        if not context_url or not job.target_id:
+            return False
+        old_target_id = job.target_id
+        new_target_id: str | None = None
+        rebound = False
+        try:
+            new_target_id = self.cdp.create_chatgpt_target(clear_cache=False, background=True)
+            self.cdp.navigate_chatgpt_conversation(new_target_id, context_url)
+            self.cdp.install_human_input_target(new_target_id, context_url)
+            self.cdp.close_target(old_target_id)
+            self.queue.bind_chat(
+                job.job_id,
+                conversation_url=job.conversation_url,
+                conversation_context_url=context_url,
+                target_id=new_target_id,
+                state=GptJobState.ACTIVE,
+                last_error=None,
+            )
+            rebound = True
+            watchdog = self.queue.mark_watchdog_recovery(job.job_id)
+            recovery = self.controller.send_message(job.job_id, STALL_RECOVERY)
+            actions.append(
+                {
+                    "job_id": job.job_id,
+                    "action": "recovered",
+                    "reason": reason,
+                    "progress_idle_ms": idle_ms,
+                    "old_target_id": old_target_id,
+                    "new_target_id": new_target_id,
+                    "watchdog": watchdog,
+                    "recovery": recovery,
+                }
+            )
+            return True
+        except (CdpError, OSError, RuntimeError, ValueError) as exc:
+            if new_target_id and not rebound:
+                try:
+                    self.cdp.close_target(new_target_id)
+                except (CdpError, OSError, RuntimeError, ValueError):
+                    pass
+            actions.append(
+                {
+                    "job_id": job.job_id,
+                    "action": "preserved",
+                    "reason": f"fresh_target_rebind_failed:{str(exc)[:160]}",
+                    "progress_idle_ms": idle_ms,
+                }
+            )
+            return False
 
     def _release_stalled(self, job_id: str, actions: list[dict[str, Any]], *, reason: str, idle_ms: int) -> None:
         self.controller.release_job(job_id)
@@ -215,7 +269,7 @@ class GptQueueShepherd:
                         "recovery": submitted,
                     })
                 except (CdpError, OSError, RuntimeError, ValueError) as exc:
-                    if watchdog["recovery_count"] >= self.policy.max_recoveries:
+                    if watchdog["recovery_count"] > self.policy.max_recoveries:
                         self._release_stalled(job.job_id, actions, reason="composer_recovery_failed", idle_ms=idle_ms)
                     else:
                         actions.append({
@@ -248,6 +302,9 @@ class GptQueueShepherd:
                         "watchdog": watchdog,
                     })
                     continue
+                if gate == "rebind":
+                    self._rebind_stalled(job, actions, reason="stalled_stream_fresh_target", idle_ms=idle_ms)
+                    continue
                 watchdog = self.queue.mark_watchdog_recovery(job.job_id)
                 try:
                     stopped = self.cdp.stop_chatgpt_response(job.target_id)
@@ -265,7 +322,7 @@ class GptQueueShepherd:
                         "continuation": continuation,
                     })
                 except (CdpError, OSError, RuntimeError, ValueError) as exc:
-                    if watchdog["recovery_count"] >= self.policy.max_recoveries:
+                    if watchdog["recovery_count"] > self.policy.max_recoveries:
                         self._release_stalled(job.job_id, actions, reason="stream_recovery_failed", idle_ms=idle_ms)
                     else:
                         actions.append({
@@ -374,6 +431,9 @@ class GptQueueShepherd:
                         "watchdog": watchdog,
                     })
                     continue
+                if gate == "rebind":
+                    self._rebind_stalled(job, actions, reason="unanswered_fresh_target", idle_ms=idle_ms)
+                    continue
                 watchdog = self.queue.mark_watchdog_recovery(job.job_id)
                 try:
                     recovery = self.controller.send_message(job.job_id, STALL_RECOVERY)
@@ -390,7 +450,7 @@ class GptQueueShepherd:
                         }
                     )
                 except (CdpError, OSError, RuntimeError, ValueError) as exc:
-                    if watchdog["recovery_count"] >= self.policy.max_recoveries:
+                    if watchdog["recovery_count"] > self.policy.max_recoveries:
                         self._release_stalled(job.job_id, actions, reason="unanswered_recovery_failed", idle_ms=idle_ms)
                     else:
                         actions.append(
