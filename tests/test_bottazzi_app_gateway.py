@@ -291,3 +291,4 @@ def test_filologo_routes_only_chat_to_scholarly_backend(client: TestClient, monk
     assert seen["json"]["allow_tools"] is True
     assert "app_scholarly" not in seen["json"]
     assert seen["json"]["context"]["app_scholarly"] is True
+    assert seen["json"]["message"].startswith("Filologo: ")

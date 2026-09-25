@@ -445,6 +445,9 @@ def assistant_chat(payload: dict[str, Any]) -> Response:
     if scholarly and not target_backend:
         return JSONResponse({"detail": "scholarly_backend_unavailable"}, status_code=503)
     if scholarly:
+        original = str(outgoing.get("message") or "").strip()
+        if original and not original.casefold().startswith("filologo:"):
+            outgoing["message"] = ("Filologo: " + original)[:32_000]
         context = dict(outgoing.get("context") or {})
         context["app_scholarly"] = True
         outgoing["context"] = context
