@@ -1400,7 +1400,7 @@ class ChromeCdp:
           const clean = value => String(value || '').replace(/\\s+/g, ' ').trim();
           const openSidebar = [...document.querySelectorAll('button')].find(button => {
             const label = clean(button.getAttribute('aria-label') || button.innerText || button.textContent || '');
-            return /^(?:open sidebar|apri barra laterale)$/i.test(label);
+            return /^(?:(?:open|show) sidebar|(?:apri|mostra|visualizza) barra laterale)$/i.test(label);
           });
           if (openSidebar) {
             openSidebar.click();

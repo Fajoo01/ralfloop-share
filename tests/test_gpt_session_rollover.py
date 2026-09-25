@@ -1752,6 +1752,38 @@ def test_project_recovery_waits_for_exact_chat_when_initial_project_list_is_part
     assert result["conversation_context_url"] == context_url
 
 
+def test_sidebar_recovery_recognizes_current_italian_show_label(monkeypatch) -> None:
+    cdp = ChromeCdp("http://127.0.0.1:1")
+    canonical = "https://chatgpt.com/c/wanted-chat"
+    home_target = BrowserTarget("target", "page", "https://chatgpt.com/", "ChatGPT", "ws://target")
+    chat_target = BrowserTarget("target", "page", canonical, "Wanted", "ws://target")
+    clicked = {"value": False}
+    expressions: list[str] = []
+
+    monkeypatch.setattr(cdp, "_wait_target", lambda target_id, **kwargs: chat_target if clicked["value"] else home_target)
+
+    def page_call(websocket_url, method, params=None, **kwargs):
+        expression = (params or {}).get("expression", "")
+        if method == "Runtime.evaluate" and "const openSidebar" in expression:
+            expressions.append(expression)
+            clicked["value"] = True
+            return {"result": {"value": json.dumps({"clicked": True, "href": canonical})}}
+        return {}
+
+    monkeypatch.setattr(cdp, "_page_call", page_call)
+    monkeypatch.setattr(
+        cdp,
+        "chatgpt_ui_state",
+        lambda target_id: {"ready": True, "user_turns": 1, "assistant_turns": 0, "temporary_access_limited": False},
+    )
+
+    result = cdp._navigate_chatgpt_conversation_via_sidebar("target", canonical, wait_timeout_s=1.0)
+
+    assert result["recovered_via_sidebar"] is True
+    assert expressions
+    assert "mostra|visualizza" in expressions[0]
+
+
 def test_conversation_navigation_recovers_empty_project_deeplink_via_project(monkeypatch) -> None:
     cdp = ChromeCdp("http://127.0.0.1:1")
     project_id = "g-p-" + "a" * 32
