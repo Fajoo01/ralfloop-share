@@ -157,3 +157,14 @@ def test_gateway_systemd_is_release_bound_and_secret_free() -> None:
     assert "EnvironmentFile=/etc/ralfloop/bottazzi-app-gateway.env" in unit
     assert "REPLACE_WITH_RANDOM_SECRET" in example
     assert "BOTTAZZI_APP_PASSWORD_HASH=" in example
+
+def test_gpt_browser_apk_download_is_public_and_served_as_android_package(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    apk = tmp_path / "GPT-Browser.apk"
+    apk.write_bytes(b"PK\x03\x04fake-apk")
+    monkeypatch.setattr(app_gateway, "GPT_APK_PATH", apk)
+    response = client.get("/gpt-browser.apk")
+    assert response.status_code == 200
+    assert response.content == b"PK\x03\x04fake-apk"
+    assert response.headers["content-type"].startswith("application/vnd.android.package-archive")
+    assert "GPT-Browser.apk" in response.headers["content-disposition"]
+    assert response.headers["cache-control"] == "no-store"

@@ -9,7 +9,7 @@ import time
 from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 import requests
 
 APP_NAME = "Bot-tazzi — App"
@@ -17,9 +17,10 @@ UI_PATH = Path(__file__).with_name("bottazzi_ui.html")
 GPT_UI_PATH = Path(__file__).with_name("bottazzi_gpt_mobile_ui.html")
 BACKEND = os.getenv("BOTTAZZI_APP_BACKEND", "http://127.0.0.1:19090").rstrip("/")
 GPT_QUEUE = os.getenv("BOTTAZZI_APP_GPT_QUEUE", "http://127.0.0.1:19201").rstrip("/")
+GPT_APK_PATH = Path(os.getenv("BOTTAZZI_GPT_APK_PATH", "/home/bandi/.local/share/bottazzi-gpt-browser/GPT-Browser.apk"))
 COOKIE = "bottazzi_app_session"
 SESSION_TTL = int(os.getenv("BOTTAZZI_APP_SESSION_TTL", "86400"))
-PUBLIC_PATHS = {"/login", "/healthz", "/manifest.webmanifest", "/sw.js", "/icon.svg"}
+PUBLIC_PATHS = {"/login", "/healthz", "/manifest.webmanifest", "/sw.js", "/icon.svg", "/gpt-browser.apk"}
 
 app = FastAPI(title=APP_NAME, docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -134,6 +135,18 @@ def logout(request: Request) -> JSONResponse:
 @app.get("/healthz")
 def healthz() -> dict[str, Any]:
     return {"ok": True, "service": "bottazzi-app-gateway"}
+
+
+@app.get("/gpt-browser.apk")
+def gpt_browser_apk() -> Response:
+    if not GPT_APK_PATH.is_file():
+        return JSONResponse({"detail": "gpt_apk_unavailable"}, status_code=404)
+    return FileResponse(
+        GPT_APK_PATH,
+        media_type="application/vnd.android.package-archive",
+        filename="GPT-Browser.apk",
+        headers={"cache-control": "no-store", "x-content-type-options": "nosniff"},
+    )
 
 
 def _ui() -> HTMLResponse:
