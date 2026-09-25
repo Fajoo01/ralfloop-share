@@ -305,3 +305,11 @@ def test_filologo_routes_only_chat_to_scholarly_backend(client: TestClient, monk
     assert "app_scholarly" not in seen["json"]
     assert seen["json"]["context"]["app_scholarly"] is True
     assert seen["json"]["message"].startswith("Filologo: ")
+
+
+def test_mobile_composer_tracks_visual_viewport_keyboard() -> None:
+    ui = (Path(__file__).resolve().parents[1] / "openshell_backend" / "bottazzi_ui.html").read_text(encoding="utf-8")
+    assert "bottom:var(--visual-viewport-bottom,0px)" in ui
+    assert "function syncVisualViewport()" in ui
+    assert "window.innerHeight-vv.height-vv.offsetTop" in ui
+    assert "visualViewport.addEventListener('resize',syncVisualViewport)" in ui
