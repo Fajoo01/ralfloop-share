@@ -4,6 +4,7 @@ import difflib
 import json
 import os
 import re
+import socket
 from collections import Counter
 from typing import Any, Callable, Iterator
 from urllib.parse import urlparse
@@ -1641,6 +1642,199 @@ class TeacherService:
             "text_profile": text_profile,
         }
 
+    def mindmap_generate(
+        self,
+        session_id: str,
+        material: str,
+        objective: str = "",
+        max_nodes: int = 12,
+    ) -> dict[str, Any]:
+        self.store.session(session_id)
+        result = self._structured_teaching_call(
+            session_id,
+            "mindmap_generate",
+            {
+                "material": material,
+                "objective": objective,
+                "max_nodes": max_nodes,
+                "instruction": (
+                    "Crea una mappa mentale modificabile usando solo il materiale fornito. "
+                    "Restituisci anche mindmap={title,nodes,edges}; ogni nodo deve avere id,label,summary,importance. "
+                    "Massimo max_nodes nodi, testi brevi e adatti anche a uno studente dislessico."
+                ),
+            },
+        )
+        mindmap = _normalize_mindmap(result.get("mindmap"), material, max_nodes)
+        self.store.event(session_id, "mindmap_generate", {"nodes": len(mindmap["nodes"])})
+        return {
+            "ok": True,
+            "source_mode": "provided_material",
+            "mindmap": mindmap,
+            "response": str(result.get("response") or "Mappa mentale proposta."),
+        }
+
+    def mindmap_update(
+        self,
+        session_id: str,
+        mindmap: dict[str, Any],
+        instruction: str,
+    ) -> dict[str, Any]:
+        self.store.session(session_id)
+        current = _normalize_mindmap(mindmap, "", 40)
+        result = self._structured_teaching_call(
+            session_id,
+            "mindmap_update",
+            {
+                "mindmap": current,
+                "instruction": instruction,
+                "constraint": (
+                    "Modifica solo la struttura fornita secondo la richiesta. "
+                    "Non aggiungere fatti esterni. Restituisci mindmap nello stesso schema."
+                ),
+            },
+        )
+        updated = _normalize_mindmap(result.get("mindmap") or current, "", 40)
+        self.store.event(session_id, "mindmap_update", {"nodes": len(updated["nodes"])})
+        return {
+            "ok": True,
+            "source_mode": "provided_structure",
+            "mindmap": updated,
+            "response": str(result.get("response") or "Mappa aggiornata."),
+        }
+
+    def mindmap_explain(
+        self,
+        session_id: str,
+        mindmap: dict[str, Any],
+        node_id: str,
+    ) -> dict[str, Any]:
+        current = _normalize_mindmap(mindmap, "", 40)
+        node = next((item for item in current["nodes"] if item["id"] == node_id), None)
+        if node is None:
+            raise ValueError("mindmap_node_not_found")
+        return self._teaching_call(
+            session_id,
+            "mindmap_explain",
+            {
+                "mindmap": current,
+                "node": node,
+                "instruction": (
+                    "Spiega soltanto questo nodo e i collegamenti presenti nella mappa, "
+                    "con frasi brevi, un esempio e una domanda finale di verifica."
+                ),
+            },
+        )
+
+    def study_audio_generate(
+        self,
+        session_id: str,
+        material: str,
+        mindmap: dict[str, Any] | None = None,
+        style: str = "audiobook",
+    ) -> dict[str, Any]:
+        self.store.session(session_id)
+        result = self._structured_teaching_call(
+            session_id,
+            "study_audio_generate",
+            {
+                "material": material,
+                "mindmap": mindmap,
+                "style": style,
+                "instruction": (
+                    "Trasforma il materiale in uno script audio didattico naturale. "
+                    "Usa frasi brevi, segnali verbali di struttura, piccoli richiami e pause logiche. "
+                    "Non aggiungere fatti assenti. Restituisci script oltre a response."
+                ),
+            },
+        )
+        script = str(result.get("script") or result.get("response") or "").strip()
+        if not script:
+            raise RuntimeError("teacher_audio_script_empty")
+        media = _media_tts_handoff(script)
+        self.store.event(session_id, "study_audio_generate", {"media_status": media["status"]})
+        return {
+            "ok": True,
+            "source_mode": "provided_material",
+            "script": script,
+            "media": media,
+            "learning_cycle": {
+                "retrieval_prompts": _retrieval_prompts_from_mindmap(mindmap),
+                "review_schedule_days": [1, 3, 7, 14],
+                "principle": "audio_plus_active_recall_and_spacing",
+            },
+        }
+
+    def documentary_generate(
+        self,
+        session_id: str,
+        material: str,
+        mindmap: dict[str, Any] | None = None,
+        duration_minutes: int = 8,
+    ) -> dict[str, Any]:
+        self.store.session(session_id)
+        result = self._structured_teaching_call(
+            session_id,
+            "documentary_generate",
+            {
+                "material": material,
+                "mindmap": mindmap,
+                "duration_minutes": duration_minutes,
+                "instruction": (
+                    "Scrivi uno script da mini-documentario didattico basato esclusivamente sul materiale. "
+                    "Apri con una domanda/contesto, sviluppa per blocchi chiari e chiudi con un riepilogo. "
+                    "Restituisci script oltre a response."
+                ),
+            },
+        )
+        script = str(result.get("script") or result.get("response") or "").strip()
+        if not script:
+            raise RuntimeError("teacher_documentary_script_empty")
+        media = _media_tts_handoff(script)
+        self.store.event(session_id, "documentary_generate", {"media_status": media["status"]})
+        return {
+            "ok": True,
+            "source_mode": "provided_material",
+            "script": script,
+            "media": media,
+            "learning_cycle": {
+                "retrieval_prompts": _retrieval_prompts_from_mindmap(mindmap),
+                "review_schedule_days": [1, 3, 7, 14],
+                "principle": "audio_plus_active_recall_and_spacing",
+            },
+        }
+
+    def _structured_teaching_call(
+        self,
+        session_id: str,
+        action: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        session = self.store.session(session_id)
+        student = self.store.student(session["student_id"])
+        context = {
+            "action": action,
+            "student": {
+                "school_level": student.get("school_level"),
+                "class_year": student.get("class_year"),
+                "preferences": student.get("preferences", {}),
+            },
+            "session": {"subject": session["subject"], "topic": session["topic"]},
+            "request": payload,
+        }
+        ensure_session = getattr(self.model_call, "ensure_session", None)
+        release_session = getattr(self.model_call, "release_session", None)
+        if callable(ensure_session):
+            ensure_session(session_id)
+        try:
+            result = self.model_call(PEDAGOGY_PROMPT, json.dumps(context, ensure_ascii=False))
+        except Exception:
+            if callable(release_session):
+                release_session(session_id)
+            raise
+        if not isinstance(result, dict):
+            raise RuntimeError("teacher_model_invalid_result")
+        return result
+
     def stream_explain(self, session_id: str, question: str, context: str = "") -> Iterator[dict[str, Any]]:
         payload = {
             "question": question,
@@ -2127,6 +2321,167 @@ class TeacherService:
 
         return output
 
+
+
+def _normalize_mindmap(value: Any, material: str, max_nodes: int) -> dict[str, Any]:
+    if isinstance(value, dict):
+        title = str(value.get("title") or "Mappa di studio").strip()[:160] or "Mappa di studio"
+        raw_nodes = value.get("nodes") if isinstance(value.get("nodes"), list) else []
+        nodes: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for index, raw in enumerate(raw_nodes[:max_nodes]):
+            if not isinstance(raw, dict):
+                continue
+            node_id = str(raw.get("id") or f"n{index + 1}").strip()[:128]
+            if not node_id or node_id in seen:
+                node_id = f"n{index + 1}"
+            seen.add(node_id)
+            label = str(raw.get("label") or "Concetto").strip()[:120]
+            summary = str(raw.get("summary") or "").strip()[:500]
+            importance = str(raw.get("importance") or "medium").strip().lower()
+            if importance not in {"low", "medium", "high"}:
+                importance = "medium"
+            nodes.append({
+                "id": node_id,
+                "label": label,
+                "summary": summary,
+                "importance": importance,
+            })
+        ids = {node["id"] for node in nodes}
+        edges: list[dict[str, str]] = []
+        raw_edges = value.get("edges") if isinstance(value.get("edges"), list) else []
+        for raw in raw_edges:
+            if not isinstance(raw, dict):
+                continue
+            source = str(raw.get("source") or "")
+            target = str(raw.get("target") or "")
+            if source in ids and target in ids and source != target:
+                edges.append({
+                    "source": source,
+                    "target": target,
+                    "label": str(raw.get("label") or "").strip()[:120],
+                })
+        if nodes:
+            return {"title": title, "nodes": nodes, "edges": edges}
+
+    sentences = [
+        part.strip()
+        for part in material.replace("\n", " ").split(".")
+        if part.strip()
+    ][:max_nodes]
+    nodes = [
+        {
+            "id": f"n{index + 1}",
+            "label": sentence[:80],
+            "summary": sentence[:300],
+            "importance": "high" if index == 0 else "medium",
+        }
+        for index, sentence in enumerate(sentences)
+    ]
+    edges = [
+        {"source": "n1", "target": f"n{index + 1}", "label": ""}
+        for index in range(1, len(nodes))
+    ] if len(nodes) > 1 else []
+    return {"title": "Mappa di studio", "nodes": nodes, "edges": edges}
+
+
+def _retrieval_prompts_from_mindmap(mindmap: dict[str, Any] | None) -> list[str]:
+    if not isinstance(mindmap, dict):
+        return [
+            "Quali sono le tre idee principali che ricordi senza guardare?",
+            "Come collegheresti tra loro i concetti principali?",
+            "Quale parte sapresti spiegare con parole tue?",
+        ]
+    normalized = _normalize_mindmap(mindmap, "", 8)
+    prompts = [
+        f"Senza guardare la mappa, cosa ricordi di: {node['label']}?"
+        for node in normalized["nodes"][:3]
+    ]
+    return prompts or ["Quali sono le idee principali che ricordi senza guardare?"]
+
+
+
+def _media_tts_handoff(script: str) -> dict[str, Any]:
+    text = str(script or "").strip()
+    if not text or len(text) > 100000:
+        return {"status": "invalid_input", "error": "teacher_audio_script_invalid"}
+    socket_path = os.getenv(
+        "RALF_MEDIA_MCP_SOCKET",
+        "/run/ralf-media-mcp/mcp.sock",
+    ).strip()
+    if socket_path != "/run/ralf-media-mcp/mcp.sock":
+        return {"status": "denied", "error": "media_socket_denied"}
+
+    def send_line(stream, payload: dict[str, Any]) -> None:
+        stream.write(
+            (json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+        )
+
+    def recv_line(stream) -> dict[str, Any]:
+        raw = stream.readline()
+        if not raw:
+            raise RuntimeError("media_mcp_eof")
+        value = json.loads(raw.decode("utf-8"))
+        if not isinstance(value, dict):
+            raise RuntimeError("media_mcp_invalid_response")
+        return value
+
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(25.0)
+    try:
+        sock.connect(socket_path)
+        stream = sock.makefile("rwb", buffering=0)
+        send_line(stream, {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "ralf-teacher", "version": "1"},
+            },
+        })
+        initialized = recv_line(stream)
+        if initialized.get("error"):
+            raise RuntimeError("media_mcp_initialize_failed")
+        send_line(stream, {"jsonrpc": "2.0", "method": "notifications/initialized"})
+        send_line(stream, {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "media_create_audiobook",
+                "arguments": {
+                    "text": text,
+                    "name": "Tutor study audio",
+                    "format": "m4b",
+                },
+            },
+        })
+        response = recv_line(stream)
+        if response.get("error"):
+            raise RuntimeError("media_mcp_call_failed")
+        result = response.get("result")
+        if not isinstance(result, dict):
+            raise RuntimeError("media_mcp_result_invalid")
+        payload = result.get("structuredContent")
+        if not isinstance(payload, dict):
+            raise RuntimeError("media_mcp_payload_invalid")
+        if result.get("isError") or payload.get("ok") is False:
+            return {
+                "status": str(payload.get("status") or "failed").lower(),
+                "error": str(payload.get("error") or payload.get("status") or "media_mcp_failed"),
+            }
+        return {
+            "status": str(payload.get("status") or "accepted"),
+            "project_id": payload.get("project_id"),
+            "job_id": payload.get("job_id"),
+            "format": str(payload.get("format") or "m4b"),
+        }
+    except (OSError, TimeoutError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
+        return {"status": "unavailable", "error": exc.__class__.__name__}
+    finally:
+        sock.close()
 
 
 def _normalize_teacher_model_result(text: str) -> dict[str, Any]:

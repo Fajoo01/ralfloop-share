@@ -20,6 +20,11 @@ from src.teacher import (
     HINT,
     LOGIN,
     PREPARE_READING,
+    MINDMAP_GENERATE,
+    MINDMAP_UPDATE,
+    MINDMAP_EXPLAIN,
+    STUDY_AUDIO_GENERATE,
+    DOCUMENTARY_GENERATE,
     QUIZ,
     START_SESSION,
     STUDENT_PROGRESS,
@@ -131,6 +136,21 @@ _KEYWORDS = {
         "ascoltarlo",
         "leggi testo",
         "prepara lettura",
+    ),
+    MINDMAP_GENERATE: (
+        "mappa mentale", "mappa concettuale", "mappe mentali", "schema concetti",
+    ),
+    MINDMAP_UPDATE: (
+        "modifica mappa", "aggiorna mappa", "riorganizza mappa", "correggi mappa",
+    ),
+    MINDMAP_EXPLAIN: (
+        "spiega nodo", "nodo mappa", "spiega parte mappa",
+    ),
+    STUDY_AUDIO_GENERATE: (
+        "audio di studio", "audio studio", "ripasso audio", "ascolto didattico", "audiolibro di studio",
+    ),
+    DOCUMENTARY_GENERATE: (
+        "documentario", "mini documentario", "documentario didattico",
     ),
 }
 

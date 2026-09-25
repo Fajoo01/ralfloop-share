@@ -362,3 +362,43 @@ def test_teacher_releases_model_lease_on_model_error(tmp_path):
 
     assert model.released is True
     assert model.active is None
+
+
+def test_mindmap_generate_is_bounded_and_editable(tmp_path):
+    def model(system_prompt, user_prompt):
+        data = json.loads(user_prompt)
+        if data["action"] == "mindmap_generate":
+            return {"response": "Mappa proposta.", "mindmap": {"title": "Fotosintesi", "nodes": [{"id": "a", "label": "Luce", "summary": "Energia luminosa", "importance": "high"}, {"id": "b", "label": "Glucosio", "summary": "Prodotto", "importance": "medium"}], "edges": [{"source": "a", "target": "b", "label": "contribuisce"}]}}
+        if data["action"] == "mindmap_update":
+            current = data["request"]["mindmap"]
+            current["nodes"][1]["label"] = "Zuccheri"
+            return {"response": "Aggiornata.", "mindmap": current}
+        return {"response": "ok"}
+    store = TeacherStore(tmp_path / "teacher.sqlite3")
+    teacher = TeacherService(store, model_call=model)
+    student = teacher.login("CARD-MAP")["student"]
+    session_id = teacher.start_session(student["student_id"], "scienze", "fotosintesi")["session"]["session_id"]
+    created = teacher.mindmap_generate(session_id, "La luce permette la produzione di glucosio.", max_nodes=6)
+    assert created["mindmap"]["title"] == "Fotosintesi"
+    assert len(created["mindmap"]["nodes"]) == 2
+    updated = teacher.mindmap_update(session_id, created["mindmap"], "Rinomina glucosio in zuccheri")
+    assert updated["mindmap"]["nodes"][1]["label"] == "Zuccheri"
+
+
+def test_study_audio_adds_active_recall_and_spacing(tmp_path, monkeypatch):
+    from ralfloop_agent.teacher import service as teacher_service
+    def model(system_prompt, user_prompt):
+        data = json.loads(user_prompt)
+        if data["action"] == "study_audio_generate":
+            return {"response": "Pronto.", "script": "La fotosintesi usa energia luminosa."}
+        return {"response": "ok"}
+    monkeypatch.setattr(teacher_service, "_media_tts_handoff", lambda script: {"status": "queued", "project_id": "book_test", "job_id": "job_test", "format": "m4b"})
+    store = TeacherStore(tmp_path / "teacher.sqlite3")
+    teacher = TeacherService(store, model_call=model)
+    student = teacher.login("CARD-AUDIO")["student"]
+    session_id = teacher.start_session(student["student_id"], "scienze", "fotosintesi")["session"]["session_id"]
+    mindmap = {"title": "Fotosintesi", "nodes": [{"id": "a", "label": "Luce", "summary": "Energia", "importance": "high"}], "edges": []}
+    out = teacher.study_audio_generate(session_id, "La luce fornisce energia.", mindmap)
+    assert out["media"]["format"] == "m4b"
+    assert out["learning_cycle"]["review_schedule_days"] == [1, 3, 7, 14]
+    assert out["learning_cycle"]["retrieval_prompts"]

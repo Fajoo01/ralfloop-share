@@ -31,6 +31,11 @@ from src.teacher import (
     HINT,
     LOGIN,
     PREPARE_READING,
+    MINDMAP_GENERATE,
+    MINDMAP_UPDATE,
+    MINDMAP_EXPLAIN,
+    STUDY_AUDIO_GENERATE,
+    DOCUMENTARY_GENERATE,
     QUIZ,
     START_SESSION,
     STUDENT_PROGRESS,
@@ -98,6 +103,16 @@ class TeacherMCPServer:
                 payload = self.service.end_session(**values)
             elif name == PREPARE_READING:
                 payload = self.service.prepare_reading(**values)
+            elif name == MINDMAP_GENERATE:
+                payload = self.service.mindmap_generate(**values)
+            elif name == MINDMAP_UPDATE:
+                payload = self.service.mindmap_update(**values)
+            elif name == MINDMAP_EXPLAIN:
+                payload = self.service.mindmap_explain(**values)
+            elif name == STUDY_AUDIO_GENERATE:
+                payload = self.service.study_audio_generate(**values)
+            elif name == DOCUMENTARY_GENERATE:
+                payload = self.service.documentary_generate(**values)
             else:
                 return _error("POLICY_DENIED")
         except KeyError as exc:

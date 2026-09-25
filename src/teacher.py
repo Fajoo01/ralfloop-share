@@ -13,6 +13,11 @@ SUMMARIZE_MATERIAL = "teacher.summarize_material"
 STUDENT_PROGRESS = "teacher.student_progress"
 END_SESSION = "teacher.end_session"
 PREPARE_READING = "teacher.prepare_reading"
+MINDMAP_GENERATE = "teacher.mindmap_generate"
+MINDMAP_UPDATE = "teacher.mindmap_update"
+MINDMAP_EXPLAIN = "teacher.mindmap_explain"
+STUDY_AUDIO_GENERATE = "teacher.study_audio_generate"
+DOCUMENTARY_GENERATE = "teacher.documentary_generate"
 
 ALL_TOOLS = (
     LOGIN,
@@ -28,4 +33,9 @@ ALL_TOOLS = (
     STUDENT_PROGRESS,
     END_SESSION,
     PREPARE_READING,
+    MINDMAP_GENERATE,
+    MINDMAP_UPDATE,
+    MINDMAP_EXPLAIN,
+    STUDY_AUDIO_GENERATE,
+    DOCUMENTARY_GENERATE,
 )

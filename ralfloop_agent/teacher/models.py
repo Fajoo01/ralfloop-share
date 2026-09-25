@@ -83,3 +83,35 @@ class PrepareReadingInput(StrictModel):
     session_id: str = Field(min_length=1, max_length=128)
     material: str = Field(min_length=1, max_length=100000)
     max_chunk_chars: int = Field(default=1200, ge=200, le=5000)
+
+class MindMapGenerateInput(StrictModel):
+    session_id: str = Field(min_length=1, max_length=128)
+    material: str = Field(min_length=1, max_length=100000)
+    objective: str = Field(default="", max_length=2000)
+    max_nodes: int = Field(default=12, ge=3, le=40)
+
+
+class MindMapUpdateInput(StrictModel):
+    session_id: str = Field(min_length=1, max_length=128)
+    mindmap: dict
+    instruction: str = Field(min_length=1, max_length=4000)
+
+
+class MindMapExplainInput(StrictModel):
+    session_id: str = Field(min_length=1, max_length=128)
+    mindmap: dict
+    node_id: str = Field(min_length=1, max_length=128)
+
+
+class StudyAudioGenerateInput(StrictModel):
+    session_id: str = Field(min_length=1, max_length=128)
+    material: str = Field(min_length=1, max_length=100000)
+    mindmap: dict | None = None
+    style: str = Field(default="audiobook", max_length=40)
+
+
+class DocumentaryGenerateInput(StrictModel):
+    session_id: str = Field(min_length=1, max_length=128)
+    material: str = Field(min_length=1, max_length=100000)
+    mindmap: dict | None = None
+    duration_minutes: int = Field(default=8, ge=2, le=45)

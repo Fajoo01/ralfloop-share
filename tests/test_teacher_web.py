@@ -334,7 +334,7 @@ def test_client_exact_surface_and_allowlist():
     class Session:
         def call_tool(self,name,args): return {"structuredContent":{"ok":True,"response":"ok"}}
     with pytest.raises(ValueError): TeacherClient.call(Session(),"shell.run",{})
-    assert len(ALL_TOOLS) == 13
+    assert len(ALL_TOOLS) == 18
     assert TeacherClient.call(Session(),"teacher.hint",{})["ok"]
 
 
