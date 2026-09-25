@@ -1255,6 +1255,16 @@ class ChromeCdp:
             raise CdpError("conversation_navigation_target_invalid")
         self._page_call(target.websocket_url, "Page.enable")
         self._page_call(target.websocket_url, "Page.navigate", {"url": project_url})
+        project_deadline = time.monotonic() + max(2.0, min(float(wait_timeout_s), 6.0))
+        while time.monotonic() < project_deadline:
+            target = self._wait_target(target_id)
+            if target.is_chatgpt and target.websocket_url:
+                parsed = urllib.parse.urlparse(target.url)
+                if parsed.path.rstrip("/") == f"/g/{project_id}/project":
+                    break
+            time.sleep(0.25)
+        else:
+            raise CdpError("conversation_project_page_timeout")
         rows = self.project_conversation_records(
             target_id,
             project_url=project_url,
