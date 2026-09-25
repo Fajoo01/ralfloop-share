@@ -132,6 +132,21 @@ class GptWorkController:
             if job.state in {GptJobState.DONE, GptJobState.CANCELLED}:
                 continue
             if job.state in {GptJobState.REVIEW, GptJobState.BLOCKED, GptJobState.FAILED}:
+                if job.target_id:
+                    stale_target = browser.targets_by_id.get(job.target_id)
+                    stale_conversation = (
+                        _canonical_chatgpt_conversation_url(stale_target.url)
+                        if stale_target is not None else None
+                    )
+                    if stale_target is None or stale_conversation != job.conversation_url:
+                        self.queue.bind_chat(
+                            job.job_id,
+                            conversation_url=job.conversation_url,
+                            conversation_context_url=job.conversation_context_url,
+                            target_id=None,
+                            state=job.state,
+                            last_error=job.last_error,
+                        )
                 continue
             target = browser.targets_by_id.get(job.target_id or "")
             if target is not None and job.conversation_url:
@@ -162,7 +177,14 @@ class GptWorkController:
                 self.queue.set_state(job.job_id, GptJobState.FAILED, last_error="start_target_missing")
             elif job.state is GptJobState.ACTIVE:
                 reason = "chat_target_ambiguous" if job.conversation_url in browser.ambiguous_conversations else "chat_not_open_locally"
-                self.queue.set_state(job.job_id, GptJobState.REVIEW, last_error=reason)
+                self.queue.bind_chat(
+                    job.job_id,
+                    conversation_url=job.conversation_url,
+                    conversation_context_url=job.conversation_context_url,
+                    target_id=None,
+                    state=GptJobState.REVIEW,
+                    last_error=reason,
+                )
         return browser
 
     @staticmethod
@@ -848,8 +870,8 @@ class GptWorkController:
         context_url = job.conversation_context_url or job.conversation_url
         new_target_id = self.cdp.create_chatgpt_target(clear_cache=False, background=True)
         try:
-            self.cdp.navigate_chatgpt_conversation(new_target_id, job.conversation_url)
-            self.cdp.install_human_input_target(new_target_id, job.conversation_url)
+            self.cdp.navigate_chatgpt_conversation(new_target_id, context_url)
+            self.cdp.install_human_input_target(new_target_id, context_url)
             rebound = self.queue.bind_chat(
                 job.job_id,
                 conversation_url=job.conversation_url,

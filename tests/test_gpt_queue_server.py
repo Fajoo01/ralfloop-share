@@ -125,7 +125,7 @@ def test_duplicate_conversation_targets_are_not_silently_rebound(tmp_path: Path)
 
     reviewed = queue.get_job(job.job_id)
     assert reviewed.state is GptJobState.REVIEW
-    assert reviewed.target_id == "missing-old-target"
+    assert reviewed.target_id is None
     assert reviewed.last_error == "chat_target_ambiguous"
 
 

@@ -215,6 +215,28 @@ def test_missing_active_target_moves_to_review_without_deleting_job(tmp_path: Pa
     assert reviewed.last_error == "chat_not_open_locally"
 
 
+def test_recycle_job_target_preserves_project_context(tmp_path: Path) -> None:
+    queue = make_queue(tmp_path)
+    job = queue.create_job(
+        "Project chat",
+        conversation_url="https://chatgpt.com/c/chat-project",
+        conversation_context_url="https://chatgpt.com/g/g-p-demo-project/c/chat-project",
+        target_id="old-target",
+        state=GptJobState.ACTIVE,
+    )
+    cdp = FakeCdp()
+    cdp._targets = [BrowserTarget("old-target", "page", job.conversation_context_url, "Project", "ws://old-target")]
+    controller = GptWorkController(queue, cdp)
+
+    result = controller.recycle_job_target(job.job_id)
+
+    rebound = queue.get_job(job.job_id)
+    target = next(t for t in cdp._targets if t.target_id == result["new_target_id"])
+    assert target.url == "https://chatgpt.com/g/g-p-demo-project/c/chat-project"
+    assert cdp.installed[-1] == (result["new_target_id"], "https://chatgpt.com/g/g-p-demo-project/c/chat-project")
+    assert rebound.conversation_context_url == "https://chatgpt.com/g/g-p-demo-project/c/chat-project"
+
+
 def test_send_message_rejects_target_reused_for_different_conversation(tmp_path: Path) -> None:
     queue = make_queue(tmp_path)
     job = queue.create_job("One", prompt="Do one")
