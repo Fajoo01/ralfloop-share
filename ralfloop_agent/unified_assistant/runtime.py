@@ -41,6 +41,7 @@ from .browser_mcp_adapter import (
     UnifiedBrowserApprovalExecutor,
     browser_inspect_adapter,
 )
+from .browser_target_shadow import BrowserTargetShadowObserver
 from .editorial_mcp_adapter import EditorialMCPContext
 from .bandi_mcp_adapter import BandiMCPContext
 from .pec_mcp_adapter import PecMCPContext
@@ -642,6 +643,11 @@ def run_unified_telegram(
     browser_interaction_provider = (
         BrowserMCPApprovalProvider() if flags.browser_interact_live else None
     )
+    browser_target_shadow = (
+        BrowserTargetShadowObserver.from_environment()
+        if flags.browser_interact_live and flags.browser_rizzo_shadow
+        else None
+    )
     jellyfin_identity_provider = (
         JellyfinIdentityMCPProvider() if flags.jellyfin_identity_write_live else None
     )
@@ -759,6 +765,7 @@ def run_unified_telegram(
         jellyfin_approval_executor=jellyfin_approval_executor,
         browser_interaction_provider=browser_interaction_provider,
         browser_approval_executor=browser_approval_executor,
+        browser_target_shadow=browser_target_shadow,
         home_workflow=home_workflow,
         memory_router=memory,
     )

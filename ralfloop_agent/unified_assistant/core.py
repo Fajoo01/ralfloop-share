@@ -122,6 +122,7 @@ class UnifiedAssistantCore:
         jellyfin_approval_executor: ApprovalBoundExecutor | None = None,
         browser_interaction_provider: BrowserMCPApprovalProvider | None = None,
         browser_approval_executor: ApprovalBoundExecutor | None = None,
+        browser_target_shadow: Any | None = None,
         home_workflow: HomeWorkflow | None = None,
         dag_executor: UnifiedDAGExecutor | None = None,
         dag_input_provider: Callable[[str], Mapping[str, Any]] | None = None,
@@ -148,6 +149,7 @@ class UnifiedAssistantCore:
         self.jellyfin_approval_executor = jellyfin_approval_executor
         self.browser_interaction_provider = browser_interaction_provider
         self.browser_approval_executor = browser_approval_executor
+        self.browser_target_shadow = browser_target_shadow
         self.home_workflow = home_workflow
         self.dag_executor = dag_executor
         self.dag_input_provider = dag_input_provider
@@ -423,7 +425,10 @@ class UnifiedAssistantCore:
             )
         try:
             payload = prepare_browser_interaction_payload(
-                self.browser_interaction_provider, assignment.arguments,
+                self.browser_interaction_provider,
+                assignment.arguments,
+                objective=str(assignment.objective or ""),
+                shadow_observer=self.browser_target_shadow,
             )
         except ValueError as exc:
             return self._result(

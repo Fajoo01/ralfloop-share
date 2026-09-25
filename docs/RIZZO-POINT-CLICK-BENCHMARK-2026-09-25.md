@@ -80,7 +80,24 @@ Rules:
 - strict shortlist membership validation and fail-closed fallback;
 - no browser write capability.
 
-Tests: `tests/test_browser_target_selector.py` plus Browser MCP adapter/approval regressions: 23/23 passed.
+`browser_target_shadow.py` adds the production-safe observation stage:
+
+- asynchronous bounded queue; no Rizzo latency on the authoritative click path;
+- exact current target remains authoritative;
+- raw page snapshots, typed values and raw user goals are never persisted;
+- Rizzo endpoint is restricted to loopback HTTP;
+- empty/meaningless exact-ref commands are skipped instead of polluting the dataset;
+- JSONL events record only hashes, refs, shortlist membership, proposal source, confidence and latency;
+- `tools/browser_rizzo_shadow_report.py` summarizes live accuracy and separates shortlist misses from selector misses.
+
+Shadow flags:
+
+- `RALFLOOP_BROWSER_RIZZO_SHADOW=1` enables observation;
+- `RALFLOOP_BROWSER_RIZZO_TARGETING=0` keeps live target selection disabled;
+- `RALFLOOP_BROWSER_RIZZO_ENDPOINT=http://127.0.0.1:18017/v1/decisions`;
+- `RALFLOOP_BROWSER_RIZZO_SHADOW_AUDIT=.../browser-rizzo-shadow.jsonl`.
+
+Tests: selector, shadow privacy/fail-open and Browser MCP adapter/approval regressions are green.
 
 ## Promotion criteria
 

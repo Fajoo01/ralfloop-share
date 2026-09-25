@@ -155,6 +155,7 @@ class AssistantFeatureFlags(StrictModel):
     mailchimp_campaign_live: bool = False
     jellyfin_identity_write_live: bool = False
     browser_interact_live: bool = False
+    browser_rizzo_shadow: bool = False
     home_assistant_read_live: bool = False
     home_assistant_live: bool = False
     semantic_judge_enabled: bool = False
@@ -171,6 +172,7 @@ class AssistantFeatureFlags(StrictModel):
             mailchimp_campaign_live=_env_bool("RALFLOOP_MAILCHIMP_CAMPAIGN_LIVE"),
             jellyfin_identity_write_live=_env_bool("RALFLOOP_JELLYFIN_IDENTITY_WRITE_LIVE"),
             browser_interact_live=_env_bool("RALFLOOP_BROWSER_INTERACT_LIVE"),
+            browser_rizzo_shadow=_env_bool("RALFLOOP_BROWSER_RIZZO_SHADOW"),
             home_assistant_read_live=_env_bool("RALFLOOP_HOME_ASSISTANT_READ_LIVE"),
             home_assistant_live=_env_bool("RALFLOOP_HOME_ASSISTANT_LIVE"),
             semantic_judge_enabled=_env_bool("RALFLOOP_SEMANTIC_JUDGE_ENABLED"),

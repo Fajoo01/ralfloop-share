@@ -7,6 +7,7 @@ import os
 import re
 import unicodedata
 import urllib.request
+from urllib.parse import urlparse
 from typing import Any, Mapping, Sequence
 
 
@@ -166,6 +167,9 @@ def shortlist_browser_targets(goal: str, snapshot: str, *, limit: int = 3) -> tu
 class RizzoTargetClient:
     def __init__(self, endpoint: str | None = None, *, timeout: float = 2.5) -> None:
         self.endpoint = endpoint or os.getenv('RALFLOOP_BROWSER_RIZZO_ENDPOINT', 'http://127.0.0.1:18017/v1/decisions')
+        parsed = urlparse(self.endpoint)
+        if parsed.scheme != 'http' or parsed.hostname not in {'127.0.0.1', 'localhost', '::1'}:
+            raise ValueError('browser_rizzo_endpoint_must_be_loopback_http')
         self.timeout = float(timeout)
 
     def choose(self, goal: str, candidates: Sequence[BrowserTargetCandidate]) -> tuple[str, float]:

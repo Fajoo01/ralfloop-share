@@ -157,6 +157,26 @@ def test_upload_payload_binds_file_content_hash(tmp_path):
         provider.apply(payload)
 
 
+def test_shadow_observer_is_called_but_never_blocks_payload_preparation():
+    calls = []
+
+    class Shadow:
+        def observe(self, **kwargs):
+            calls.append(kwargs)
+            raise RuntimeError("shadow must fail open")
+
+    provider = BrowserMCPApprovalProvider(session_factory=lambda: FakeSession([]))
+    payload = prepare_browser_interaction_payload(
+        provider,
+        {"logical_action": "click", "target": "e7", "element": "Conferma"},
+        objective="browser clicca Conferma e7",
+        shadow_observer=Shadow(),
+    )
+    assert payload["target"] == "e7"
+    assert calls[0]["authoritative_target"] == "e7"
+    assert calls[0]["logical_action"] == "click"
+
+
 class FakeApprovalProvider:
     def __init__(self, before_text: str, after_text: str):
         self.before_text = before_text

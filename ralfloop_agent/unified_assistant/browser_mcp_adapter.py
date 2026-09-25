@@ -456,12 +456,25 @@ class BrowserMCPApprovalProvider:
 def prepare_browser_interaction_payload(
     provider: BrowserMCPApprovalProvider,
     arguments: Mapping[str, Any],
+    *,
+    objective: str = "",
+    shadow_observer: Any | None = None,
 ) -> dict[str, Any]:
     normalized = provider.normalize_payload(arguments)
     before = provider.snapshot()
     target = str(normalized["target"])
     if not _target_present(str(before["text"]), target):
         raise ValueError("browser_target_not_in_snapshot")
+    if shadow_observer is not None and objective:
+        try:
+            shadow_observer.observe(
+                goal=objective,
+                snapshot=str(before["text"]),
+                authoritative_target=target,
+                logical_action=str(normalized["logical_action"]),
+            )
+        except Exception:
+            pass
     summary = [
         f"azione={normalized['logical_action']}",
         f"target={target}",
