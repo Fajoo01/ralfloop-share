@@ -1879,7 +1879,29 @@ class ChromeCdp:
           importDraft();
           return JSON.stringify({ok:true, human_input_target:true, conversation_url:config.conversation_url, window_name:window.name, human_composer:Boolean(document.getElementById(humanBoxId)), native_locked:Boolean(findComposer())});
         })()'''.replace("__CONFIG__", config)
-        result = self._page_call(target.websocket_url, "Runtime.evaluate", {"expression": expression, "returnByValue": True})
+        result: dict[str, Any] | None = None
+        for attempt in range(3):
+            try:
+                current = self._wait_target(target_id)
+                if not current.websocket_url or not current.is_chatgpt:
+                    raise CdpError("human_input_target_invalid")
+                result = self._page_call(
+                    current.websocket_url,
+                    "Runtime.evaluate",
+                    {"expression": expression, "returnByValue": True},
+                    timeout_s=max(self.timeout_s, 8.0),
+                )
+                break
+            except CdpError as exc:
+                transient = (
+                    "cdp_timeout:Runtime.evaluate" in str(exc)
+                    or "cdp_transport_error:Runtime.evaluate:WebSocketTimeoutException" in str(exc)
+                )
+                if not transient or attempt >= 2:
+                    raise
+                time.sleep(0.4 * (attempt + 1))
+        if result is None:
+            raise CdpError("human_input_target_install_failed")
         raw = (result.get("result") or {}).get("value")
         try:
             state = json.loads(raw) if isinstance(raw, str) else {}
