@@ -14,7 +14,7 @@ from typing import Any
 from urllib.parse import unquote_plus
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 import requests
 
 from openshell_backend import oidc_auth
@@ -26,11 +26,12 @@ BACKEND = os.getenv("BOTTAZZI_APP_BACKEND", "http://127.0.0.1:19090").rstrip("/"
 SCHOLARLY_BACKEND = os.getenv("BOTTAZZI_APP_SCHOLARLY_BACKEND", "").rstrip("/")
 UPLOAD_ROOT = Path(os.getenv("BOTTAZZI_APP_UPLOAD_ROOT", "/var/lib/ralfloop-bottazzi-call-recordings/app-uploads"))
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+APP_APK_PATH = Path(os.getenv("BOTTAZZI_APP_APK_PATH", "/var/lib/ralfloop-bottazzi-apk/bottazzi.apk"))
 COOKIE = "bottazzi_app_session"
 OIDC_STATE_COOKIE = "bottazzi_oidc_state"
 SESSION_TTL = int(os.getenv("BOTTAZZI_APP_SESSION_TTL", "86400"))
 OIDC_STATE_TTL = 600
-PUBLIC_PATHS = {"/login", "/oidc/login", "/oidc/callback", "/healthz", "/manifest.webmanifest", "/sw.js", "/icon.svg"}
+PUBLIC_PATHS = {"/login", "/oidc/login", "/oidc/callback", "/healthz", "/manifest.webmanifest", "/sw.js", "/icon.svg", "/downloads/bottazzi.apk"}
 
 app = FastAPI(title=APP_NAME, docs_url=None, redoc_url=None, openapi_url=None)
 CALL_RECORDINGS = CallRecordingStore.from_env()
@@ -461,6 +462,18 @@ def assistant_chat(payload: dict[str, Any]) -> Response:
     except requests.RequestException:
         return JSONResponse({"detail": "assistant_backend_unavailable"}, status_code=503)
     return _proxy_response(upstream)
+
+
+@app.get("/downloads/bottazzi.apk")
+def bottazzi_apk() -> Response:
+    if not APP_APK_PATH.is_file():
+        return JSONResponse({"detail": "bottazzi_apk_unavailable"}, status_code=503)
+    return FileResponse(
+        APP_APK_PATH,
+        media_type="application/vnd.android.package-archive",
+        filename="Bot-tazzi.apk",
+        headers={"cache-control": "no-store"},
+    )
 
 
 @app.get("/manifest.webmanifest")

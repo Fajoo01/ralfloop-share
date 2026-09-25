@@ -34,6 +34,19 @@ def test_app_requires_auth_and_uses_bot_tazzi_cookie(client: TestClient) -> None
     assert "bottazzi_app_session=" in login.headers["set-cookie"]
 
 
+def test_signed_apk_download_is_public(client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    apk = tmp_path / "bottazzi.apk"
+    apk.write_bytes(b"signed-apk-fixture")
+    monkeypatch.setattr(app_gateway, "APP_APK_PATH", apk)
+
+    response = client.get("/downloads/bottazzi.apk")
+
+    assert response.status_code == 200
+    assert response.content == b"signed-apk-fixture"
+    assert response.headers["content-type"].startswith("application/vnd.android.package-archive")
+    assert response.headers["cache-control"] == "no-store"
+
+
 def test_bot_tazzi_is_product_and_peppone_is_persona(client: TestClient) -> None:
     client.post("/login", json={"password": "app-pass"})
     ui = client.get("/")
