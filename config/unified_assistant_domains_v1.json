@@ -362,7 +362,8 @@
       ],
       "description": "Sandboxed code context and remote-code workflow; no free-form shell execution.",
       "supported_skills": [
-        "code.inspect"
+        "code.inspect",
+        "github.read"
       ],
       "allowed_memory_namespaces": [
         "infrastructure",
@@ -1221,6 +1222,26 @@
       "classification": "READ",
       "workflow": "ralfloop_agent.model_tools.remote_code",
       "verification_method": "sandbox audit + artifact hash",
+      "status": "ready"
+    },
+    {
+      "id": "github.read",
+      "domains": [
+        "code"
+      ],
+      "required_arguments": [
+        "operation"
+      ],
+      "required_capabilities": [
+        "github.repo.read",
+        "github.issue.list",
+        "github.issue.read",
+        "github.pr.list",
+        "github.pr.read"
+      ],
+      "classification": "READ",
+      "workflow": "ralfloop_agent.unified_assistant.github_mcp_adapter.github_read_adapter",
+      "verification_method": "GitHub MCP read-only result + writes=0",
       "status": "ready"
     },
     {

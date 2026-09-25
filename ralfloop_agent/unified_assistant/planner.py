@@ -229,6 +229,14 @@ _MAILCHIMP_PING_RE = re.compile(
     re.I,
 )
 
+_GITHUB_RE = re.compile(r"\b(?:github|pull\s+request|github\s+issue|issue\s*#)\b", re.I)
+_GITHUB_REPO_RE = re.compile(r"\b(?P<repo>[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100})\b")
+_GITHUB_ISSUE_RE = re.compile(r"\bissue\s*#?\s*(?P<number>[0-9]{1,10})\b", re.I)
+_GITHUB_PR_RE = re.compile(r"\b(?:pr|pull\s+request)\s*#?\s*(?P<number>[0-9]{1,10})\b", re.I)
+_GITHUB_LIST_ISSUES_RE = re.compile(r"\b(?:lista|elenca|mostra|leggi|controlla)\b.*\bissues?\b", re.I)
+_GITHUB_LIST_PRS_RE = re.compile(r"\b(?:lista|elenca|mostra|leggi|controlla)\b.*\b(?:pr|pull\s+request)\b", re.I)
+_GITHUB_MUTATION_RE = re.compile(r"\b(?:crea|apri|commenta|scrivi|merge|chiudi|modifica|elimina)\b", re.I)
+
 _WHATSAPP_RE = re.compile(r"\b(?:whatsapp|whatsapp\s+web|wapp)\b", re.I)
 _WHATSAPP_COMPOSE_RE = re.compile(
     r"\b(?:scrivi|manda|invia)\s+(?:un\s+messaggio\s+)?(?:su\s+)?(?:whatsapp|wapp)\s+a\s+"
@@ -390,6 +398,35 @@ class UnifiedPlanner:
                             {"list_id": list_id_match.group("list_id")}
                             if list_id_match else {}
                         ),
+                    },
+                ),),
+            )
+
+        if _GITHUB_RE.search(goal):
+            if _GITHUB_MUTATION_RE.search(goal):
+                return self._denied("github_mutation_requires_approval_workflow")
+            repo_match = _GITHUB_REPO_RE.search(goal)
+            issue_match = _GITHUB_ISSUE_RE.search(goal)
+            pr_match = _GITHUB_PR_RE.search(goal)
+            operation = (
+                "issue" if issue_match
+                else "pr" if pr_match
+                else "issues" if _GITHUB_LIST_ISSUES_RE.search(goal)
+                else "prs" if _GITHUB_LIST_PRS_RE.search(goal)
+                else "repo"
+            )
+            number_match = issue_match or pr_match
+            return AssistantPlan(
+                intent="github.read",
+                domains=("code",),
+                assignments=(self._assignment(
+                    domain="code", skill="github.read", objective=goal,
+                    input_refs=("user.goal",), output_ref="artifact.github",
+                    policy=PolicyClass.READ,
+                    arguments={
+                        "operation": operation,
+                        **({"repo": repo_match.group("repo")} if repo_match else {}),
+                        **({"number": int(number_match.group("number"))} if number_match else {}),
                     },
                 ),),
             )
