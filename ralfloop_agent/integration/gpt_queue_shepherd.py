@@ -15,6 +15,7 @@ GOAL_CONTINUATION = (
     "Continua automaticamente il lavoro verso il GOAL definito nel messaggio iniziale. "
     "Non chiedere conferme e non ripetere quanto già completato. "
     "Verifica concretamente i criteri di accettazione prima di dichiarare il GOAL raggiunto; una fase, un piano o un risultato parziale non bastano. "
+    "Mantieni il repository/issue GitHub associato come diario tecnico persistente e fonte di verità: registra e verifica lì commit, test, runtime/stato e riferimenti necessari; non affidarti alla sola memoria della chat. "
     "Se sei realmente bloccato da un dato, permesso o intervento umano indispensabile, spiega cosa manca e termina con [[BOTTAZZI_GOAL_BLOCKED]]. "
     "Quando e solo quando il GOAL è davvero raggiunto, termina con una riga contenente esattamente [[BOTTAZZI_GOAL_REACHED]]."
 )

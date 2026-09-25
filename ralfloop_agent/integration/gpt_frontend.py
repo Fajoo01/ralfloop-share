@@ -210,6 +210,7 @@ class GptWorkController:
             + "\n\nBOT-TAZZI GOAL LOOP\n"
             + "Porta a termine integralmente la richiesta sopra. Non considerare concluso il lavoro solo perché una singola risposta è terminata. "
             + "Prima di dichiarare il GOAL raggiunto, verifica concretamente i criteri di accettazione espliciti o impliciti: modifiche applicate, test o riscontri necessari e stato finale richiesto. "
+            + "Mantieni il repository/issue GitHub associato come diario tecnico persistente e fonte di verità: registra e verifica lì commit, test, runtime/stato e riferimenti necessari; non affidarti alla sola memoria della chat. "
             + "Non usare il marker di completamento per un piano, una singola fase o un risultato parziale. "
             + "Se il GOAL non è ancora realmente raggiunto, termina la risposta senza dichiarare il lavoro finito: Bot-tazzi continuerà automaticamente. "
             + "Se sei realmente bloccato da un dato, permesso o intervento umano indispensabile, spiega in modo conciso cosa manca e termina con una riga contenente esattamente [[BOTTAZZI_GOAL_BLOCKED]]. "

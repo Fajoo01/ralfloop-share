@@ -317,6 +317,17 @@ def test_human_input_observers_are_reused_and_throttled() -> None:
     assert "if (activeStateV3 && activeStateV3.observerTimer) clearTimeout(activeStateV3.observerTimer)" in source
 
 
+def test_goal_loop_requires_github_as_persistent_diary() -> None:
+    root = Path(__file__).resolve().parents[1]
+    frontend = (root / "ralfloop_agent" / "integration" / "gpt_frontend.py").read_text(encoding="utf-8")
+    shepherd = (root / "ralfloop_agent" / "integration" / "gpt_queue_shepherd.py").read_text(encoding="utf-8")
+    requirement = "repository/issue GitHub associato come diario tecnico persistente e fonte di verità"
+    assert requirement in frontend
+    assert requirement in shepherd
+    assert "non affidarti alla sola memoria della chat" in frontend
+    assert "non affidarti alla sola memoria della chat" in shepherd
+
+
 def test_gpt_browser_mobile_surface_is_distinct_from_bottazzi_chat_app() -> None:
     root = Path(__file__).resolve().parents[1]
     html = (root / "openshell_backend" / "bottazzi_gpt_mobile_ui.html").read_text(encoding="utf-8")
