@@ -1,0 +1,3150 @@
+{
+  "source": "Sanitized from live Browser MCP accessibility snapshots on 2026-09-25; no URLs, field values, cookies, account identifiers, or page text retained.",
+  "pages": [
+    {
+      "tab": 0,
+      "candidates": [
+        {
+          "ref": "e20",
+          "role": "link",
+          "label": "Cambia account",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            434.0,
+            49.0,
+            104.0,
+            16.0
+          ]
+        },
+        {
+          "ref": "e38",
+          "role": "textbox",
+          "label": "Il tuo indirizzo email",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            250.0,
+            228.0,
+            295.0,
+            24.0
+          ]
+        },
+        {
+          "ref": "e55",
+          "role": "textbox",
+          "label": "Inserisci l'email con cui ti sei iscritto al canale YouTube https://www.youtube.com/@lopsvito Domanda obbligatoria",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            250.0,
+            418.0,
+            295.0,
+            24.0
+          ]
+        },
+        {
+          "ref": "e60",
+          "role": "button",
+          "label": "Invia",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            225.0,
+            490.0,
+            82.0,
+            38.0
+          ]
+        },
+        {
+          "ref": "e65",
+          "role": "button",
+          "label": "Cancella modulo",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            737.0,
+            490.0,
+            128.0,
+            38.0
+          ]
+        },
+        {
+          "ref": "e72",
+          "role": "button",
+          "label": "Contatta il proprietario del modulo",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            547.0,
+            578.0,
+            182.0,
+            14.0
+          ]
+        },
+        {
+          "ref": "e73",
+          "role": "link",
+          "label": "Termini di servizio",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            738.0,
+            578.0,
+            97.0,
+            14.0
+          ]
+        },
+        {
+          "ref": "e74",
+          "role": "link",
+          "label": "Norme sulla privacy",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            492.0,
+            592.0,
+            105.0,
+            14.0
+          ]
+        },
+        {
+          "ref": "e76",
+          "role": "link",
+          "label": "Segnala",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            615.0,
+            618.0,
+            43.0,
+            14.0
+          ]
+        },
+        {
+          "ref": "e78",
+          "role": "link",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            474.0,
+            664.0,
+            143.0,
+            19.0
+          ]
+        },
+        {
+          "ref": "e84",
+          "role": "button",
+          "label": "Guida e feedback",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            5.0,
+            428.0,
+            48.0,
+            48.0
+          ]
+        }
+      ]
+    },
+    {
+      "tab": 2,
+      "candidates": [
+        {
+          "ref": "e4",
+          "role": "link",
+          "label": "Powered by WordPress",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            398.0,
+            20.0,
+            84.0,
+            84.0
+          ]
+        },
+        {
+          "ref": "e8",
+          "role": "textbox",
+          "label": "Nome utente o indirizzo email",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            305.0,
+            179.0,
+            270.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e12",
+          "role": "textbox",
+          "label": "Password",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            305.0,
+            259.0,
+            270.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e13",
+          "role": "button",
+          "label": "Mostra password",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            535.0,
+            259.0,
+            40.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e16",
+          "role": "checkbox",
+          "label": "Ricordami",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            305.0,
+            327.0,
+            16.0,
+            16.0
+          ]
+        },
+        {
+          "ref": "e19",
+          "role": "button",
+          "label": "Aiuto",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            396.0,
+            323.0,
+            24.0,
+            24.0
+          ]
+        },
+        {
+          "ref": "e21",
+          "role": "button",
+          "label": "Accedi",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            502.0,
+            315.0,
+            73.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e23",
+          "role": "link",
+          "label": "Password dimenticata?",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            304.0,
+            408.0,
+            133.0,
+            14.0
+          ]
+        },
+        {
+          "ref": "e25",
+          "role": "link",
+          "label": "← Torna a Tiremm Innanz",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            304.0,
+            444.0,
+            148.0,
+            14.0
+          ]
+        },
+        {
+          "ref": "e30",
+          "role": "combobox",
+          "label": "Lingua",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            308.0,
+            525.0,
+            180.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e31",
+          "role": "button",
+          "label": "Cambia",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            494.0,
+            525.0,
+            78.0,
+            40.0
+          ]
+        }
+      ]
+    },
+    {
+      "tab": 3,
+      "candidates": [
+        {
+          "ref": "e7",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            102.0,
+            -996.0,
+            208.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e11",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            510.0,
+            -996.0,
+            172.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e15",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            882.0,
+            -996.0,
+            199.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e24",
+          "role": "link",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            20.0,
+            9.0,
+            102.0,
+            48.0
+          ]
+        },
+        {
+          "ref": "e35",
+          "role": "textbox",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            313.0,
+            22.0,
+            680.0,
+            20.0
+          ]
+        },
+        {
+          "ref": "e36",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            1033.0,
+            8.0,
+            56.0,
+            46.0
+          ]
+        },
+        {
+          "ref": "e39",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            989.0,
+            8.0,
+            56.0,
+            46.0
+          ]
+        },
+        {
+          "ref": "e43",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            257.0,
+            8.0,
+            56.0,
+            46.0
+          ]
+        },
+        {
+          "ref": "e49",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            777.0,
+            11.0,
+            40.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e56",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            821.0,
+            11.0,
+            40.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e61",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            865.0,
+            11.0,
+            40.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e75",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            912.0,
+            11.0,
+            40.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e88",
+          "role": "link",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            965.0,
+            11.0,
+            108.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e97",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            1081.0,
+            11.0,
+            40.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e103",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            1129.0,
+            11.0,
+            40.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e108",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            16.0,
+            71.0,
+            114.0,
+            56.0
+          ]
+        },
+        {
+          "ref": "e123",
+          "role": "link",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            16.0,
+            143.0,
+            216.0,
+            32.0
+          ]
+        },
+        {
+          "ref": "e143",
+          "role": "link",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            16.0,
+            175.0,
+            216.0,
+            32.0
+          ]
+        },
+        {
+          "ref": "e157",
+          "role": "link",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            16.0,
+            223.0,
+            216.0,
+            32.0
+          ]
+        },
+        {
+          "ref": "e176",
+          "role": "link",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            16.0,
+            255.0,
+            216.0,
+            32.0
+          ]
+        },
+        {
+          "ref": "e200",
+          "role": "link",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            16.0,
+            287.0,
+            216.0,
+            32.0
+          ]
+        },
+        {
+          "ref": "e221",
+          "role": "link",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            16.0,
+            335.0,
+            216.0,
+            32.0
+          ]
+        },
+        {
+          "ref": "e242",
+          "role": "link",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            16.0,
+            367.0,
+            216.0,
+            32.0
+          ]
+        },
+        {
+          "ref": "e263",
+          "role": "link",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            16.0,
+            399.0,
+            216.0,
+            32.0
+          ]
+        },
+        {
+          "ref": "e279",
+          "role": "link",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            16.0,
+            447.0,
+            216.0,
+            32.0
+          ]
+        },
+        {
+          "ref": "e298",
+          "role": "link",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            16.0,
+            479.0,
+            216.0,
+            32.0
+          ]
+        },
+        {
+          "ref": "e318",
+          "role": "link",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            16.0,
+            511.0,
+            216.0,
+            32.0
+          ]
+        },
+        {
+          "ref": "e348",
+          "role": "link",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            34.0,
+            616.0,
+            212.0,
+            56.0
+          ]
+        },
+        {
+          "ref": "e376",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            1071.0,
+            87.0,
+            32.0,
+            32.0
+          ]
+        },
+        {
+          "ref": "e392",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            265.0,
+            135.0,
+            155.0,
+            32.0
+          ]
+        },
+        {
+          "ref": "e400",
+          "role": "radio",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            993.0,
+            135.0,
+            110.0,
+            32.0
+          ]
+        },
+        {
+          "ref": "e402",
+          "role": "radio",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            993.0,
+            135.0,
+            55.0,
+            32.0
+          ]
+        },
+        {
+          "ref": "e412",
+          "role": "radio",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            1048.0,
+            135.0,
+            55.0,
+            32.0
+          ]
+        },
+        {
+          "ref": "e452",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            1061.0,
+            229.0,
+            36.0,
+            36.0
+          ]
+        },
+        {
+          "ref": "e486",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            1061.0,
+            277.0,
+            36.0,
+            36.0
+          ]
+        },
+        {
+          "ref": "e524",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            1061.0,
+            325.0,
+            36.0,
+            36.0
+          ]
+        },
+        {
+          "ref": "e557",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            1061.0,
+            373.0,
+            36.0,
+            36.0
+          ]
+        },
+        {
+          "ref": "e591",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            1061.0,
+            421.0,
+            36.0,
+            36.0
+          ]
+        },
+        {
+          "ref": "e624",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            1061.0,
+            469.0,
+            36.0,
+            36.0
+          ]
+        },
+        {
+          "ref": "e662",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            1061.0,
+            517.0,
+            36.0,
+            36.0
+          ]
+        },
+        {
+          "ref": "e690",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            1061.0,
+            565.0,
+            36.0,
+            36.0
+          ]
+        },
+        {
+          "ref": "e723",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            1061.0,
+            613.0,
+            36.0,
+            36.0
+          ]
+        },
+        {
+          "ref": "e756",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            1061.0,
+            661.0,
+            36.0,
+            36.0
+          ]
+        },
+        {
+          "ref": "e765",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            297.0,
+            715.0,
+            104.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e793",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            352.0,
+            448.0,
+            55.0,
+            17.0
+          ]
+        },
+        {
+          "ref": "e794",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            422.0,
+            445.0,
+            22.0,
+            22.0
+          ]
+        },
+        {
+          "ref": "e806",
+          "role": "button",
+          "label": "Disattiva modalità offline",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            795.0,
+            276.0,
+            224.0,
+            36.0
+          ]
+        },
+        {
+          "ref": "e807",
+          "role": "button",
+          "label": "Aggiungi a Chrome",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            803.0,
+            312.0,
+            164.0,
+            36.0
+          ]
+        }
+      ]
+    },
+    {
+      "tab": 4,
+      "candidates": [
+        {
+          "ref": "e2",
+          "role": "link",
+          "label": "Vai ai contenuti principali",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            11.0,
+            59.0,
+            109.0,
+            43.0
+          ]
+        },
+        {
+          "ref": "e3",
+          "role": "link",
+          "label": "Guida per l'accessibilità",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            11.0,
+            59.0,
+            109.0,
+            43.0
+          ]
+        },
+        {
+          "ref": "e13",
+          "role": "link",
+          "label": "Vai alla home page di Google",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            37.0,
+            36.0,
+            92.0,
+            33.0
+          ]
+        },
+        {
+          "ref": "e24",
+          "role": "combobox",
+          "label": "Cerca",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            194.0,
+            27.0,
+            565.0,
+            50.0
+          ]
+        },
+        {
+          "ref": "e29",
+          "role": "button",
+          "label": "Cancella",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            759.0,
+            38.0,
+            44.0,
+            28.0
+          ]
+        },
+        {
+          "ref": "e37",
+          "role": "button",
+          "label": "Esegui una ricerca vocale",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            808.0,
+            40.0,
+            40.0,
+            24.0
+          ]
+        },
+        {
+          "ref": "e47",
+          "role": "button",
+          "label": "Ricerca tramite immagine",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            848.0,
+            40.0,
+            40.0,
+            24.0
+          ]
+        },
+        {
+          "ref": "e51",
+          "role": "button",
+          "label": "Condividi",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            1021.0,
+            32.0,
+            40.0,
+            41.0
+          ]
+        },
+        {
+          "ref": "e59",
+          "role": "button",
+          "label": "App Google",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            1065.0,
+            32.0,
+            40.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e84",
+          "role": "link",
+          "label": "AI Mode",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            25.0,
+            90.0,
+            76.0,
+            48.0
+          ]
+        },
+        {
+          "ref": "e89",
+          "role": "link",
+          "label": "Tutti",
+          "disabled": true,
+          "visible": true,
+          "box": [
+            101.0,
+            90.0,
+            51.0,
+            48.0
+          ]
+        },
+        {
+          "ref": "e93",
+          "role": "link",
+          "label": "Immagini",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            152.0,
+            90.0,
+            81.0,
+            48.0
+          ]
+        },
+        {
+          "ref": "e97",
+          "role": "link",
+          "label": "Video",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            232.0,
+            90.0,
+            60.0,
+            48.0
+          ]
+        },
+        {
+          "ref": "e101",
+          "role": "link",
+          "label": "Video brevi",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            292.0,
+            90.0,
+            94.0,
+            48.0
+          ]
+        },
+        {
+          "ref": "e105",
+          "role": "link",
+          "label": "Notizie",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            386.0,
+            90.0,
+            67.0,
+            48.0
+          ]
+        },
+        {
+          "ref": "e109",
+          "role": "link",
+          "label": "Web",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            453.0,
+            90.0,
+            53.0,
+            48.0
+          ]
+        },
+        {
+          "ref": "e113",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            505.0,
+            90.0,
+            71.0,
+            48.0
+          ]
+        },
+        {
+          "ref": "e121",
+          "role": "button",
+          "label": "Strumenti",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            576.0,
+            90.0,
+            102.0,
+            48.0
+          ]
+        },
+        {
+          "ref": "e167",
+          "role": "button",
+          "label": "Informazioni su questo risultato",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            333.0,
+            186.0,
+            34.0,
+            20.0
+          ]
+        },
+        {
+          "ref": "e187",
+          "role": "link",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            38.0,
+            321.0,
+            46.0,
+            20.0
+          ]
+        },
+        {
+          "ref": "e200",
+          "role": "link",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            38.0,
+            392.0,
+            71.0,
+            20.0
+          ]
+        },
+        {
+          "ref": "e213",
+          "role": "link",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            38.0,
+            463.0,
+            128.0,
+            20.0
+          ]
+        },
+        {
+          "ref": "e226",
+          "role": "link",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            38.0,
+            534.0,
+            65.0,
+            20.0
+          ]
+        },
+        {
+          "ref": "e239",
+          "role": "link",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            38.0,
+            606.0,
+            126.0,
+            20.0
+          ]
+        },
+        {
+          "ref": "e247",
+          "role": "link",
+          "label": "Altri risultati in regione.lombardia.it »",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            37.0,
+            671.0,
+            226.0,
+            24.0
+          ]
+        },
+        {
+          "ref": "e292",
+          "role": "link",
+          "label": "Bandi e Servizi di Regione Lombardia",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            295.0,
+            792.0,
+            268.0,
+            19.0
+          ]
+        },
+        {
+          "ref": "e295",
+          "role": "button",
+          "label": "Risultati correlati",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            574.0,
+            791.0,
+            20.0,
+            20.0
+          ]
+        },
+        {
+          "ref": "e312",
+          "role": "link",
+          "label": "Portale inPA",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            331.0,
+            940.0,
+            88.0,
+            19.0
+          ]
+        },
+        {
+          "ref": "e318",
+          "role": "link",
+          "label": "",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            59.0,
+            1000.0,
+            618.0,
+            43.0
+          ]
+        },
+        {
+          "ref": "e321",
+          "role": "link",
+          "label": "",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            475.0,
+            1024.0,
+            179.0,
+            19.0
+          ]
+        },
+        {
+          "ref": "e322",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            479.0,
+            1024.0,
+            175.0,
+            20.0
+          ]
+        },
+        {
+          "ref": "e353",
+          "role": "button",
+          "label": "Informazioni su questo risultato",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            286.0,
+            1154.0,
+            36.0,
+            36.0
+          ]
+        },
+        {
+          "ref": "e366",
+          "role": "link",
+          "label": "Bandi e avvisi – Portale del reclutamento - inPA. Si apre in una nuova scheda.",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            354.0,
+            1149.0,
+            287.0,
+            135.0
+          ]
+        },
+        {
+          "ref": "e375",
+          "role": "button",
+          "label": "Informazioni su questo risultato",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            600.0,
+            1154.0,
+            36.0,
+            36.0
+          ]
+        },
+        {
+          "ref": "e387",
+          "role": "link",
+          "label": "Bandi - Confcommercio Milano. Si apre in una nuova scheda.",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            668.0,
+            1149.0,
+            287.0,
+            135.0
+          ]
+        },
+        {
+          "ref": "e396",
+          "role": "button",
+          "label": "Informazioni su questo risultato",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            914.0,
+            1154.0,
+            36.0,
+            36.0
+          ]
+        },
+        {
+          "ref": "e406",
+          "role": "button",
+          "label": "",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            668.0,
+            1197.0,
+            39.0,
+            39.0
+          ]
+        },
+        {
+          "ref": "e412",
+          "role": "button",
+          "label": "Mostra di più in AI Overview",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            37.0,
+            1054.0,
+            652.0,
+            51.0
+          ]
+        },
+        {
+          "ref": "e429",
+          "role": "link",
+          "label": "Bandi Confcommercio Milano https://www.confcommerciomilano.it › bandi",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            37.0,
+            1183.0,
+            271.0,
+            44.0
+          ]
+        },
+        {
+          "ref": "e445",
+          "role": "button",
+          "label": "Informazioni su questo risultato",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            315.0,
+            1188.0,
+            34.0,
+            20.0
+          ]
+        },
+        {
+          "ref": "e467",
+          "role": "button",
+          "label": "Che cosa sono i bandi?",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            37.0,
+            1354.0,
+            652.0,
+            52.0
+          ]
+        },
+        {
+          "ref": "e481",
+          "role": "button",
+          "label": "Quali sono i bandi aperti nella Regione Lombardia per il 2026?",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            37.0,
+            1407.0,
+            652.0,
+            52.0
+          ]
+        },
+        {
+          "ref": "e495",
+          "role": "button",
+          "label": "Quali sono i nuovi bandi per il 2026?",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            37.0,
+            1460.0,
+            652.0,
+            52.0
+          ]
+        },
+        {
+          "ref": "e509",
+          "role": "button",
+          "label": "Qual è la trama di Bandi?",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            37.0,
+            1514.0,
+            652.0,
+            52.0
+          ]
+        },
+        {
+          "ref": "e526",
+          "role": "link",
+          "label": "Bandi attivi Infobandi CSVnet https://infobandi.csvnet.it › home › bandi-attivi",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            37.0,
+            1623.0,
+            282.0,
+            44.0
+          ]
+        },
+        {
+          "ref": "e542",
+          "role": "button",
+          "label": "Informazioni su questo risultato",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            327.0,
+            1628.0,
+            34.0,
+            20.0
+          ]
+        },
+        {
+          "ref": "e557",
+          "role": "link",
+          "label": "Bandi per Assegni di ricerca Ministero dell'Università e della Ricerca https://bandi.mur.gov.it",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            37.0,
+            1771.0,
+            285.0,
+            44.0
+          ]
+        },
+        {
+          "ref": "e573",
+          "role": "button",
+          "label": "Informazioni su questo risultato",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            329.0,
+            1776.0,
+            34.0,
+            20.0
+          ]
+        },
+        {
+          "ref": "e590",
+          "role": "link",
+          "label": "Ricerca bandi Obiettivo Europa https://www.obiettivoeuropa.com › bandi",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            37.0,
+            1919.0,
+            253.0,
+            44.0
+          ]
+        },
+        {
+          "ref": "e606",
+          "role": "button",
+          "label": "Informazioni su questo risultato",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            297.0,
+            1924.0,
+            34.0,
+            20.0
+          ]
+        },
+        {
+          "ref": "e623",
+          "role": "link",
+          "label": "Bandi e avvisi – Portale del reclutamento inPA https://www.inpa.gov.it › bandi-e-avvisi",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            37.0,
+            2067.0,
+            399.0,
+            44.0
+          ]
+        },
+        {
+          "ref": "e639",
+          "role": "button",
+          "label": "Informazioni su questo risultato",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            288.0,
+            2072.0,
+            34.0,
+            20.0
+          ]
+        },
+        {
+          "ref": "e663",
+          "role": "link",
+          "label": "Bandi significato",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            53.0,
+            2236.0,
+            294.0,
+            60.0
+          ]
+        },
+        {
+          "ref": "e677",
+          "role": "link",
+          "label": "Bandi Film",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            53.0,
+            2296.0,
+            294.0,
+            60.0
+          ]
+        },
+        {
+          "ref": "e691",
+          "role": "link",
+          "label": "Bandi aperti Regione Lombardia",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            53.0,
+            2356.0,
+            294.0,
+            60.0
+          ]
+        },
+        {
+          "ref": "e705",
+          "role": "link",
+          "label": "Bandi Netflix",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            53.0,
+            2416.0,
+            294.0,
+            60.0
+          ]
+        },
+        {
+          "ref": "e720",
+          "role": "link",
+          "label": "Bandi serie TV",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            387.0,
+            2236.0,
+            294.0,
+            60.0
+          ]
+        },
+        {
+          "ref": "e734",
+          "role": "link",
+          "label": "Bandi Regione Lombardia per Comuni",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            387.0,
+            2295.0,
+            294.0,
+            61.0
+          ]
+        },
+        {
+          "ref": "e748",
+          "role": "link",
+          "label": "Bandi TV",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            387.0,
+            2356.0,
+            294.0,
+            60.0
+          ]
+        },
+        {
+          "ref": "e762",
+          "role": "link",
+          "label": "Bandi Regione Lombardia stufe",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            387.0,
+            2416.0,
+            294.0,
+            60.0
+          ]
+        },
+        {
+          "ref": "e777",
+          "role": "link",
+          "label": "Page 2",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            251.0,
+            2520.0,
+            20.0,
+            56.0
+          ]
+        },
+        {
+          "ref": "e779",
+          "role": "link",
+          "label": "Page 3",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            271.0,
+            2520.0,
+            20.0,
+            56.0
+          ]
+        },
+        {
+          "ref": "e781",
+          "role": "link",
+          "label": "Page 4",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            291.0,
+            2520.0,
+            20.0,
+            56.0
+          ]
+        },
+        {
+          "ref": "e783",
+          "role": "link",
+          "label": "Page 5",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            311.0,
+            2520.0,
+            20.0,
+            56.0
+          ]
+        },
+        {
+          "ref": "e785",
+          "role": "link",
+          "label": "Page 6",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            331.0,
+            2520.0,
+            20.0,
+            56.0
+          ]
+        },
+        {
+          "ref": "e787",
+          "role": "link",
+          "label": "Page 7",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            351.0,
+            2520.0,
+            20.0,
+            56.0
+          ]
+        },
+        {
+          "ref": "e789",
+          "role": "link",
+          "label": "Page 8",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            371.0,
+            2520.0,
+            20.0,
+            56.0
+          ]
+        },
+        {
+          "ref": "e791",
+          "role": "link",
+          "label": "Page 9",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            391.0,
+            2520.0,
+            20.0,
+            56.0
+          ]
+        },
+        {
+          "ref": "e793",
+          "role": "link",
+          "label": "Page 10",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            411.0,
+            2520.0,
+            20.0,
+            56.0
+          ]
+        },
+        {
+          "ref": "e796",
+          "role": "link",
+          "label": "Avanti",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            431.0,
+            2520.0,
+            92.0,
+            56.0
+          ]
+        },
+        {
+          "ref": "e811",
+          "role": "link",
+          "label": "Prova senza personalizzazione",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            225.0,
+            2613.0,
+            194.0,
+            48.0
+          ]
+        },
+        {
+          "ref": "e818",
+          "role": "button",
+          "label": "Ponte Nuovo, Milano MI - In base ai tuoi luoghi (lavoro)",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            99.0,
+            2670.0,
+            364.0,
+            16.0
+          ]
+        },
+        {
+          "ref": "e824",
+          "role": "button",
+          "label": "Aggiorna posizione",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            475.0,
+            2670.0,
+            119.0,
+            16.0
+          ]
+        },
+        {
+          "ref": "e828",
+          "role": "link",
+          "label": "Guida",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            37.0,
+            2708.0,
+            37.0,
+            22.0
+          ]
+        },
+        {
+          "ref": "e830",
+          "role": "button",
+          "label": "Invia feedback",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            98.0,
+            2708.0,
+            90.0,
+            22.0
+          ]
+        },
+        {
+          "ref": "e832",
+          "role": "link",
+          "label": "Privacy",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            212.0,
+            2708.0,
+            46.0,
+            22.0
+          ]
+        },
+        {
+          "ref": "e833",
+          "role": "link",
+          "label": "Termini",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            282.0,
+            2708.0,
+            45.0,
+            22.0
+          ]
+        }
+      ]
+    },
+    {
+      "tab": 6,
+      "candidates": [
+        {
+          "ref": "e4",
+          "role": "link",
+          "label": "WireGuard UI",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            358.0,
+            35.0,
+            179.0,
+            42.0
+          ]
+        },
+        {
+          "ref": "e10",
+          "role": "textbox",
+          "label": "Username",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            288.0,
+            160.0,
+            280.0,
+            38.0
+          ]
+        },
+        {
+          "ref": "e15",
+          "role": "textbox",
+          "label": "Password",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            288.0,
+            214.0,
+            282.0,
+            38.0
+          ]
+        },
+        {
+          "ref": "e22",
+          "role": "checkbox",
+          "label": "Remember Me",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            288.0,
+            274.0,
+            13.0,
+            13.0
+          ]
+        },
+        {
+          "ref": "e25",
+          "role": "button",
+          "label": "Sign In",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            511.0,
+            268.0,
+            97.0,
+            38.0
+          ]
+        }
+      ]
+    },
+    {
+      "tab": 7,
+      "candidates": [
+        {
+          "ref": "e15",
+          "role": "button",
+          "label": "Chiudi",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            655.0,
+            135.0,
+            36.0,
+            36.0
+          ]
+        },
+        {
+          "ref": "e31",
+          "role": "checkbox",
+          "label": "Non mostrare più",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            429.0,
+            237.0,
+            36.0,
+            36.0
+          ]
+        },
+        {
+          "ref": "e35",
+          "role": "button",
+          "label": "Visualizza tutte le limitazioni",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            425.0,
+            293.0,
+            184.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e37",
+          "role": "button",
+          "label": "Ok",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            621.0,
+            293.0,
+            64.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e60",
+          "role": "link",
+          "label": "Gestisci impostazioni",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            749.0,
+            8.0,
+            164.0,
+            48.0
+          ]
+        },
+        {
+          "ref": "e64",
+          "role": "link",
+          "label": "Attiva estensione",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            922.0,
+            8.0,
+            137.0,
+            48.0
+          ]
+        },
+        {
+          "ref": "e66",
+          "role": "button",
+          "label": "Chiudi il banner",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            1071.0,
+            12.0,
+            40.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e75",
+          "role": "link",
+          "label": "Home di Fogli",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            8.0,
+            71.0,
+            48.0,
+            48.0
+          ]
+        },
+        {
+          "ref": "e90",
+          "role": "button",
+          "label": "Limitazioni di sicurezza",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            391.0,
+            73.0,
+            28.0,
+            28.0
+          ]
+        },
+        {
+          "ref": "e94",
+          "role": "checkbox",
+          "label": "Aggiungi a Speciali",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            423.0,
+            73.0,
+            28.0,
+            28.0
+          ]
+        },
+        {
+          "ref": "e98",
+          "role": "button",
+          "label": "Aggiungi scorciatoia a Drive",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            455.0,
+            73.0,
+            28.0,
+            28.0
+          ]
+        },
+        {
+          "ref": "e113",
+          "role": "button",
+          "label": "2 nascosti 2 visualizzatori",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            651.0,
+            77.0,
+            34.0,
+            34.0
+          ]
+        },
+        {
+          "ref": "e124",
+          "role": "button",
+          "label": "Partecipa a una chiamata qui o presenta questa scheda durante la chiamata",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            746.0,
+            74.0,
+            68.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e130",
+          "role": "button",
+          "label": "Condividi",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            822.0,
+            74.0,
+            41.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e138",
+          "role": "link",
+          "label": "Fai l'upgrade",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            875.0,
+            74.0,
+            133.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e151",
+          "role": "button",
+          "label": "Prova Gemini",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            1015.0,
+            74.0,
+            40.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e162",
+          "role": "menuitem",
+          "label": "File",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            54.0,
+            98.0,
+            39.0,
+            24.0
+          ]
+        },
+        {
+          "ref": "e163",
+          "role": "menuitem",
+          "label": "Modifica",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            93.0,
+            98.0,
+            73.0,
+            24.0
+          ]
+        },
+        {
+          "ref": "e164",
+          "role": "menuitem",
+          "label": "Visualizza",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            166.0,
+            98.0,
+            80.0,
+            24.0
+          ]
+        },
+        {
+          "ref": "e165",
+          "role": "menuitem",
+          "label": "Inserisci",
+          "disabled": true,
+          "visible": true,
+          "box": [
+            246.0,
+            98.0,
+            71.0,
+            24.0
+          ]
+        },
+        {
+          "ref": "e166",
+          "role": "menuitem",
+          "label": "Formato",
+          "disabled": true,
+          "visible": true,
+          "box": [
+            317.0,
+            98.0,
+            71.0,
+            24.0
+          ]
+        },
+        {
+          "ref": "e167",
+          "role": "menuitem",
+          "label": "Dati",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            388.0,
+            98.0,
+            43.0,
+            24.0
+          ]
+        },
+        {
+          "ref": "e168",
+          "role": "menuitem",
+          "label": "Strumenti",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            431.0,
+            98.0,
+            80.0,
+            24.0
+          ]
+        },
+        {
+          "ref": "e169",
+          "role": "menuitem",
+          "label": "Estensioni",
+          "disabled": true,
+          "visible": true,
+          "box": [
+            511.0,
+            98.0,
+            83.0,
+            24.0
+          ]
+        },
+        {
+          "ref": "e170",
+          "role": "menuitem",
+          "label": "Guida",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            594.0,
+            98.0,
+            55.0,
+            24.0
+          ]
+        },
+        {
+          "ref": "e175",
+          "role": "combobox",
+          "label": "Menu",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            25.0,
+            135.0,
+            44.0,
+            28.0
+          ]
+        },
+        {
+          "ref": "e177",
+          "role": "button",
+          "label": "Stampa (Ctrl+P)",
+          "disabled": true,
+          "visible": true,
+          "box": [
+            62.0,
+            134.0,
+            30.0,
+            30.0
+          ]
+        },
+        {
+          "ref": "e182",
+          "role": "button",
+          "label": "Visualizzazioni filtrate",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            94.0,
+            134.0,
+            39.0,
+            30.0
+          ]
+        },
+        {
+          "ref": "e191",
+          "role": "combobox",
+          "label": "Zoom",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            136.0,
+            135.0,
+            75.0,
+            28.0
+          ]
+        },
+        {
+          "ref": "e195",
+          "role": "textbox",
+          "label": "Zoom",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            139.0,
+            136.0,
+            48.0,
+            28.0
+          ]
+        },
+        {
+          "ref": "e199",
+          "role": "button",
+          "label": "Modalità",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            220.0,
+            135.0,
+            199.0,
+            28.0
+          ]
+        },
+        {
+          "ref": "e204",
+          "role": "button",
+          "label": "Nascondi i menu (Ctrl+Maiusc+F)",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            1058.0,
+            134.0,
+            30.0,
+            30.0
+          ]
+        },
+        {
+          "ref": "e217",
+          "role": "textbox",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            8.0,
+            181.0,
+            74.0,
+            19.0
+          ]
+        },
+        {
+          "ref": "e219",
+          "role": "button",
+          "label": "Pulsante Menu della casella del nome. Seleziona una delle voci di menu per andare all'intervallo denominato corrispondente.",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            82.0,
+            179.0,
+            18.0,
+            24.0
+          ]
+        },
+        {
+          "ref": "e235",
+          "role": "textbox",
+          "label": "",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            141.0,
+            179.0,
+            962.0,
+            26.0
+          ]
+        },
+        {
+          "ref": "e261",
+          "role": "button",
+          "label": "Torna al grafico",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            1518.0,
+            1276.0,
+            99.0,
+            29.0
+          ]
+        },
+        {
+          "ref": "e268",
+          "role": "button",
+          "label": "Torna al grafico",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            1997.0,
+            1271.0,
+            99.0,
+            29.0
+          ]
+        },
+        {
+          "ref": "e275",
+          "role": "button",
+          "label": "Torna al grafico",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            1518.0,
+            1022.0,
+            99.0,
+            29.0
+          ]
+        },
+        {
+          "ref": "e289",
+          "role": "link",
+          "label": "Limitazione di responsabilità",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            231.0,
+            437.0,
+            143.0,
+            13.0
+          ]
+        },
+        {
+          "ref": "e291",
+          "role": "button",
+          "label": "Tutti i fogli",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            44.0,
+            452.0,
+            34.0,
+            34.0
+          ]
+        },
+        {
+          "ref": "e299",
+          "role": "button",
+          "label": "PORTAFOGLI-SCENARI",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            94.0,
+            451.0,
+            210.0,
+            37.0
+          ]
+        },
+        {
+          "ref": "e307",
+          "role": "button",
+          "label": "grafici",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            303.0,
+            451.0,
+            91.0,
+            37.0
+          ]
+        },
+        {
+          "ref": "e315",
+          "role": "button",
+          "label": "Matrice",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            392.0,
+            451.0,
+            99.0,
+            37.0
+          ]
+        },
+        {
+          "ref": "e325",
+          "role": "link",
+          "label": "Attiva il supporto per lo screen reader",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            0.0,
+            -1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "ref": "e326",
+          "role": "textbox",
+          "label": "",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            -10000.0,
+            -10000.0,
+            186.0,
+            39.0
+          ]
+        }
+      ]
+    },
+    {
+      "tab": 9,
+      "candidates": [
+        {
+          "ref": "e14",
+          "role": "button",
+          "label": "Chiudi",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            415.0,
+            230.0,
+            65.0,
+            36.0
+          ]
+        }
+      ]
+    },
+    {
+      "tab": 12,
+      "candidates": [
+        {
+          "ref": "e9",
+          "role": "button",
+          "label": "Guida",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            24.0,
+            16.0,
+            24.0,
+            24.0
+          ]
+        },
+        {
+          "ref": "e14",
+          "role": "link",
+          "label": "Home page di YouTube",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            56.0,
+            0.0,
+            123.0,
+            56.0
+          ]
+        },
+        {
+          "ref": "e24",
+          "role": "button",
+          "label": "Salta link di navigazione",
+          "disabled": false,
+          "visible": false,
+          "box": [
+            16.0,
+            -1000.0,
+            183.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e34",
+          "role": "combobox",
+          "label": "Cerca",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            359.0,
+            16.0,
+            515.0,
+            24.0
+          ]
+        },
+        {
+          "ref": "e35",
+          "role": "button",
+          "label": "Search",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            878.0,
+            8.0,
+            64.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e42",
+          "role": "button",
+          "label": "Esegui una ricerca vocale",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            958.0,
+            8.0,
+            40.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e50",
+          "role": "button",
+          "label": "Crea",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            1103.0,
+            8.0,
+            91.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e56",
+          "role": "button",
+          "label": "Notifiche",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            1202.0,
+            8.0,
+            40.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e64",
+          "role": "button",
+          "label": "Menu Account",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            1250.0,
+            11.0,
+            54.0,
+            34.0
+          ]
+        },
+        {
+          "ref": "e73",
+          "role": "link",
+          "label": "Account",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            12.0,
+            120.0,
+            216.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e79",
+          "role": "link",
+          "label": "Notifiche",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            12.0,
+            160.0,
+            216.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e85",
+          "role": "link",
+          "label": "Riproduzione e prestazioni",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            12.0,
+            200.0,
+            216.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e91",
+          "role": "link",
+          "label": "Privacy",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            12.0,
+            240.0,
+            216.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e97",
+          "role": "link",
+          "label": "App collegate",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            12.0,
+            280.0,
+            216.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e103",
+          "role": "link",
+          "label": "Fatturazione e pagamenti",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            12.0,
+            320.0,
+            216.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e109",
+          "role": "link",
+          "label": "Impostazioni avanzate",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            12.0,
+            360.0,
+            216.0,
+            40.0
+          ]
+        },
+        {
+          "ref": "e143",
+          "role": "link",
+          "label": "Il tuo canale",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            459.0,
+            30.0,
+            70.0,
+            53.0
+          ]
+        },
+        {
+          "ref": "e148",
+          "role": "link",
+          "label": "Stato e funzioni del canale",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            463.0,
+            103.0,
+            165.0,
+            20.0
+          ]
+        },
+        {
+          "ref": "e150",
+          "role": "link",
+          "label": "Aggiungi o gestisci i tuoi canali",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            463.0,
+            131.0,
+            195.0,
+            20.0
+          ]
+        },
+        {
+          "ref": "e152",
+          "role": "link",
+          "label": "Visualizza impostazioni avanzate",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            463.0,
+            159.0,
+            208.0,
+            20.0
+          ]
+        },
+        {
+          "ref": "e165",
+          "role": "link",
+          "label": "Visualizza o modifica le impostazioni del tuo Account Google",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            459.0,
+            327.0,
+            382.0,
+            20.0
+          ]
+        },
+        {
+          "ref": "e171",
+          "role": "link",
+          "label": "Gestisci i profili per bambini e le funzionalità per gli adolescenti",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            459.0,
+            407.0,
+            396.0,
+            20.0
+          ]
+        },
+        {
+          "ref": "e177",
+          "role": "link",
+          "label": "Passa a YouTube Premium",
+          "disabled": false,
+          "visible": true,
+          "box": [
+            606.0,
+            487.0,
+            168.0,
+            20.0
+          ]
+        }
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "tab": 0,
+      "goal": "Invia questo modulo",
+      "expected": "e60"
+    },
+    {
+      "tab": 0,
+      "goal": "Svuota tutte le risposte e ricomincia",
+      "expected": "e65"
+    },
+    {
+      "tab": 0,
+      "goal": "Scrivi il mio indirizzo nella casella Email",
+      "expected": "e38"
+    },
+    {
+      "tab": 0,
+      "goal": "Metti la mail con cui seguo il canale YouTube",
+      "expected": "e55"
+    },
+    {
+      "tab": 0,
+      "goal": "Contatta chi ha creato il modulo",
+      "expected": "e72"
+    },
+    {
+      "tab": 0,
+      "goal": "Apri l'informativa sulla privacy",
+      "expected": "e74"
+    },
+    {
+      "tab": 0,
+      "goal": "Segnala questo modulo come sospetto",
+      "expected": "e76"
+    },
+    {
+      "tab": 2,
+      "goal": "Entra nel pannello WordPress",
+      "expected": "e21"
+    },
+    {
+      "tab": 2,
+      "goal": "Fammi vedere cosa c'è scritto nella password",
+      "expected": "e13"
+    },
+    {
+      "tab": 2,
+      "goal": "Resta collegato su questo dispositivo",
+      "expected": "e16"
+    },
+    {
+      "tab": 2,
+      "goal": "Ho dimenticato la password",
+      "expected": "e23"
+    },
+    {
+      "tab": 2,
+      "goal": "Torna al sito Tiremm Innanz",
+      "expected": "e25"
+    },
+    {
+      "tab": 2,
+      "goal": "Scegli la lingua dell'interfaccia",
+      "expected": "e30"
+    },
+    {
+      "tab": 2,
+      "goal": "Applica il cambio di lingua",
+      "expected": "e31"
+    },
+    {
+      "tab": 4,
+      "goal": "Cancella la ricerca corrente",
+      "expected": "e29"
+    },
+    {
+      "tab": 4,
+      "goal": "Cerca parlando al microfono",
+      "expected": "e37"
+    },
+    {
+      "tab": 4,
+      "goal": "Cerca usando una foto",
+      "expected": "e47"
+    },
+    {
+      "tab": 4,
+      "goal": "Fammi vedere solo le notizie",
+      "expected": "e105"
+    },
+    {
+      "tab": 4,
+      "goal": "Apri gli strumenti della ricerca",
+      "expected": "e121"
+    },
+    {
+      "tab": 4,
+      "goal": "Vai ai Bandi e Servizi di Regione Lombardia",
+      "expected": "e292"
+    },
+    {
+      "tab": 4,
+      "goal": "Mostra altri risultati dal sito Regione Lombardia",
+      "expected": "e247"
+    },
+    {
+      "tab": 6,
+      "goal": "Scrivi il nome utente",
+      "expected": "e10"
+    },
+    {
+      "tab": 6,
+      "goal": "Scrivi la password",
+      "expected": "e15"
+    },
+    {
+      "tab": 6,
+      "goal": "Ricordami su questo dispositivo",
+      "expected": "e22"
+    },
+    {
+      "tab": 6,
+      "goal": "Entra nella VPN",
+      "expected": "e25"
+    },
+    {
+      "tab": 7,
+      "goal": "Chiudi la finestra delle limitazioni",
+      "expected": "e15"
+    },
+    {
+      "tab": 7,
+      "goal": "Non farmi vedere più questo avviso",
+      "expected": "e31"
+    },
+    {
+      "tab": 7,
+      "goal": "Mostrami tutte le limitazioni",
+      "expected": "e35"
+    },
+    {
+      "tab": 7,
+      "goal": "Conferma e chiudi l'avviso",
+      "expected": "e37"
+    },
+    {
+      "tab": 7,
+      "goal": "Condividi questo foglio",
+      "expected": "e130"
+    },
+    {
+      "tab": 7,
+      "goal": "Apri il menu File",
+      "expected": "e162"
+    },
+    {
+      "tab": 7,
+      "goal": "Apri il menu Strumenti",
+      "expected": "e168"
+    },
+    {
+      "tab": 7,
+      "goal": "Nascondi i menu",
+      "expected": "e204"
+    },
+    {
+      "tab": 7,
+      "goal": "Apri l'elenco di tutti i fogli",
+      "expected": "e291"
+    },
+    {
+      "tab": 7,
+      "goal": "Vai al foglio grafici",
+      "expected": "e307"
+    },
+    {
+      "tab": 7,
+      "goal": "Vai al foglio Matrice",
+      "expected": "e315"
+    },
+    {
+      "tab": 12,
+      "goal": "Scrivi cosa cercare su YouTube",
+      "expected": "e34"
+    },
+    {
+      "tab": 12,
+      "goal": "Avvia la ricerca su YouTube",
+      "expected": "e35"
+    },
+    {
+      "tab": 12,
+      "goal": "Cerca con la voce",
+      "expected": "e42"
+    },
+    {
+      "tab": 12,
+      "goal": "Crea un nuovo contenuto",
+      "expected": "e50"
+    },
+    {
+      "tab": 12,
+      "goal": "Apri il pannello delle notifiche",
+      "expected": "e56"
+    },
+    {
+      "tab": 12,
+      "goal": "Vai alle impostazioni delle notifiche",
+      "expected": "e79"
+    },
+    {
+      "tab": 12,
+      "goal": "Apri le impostazioni avanzate dal menu laterale",
+      "expected": "e109"
+    },
+    {
+      "tab": 12,
+      "goal": "Visualizza le impostazioni avanzate di questo canale",
+      "expected": "e152"
+    },
+    {
+      "tab": 12,
+      "goal": "Gestisci i miei canali",
+      "expected": "e150"
+    },
+    {
+      "tab": 12,
+      "goal": "Passa a YouTube Premium",
+      "expected": "e177"
+    }
+  ]
+}
