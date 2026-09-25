@@ -97,6 +97,8 @@ Shadow flags:
 - `RALFLOOP_BROWSER_RIZZO_ENDPOINT=http://127.0.0.1:18017/v1/decisions`;
 - `RALFLOOP_BROWSER_RIZZO_SHADOW_AUDIT=.../browser-rizzo-shadow.jsonl`.
 
+The shadow service uses Spark-X2.5-4B Q4_K_M with Vulkan and `--ctx 1024`: point-click requests are only a few hundred tokens, and reducing the context lowered observed GPU use from about 4.0 GiB to about 3.0 GiB while keeping warm Rizzo selection around 0.64 s median on the sanitized replay. The production click path does not wait for this inference.
+
 Tests: selector, shadow privacy/fail-open and Browser MCP adapter/approval regressions are green.
 
 ## Promotion criteria
