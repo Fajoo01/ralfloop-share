@@ -80,7 +80,7 @@ Rules:
 - strict shortlist membership validation and fail-closed fallback;
 - no browser write capability.
 
-Tests: `tests/test_browser_target_selector.py` plus Browser MCP approval regressions: 20/20 passed.
+Tests: `tests/test_browser_target_selector.py` plus Browser MCP adapter/approval regressions: 23/23 passed.
 
 ## Promotion criteria
 

@@ -7,7 +7,7 @@ import os
 import re
 import unicodedata
 import urllib.request
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 
 _INTERACTIVE_RE = re.compile(
@@ -17,7 +17,6 @@ _INTERACTIVE_RE = re.compile(
     r'(?P<w>\d+(?:\.\d+)?),(?P<h>\d+(?:\.\d+)?)\])?',
     re.I,
 )
-_PAGE_TITLE_RE = re.compile(r'^- Page Title:\s*(.+)$', re.M)
 _STOP = frozenset({
     'il','lo','la','i','gli','le','un','uno','una','di','del','della','dei','delle',
     'a','al','alla','da','dal','in','su','e','o','per','questo','questa','mi','mio',
