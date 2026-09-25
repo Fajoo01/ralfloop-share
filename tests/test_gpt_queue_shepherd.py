@@ -195,6 +195,29 @@ def test_silent_stream_is_recovered_before_full_stall_timeout(tmp_path: Path) ->
     assert report["actions"][0]["reason"] == "stalled_stream_restarted"
 
 
+def test_silent_stream_with_only_old_assistant_turn_is_recovered(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    cdp = FakeCdp(
+        ui={
+            "user_turns": 4,
+            "assistant_turns": 1,
+            "response_in_progress": True,
+            "response_pending": True,
+            "response_idle_ms": 76_000,
+            "progress_idle_ms": 76_000,
+            "tool_activity_count": 0,
+        },
+        companion={"busy": True, "assistant_turns": 1, "last_assistant_text": "Risposta precedente"},
+    )
+
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    assert queue.get_job(job_id).state is GptJobState.ACTIVE
+    assert cdp.stopped == ["managed"]
+    assert len(cdp.messages) == 1
+    assert report["actions"][0]["reason"] == "stalled_stream_restarted"
+
+
 def test_companion_busy_is_preserved_while_response_is_still_fresh(tmp_path: Path) -> None:
     queue, job_id = queue_with_active(tmp_path)
     cdp = FakeCdp(

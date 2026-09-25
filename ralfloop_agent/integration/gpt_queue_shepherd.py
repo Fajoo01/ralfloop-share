@@ -28,7 +28,7 @@ STALL_RECOVERY = (
 @dataclass(frozen=True)
 class GptQueueShepherdPolicy:
     complete_idle_ms: int = 60_000
-    silent_stream_stalled_ms: int = 90_000
+    silent_stream_stalled_ms: int = 75_000
     stalled_idle_ms: int = 180_000
     recovery_cooldown_ms: int = 90_000
     max_recoveries: int = 2
@@ -428,7 +428,7 @@ class GptQueueShepherd:
                 continue
 
             if response_in_progress:
-                silent_stream = not response_text and tool_activity_count == 0
+                silent_stream = assistant_turns < user_turns and tool_activity_count == 0
                 stream_stall_limit_ms = (
                     self.policy.silent_stream_stalled_ms
                     if silent_stream
