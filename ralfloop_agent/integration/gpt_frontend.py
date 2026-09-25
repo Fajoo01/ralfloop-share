@@ -839,6 +839,44 @@ class GptWorkController:
             "reason": result.get("reason"),
         }
 
+    def recycle_job_target(self, job_id: str) -> dict[str, Any]:
+        """Replace only the local browser tab while preserving the server conversation."""
+        job = self.queue.get_job(job_id)
+        if job.state is not GptJobState.ACTIVE or not job.conversation_url:
+            raise ValueError("job_not_active")
+        old_target_id = job.target_id
+        context_url = job.conversation_context_url or job.conversation_url
+        new_target_id = self.cdp.create_chatgpt_target(clear_cache=False, background=True)
+        try:
+            self.cdp.navigate_chatgpt_conversation(new_target_id, context_url)
+            self.cdp.install_human_input_target(new_target_id, context_url)
+            rebound = self.queue.bind_chat(
+                job.job_id,
+                conversation_url=job.conversation_url,
+                conversation_context_url=context_url,
+                target_id=new_target_id,
+                state=GptJobState.ACTIVE,
+                last_error=None,
+            )
+            if old_target_id and old_target_id != new_target_id:
+                try:
+                    self.cdp.close_target(old_target_id)
+                except CdpError:
+                    pass
+        except Exception:
+            try:
+                self.cdp.close_target(new_target_id)
+            except CdpError:
+                pass
+            raise
+        return {
+            "action": "target_recycled",
+            "job_id": rebound.job_id,
+            "old_target_id": old_target_id,
+            "new_target_id": new_target_id,
+            "conversation_url": rebound.conversation_url,
+        }
+
     def release_job(self, job_id: str) -> GptWorkJob:
         job = self.queue.get_job(job_id)
         if job.target_id:

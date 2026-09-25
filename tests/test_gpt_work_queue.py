@@ -69,7 +69,14 @@ def test_watchdog_recovery_counter_is_durable(tmp_path: Path) -> None:
     assert second.watchdog_state(job.job_id) == {
         "recovery_count": 1,
         "last_recovery_at": 1_000_000,
+        "transport_failure_count": 0,
+        "last_transport_failure_at": 0,
     }
+    transport = second.mark_watchdog_transport_failure(job.job_id)
+    assert transport["recovery_count"] == 1
+    assert transport["transport_failure_count"] == 1
+    second.reset_watchdog_transport_failures(job.job_id)
+    assert second.watchdog_state(job.job_id)["transport_failure_count"] == 0
     second.reset_watchdog(job.job_id)
     assert first.watchdog_state(job.job_id)["recovery_count"] == 0
 

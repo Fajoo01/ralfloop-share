@@ -106,6 +106,65 @@ class GptQueueShepherd:
             self._int(ui.get("progress_idle_ms")),
         )
 
+    @staticmethod
+    def _is_transport_error(exc: Exception) -> bool:
+        text = str(exc)
+        return any(
+            token in text
+            for token in (
+                "cdp_timeout:",
+                "cdp_transport_error:",
+                "cdp_unavailable:",
+                "WebSocketTimeoutException",
+            )
+        )
+
+    @staticmethod
+    def _is_queue_busy(exc: Exception) -> bool:
+        return str(exc).strip() == "queue_busy"
+
+    def _transport_failure(
+        self,
+        job: Any,
+        actions: list[dict[str, Any]],
+        *,
+        phase: str,
+        exc: Exception,
+    ) -> None:
+        watchdog = self.queue.mark_watchdog_transport_failure(job.job_id)
+        if watchdog["transport_failure_count"] < 3:
+            actions.append(
+                {
+                    "job_id": job.job_id,
+                    "action": "preserved",
+                    "reason": f"transport_retry:{phase}:{str(exc)[:120]}",
+                    "watchdog": watchdog,
+                }
+            )
+            return
+        try:
+            recycled = self.controller.recycle_job_target(job.job_id)
+            self.queue.reset_watchdog_transport_failures(job.job_id)
+            actions.append(
+                {
+                    "job_id": job.job_id,
+                    "action": "recovered",
+                    "reason": "transport_target_recycled",
+                    "phase": phase,
+                    "watchdog": self.queue.watchdog_state(job.job_id),
+                    "recovery": recycled,
+                }
+            )
+        except (CdpError, OSError, RuntimeError, ValueError) as recycle_exc:
+            actions.append(
+                {
+                    "job_id": job.job_id,
+                    "action": "preserved",
+                    "reason": f"transport_recycle_failed:{str(recycle_exc)[:160]}",
+                    "watchdog": watchdog,
+                }
+            )
+
     def _recovery_gate(self, job_id: str) -> tuple[str, dict[str, int]]:
         state = self.queue.watchdog_state(job_id)
         last = state["last_recovery_at"]
@@ -140,8 +199,8 @@ class GptQueueShepherd:
                 last_error=None,
             )
             rebound = True
-            watchdog = self.queue.mark_watchdog_recovery(job.job_id)
             recovery = self.controller.send_message(job.job_id, STALL_RECOVERY)
+            watchdog = self.queue.mark_watchdog_recovery(job.job_id)
             actions.append(
                 {
                     "job_id": job.job_id,
@@ -161,14 +220,28 @@ class GptQueueShepherd:
                     self.cdp.close_target(new_target_id)
                 except (CdpError, OSError, RuntimeError, ValueError):
                     pass
-            actions.append(
-                {
-                    "job_id": job.job_id,
-                    "action": "preserved",
-                    "reason": f"fresh_target_rebind_failed:{str(exc)[:160]}",
-                    "progress_idle_ms": idle_ms,
-                }
-            )
+            if self._is_queue_busy(exc):
+                actions.append(
+                    {
+                        "job_id": job.job_id,
+                        "action": "preserved",
+                        "reason": "delivery_already_queued",
+                        "progress_idle_ms": idle_ms,
+                        "watchdog": self.queue.watchdog_state(job.job_id),
+                    }
+                )
+            elif self._is_transport_error(exc):
+                current = self.queue.get_job(job.job_id)
+                self._transport_failure(current, actions, phase="fresh_target_rebind", exc=exc)
+            else:
+                actions.append(
+                    {
+                        "job_id": job.job_id,
+                        "action": "preserved",
+                        "reason": f"fresh_target_rebind_failed:{str(exc)[:160]}",
+                        "progress_idle_ms": idle_ms,
+                    }
+                )
             return False
 
     def _release_stalled(self, job_id: str, actions: list[dict[str, Any]], *, reason: str, idle_ms: int) -> None:
@@ -198,13 +271,16 @@ class GptQueueShepherd:
                 ui = self.cdp.chatgpt_ui_state(job.target_id)
                 companion = self.cdp.chatgpt_companion_state(job.target_id)
             except (CdpError, OSError, RuntimeError, ValueError) as exc:
-                actions.append(
-                    {
-                        "job_id": job.job_id,
-                        "action": "preserved",
-                        "reason": f"probe_failed:{str(exc)[:200]}",
-                    }
-                )
+                if self._is_transport_error(exc):
+                    self._transport_failure(job, actions, phase="probe", exc=exc)
+                else:
+                    actions.append(
+                        {
+                            "job_id": job.job_id,
+                            "action": "preserved",
+                            "reason": f"probe_failed:{str(exc)[:200]}",
+                        }
+                    )
                 continue
 
             focused = bool(companion.get("focused"))
@@ -223,9 +299,12 @@ class GptQueueShepherd:
             saved_text = self._substantive_response_text(current_job.last_assistant_text)
             if response_text and response_text != saved_text:
                 self.queue.reset_watchdog(job.job_id)
+                self.queue.reset_watchdog_transport_failures(job.job_id)
                 if response_in_progress or pending:
                     self.queue.set_last_assistant_text(job.job_id, response_text)
                     saved_text = response_text
+            elif idle_ms < self.policy.complete_idle_ms:
+                self.queue.reset_watchdog_transport_failures(job.job_id)
             final_text = response_text or saved_text
             answered = user_turns > 0 and assistant_turns >= user_turns
 
@@ -255,11 +334,11 @@ class GptQueueShepherd:
                         "watchdog": watchdog,
                     })
                     continue
-                watchdog = self.queue.mark_watchdog_recovery(job.job_id)
                 try:
                     submitted = self.cdp.submit_chatgpt_composer(job.target_id)
                     if not bool(submitted.get("submitted")):
                         raise CdpError(str(submitted.get("reason") or "composer_submit_failed"))
+                    watchdog = self.queue.mark_watchdog_recovery(job.job_id)
                     actions.append({
                         "job_id": job.job_id,
                         "action": "recovered",
@@ -269,8 +348,15 @@ class GptQueueShepherd:
                         "recovery": submitted,
                     })
                 except (CdpError, OSError, RuntimeError, ValueError) as exc:
-                    if watchdog["recovery_count"] > self.policy.max_recoveries:
-                        self._release_stalled(job.job_id, actions, reason="composer_recovery_failed", idle_ms=idle_ms)
+                    if self._is_queue_busy(exc):
+                        actions.append({
+                            "job_id": job.job_id,
+                            "action": "preserved",
+                            "reason": "delivery_already_queued",
+                            "watchdog": watchdog,
+                        })
+                    elif self._is_transport_error(exc):
+                        self._transport_failure(job, actions, phase="composer_submit", exc=exc)
                     else:
                         actions.append({
                             "job_id": job.job_id,
@@ -305,13 +391,13 @@ class GptQueueShepherd:
                 if gate == "rebind":
                     self._rebind_stalled(job, actions, reason="stalled_stream_fresh_target", idle_ms=idle_ms)
                     continue
-                watchdog = self.queue.mark_watchdog_recovery(job.job_id)
                 try:
                     stopped = self.cdp.stop_chatgpt_response(job.target_id)
                     partial = self._substantive_response_text(stopped.get("last_assistant_text"))
                     if partial:
                         self.queue.set_last_assistant_text(job.job_id, partial)
                     continuation = self.controller.send_message(job.job_id, GOAL_CONTINUATION)
+                    watchdog = self.queue.mark_watchdog_recovery(job.job_id)
                     actions.append({
                         "job_id": job.job_id,
                         "action": "recovered",
@@ -322,8 +408,15 @@ class GptQueueShepherd:
                         "continuation": continuation,
                     })
                 except (CdpError, OSError, RuntimeError, ValueError) as exc:
-                    if watchdog["recovery_count"] > self.policy.max_recoveries:
-                        self._release_stalled(job.job_id, actions, reason="stream_recovery_failed", idle_ms=idle_ms)
+                    if self._is_queue_busy(exc):
+                        actions.append({
+                            "job_id": job.job_id,
+                            "action": "preserved",
+                            "reason": "delivery_already_queued",
+                            "watchdog": watchdog,
+                        })
+                    elif self._is_transport_error(exc):
+                        self._transport_failure(job, actions, phase="stream_recovery", exc=exc)
                     else:
                         actions.append({
                             "job_id": job.job_id,
@@ -382,6 +475,7 @@ class GptQueueShepherd:
                 if not goal_reached:
                     try:
                         continuation = self.controller.send_message(job.job_id, GOAL_CONTINUATION)
+                        self.queue.reset_watchdog(job.job_id)
                         actions.append(
                             {
                                 "job_id": job.job_id,
@@ -394,13 +488,24 @@ class GptQueueShepherd:
                             }
                         )
                     except (CdpError, OSError, RuntimeError, ValueError) as exc:
-                        actions.append(
-                            {
-                                "job_id": job.job_id,
-                                "action": "preserved",
-                                "reason": f"goal_continue_failed:{str(exc)[:200]}",
-                            }
-                        )
+                        if self._is_queue_busy(exc):
+                            actions.append(
+                                {
+                                    "job_id": job.job_id,
+                                    "action": "preserved",
+                                    "reason": "delivery_already_queued",
+                                }
+                            )
+                        elif self._is_transport_error(exc):
+                            self._transport_failure(job, actions, phase="goal_continue", exc=exc)
+                        else:
+                            actions.append(
+                                {
+                                    "job_id": job.job_id,
+                                    "action": "preserved",
+                                    "reason": f"goal_continue_failed:{str(exc)[:200]}",
+                                }
+                            )
                     continue
                 notification = self.completion_notifier(job.title)
                 self.controller.release_job(job.job_id)
@@ -434,9 +539,9 @@ class GptQueueShepherd:
                 if gate == "rebind":
                     self._rebind_stalled(job, actions, reason="unanswered_fresh_target", idle_ms=idle_ms)
                     continue
-                watchdog = self.queue.mark_watchdog_recovery(job.job_id)
                 try:
                     recovery = self.controller.send_message(job.job_id, STALL_RECOVERY)
+                    watchdog = self.queue.mark_watchdog_recovery(job.job_id)
                     actions.append(
                         {
                             "job_id": job.job_id,
@@ -450,8 +555,17 @@ class GptQueueShepherd:
                         }
                     )
                 except (CdpError, OSError, RuntimeError, ValueError) as exc:
-                    if watchdog["recovery_count"] > self.policy.max_recoveries:
-                        self._release_stalled(job.job_id, actions, reason="unanswered_recovery_failed", idle_ms=idle_ms)
+                    if self._is_queue_busy(exc):
+                        actions.append(
+                            {
+                                "job_id": job.job_id,
+                                "action": "preserved",
+                                "reason": "delivery_already_queued",
+                                "watchdog": watchdog,
+                            }
+                        )
+                    elif self._is_transport_error(exc):
+                        self._transport_failure(job, actions, phase="unanswered_recovery", exc=exc)
                     else:
                         actions.append(
                             {

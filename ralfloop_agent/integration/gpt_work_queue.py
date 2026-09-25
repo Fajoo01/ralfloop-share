@@ -135,10 +135,24 @@ class GptWorkQueue:
                     job_id TEXT PRIMARY KEY,
                     recovery_count INTEGER NOT NULL DEFAULT 0,
                     last_recovery_at INTEGER NOT NULL DEFAULT 0,
+                    transport_failure_count INTEGER NOT NULL DEFAULT 0,
+                    last_transport_failure_at INTEGER NOT NULL DEFAULT 0,
                     FOREIGN KEY(job_id) REFERENCES gpt_jobs(job_id) ON DELETE CASCADE
                 )
                 """
             )
+            watchdog_columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(gpt_job_watchdog)").fetchall()
+            }
+            if "transport_failure_count" not in watchdog_columns:
+                conn.execute(
+                    "ALTER TABLE gpt_job_watchdog ADD COLUMN transport_failure_count INTEGER NOT NULL DEFAULT 0"
+                )
+            if "last_transport_failure_at" not in watchdog_columns:
+                conn.execute(
+                    "ALTER TABLE gpt_job_watchdog ADD COLUMN last_transport_failure_at INTEGER NOT NULL DEFAULT 0"
+                )
 
     @staticmethod
     def _project_url(value: str | None) -> str | None:
@@ -427,14 +441,21 @@ class GptWorkQueue:
     def watchdog_state(self, job_id: str) -> dict[str, int]:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT recovery_count, last_recovery_at FROM gpt_job_watchdog WHERE job_id=?",
+                "SELECT recovery_count, last_recovery_at, transport_failure_count, last_transport_failure_at FROM gpt_job_watchdog WHERE job_id=?",
                 (job_id,),
             ).fetchone()
         if row is None:
-            return {"recovery_count": 0, "last_recovery_at": 0}
+            return {
+                "recovery_count": 0,
+                "last_recovery_at": 0,
+                "transport_failure_count": 0,
+                "last_transport_failure_at": 0,
+            }
         return {
             "recovery_count": max(0, int(row["recovery_count"] or 0)),
             "last_recovery_at": max(0, int(row["last_recovery_at"] or 0)),
+            "transport_failure_count": max(0, int(row["transport_failure_count"] or 0)),
+            "last_transport_failure_at": max(0, int(row["last_transport_failure_at"] or 0)),
         }
 
     def mark_watchdog_recovery(self, job_id: str) -> dict[str, int]:
@@ -443,15 +464,44 @@ class GptWorkQueue:
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO gpt_job_watchdog(job_id, recovery_count, last_recovery_at)
-                VALUES(?, 1, ?)
+                INSERT INTO gpt_job_watchdog(
+                    job_id, recovery_count, last_recovery_at,
+                    transport_failure_count, last_transport_failure_at
+                ) VALUES(?, 1, ?, 0, 0)
                 ON CONFLICT(job_id) DO UPDATE SET
                     recovery_count=gpt_job_watchdog.recovery_count + 1,
-                    last_recovery_at=excluded.last_recovery_at
+                    last_recovery_at=excluded.last_recovery_at,
+                    transport_failure_count=0,
+                    last_transport_failure_at=0
                 """,
                 (job_id, now),
             )
         return self.watchdog_state(job_id)
+
+    def mark_watchdog_transport_failure(self, job_id: str) -> dict[str, int]:
+        self.get_job(job_id)
+        now = int(self.clock())
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO gpt_job_watchdog(
+                    job_id, recovery_count, last_recovery_at,
+                    transport_failure_count, last_transport_failure_at
+                ) VALUES(?, 0, 0, 1, ?)
+                ON CONFLICT(job_id) DO UPDATE SET
+                    transport_failure_count=gpt_job_watchdog.transport_failure_count + 1,
+                    last_transport_failure_at=excluded.last_transport_failure_at
+                """,
+                (job_id, now),
+            )
+        return self.watchdog_state(job_id)
+
+    def reset_watchdog_transport_failures(self, job_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE gpt_job_watchdog SET transport_failure_count=0, last_transport_failure_at=0 WHERE job_id=?",
+                (job_id,),
+            )
 
     def reset_watchdog(self, job_id: str) -> None:
         with self._connect() as conn:

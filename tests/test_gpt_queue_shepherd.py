@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ralfloop_agent.integration.gpt_browser_cdp import BrowserTarget
+from ralfloop_agent.integration.gpt_browser_cdp import BrowserTarget, CdpError
 from ralfloop_agent.integration.gpt_queue_shepherd import (
     GptQueueShepherd,
     GptQueueShepherdPolicy,
@@ -400,6 +400,57 @@ def test_exhausted_watchdog_releases_instead_of_arenating_forever(tmp_path: Path
     assert saved.target_id is None
     assert saved.last_error == "worker_stalled_after_retries"
     assert report["actions"][0]["reason"] == "unanswered_stalled_after_retries"
+
+
+def test_transport_timeouts_do_not_consume_recovery_budget_and_recycle_target(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+
+    class TransportFailCdp(FakeCdp):
+        def chatgpt_ui_state(self, target_id: str):
+            raise CdpError("cdp_transport_error:Runtime.evaluate:WebSocketTimeoutException")
+
+    cdp = TransportFailCdp(ui={})
+    runner = shepherd(queue, cdp)
+
+    first = runner.run_once(auto_start=False)
+    second = runner.run_once(auto_start=False)
+    third = runner.run_once(auto_start=False)
+
+    assert first["actions"][0]["reason"].startswith("transport_retry:probe:")
+    assert second["actions"][0]["reason"].startswith("transport_retry:probe:")
+    assert third["actions"][0]["reason"] == "transport_target_recycled"
+    saved = queue.get_job(job_id)
+    assert saved.state is GptJobState.ACTIVE
+    assert saved.target_id == "fresh-1"
+    state = queue.watchdog_state(job_id)
+    assert state["recovery_count"] == 0
+    assert state["transport_failure_count"] == 0
+
+
+def test_queue_busy_is_existing_delivery_not_failed_recovery(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+
+    class QueueBusyCdp(FakeCdp):
+        def queue_human_message(self, target_id: str, conversation_url: str, text: str):
+            return {"queued": False, "reason": "queue_busy"}
+
+    cdp = QueueBusyCdp(
+        ui={
+            "user_turns": 1,
+            "assistant_turns": 1,
+            "response_in_progress": False,
+            "response_pending": False,
+            "response_idle_ms": 61_000,
+            "progress_idle_ms": 61_000,
+        },
+        companion={"busy": False, "last_assistant_text": "Fase conclusa, resta altro da fare."},
+    )
+
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    assert queue.get_job(job_id).state is GptJobState.ACTIVE
+    assert queue.watchdog_state(job_id)["recovery_count"] == 0
+    assert report["actions"][0]["reason"] == "delivery_already_queued"
 
 
 def test_goal_managed_reply_auto_continues_same_chat_without_notification(tmp_path: Path) -> None:
