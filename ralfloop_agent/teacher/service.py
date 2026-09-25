@@ -2450,10 +2450,10 @@ def _media_tts_handoff(script: str) -> dict[str, Any]:
             "id": 2,
             "method": "tools/call",
             "params": {
-                "name": "media_create_audiobook",
+                "name": "media_education_audio_generate",
                 "arguments": {
                     "text": text,
-                    "name": "Tutor study audio",
+                    "title": "Tutor study audio",
                     "format": "m4b",
                 },
             },
