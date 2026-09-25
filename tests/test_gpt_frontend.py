@@ -117,6 +117,25 @@ def make_queue(tmp_path: Path) -> GptWorkQueue:
     return GptWorkQueue(tmp_path / "queue.sqlite3", clock=lambda: 1_000_000)
 
 
+def test_stalled_rollover_external_only_omits_saved_chat_text(tmp_path: Path) -> None:
+    queue = make_queue(tmp_path)
+    job = queue.create_job(
+        "External recovery",
+        prompt="Completa il lavoro",
+        conversation_url="https://chatgpt.com/c/job",
+        conversation_context_url="https://chatgpt.com/c/job",
+        state=GptJobState.REVIEW,
+    )
+    queue.set_last_assistant_text(job.job_id, "TESTO CHAT PRECEDENTE DA NON RIUSARE")
+    saved = queue.get_job(job.job_id)
+
+    prompt = GptWorkController._stalled_rollover_prompt(saved, "worker_stalled_after_retries")
+
+    assert "Modalità external-only" in prompt
+    assert "TESTO CHAT PRECEDENTE DA NON RIUSARE" not in prompt
+    assert "Chat precedente (solo riferimento, non fonte di verità)" in prompt
+
+
 def test_dashboard_distinguishes_real_progress_from_stale_busy_flag(tmp_path: Path) -> None:
     queue = make_queue(tmp_path)
     job = queue.create_job(

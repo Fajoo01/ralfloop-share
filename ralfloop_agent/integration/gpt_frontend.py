@@ -221,16 +221,26 @@ class GptWorkController:
 
     @staticmethod
     def _stalled_rollover_prompt(job: GptWorkJob, reason: str) -> str:
+        reason_text = str(reason or "worker_stalled")[:240]
+        external_only = any(
+            token in reason_text
+            for token in ("after_retries", "stalled_stream", "unanswered_fresh_target", "conversation_content_unavailable")
+        )
         parts = [
             "Riprendi automaticamente questo lavoro dopo il blocco della chat precedente. Non ripartire da zero. "
             "Prima verifica il repository/issue GitHub associato, i commit, i test e lo stato runtime reale; "
             "la chat precedente non è la fonte di verità.",
-            f"Motivo tecnico del rollover: {str(reason or 'worker_stalled')[:240]}",
+            f"Motivo tecnico del rollover: {reason_text}",
             f"Titolo del lavoro: {job.title}",
         ]
         if job.conversation_url:
-            parts.append(f"Chat precedente (non cancellata): {job.conversation_url}")
-        if job.last_assistant_text.strip():
+            parts.append(f"Chat precedente (solo riferimento, non fonte di verità): {job.conversation_url}")
+        if external_only:
+            parts.append(
+                "Modalità external-only: ricostruisci lo stato esclusivamente da repository/issue GitHub, commit, test, runtime/servizi e riscontri reali. "
+                "Ignora il testo e i riassunti della chat precedente come fonte per decidere cosa è già stato fatto."
+            )
+        elif job.last_assistant_text.strip():
             parts.append("Ultimo testo assistente salvato:\n" + job.last_assistant_text.strip()[-12000:])
         parts.append("GOAL da continuare:\n" + job.prompt.strip())
         parts.append(

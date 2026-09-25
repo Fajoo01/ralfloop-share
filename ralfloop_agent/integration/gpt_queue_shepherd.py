@@ -25,6 +25,13 @@ STALL_RECOVERY = (
     "Verifica lo stato reale e completa il passo corrente. Alla fine usa esattamente uno dei marker "
     "[[BOTTAZZI_GOAL_CONTINUE]], [[BOTTAZZI_GOAL_BLOCKED]] o [[BOTTAZZI_GOAL_REACHED]] secondo l'esito reale."
 )
+EXTERNAL_ONLY_RECOVERY = (
+    "Riprendi questo lavoro usando come fonte di verità soltanto riferimenti esterni verificabili: "
+    "repository/issue GitHub associato, commit, test, runtime/servizi e stato reale del sistema. "
+    "Non usare il testo della chat precedente, riassunti della conversazione o memoria della chat per ricostruire lo stato. "
+    "Individua il prossimo passo concreto, eseguilo e verifica il risultato. Alla fine usa esattamente uno dei marker "
+    "[[BOTTAZZI_GOAL_CONTINUE]], [[BOTTAZZI_GOAL_BLOCKED]] o [[BOTTAZZI_GOAL_REACHED]] secondo l'esito reale."
+)
 
 
 @dataclass(frozen=True)
@@ -170,6 +177,12 @@ class GptQueueShepherd:
                 }
             )
 
+    def _recovery_prompt(self, job_id: str) -> str:
+        state = self.queue.watchdog_state(job_id)
+        if state["recovery_count"] >= 1:
+            return EXTERNAL_ONLY_RECOVERY
+        return STALL_RECOVERY
+
     def _recovery_gate(self, job_id: str) -> tuple[str, dict[str, int]]:
         state = self.queue.watchdog_state(job_id)
         last = state["last_recovery_at"]
@@ -190,7 +203,7 @@ class GptQueueShepherd:
         try:
             recycled = self.controller.recycle_job_target(job.job_id)
             current = self.queue.get_job(job.job_id)
-            recovery = self.controller.send_message(job.job_id, STALL_RECOVERY)
+            recovery = self.controller.send_message(job.job_id, self._recovery_prompt(job.job_id))
             watchdog = self.queue.mark_watchdog_recovery(job.job_id)
             actions.append(
                 {
@@ -606,7 +619,7 @@ class GptQueueShepherd:
                     partial = self._substantive_response_text(stopped.get("last_assistant_text"))
                     if partial:
                         self.queue.set_last_assistant_text(job.job_id, partial)
-                    continuation = self.controller.send_message(job.job_id, STALL_RECOVERY)
+                    continuation = self.controller.send_message(job.job_id, self._recovery_prompt(job.job_id))
                     watchdog = self.queue.mark_watchdog_recovery(job.job_id)
                     actions.append({
                         "job_id": job.job_id,
@@ -761,7 +774,7 @@ class GptQueueShepherd:
                     self._rebind_stalled(job, actions, reason="unanswered_fresh_target", idle_ms=idle_ms)
                     continue
                 try:
-                    recovery = self.controller.send_message(job.job_id, STALL_RECOVERY)
+                    recovery = self.controller.send_message(job.job_id, self._recovery_prompt(job.job_id))
                     watchdog = self.queue.mark_watchdog_recovery(job.job_id)
                     actions.append(
                         {

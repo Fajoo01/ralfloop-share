@@ -306,6 +306,19 @@ def test_silent_stream_is_recovered_before_full_stall_timeout(tmp_path: Path) ->
     assert report["actions"][0]["reason"] == "stalled_stream_restarted"
 
 
+def test_repeated_recovery_uses_external_only_evidence(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    cdp = FakeCdp(ui={}, companion={})
+    runner = shepherd(queue, cdp)
+
+    assert "Riprendi dall'ultimo punto utile" in runner._recovery_prompt(job_id)
+    queue.mark_watchdog_recovery(job_id)
+
+    prompt = runner._recovery_prompt(job_id)
+    assert "soltanto riferimenti esterni verificabili" in prompt
+    assert "Non usare il testo della chat precedente" in prompt
+
+
 def test_silent_stream_with_only_old_assistant_turn_is_recovered(tmp_path: Path) -> None:
     queue, job_id = queue_with_active(tmp_path)
     cdp = FakeCdp(
