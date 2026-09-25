@@ -332,6 +332,56 @@ def test_focused_chat_is_never_released(tmp_path: Path) -> None:
     assert report["actions"][0]["reason"] == "focused_human_draft"
 
 
+def test_silent_pending_job_recovers_without_human_wakeup(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    cdp = FakeCdp(
+        ui={
+            "user_turns": 2,
+            "assistant_turns": 1,
+            "response_in_progress": False,
+            "response_pending": True,
+            "response_idle_ms": 76_000,
+            "progress_idle_ms": 76_000,
+            "tool_activity_count": 0,
+        },
+        companion={"busy": False, "last_assistant_text": "Risposta precedente"},
+    )
+
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    job = queue.get_job(job_id)
+    assert job.state is GptJobState.ACTIVE
+    assert job.target_id == "managed"
+    assert len(cdp.messages) == 1
+    assert "Riprendi" in cdp.messages[0][2]
+    assert "ultimo punto utile" in cdp.messages[0][2]
+    assert queue.watchdog_state(job_id)["recovery_count"] == 1
+    assert report["actions"][0]["reason"] == "unanswered_restarted"
+
+
+def test_fresh_silent_pending_job_is_not_recovered_too_early(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    cdp = FakeCdp(
+        ui={
+            "user_turns": 2,
+            "assistant_turns": 1,
+            "response_in_progress": False,
+            "response_pending": True,
+            "response_idle_ms": 74_000,
+            "progress_idle_ms": 74_000,
+            "tool_activity_count": 0,
+        },
+        companion={"busy": False, "last_assistant_text": "Risposta precedente"},
+    )
+
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    assert queue.get_job(job_id).state is GptJobState.ACTIVE
+    assert cdp.messages == []
+    assert queue.watchdog_state(job_id)["recovery_count"] == 0
+    assert report["actions"][0]["reason"] == "awaiting_settle"
+
+
 def test_stalled_unanswered_job_is_recovered_before_review(tmp_path: Path) -> None:
     queue, job_id = queue_with_active(tmp_path)
     cdp = FakeCdp(

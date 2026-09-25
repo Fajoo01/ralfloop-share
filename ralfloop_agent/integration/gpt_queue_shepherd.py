@@ -584,8 +584,18 @@ class GptQueueShepherd:
                 and bool(final_text)
                 and idle_ms >= self.policy.complete_idle_ms
             )
+            silent_pending = (
+                pending
+                and user_turns > assistant_turns
+                and tool_activity_count == 0
+            )
+            stalled_limit_ms = (
+                self.policy.silent_stream_stalled_ms
+                if silent_pending
+                else self.policy.stalled_idle_ms
+            )
             stalled = (
-                idle_ms >= self.policy.stalled_idle_ms
+                idle_ms >= stalled_limit_ms
                 and (pending or user_turns > assistant_turns or not final_text)
             )
 
