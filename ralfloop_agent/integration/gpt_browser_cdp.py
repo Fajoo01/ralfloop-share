@@ -298,7 +298,7 @@ class ChromeCdp:
             page_age_minutes: Math.max(0, Math.floor(performance.now() / 60000)),
             interaction_required: !authenticatedHint || !composer || /ci siamo quasi/i.test(document.title || ''),
             composer_kind: composer ? (composer.id || composer.tagName || '').toLowerCase() : null,
-            composer_chars: composer ? String(composer.value || composer.innerText || composer.textContent || '').length : 0,
+            composer_chars: composer ? String(composer.value || composer.innerText || composer.textContent || '').trim().length : 0,
             document_ready_state: document.readyState,
             page_age_ms: pageAgeMs,
             page_settled: pageSettled,
@@ -1388,7 +1388,7 @@ class ChromeCdp:
           const responsePending = Boolean(telemetry && telemetry.pending_started_ms !== null && telemetry.pending_started_ms !== undefined);
           const composer = Array.from(document.querySelectorAll('#prompt-textarea, textarea, [contenteditable="true"]'))
             .find((el) => visible(el) && el.id !== 'bottazzi-human-composer') || null;
-          const composerText = composer ? String(composer.value || composer.innerText || composer.textContent || '') : '';
+          const composerText = composer ? String(composer.value || composer.innerText || composer.textContent || '').trim() : '';
           const assistantSections = Array.from(document.querySelectorAll('section[data-turn="assistant"]'));
           const assistantNodes = assistantSections.length
             ? assistantSections

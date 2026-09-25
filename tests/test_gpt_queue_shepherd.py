@@ -350,6 +350,30 @@ def test_stale_stream_is_stopped_and_restarted_in_same_chat(tmp_path: Path) -> N
     assert report["actions"][0]["reason"] == "stalled_stream_restarted"
 
 
+def test_zombie_conversation_with_zero_turns_recycles_target_without_work_retry(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    cdp = FakeCdp(
+        ui={
+            "user_turns": 0,
+            "assistant_turns": 0,
+            "response_in_progress": False,
+            "response_pending": False,
+            "response_idle_ms": 0,
+            "progress_idle_ms": 61_000,
+        },
+        companion={"busy": False, "composer_chars": 0, "assistant_turns": 0, "last_assistant_text": ""},
+    )
+
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    saved = queue.get_job(job_id)
+    assert saved.state is GptJobState.ACTIVE
+    assert saved.target_id == "fresh-1"
+    assert queue.watchdog_state(job_id)["recovery_count"] == 0
+    assert queue.watchdog_state(job_id)["transport_failure_count"] == 1
+    assert report["actions"][0]["reason"] == "empty_conversation_target_recycled"
+
+
 def test_progress_idle_settles_reply_even_when_response_idle_was_reset(tmp_path: Path) -> None:
     queue, job_id = queue_with_active(tmp_path)
     cdp = FakeCdp(

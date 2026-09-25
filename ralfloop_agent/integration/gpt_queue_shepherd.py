@@ -303,10 +303,51 @@ class GptQueueShepherd:
                 if response_in_progress or pending:
                     self.queue.set_last_assistant_text(job.job_id, response_text)
                     saved_text = response_text
-            elif idle_ms < self.policy.complete_idle_ms:
+            elif (user_turns > 0 or assistant_turns > 0 or response_in_progress or pending) and idle_ms < self.policy.complete_idle_ms:
                 self.queue.reset_watchdog_transport_failures(job.job_id)
             final_text = response_text or saved_text
             answered = user_turns > 0 and assistant_turns >= user_turns
+
+            if (
+                user_turns == 0
+                and assistant_turns == 0
+                and not response_in_progress
+                and not pending
+                and idle_ms >= self.policy.complete_idle_ms
+            ):
+                watchdog = self.queue.mark_watchdog_transport_failure(job.job_id)
+                if watchdog["transport_failure_count"] > 3:
+                    self.controller.release_job(job.job_id)
+                    self.queue.set_state(
+                        job.job_id,
+                        GptJobState.REVIEW,
+                        last_error="conversation_content_unavailable_after_retries",
+                    )
+                    actions.append({
+                        "job_id": job.job_id,
+                        "action": "released",
+                        "reason": "conversation_content_unavailable_after_retries",
+                        "watchdog": watchdog,
+                    })
+                    continue
+                try:
+                    recycled = self.controller.recycle_job_target(job.job_id)
+                    actions.append({
+                        "job_id": job.job_id,
+                        "action": "recovered",
+                        "reason": "empty_conversation_target_recycled",
+                        "progress_idle_ms": idle_ms,
+                        "watchdog": watchdog,
+                        "recovery": recycled,
+                    })
+                except (CdpError, OSError, RuntimeError, ValueError) as exc:
+                    actions.append({
+                        "job_id": job.job_id,
+                        "action": "preserved",
+                        "reason": f"empty_conversation_recycle_failed:{str(exc)[:160]}",
+                        "watchdog": watchdog,
+                    })
+                continue
 
             if focused:
                 actions.append({"job_id": job.job_id, "action": "preserved", "reason": "focused"})
