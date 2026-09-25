@@ -1365,6 +1365,131 @@ class ChromeCdp:
                 pass
             raise
 
+    def _navigate_chatgpt_conversation_via_sidebar(
+        self,
+        target_id: str,
+        url: str,
+        *,
+        wait_timeout_s: float = 20.0,
+    ) -> dict[str, Any]:
+        normalized = _canonical_chatgpt_conversation_url(url)
+        if not normalized:
+            raise CdpError("conversation_url_invalid")
+        target = self._wait_target(target_id)
+        if not target.websocket_url:
+            raise CdpError("conversation_navigation_target_invalid")
+        self._page_call(target.websocket_url, "Page.enable")
+        self._page_call(target.websocket_url, "Page.navigate", {"url": CHATGPT_ORIGIN})
+        home_deadline = time.monotonic() + max(2.0, min(float(wait_timeout_s), 8.0))
+        while time.monotonic() < home_deadline:
+            target = self._wait_target(target_id)
+            if target.is_chatgpt and target.websocket_url:
+                break
+            time.sleep(0.2)
+        else:
+            raise CdpError("conversation_sidebar_home_timeout")
+        expression = r"""(async () => {
+          const wanted = __WANTED__;
+          const normalize = value => {
+            try {
+              const u = new URL(String(value || ''), location.origin);
+              const m = u.pathname.match(/^\\/(?:g\\/[^/]+\\/)?c\\/([A-Za-z0-9-]+)/);
+              return m ? `${u.origin}/c/${m[1]}` : '';
+            } catch (_) { return ''; }
+          };
+          const clean = value => String(value || '').replace(/\\s+/g, ' ').trim();
+          const openSidebar = [...document.querySelectorAll('button')].find(button => {
+            const label = clean(button.getAttribute('aria-label') || button.innerText || button.textContent || '');
+            return /^(?:open sidebar|apri barra laterale)$/i.test(label);
+          });
+          if (openSidebar) {
+            openSidebar.click();
+            await new Promise(resolve => setTimeout(resolve, 250));
+          }
+          const navs = [...document.querySelectorAll('nav')];
+          const scrollport = navs.find(n => n.scrollHeight > n.clientHeight && [...n.querySelectorAll('a[href]')].some(a => normalize(a.href)))
+            || navs.find(n => [...n.querySelectorAll('a[href]')].some(a => normalize(a.href)));
+          if (!scrollport) return JSON.stringify({clicked:false, reason:'sidebar_scrollport_not_found'});
+          const clickExact = () => {
+            const exact = [...scrollport.querySelectorAll('a[href]')].find(a => normalize(a.href) === wanted);
+            if (!exact) return null;
+            const href = exact.href;
+            exact.click();
+            return href;
+          };
+          let href = clickExact();
+          if (href) return JSON.stringify({clicked:true, href});
+          scrollport.scrollTop = 0;
+          await new Promise(resolve => setTimeout(resolve, 120));
+          for (let i = 0; i < 100; i++) {
+            href = clickExact();
+            if (href) return JSON.stringify({clicked:true, href});
+            const before = scrollport.scrollTop;
+            const step = Math.max(220, Math.floor(scrollport.clientHeight * 0.82));
+            scrollport.scrollTop = Math.min(scrollport.scrollHeight, scrollport.scrollTop + step);
+            await new Promise(resolve => setTimeout(resolve, 220));
+            if (scrollport.scrollTop === before && scrollport.scrollTop + scrollport.clientHeight >= scrollport.scrollHeight - 4) break;
+          }
+          return JSON.stringify({clicked:false, reason:'conversation_sidebar_entry_missing'});
+        })()""".replace("__WANTED__", json.dumps(normalized))
+        target = self._wait_target(target_id)
+        clicked = self._page_call(
+            target.websocket_url,
+            "Runtime.evaluate",
+            {"expression": expression, "awaitPromise": True, "returnByValue": True},
+            timeout_s=max(5.0, min(float(wait_timeout_s), 30.0)),
+        )
+        raw = (clicked.get("result") or {}).get("value")
+        try:
+            click_state = json.loads(raw) if isinstance(raw, str) else {}
+        except json.JSONDecodeError:
+            click_state = {}
+        if not click_state.get("clicked"):
+            raise CdpError(str(click_state.get("reason") or "conversation_sidebar_click_missing"))
+        deadline = time.monotonic() + max(4.0, float(wait_timeout_s))
+        last_state: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            current = self._wait_target(target_id)
+            if _canonical_chatgpt_conversation_url(current.url) != normalized:
+                time.sleep(0.25)
+                continue
+            last_state = self.chatgpt_ui_state(target_id)
+            if last_state.get("temporary_access_limited"):
+                raise CdpError("temporary_access_limited")
+            if (
+                last_state.get("user_turns", 0) > 0
+                or last_state.get("assistant_turns", 0) > 0
+                or last_state.get("response_in_progress")
+                or last_state.get("response_pending")
+            ):
+                last_state["recovered_via_sidebar"] = True
+                last_state["conversation_context_url"] = current.url
+                return last_state
+            time.sleep(0.25)
+        raise CdpError(f"conversation_sidebar_click_timeout:{normalized}")
+
+    def create_sidebar_conversation_target(
+        self,
+        url: str,
+        *,
+        background: bool = True,
+        wait_timeout_s: float = 30.0,
+    ) -> dict[str, Any]:
+        target_id = self.create_target(CHATGPT_ORIGIN, background=background)
+        try:
+            state = self._navigate_chatgpt_conversation_via_sidebar(
+                target_id,
+                url,
+                wait_timeout_s=wait_timeout_s,
+            )
+            return {"new_target_id": target_id, **state}
+        except Exception:
+            try:
+                self.close_target(target_id)
+            except CdpError:
+                pass
+            raise
+
     def navigate_chatgpt_conversation(
         self,
         target_id: str,

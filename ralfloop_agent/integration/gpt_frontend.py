@@ -320,20 +320,28 @@ class GptWorkController:
                     try:
                         self.cdp.navigate_chatgpt_conversation(created_target_id, context_url)
                     except CdpError as exc:
-                        if (
-                            str(exc) == "temporary_access_limited"
-                            or not chatgpt_project_new_chat_url(context_url)
-                            or not hasattr(self.cdp, "create_project_conversation_target")
-                        ):
+                        if str(exc) == "temporary_access_limited":
                             raise
-                        recovered = self.cdp.create_project_conversation_target(
-                            context_url,
-                            background=True,
-                            wait_timeout_s=30.0,
-                        )
+                        project_context = chatgpt_project_new_chat_url(context_url)
+                        if project_context and hasattr(self.cdp, "create_project_conversation_target"):
+                            recovered = self.cdp.create_project_conversation_target(
+                                context_url,
+                                background=True,
+                                wait_timeout_s=30.0,
+                            )
+                            missing_error = "project_recovery_target_missing"
+                        elif hasattr(self.cdp, "create_sidebar_conversation_target"):
+                            recovered = self.cdp.create_sidebar_conversation_target(
+                                context_url,
+                                background=True,
+                                wait_timeout_s=30.0,
+                            )
+                            missing_error = "sidebar_recovery_target_missing"
+                        else:
+                            raise
                         replacement_id = str(recovered.get("new_target_id") or "")
                         if not replacement_id:
-                            raise CdpError("project_recovery_target_missing")
+                            raise CdpError(missing_error)
                         try:
                             self.cdp.close_target(created_target_id)
                         except CdpError:
@@ -905,20 +913,28 @@ class GptWorkController:
             try:
                 self.cdp.navigate_chatgpt_conversation(new_target_id, context_url)
             except CdpError as exc:
-                if (
-                    str(exc) == "temporary_access_limited"
-                    or not chatgpt_project_new_chat_url(context_url)
-                    or not hasattr(self.cdp, "create_project_conversation_target")
-                ):
+                if str(exc) == "temporary_access_limited":
                     raise
-                recovered = self.cdp.create_project_conversation_target(
-                    context_url,
-                    background=True,
-                    wait_timeout_s=12.0,
-                )
+                project_context = chatgpt_project_new_chat_url(context_url)
+                if project_context and hasattr(self.cdp, "create_project_conversation_target"):
+                    recovered = self.cdp.create_project_conversation_target(
+                        context_url,
+                        background=True,
+                        wait_timeout_s=30.0,
+                    )
+                    missing_error = "project_recovery_target_missing"
+                elif hasattr(self.cdp, "create_sidebar_conversation_target"):
+                    recovered = self.cdp.create_sidebar_conversation_target(
+                        context_url,
+                        background=True,
+                        wait_timeout_s=30.0,
+                    )
+                    missing_error = "sidebar_recovery_target_missing"
+                else:
+                    raise
                 replacement_id = str(recovered.get("new_target_id") or "")
                 if not replacement_id:
-                    raise CdpError("project_recovery_target_missing")
+                    raise CdpError(missing_error)
                 try:
                     self.cdp.close_target(new_target_id)
                 except CdpError:

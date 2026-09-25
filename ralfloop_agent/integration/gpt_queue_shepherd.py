@@ -182,26 +182,12 @@ class GptQueueShepherd:
         return "exhausted", state
 
     def _rebind_stalled(self, job: Any, actions: list[dict[str, Any]], *, reason: str, idle_ms: int) -> bool:
-        context_url = job.conversation_context_url or job.conversation_url
-        if not context_url or not job.target_id:
+        if not job.conversation_url or not job.target_id:
             return False
         old_target_id = job.target_id
-        new_target_id: str | None = None
-        rebound = False
         try:
-            new_target_id = self.cdp.create_chatgpt_target(clear_cache=False, background=True)
-            self.cdp.navigate_chatgpt_conversation(new_target_id, context_url)
-            self.cdp.install_human_input_target(new_target_id, context_url)
-            self.cdp.close_target(old_target_id)
-            self.queue.bind_chat(
-                job.job_id,
-                conversation_url=job.conversation_url,
-                conversation_context_url=context_url,
-                target_id=new_target_id,
-                state=GptJobState.ACTIVE,
-                last_error=None,
-            )
-            rebound = True
+            recycled = self.controller.recycle_job_target(job.job_id)
+            current = self.queue.get_job(job.job_id)
             recovery = self.controller.send_message(job.job_id, STALL_RECOVERY)
             watchdog = self.queue.mark_watchdog_recovery(job.job_id)
             actions.append(
@@ -211,18 +197,14 @@ class GptQueueShepherd:
                     "reason": reason,
                     "progress_idle_ms": idle_ms,
                     "old_target_id": old_target_id,
-                    "new_target_id": new_target_id,
+                    "new_target_id": current.target_id,
                     "watchdog": watchdog,
+                    "recycle": recycled,
                     "recovery": recovery,
                 }
             )
             return True
         except (CdpError, OSError, RuntimeError, ValueError) as exc:
-            if new_target_id and not rebound:
-                try:
-                    self.cdp.close_target(new_target_id)
-                except (CdpError, OSError, RuntimeError, ValueError):
-                    pass
             if self._is_queue_busy(exc):
                 actions.append(
                     {

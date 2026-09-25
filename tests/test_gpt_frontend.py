@@ -708,3 +708,35 @@ def test_frontend_accepts_vpn_host_when_explicitly_allowed(tmp_path: Path) -> No
 
     assert status == 200
     assert body["ok"] is True
+
+def test_start_job_recovers_plain_chat_via_sidebar_when_deeplink_fails(tmp_path: Path) -> None:
+    queue = make_queue(tmp_path)
+    job = queue.create_job(
+        "Plain recovery",
+        conversation_url="https://chatgpt.com/c/plain-chat",
+        conversation_context_url="https://chatgpt.com/c/plain-chat",
+        state=GptJobState.REVIEW,
+    )
+
+    class SidebarRecoveryCdp(FakeCdp):
+        def navigate_chatgpt_conversation(self, target_id: str, url: str):
+            raise CdpError("conversation_navigation_timeout:https://chatgpt.com/c/plain-chat")
+
+        def create_sidebar_conversation_target(self, url: str, *, background: bool = True, wait_timeout_s: float = 30.0):
+            assert url == "https://chatgpt.com/c/plain-chat"
+            assert wait_timeout_s == 30.0
+            target_id = "fresh-sidebar-target"
+            self._targets.append(BrowserTarget(target_id, "page", url, "Plain recovery", f"ws://{target_id}"))
+            return {"new_target_id": target_id, "conversation_context_url": url, "recovered_via_sidebar": True}
+
+    cdp = SidebarRecoveryCdp()
+    controller = GptWorkController(queue, cdp)
+
+    result = controller.start_job(job.job_id)
+
+    rebound = queue.get_job(job.job_id)
+    assert rebound.state is GptJobState.ACTIVE
+    assert rebound.target_id == "fresh-sidebar-target"
+    assert rebound.conversation_context_url == "https://chatgpt.com/c/plain-chat"
+    assert result["errors"] == []
+    assert any(target_id.startswith("reopen-") for target_id in cdp.closed)
