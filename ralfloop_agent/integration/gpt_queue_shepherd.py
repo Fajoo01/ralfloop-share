@@ -11,18 +11,19 @@ from .gpt_work_queue import GptJobState, GptWorkQueue
 
 GOAL_MARKER = "[[BOTTAZZI_GOAL_REACHED]]"
 GOAL_BLOCKED_MARKER = "[[BOTTAZZI_GOAL_BLOCKED]]"
+GOAL_CONTINUE_MARKER = "[[BOTTAZZI_GOAL_CONTINUE]]"
 GOAL_CONTINUATION = (
-    "Continua automaticamente il lavoro verso il GOAL definito nel messaggio iniziale. "
-    "Non chiedere conferme e non ripetere quanto già completato. "
-    "Verifica concretamente i criteri di accettazione prima di dichiarare il GOAL raggiunto; una fase, un piano o un risultato parziale non bastano. "
-    "Mantieni il repository/issue GitHub associato come diario tecnico persistente e fonte di verità: registra e verifica lì commit, test, runtime/stato e riferimenti necessari; non affidarti alla sola memoria della chat. "
-    "Se sei realmente bloccato da un dato, permesso o intervento umano indispensabile, spiega cosa manca e termina con [[BOTTAZZI_GOAL_BLOCKED]]. "
-    "Quando e solo quando il GOAL è davvero raggiunto, termina con una riga contenente esattamente [[BOTTAZZI_GOAL_REACHED]]."
+    "Continua automaticamente dal punto raggiunto verso il GOAL iniziale, senza ripetere lavoro già verificato. "
+    "Mantieni il repository/issue GitHub associato come diario tecnico persistente e fonte di verità; non affidarti alla sola memoria della chat. "
+    "Alla fine di questo turno usa esattamente uno di questi marker: "
+    "[[BOTTAZZI_GOAL_CONTINUE]] se puoi proseguire autonomamente con altro lavoro concreto; "
+    "[[BOTTAZZI_GOAL_BLOCKED]] se serve davvero un dato, permesso o intervento umano; "
+    "[[BOTTAZZI_GOAL_REACHED]] solo se il GOAL è verificato integralmente."
 )
 STALL_RECOVERY = (
-    "Riprendi automaticamente dall'ultimo messaggio utente rimasto senza una risposta completa. "
-    "Non ripartire da zero e non chiedere conferme. Continua il lavoro verso il GOAL già definito, "
-    "verifica lo stato reale e porta a termine ciò che manca."
+    "Riprendi dall'ultimo punto utile dopo l'interruzione, senza ripartire da zero. "
+    "Verifica lo stato reale e completa il passo corrente. Alla fine usa esattamente uno dei marker "
+    "[[BOTTAZZI_GOAL_CONTINUE]], [[BOTTAZZI_GOAL_BLOCKED]] o [[BOTTAZZI_GOAL_REACHED]] secondo l'esito reale."
 )
 
 
@@ -346,9 +347,10 @@ class GptQueueShepherd:
             answered = user_turns > 0 and assistant_turns >= user_turns
             explicit_goal_reached = GOAL_MARKER in final_text
             explicit_goal_blocked = GOAL_BLOCKED_MARKER in final_text
+            explicit_goal_continue = GOAL_CONTINUE_MARKER in final_text
 
             if (
-                (explicit_goal_reached or explicit_goal_blocked)
+                (explicit_goal_reached or explicit_goal_blocked or explicit_goal_continue)
                 and idle_ms >= self.policy.complete_idle_ms
                 and not (focused and human_composer_chars)
             ):
@@ -360,8 +362,8 @@ class GptQueueShepherd:
                             final_text = partial
                     except (CdpError, OSError, RuntimeError, ValueError):
                         pass
-                clean_final_text = final_text.replace(GOAL_MARKER, "").replace(GOAL_BLOCKED_MARKER, "").strip()
-                clean_saved_text = saved_text.replace(GOAL_MARKER, "").replace(GOAL_BLOCKED_MARKER, "").strip()
+                clean_final_text = final_text.replace(GOAL_MARKER, "").replace(GOAL_BLOCKED_MARKER, "").replace(GOAL_CONTINUE_MARKER, "").strip()
+                clean_saved_text = saved_text.replace(GOAL_MARKER, "").replace(GOAL_BLOCKED_MARKER, "").replace(GOAL_CONTINUE_MARKER, "").strip()
                 persisted_text = clean_final_text
                 if clean_saved_text:
                     minimum_final_chars = max(120, len(clean_saved_text) // 2)
@@ -369,13 +371,27 @@ class GptQueueShepherd:
                         persisted_text = clean_saved_text
                 if persisted_text:
                     self.queue.set_last_assistant_text(job.job_id, persisted_text)
-                self.controller.release_job(job.job_id)
                 if explicit_goal_blocked:
+                    self.controller.release_job(job.job_id)
                     self.queue.set_state(job.job_id, GptJobState.REVIEW, last_error="goal_blocked")
                     actions.append({"job_id": job.job_id, "action": "released", "reason": "goal_blocked", "response_idle_ms": idle_ms})
-                else:
+                    continue
+                if explicit_goal_reached:
                     notification = self.completion_notifier(job.title)
+                    self.controller.release_job(job.job_id)
                     actions.append({"job_id": job.job_id, "action": "released", "reason": "goal_complete", "response_idle_ms": idle_ms, "telegram_notification": notification})
+                    continue
+                try:
+                    continuation = self.controller.send_message(job.job_id, GOAL_CONTINUATION)
+                    self.queue.reset_watchdog(job.job_id)
+                    actions.append({"job_id": job.job_id, "action": "continued", "reason": "goal_continue_marker", "response_idle_ms": idle_ms, "continuation": continuation})
+                except (CdpError, OSError, RuntimeError, ValueError) as exc:
+                    if self._is_queue_busy(exc):
+                        actions.append({"job_id": job.job_id, "action": "preserved", "reason": "delivery_already_queued"})
+                    elif self._is_transport_error(exc):
+                        self._transport_failure(job, actions, phase="goal_continue_marker", exc=exc)
+                    else:
+                        actions.append({"job_id": job.job_id, "action": "preserved", "reason": f"goal_continue_failed:{str(exc)[:200]}"})
                 continue
 
             if (
@@ -529,7 +545,7 @@ class GptQueueShepherd:
                     partial = self._substantive_response_text(stopped.get("last_assistant_text"))
                     if partial:
                         self.queue.set_last_assistant_text(job.job_id, partial)
-                    continuation = self.controller.send_message(job.job_id, GOAL_CONTINUATION)
+                    continuation = self.controller.send_message(job.job_id, STALL_RECOVERY)
                     watchdog = self.queue.mark_watchdog_recovery(job.job_id)
                     actions.append({
                         "job_id": job.job_id,
@@ -574,15 +590,14 @@ class GptQueueShepherd:
             )
 
             if completed:
-                # Every ACTIVE queue job is GOAL-managed, including imported legacy chats.
-                goal_managed = True
                 goal_reached = GOAL_MARKER in final_text
                 goal_blocked = GOAL_BLOCKED_MARKER in final_text
+                goal_continue = GOAL_CONTINUE_MARKER in final_text
                 clean_final_text = (
-                    final_text.replace(GOAL_MARKER, "").replace(GOAL_BLOCKED_MARKER, "").strip()
+                    final_text.replace(GOAL_MARKER, "").replace(GOAL_BLOCKED_MARKER, "").replace(GOAL_CONTINUE_MARKER, "").strip()
                 )
                 clean_saved_text = (
-                    saved_text.replace(GOAL_MARKER, "").replace(GOAL_BLOCKED_MARKER, "").strip()
+                    saved_text.replace(GOAL_MARKER, "").replace(GOAL_BLOCKED_MARKER, "").replace(GOAL_CONTINUE_MARKER, "").strip()
                 )
                 persisted_text = clean_final_text
                 if clean_saved_text:
@@ -605,7 +620,22 @@ class GptQueueShepherd:
                         }
                     )
                     continue
-                if not goal_reached:
+                if goal_reached:
+                    notification = self.completion_notifier(job.title)
+                    self.controller.release_job(job.job_id)
+                    actions.append(
+                        {
+                            "job_id": job.job_id,
+                            "action": "released",
+                            "reason": "goal_complete",
+                            "user_turns": user_turns,
+                            "assistant_turns": assistant_turns,
+                            "response_idle_ms": idle_ms,
+                            "telegram_notification": notification,
+                        }
+                    )
+                    continue
+                if goal_continue:
                     try:
                         continuation = self.controller.send_message(job.job_id, GOAL_CONTINUATION)
                         self.queue.reset_watchdog(job.job_id)
@@ -613,7 +643,7 @@ class GptQueueShepherd:
                             {
                                 "job_id": job.job_id,
                                 "action": "continued",
-                                "reason": "goal_not_reached",
+                                "reason": "goal_continue_marker",
                                 "user_turns": user_turns,
                                 "assistant_turns": assistant_turns,
                                 "response_idle_ms": idle_ms,
@@ -622,35 +652,22 @@ class GptQueueShepherd:
                         )
                     except (CdpError, OSError, RuntimeError, ValueError) as exc:
                         if self._is_queue_busy(exc):
-                            actions.append(
-                                {
-                                    "job_id": job.job_id,
-                                    "action": "preserved",
-                                    "reason": "delivery_already_queued",
-                                }
-                            )
+                            actions.append({"job_id": job.job_id, "action": "preserved", "reason": "delivery_already_queued"})
                         elif self._is_transport_error(exc):
-                            self._transport_failure(job, actions, phase="goal_continue", exc=exc)
+                            self._transport_failure(job, actions, phase="goal_continue_marker", exc=exc)
                         else:
-                            actions.append(
-                                {
-                                    "job_id": job.job_id,
-                                    "action": "preserved",
-                                    "reason": f"goal_continue_failed:{str(exc)[:200]}",
-                                }
-                            )
+                            actions.append({"job_id": job.job_id, "action": "preserved", "reason": f"goal_continue_failed:{str(exc)[:200]}"})
                     continue
-                notification = self.completion_notifier(job.title)
                 self.controller.release_job(job.job_id)
+                self.queue.set_state(job.job_id, GptJobState.REVIEW, last_error="goal_status_missing")
                 actions.append(
                     {
                         "job_id": job.job_id,
                         "action": "released",
-                        "reason": "goal_complete",
+                        "reason": "goal_status_missing",
                         "user_turns": user_turns,
                         "assistant_turns": assistant_turns,
                         "response_idle_ms": idle_ms,
-                        "telegram_notification": notification,
                     }
                 )
                 continue

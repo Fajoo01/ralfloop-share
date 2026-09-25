@@ -1691,7 +1691,7 @@ class ChromeCdp:
             'button[aria-label*="interrompi"]',
           ];
           const responseInProgress = stopSelectors.some((selector) => Array.from(document.querySelectorAll(selector)).some(visible));
-          const telemetry = window.__bottazziGptTelemetryV2;
+          const telemetry = window.__bottazziGptTelemetryV3 || window.__bottazziGptTelemetryV2;
           const responsePending = Boolean(telemetry && telemetry.pending_started_ms !== null && telemetry.pending_started_ms !== undefined);
           const composer = Array.from(document.querySelectorAll('#prompt-textarea, textarea, [contenteditable="true"]'))
             .find((el) => visible(el) && el.id !== 'bottazzi-human-composer') || null;
@@ -1721,6 +1721,19 @@ class ChromeCdp:
           const lastAssistantText = lastAssistant
             ? String((responseInProgress && streamingNode ? streamingNode.innerText || streamingNode.textContent : lastAssistant.innerText || lastAssistant.textContent) || '').trim().slice(-24000)
             : '';
+          const statusNodes = Array.from(document.querySelectorAll('[role="status"]')).filter(visible);
+          const statusText = statusNodes.length
+            ? String(statusNodes[statusNodes.length - 1].innerText || statusNodes[statusNodes.length - 1].textContent || '').trim().slice(-180)
+            : '';
+          const activityLines = lastAssistantText.split(/\n+/).map(line => line.trim()).filter(line => line && !line.includes('[[BOTTAZZI_GOAL_'));
+          const activityText = activityLines.length ? activityLines[activityLines.length - 1].slice(-240) : statusText;
+          const nowMs = performance.now();
+          const progressIdleMs = telemetry && Number(telemetry.last_progress_ms || 0) > 0
+            ? Math.max(0, Math.floor(nowMs - Number(telemetry.last_progress_ms)))
+            : 0;
+          const responseLatencyMs = telemetry && telemetry.pending_started_ms !== null && telemetry.pending_started_ms !== undefined
+            ? Math.max(0, Math.floor(nowMs - Number(telemetry.pending_started_ms || nowMs)))
+            : Math.max(0, Number((telemetry || {}).last_response_latency_ms || 0));
           return JSON.stringify({
             focused: document.hasFocus() && document.visibilityState === 'visible',
             visible: document.visibilityState === 'visible',
@@ -1733,6 +1746,10 @@ class ChromeCdp:
             user_turns: userNodes.length,
             assistant_turns: assistantNodes.length,
             tool_activity_count: toolActivityCount,
+            status_text: statusText,
+            activity_text: activityText,
+            progress_idle_ms: progressIdleMs,
+            response_latency_ms: responseLatencyMs,
             last_assistant_text: lastAssistantText,
           });
         })()'''

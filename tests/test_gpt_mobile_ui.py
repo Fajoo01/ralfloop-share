@@ -355,3 +355,23 @@ def test_gpt_browser_whatsapp_surface_has_apk_voice_attachments_and_completion_n
     assert '"review".equals(current)' in service
     assert '"Lavoro finito"' in service
     assert '"bottazzi_gpt_notifications_v2"' in service
+
+
+def test_gpt_browser_surfaces_live_activity_and_bounded_goal_protocol() -> None:
+    root = Path(__file__).resolve().parents[1]
+    html = (root / "openshell_backend" / "bottazzi_gpt_mobile_ui.html").read_text(encoding="utf-8")
+    frontend = (root / "ralfloop_agent" / "integration" / "gpt_frontend.py").read_text(encoding="utf-8")
+    cdp = (root / "ralfloop_agent" / "integration" / "gpt_browser_cdp.py").read_text(encoding="utf-8")
+    shepherd = (root / "ralfloop_agent" / "integration" / "gpt_queue_shepherd.py").read_text(encoding="utf-8")
+    assert "Attività visibile" in html
+    assert "ultimo progresso" in html
+    assert "live_activity_text" in html
+    assert "live_progress_idle_ms" in html
+    assert "goal_status_missing" in html
+    assert 'job["live_activity_text"]' in frontend
+    assert 'job["live_tool_activity_count"]' in frontend
+    assert "status_text: statusText" in cdp
+    assert "activity_text: activityText" in cdp
+    assert "window.__bottazziGptTelemetryV3 || window.__bottazziGptTelemetryV2" in cdp
+    assert "[[BOTTAZZI_GOAL_CONTINUE]]" in shepherd
+    assert 'last_error="goal_status_missing"' in shepherd

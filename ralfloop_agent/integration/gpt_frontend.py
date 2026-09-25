@@ -212,9 +212,11 @@ class GptWorkController:
             + "Prima di dichiarare il GOAL raggiunto, verifica concretamente i criteri di accettazione espliciti o impliciti: modifiche applicate, test o riscontri necessari e stato finale richiesto. "
             + "Mantieni il repository/issue GitHub associato come diario tecnico persistente e fonte di verità: registra e verifica lì commit, test, runtime/stato e riferimenti necessari; non affidarti alla sola memoria della chat. "
             + "Non usare il marker di completamento per un piano, una singola fase o un risultato parziale. "
-            + "Se il GOAL non è ancora realmente raggiunto, termina la risposta senza dichiarare il lavoro finito: Bot-tazzi continuerà automaticamente. "
+            + "Alla fine di ogni turno usa esattamente uno dei tre marker di stato. "
+            + "Se resta lavoro concreto che puoi eseguire autonomamente, termina con una riga contenente esattamente [[BOTTAZZI_GOAL_CONTINUE]]. "
             + "Se sei realmente bloccato da un dato, permesso o intervento umano indispensabile, spiega in modo conciso cosa manca e termina con una riga contenente esattamente [[BOTTAZZI_GOAL_BLOCKED]]. "
-            + "Quando e solo quando il GOAL è davvero raggiunto, termina la risposta con una riga contenente esattamente [[BOTTAZZI_GOAL_REACHED]]."
+            + "Quando e solo quando il GOAL è davvero raggiunto, termina con una riga contenente esattamente [[BOTTAZZI_GOAL_REACHED]]. "
+            + "Non omettere il marker: senza un esito esplicito Bot-tazzi fermerà il ciclo invece di inviare continuazioni alla cieca."
         )
 
     def _occupied_job_ids(self, browser: BrowserSnapshot) -> set[str]:
@@ -1090,6 +1092,10 @@ class GptWorkController:
                     "user_turns": user_turns,
                     "assistant_turns": assistant_turns,
                     "tool_activity_count": tool_activity_count,
+                    "status_text": str(companion.get("status_text") or ""),
+                    "activity_text": str(companion.get("activity_text") or ""),
+                    "progress_idle_ms": int(companion.get("progress_idle_ms") or 0),
+                    "response_latency_ms": int(companion.get("response_latency_ms") or 0),
                     "last_assistant_text": assistant_text,
                     "sample_cached": sample_cached,
                     "managed": bool(job_id),
@@ -1110,6 +1116,13 @@ class GptWorkController:
             job["live_busy"] = bool((live or {}).get("working"))
             job["live_pending"] = bool((live or {}).get("busy")) and not bool((live or {}).get("working"))
             job["live_cached"] = bool((live or {}).get("sample_cached"))
+            job["live_status_text"] = str((live or {}).get("status_text") or "")
+            job["live_activity_text"] = str((live or {}).get("activity_text") or "")
+            job["live_progress_idle_ms"] = int((live or {}).get("progress_idle_ms") or 0)
+            job["live_response_latency_ms"] = int((live or {}).get("response_latency_ms") or 0)
+            job["live_tool_activity_count"] = int((live or {}).get("tool_activity_count") or 0)
+            job["live_user_turns"] = int((live or {}).get("user_turns") or 0)
+            job["live_assistant_turns"] = int((live or {}).get("assistant_turns") or 0)
         limit = int(base["settings"]["max_open_chats"])
         managed = sum(1 for row in browser_rows if row["managed"])
         base["browser"] = {

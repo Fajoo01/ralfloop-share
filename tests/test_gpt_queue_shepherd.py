@@ -221,7 +221,7 @@ def test_silent_stream_is_recovered_before_full_stall_timeout(tmp_path: Path) ->
     assert queue.get_job(job_id).state is GptJobState.ACTIVE
     assert cdp.stopped == ["managed"]
     assert len(cdp.messages) == 1
-    assert "Continua automaticamente il lavoro verso il GOAL" in cdp.messages[0][2]
+    assert "Riprendi dall'ultimo punto utile" in cdp.messages[0][2]
     assert queue.watchdog_state(job_id)["recovery_count"] == 1
     assert report["actions"][0]["reason"] == "stalled_stream_restarted"
 
@@ -352,7 +352,7 @@ def test_stalled_unanswered_job_is_recovered_before_review(tmp_path: Path) -> No
     assert job.target_id == "managed"
     assert cdp.closed == []
     assert len(cdp.messages) == 1
-    assert "Riprendi automaticamente" in cdp.messages[0][2]
+    assert "Riprendi dall'ultimo punto utile" in cdp.messages[0][2]
     assert queue.watchdog_state(job_id)["recovery_count"] == 1
     assert report["actions"][0]["reason"] == "unanswered_restarted"
 
@@ -425,7 +425,7 @@ def test_stale_stream_is_stopped_and_restarted_in_same_chat(tmp_path: Path) -> N
     assert queue.get_job(job_id).state is GptJobState.ACTIVE
     assert cdp.stopped == ["managed"]
     assert len(cdp.messages) == 1
-    assert "Continua automaticamente il lavoro verso il GOAL" in cdp.messages[0][2]
+    assert "Riprendi dall'ultimo punto utile" in cdp.messages[0][2]
     assert queue.watchdog_state(job_id)["recovery_count"] == 1
     assert report["actions"][0]["reason"] == "stalled_stream_restarted"
 
@@ -617,7 +617,7 @@ def test_queue_busy_is_existing_delivery_not_failed_recovery(tmp_path: Path) -> 
             "response_idle_ms": 61_000,
             "progress_idle_ms": 61_000,
         },
-        companion={"busy": False, "last_assistant_text": "Fase conclusa, resta altro da fare."},
+        companion={"busy": False, "last_assistant_text": "Fase conclusa, resta altro da fare.\n[[BOTTAZZI_GOAL_CONTINUE]]"},
     )
 
     report = shepherd(queue, cdp).run_once(auto_start=False)
@@ -627,7 +627,7 @@ def test_queue_busy_is_existing_delivery_not_failed_recovery(tmp_path: Path) -> 
     assert report["actions"][0]["reason"] == "delivery_already_queued"
 
 
-def test_goal_managed_reply_auto_continues_same_chat_without_notification(tmp_path: Path) -> None:
+def test_goal_reply_without_status_marker_stops_in_review_instead_of_looping(tmp_path: Path) -> None:
     queue, job_id = queue_with_active(tmp_path)
     with queue._connect() as conn:
         conn.execute("UPDATE gpt_jobs SET prompt=? WHERE job_id=?", ("Fai il lavoro.\\n\\nBOT-TAZZI GOAL LOOP", job_id))
@@ -640,12 +640,30 @@ def test_goal_managed_reply_auto_continues_same_chat_without_notification(tmp_pa
     notices=[]; cdp=GoalCdp()
     runner=GptQueueShepherd(queue,cdp,policy=GptQueueShepherdPolicy(complete_idle_ms=60000,stalled_idle_ms=180000),completion_notifier=lambda title:notices.append(title) or {"ok":True})
     report=runner.run_once(auto_start=False)
-    assert queue.get_job(job_id).state is GptJobState.ACTIVE
-    assert cdp.closed == []
-    assert len(cdp.messages)==1
-    assert "Continua automaticamente il lavoro verso il GOAL" in cdp.messages[0][2]
+    saved=queue.get_job(job_id)
+    assert saved.state is GptJobState.REVIEW
+    assert saved.last_error == "goal_status_missing"
+    assert cdp.messages == []
     assert notices==[]
-    assert report["actions"][0]["reason"]=="goal_not_reached"
+    assert report["actions"][0]["reason"]=="goal_status_missing"
+
+
+def test_goal_continue_marker_auto_continues_same_chat_without_notification(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    class GoalCdp(FakeCdp):
+        def __init__(self):
+            super().__init__(ui={"user_turns":1,"assistant_turns":1,"response_in_progress":False,"response_pending":False,"response_idle_ms":61000}, companion={"busy":False,"last_assistant_text":"Ho completato una fase.\\n[[BOTTAZZI_GOAL_CONTINUE]]"})
+            self.messages=[]
+        def install_human_input_target(self,target_id,conversation_url): return {"ok":True}
+        def queue_human_message(self,target_id,conversation_url,text): self.messages.append((target_id,conversation_url,text)); return {"queued":True}
+    notices=[]; cdp=GoalCdp()
+    runner=GptQueueShepherd(queue,cdp,policy=GptQueueShepherdPolicy(complete_idle_ms=60000,stalled_idle_ms=180000),completion_notifier=lambda title:notices.append(title) or {"ok":True})
+    report=runner.run_once(auto_start=False)
+    assert queue.get_job(job_id).state is GptJobState.ACTIVE
+    assert len(cdp.messages)==1
+    assert "[[BOTTAZZI_GOAL_CONTINUE]]" in cdp.messages[0][2]
+    assert notices==[]
+    assert report["actions"][0]["reason"]=="goal_continue_marker"
 
 
 def test_goal_marker_releases_and_notifies(tmp_path: Path) -> None:
