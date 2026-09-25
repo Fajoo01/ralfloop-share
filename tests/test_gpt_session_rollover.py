@@ -1782,6 +1782,9 @@ def test_sidebar_recovery_recognizes_current_italian_show_label(monkeypatch) -> 
     assert result["recovered_via_sidebar"] is True
     assert expressions
     assert "mostra|visualizza" in expressions[0]
+    assert r"match(/^\/(?:g\/[^/]+\/)?c\/" in expressions[0]
+    assert r"replace(/\s+/g" in expressions[0]
+    assert r"match(/^\\/" not in expressions[0]
 
 
 def test_conversation_navigation_recovers_empty_project_deeplink_via_project(monkeypatch) -> None:
