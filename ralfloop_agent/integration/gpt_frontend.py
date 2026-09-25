@@ -316,7 +316,29 @@ class GptWorkController:
                         raise CdpError("chat_target_ambiguous")
                     created_target_id = self.cdp.create_chatgpt_target(clear_cache=False, background=True)
                     context_url = job.conversation_context_url or job.conversation_url
-                    self.cdp.navigate_chatgpt_conversation(created_target_id, context_url)
+                    try:
+                        self.cdp.navigate_chatgpt_conversation(created_target_id, context_url)
+                    except CdpError as exc:
+                        if (
+                            str(exc) == "temporary_access_limited"
+                            or not chatgpt_project_new_chat_url(context_url)
+                            or not hasattr(self.cdp, "create_project_conversation_target")
+                        ):
+                            raise
+                        recovered = self.cdp.create_project_conversation_target(
+                            context_url,
+                            background=True,
+                            wait_timeout_s=12.0,
+                        )
+                        replacement_id = str(recovered.get("new_target_id") or "")
+                        if not replacement_id:
+                            raise CdpError("project_recovery_target_missing")
+                        try:
+                            self.cdp.close_target(created_target_id)
+                        except CdpError:
+                            pass
+                        created_target_id = replacement_id
+                        context_url = str(recovered.get("conversation_context_url") or context_url)
                     refreshed = self.browser_snapshot()
                     target = refreshed.targets_by_id.get(created_target_id)
                     if target is None or _canonical_chatgpt_conversation_url(target.url) != job.conversation_url:
@@ -337,7 +359,11 @@ class GptWorkController:
                         "errors": [{"job_id": job.job_id, "error": "temporary_access_limited"}],
                         **self.runtime_state(reconcile=False),
                     }
-                self.cdp.install_human_input_target(target.target_id, context_url)
+                try:
+                    self.cdp.install_human_input_target(target.target_id, context_url)
+                except CdpError as exc:
+                    if not str(exc).startswith("cdp_transport_error:"):
+                        raise
                 bound = self.queue.bind_chat(
                     job.job_id,
                     conversation_url=job.conversation_url,
@@ -870,8 +896,34 @@ class GptWorkController:
         context_url = job.conversation_context_url or job.conversation_url
         new_target_id = self.cdp.create_chatgpt_target(clear_cache=False, background=True)
         try:
-            self.cdp.navigate_chatgpt_conversation(new_target_id, context_url)
-            self.cdp.install_human_input_target(new_target_id, context_url)
+            try:
+                self.cdp.navigate_chatgpt_conversation(new_target_id, context_url)
+            except CdpError as exc:
+                if (
+                    str(exc) == "temporary_access_limited"
+                    or not chatgpt_project_new_chat_url(context_url)
+                    or not hasattr(self.cdp, "create_project_conversation_target")
+                ):
+                    raise
+                recovered = self.cdp.create_project_conversation_target(
+                    context_url,
+                    background=True,
+                    wait_timeout_s=12.0,
+                )
+                replacement_id = str(recovered.get("new_target_id") or "")
+                if not replacement_id:
+                    raise CdpError("project_recovery_target_missing")
+                try:
+                    self.cdp.close_target(new_target_id)
+                except CdpError:
+                    pass
+                new_target_id = replacement_id
+                context_url = str(recovered.get("conversation_context_url") or context_url)
+            try:
+                self.cdp.install_human_input_target(new_target_id, context_url)
+            except CdpError as exc:
+                if not str(exc).startswith("cdp_transport_error:"):
+                    raise
             rebound = self.queue.bind_chat(
                 job.job_id,
                 conversation_url=job.conversation_url,

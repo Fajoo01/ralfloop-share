@@ -237,6 +237,43 @@ def test_recycle_job_target_preserves_project_context(tmp_path: Path) -> None:
     assert rebound.conversation_context_url == "https://chatgpt.com/g/g-p-demo-project/c/chat-project"
 
 
+def test_start_job_recovers_project_chat_on_fresh_target_when_deeplink_fails(tmp_path: Path) -> None:
+    queue = make_queue(tmp_path)
+    project_id = "g-p-" + "a" * 32
+    context_url = f"https://chatgpt.com/g/{project_id}-demo/c/project-chat"
+    job = queue.create_job(
+        "Project recovery",
+        conversation_url="https://chatgpt.com/c/project-chat",
+        conversation_context_url=context_url,
+        state=GptJobState.REVIEW,
+    )
+
+    class ProjectRecoveryCdp(FakeCdp):
+        def navigate_chatgpt_conversation(self, target_id: str, url: str):
+            raise CdpError("conversation_project_click_timeout:https://chatgpt.com/c/project-chat")
+
+        def create_project_conversation_target(self, url: str, *, background: bool = True, wait_timeout_s: float = 12.0):
+            assert url == context_url
+            target_id = "fresh-project-target"
+            self._targets.append(BrowserTarget(target_id, "page", context_url, "Project recovery", f"ws://{target_id}"))
+            return {"new_target_id": target_id, "conversation_context_url": context_url, "recovered_via_project": True}
+
+        def install_human_input_target(self, target_id: str, conversation_url: str):
+            raise CdpError("cdp_transport_error:Runtime.evaluate:WebSocketTimeoutException")
+
+    cdp = ProjectRecoveryCdp()
+    controller = GptWorkController(queue, cdp)
+
+    result = controller.start_job(job.job_id)
+
+    rebound = queue.get_job(job.job_id)
+    assert rebound.state is GptJobState.ACTIVE
+    assert rebound.target_id == "fresh-project-target"
+    assert rebound.conversation_context_url == context_url
+    assert result["errors"] == []
+    assert any(target_id.startswith("reopen-") for target_id in cdp.closed)
+
+
 def test_send_message_rejects_target_reused_for_different_conversation(tmp_path: Path) -> None:
     queue = make_queue(tmp_path)
     job = queue.create_job("One", prompt="Do one")

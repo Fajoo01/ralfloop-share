@@ -1254,7 +1254,18 @@ class ChromeCdp:
         if not target.websocket_url:
             raise CdpError("conversation_navigation_target_invalid")
         self._page_call(target.websocket_url, "Page.enable")
-        self._page_call(target.websocket_url, "Page.navigate", {"url": project_url})
+        project_path = f"/g/{project_id}/project"
+        initial_deadline = time.monotonic() + min(2.0, max(0.5, float(wait_timeout_s) / 4.0))
+        while time.monotonic() < initial_deadline:
+            target = self._wait_target(target_id)
+            if target.is_chatgpt and urllib.parse.urlparse(target.url).path.rstrip("/") == project_path:
+                break
+            time.sleep(0.2)
+        else:
+            target = self._wait_target(target_id)
+            if not target.websocket_url:
+                raise CdpError("conversation_navigation_target_invalid")
+            self._page_call(target.websocket_url, "Page.navigate", {"url": project_url})
         project_deadline = time.monotonic() + max(2.0, min(float(wait_timeout_s), 6.0))
         while time.monotonic() < project_deadline:
             target = self._wait_target(target_id)
@@ -1322,6 +1333,33 @@ class ChromeCdp:
                 return last_state
             time.sleep(0.25)
         raise CdpError(f"conversation_project_click_timeout:{normalized}")
+
+    def create_project_conversation_target(
+        self,
+        context_url: str,
+        *,
+        background: bool = True,
+        wait_timeout_s: float = 12.0,
+    ) -> dict[str, Any]:
+        parts = _chatgpt_project_conversation_parts(context_url)
+        if parts is None:
+            raise CdpError("conversation_project_context_invalid")
+        project_id, _ = parts
+        project_url = f"https://chatgpt.com/g/{project_id}/project"
+        target_id = self.create_target(project_url, background=background)
+        try:
+            state = self._navigate_chatgpt_conversation_via_project(
+                target_id,
+                context_url,
+                wait_timeout_s=wait_timeout_s,
+            )
+            return {"new_target_id": target_id, **state}
+        except Exception:
+            try:
+                self.close_target(target_id)
+            except CdpError:
+                pass
+            raise
 
     def navigate_chatgpt_conversation(
         self,
