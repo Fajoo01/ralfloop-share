@@ -1274,12 +1274,18 @@ class ChromeCdp:
             time.sleep(0.25)
         else:
             raise CdpError("conversation_project_page_timeout")
-        rows = self.project_conversation_records(
-            target_id,
-            project_url=project_url,
-            wait_timeout_s=max(2.0, min(float(wait_timeout_s), 10.0)),
-        )
-        row = next((item for item in rows if item.get("url") == normalized), None)
+        scan_deadline = time.monotonic() + max(2.0, min(float(wait_timeout_s), 10.0))
+        row: dict[str, str] | None = None
+        while time.monotonic() < scan_deadline and row is None:
+            remaining = max(0.5, scan_deadline - time.monotonic())
+            rows = self.project_conversation_records(
+                target_id,
+                project_url=project_url,
+                wait_timeout_s=min(1.5, remaining),
+            )
+            row = next((item for item in rows if item.get("url") == normalized), None)
+            if row is None:
+                time.sleep(0.35)
         if row is None:
             raise CdpError("conversation_project_entry_missing")
         target = self._wait_target(target_id)

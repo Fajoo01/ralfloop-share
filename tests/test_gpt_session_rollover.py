@@ -1702,6 +1702,45 @@ def test_conversation_navigation_preserves_project_context(monkeypatch) -> None:
     assert ("Page.navigate", {"url": project_url}) in calls
 
 
+def test_project_recovery_waits_for_exact_chat_when_initial_project_list_is_partial(monkeypatch) -> None:
+    cdp = ChromeCdp("http://127.0.0.1:1")
+    project_id = "g-p-" + "a" * 32
+    context_url = f"https://chatgpt.com/g/{project_id}-demo/c/wanted-chat"
+    project_url = f"https://chatgpt.com/g/{project_id}/project"
+    canonical = "https://chatgpt.com/c/wanted-chat"
+    project_target = BrowserTarget("target", "page", project_url, "Project", "ws://target")
+    chat_target = BrowserTarget("target", "page", context_url, "Wanted", "ws://target")
+    clicked = {"value": False}
+    scans = iter(
+        [
+            [{"url": "https://chatgpt.com/c/other", "context_url": f"https://chatgpt.com/g/{project_id}/c/other", "title": "Other", "project_id": project_id}],
+            [{"url": canonical, "context_url": context_url, "title": "Wanted", "project_id": project_id}],
+        ]
+    )
+
+    monkeypatch.setattr(cdp, "_wait_target", lambda target_id, **kwargs: chat_target if clicked["value"] else project_target)
+    monkeypatch.setattr(cdp, "project_conversation_records", lambda *args, **kwargs: next(scans, [{"url": canonical, "context_url": context_url, "title": "Wanted", "project_id": project_id}]))
+
+    def page_call(websocket_url, method, params=None, **kwargs):
+        expression = (params or {}).get("expression", "")
+        if method == "Runtime.evaluate" and "const wanted" in expression:
+            clicked["value"] = True
+            return {"result": {"value": json.dumps({"clicked": True, "href": context_url})}}
+        return {}
+
+    monkeypatch.setattr(cdp, "_page_call", page_call)
+    monkeypatch.setattr(
+        cdp,
+        "chatgpt_ui_state",
+        lambda target_id: {"ready": True, "user_turns": 2, "assistant_turns": 2, "temporary_access_limited": False},
+    )
+
+    result = cdp._navigate_chatgpt_conversation_via_project("target", context_url, wait_timeout_s=2.0)
+
+    assert result["recovered_via_project"] is True
+    assert result["conversation_context_url"] == context_url
+
+
 def test_conversation_navigation_recovers_empty_project_deeplink_via_project(monkeypatch) -> None:
     cdp = ChromeCdp("http://127.0.0.1:1")
     project_id = "g-p-" + "a" * 32
