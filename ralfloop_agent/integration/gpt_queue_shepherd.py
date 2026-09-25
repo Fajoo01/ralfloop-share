@@ -28,6 +28,7 @@ STALL_RECOVERY = (
 @dataclass(frozen=True)
 class GptQueueShepherdPolicy:
     complete_idle_ms: int = 60_000
+    silent_stream_stalled_ms: int = 90_000
     stalled_idle_ms: int = 180_000
     recovery_cooldown_ms: int = 90_000
     max_recoveries: int = 2
@@ -35,8 +36,10 @@ class GptQueueShepherdPolicy:
     def __post_init__(self) -> None:
         if self.complete_idle_ms < 5_000:
             raise ValueError("complete_idle_ms_too_small")
-        if self.stalled_idle_ms < self.complete_idle_ms:
-            raise ValueError("stalled_idle_ms_before_complete_idle_ms")
+        if self.silent_stream_stalled_ms < self.complete_idle_ms:
+            raise ValueError("silent_stream_stalled_before_complete_idle_ms")
+        if self.stalled_idle_ms < self.silent_stream_stalled_ms:
+            raise ValueError("stalled_idle_ms_before_silent_stream_stalled_ms")
         if self.recovery_cooldown_ms < 5_000:
             raise ValueError("recovery_cooldown_ms_too_small")
         if self.max_recoveries < 1:
@@ -295,6 +298,7 @@ class GptQueueShepherd:
                 self._int(ui.get("assistant_turns")),
                 self._int(companion.get("assistant_turns")),
             )
+            tool_activity_count = self._int(ui.get("tool_activity_count"))
             idle_ms = self._idle_ms(ui)
             current_job = self.queue.get_job(job.job_id)
             saved_text = self._substantive_response_text(current_job.last_assistant_text)
@@ -424,12 +428,19 @@ class GptQueueShepherd:
                 continue
 
             if response_in_progress:
-                if idle_ms < self.policy.stalled_idle_ms:
+                silent_stream = not response_text and tool_activity_count == 0
+                stream_stall_limit_ms = (
+                    self.policy.silent_stream_stalled_ms
+                    if silent_stream
+                    else self.policy.stalled_idle_ms
+                )
+                if idle_ms < stream_stall_limit_ms:
                     actions.append({
                         "job_id": job.job_id,
                         "action": "preserved",
-                        "reason": "response_in_progress",
+                        "reason": "response_in_progress_silent" if silent_stream else "response_in_progress",
                         "progress_idle_ms": idle_ms,
+                        "stall_limit_ms": stream_stall_limit_ms,
                     })
                     continue
                 gate, watchdog = self._recovery_gate(job.job_id)

@@ -158,7 +158,8 @@ def test_fresh_streaming_reply_is_never_recovered(tmp_path: Path) -> None:
             "response_pending": True,
             "response_idle_ms": 1_000,
             "progress_idle_ms": 1_000,
-        }
+        },
+        companion={"busy": True, "last_assistant_text": "Risposta parziale in avanzamento"},
     )
 
     report = shepherd(queue, cdp).run_once(auto_start=False)
@@ -167,6 +168,31 @@ def test_fresh_streaming_reply_is_never_recovered(tmp_path: Path) -> None:
     assert cdp.closed == []
     assert cdp.stopped == []
     assert report["actions"][0]["reason"] == "response_in_progress"
+
+
+def test_silent_stream_is_recovered_before_full_stall_timeout(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    cdp = FakeCdp(
+        ui={
+            "user_turns": 2,
+            "assistant_turns": 0,
+            "response_in_progress": True,
+            "response_pending": True,
+            "response_idle_ms": 91_000,
+            "progress_idle_ms": 91_000,
+            "tool_activity_count": 0,
+        },
+        companion={"busy": True, "last_assistant_text": ""},
+    )
+
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    assert queue.get_job(job_id).state is GptJobState.ACTIVE
+    assert cdp.stopped == ["managed"]
+    assert len(cdp.messages) == 1
+    assert "Continua automaticamente il lavoro verso il GOAL" in cdp.messages[0][2]
+    assert queue.watchdog_state(job_id)["recovery_count"] == 1
+    assert report["actions"][0]["reason"] == "stalled_stream_restarted"
 
 
 def test_companion_busy_is_preserved_while_response_is_still_fresh(tmp_path: Path) -> None:
