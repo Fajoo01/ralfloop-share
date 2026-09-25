@@ -313,3 +313,61 @@ def test_mobile_composer_tracks_visual_viewport_keyboard() -> None:
     assert "function syncVisualViewport()" in ui
     assert "window.innerHeight-vv.height-vv.offsetTop" in ui
     assert "visualViewport.addEventListener('resize',syncVisualViewport)" in ui
+
+
+def test_scholarly_concept_question_auto_routes_to_filologo(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    client.post("/login", json={"password": "app-pass"})
+    monkeypatch.setattr(app_gateway, "SCHOLARLY_BACKEND", "http://127.0.0.1:19120")
+    seen = {}
+
+    class FakeResponse:
+        status_code = 200
+        content = b'{"ok":true,"response":"scholarly"}'
+        headers = {"content-type": "application/json"}
+        ok = True
+
+    def fake_post(url, *, json, timeout):
+        seen.update(url=url, json=json, timeout=timeout)
+        return FakeResponse()
+
+    monkeypatch.setattr(app_gateway.requests, "post", fake_post)
+    response = client.post(
+        "/assistant/v1/chat",
+        json={
+            "message": "Nella sua teoria del simbolo, cosa intende un autore con il concetto della memoria culturale?",
+            "allow_tools": False,
+        },
+    )
+    assert response.status_code == 200
+    assert seen["url"] == "http://127.0.0.1:19120/assistant/v1/chat"
+    assert seen["json"]["message"].startswith("Filologo: ")
+    assert seen["json"]["allow_tools"] is True
+
+
+def test_explicit_internet_agent_keeps_general_research_route(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    client.post("/login", json={"password": "app-pass"})
+    monkeypatch.setattr(app_gateway, "SCHOLARLY_BACKEND", "http://127.0.0.1:19120")
+    seen = {}
+
+    class FakeResponse:
+        status_code = 200
+        content = b'{"ok":true,"response":"research"}'
+        headers = {"content-type": "application/json"}
+        ok = True
+
+    def fake_post(url, *, json, timeout):
+        seen.update(url=url, json=json, timeout=timeout)
+        return FakeResponse()
+
+    monkeypatch.setattr(app_gateway.requests, "post", fake_post)
+    response = client.post(
+        "/assistant/v1/chat",
+        json={
+            "message": "Nella sua teoria del simbolo, cosa intende un autore con il concetto della memoria culturale?",
+            "allow_tools": False,
+            "app_internet_agent": True,
+        },
+    )
+    assert response.status_code == 200
+    assert seen["url"] == app_gateway.BACKEND + "/assistant/v1/chat"
+    assert seen["json"]["message"].startswith("Ricerca approfondita. Domanda originale: ")

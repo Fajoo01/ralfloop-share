@@ -36,6 +36,19 @@ PUBLIC_PATHS = {"/login", "/oidc/login", "/oidc/callback", "/healthz", "/manifes
 app = FastAPI(title=APP_NAME, docs_url=None, redoc_url=None, openapi_url=None)
 CALL_RECORDINGS = CallRecordingStore.from_env()
 
+_SCHOLARLY_QUERY_RE = re.compile(
+    r"(?:\bfilolog\w*\b|\bstoriograf\w*\b|\bbibliograf\w*\b|"
+    r"\bfont[ei]\s+primari\w*\b|\bedizion\w*\s+critic\w*\b|"
+    r"\bvariant\w*\s+testual\w*\b|\bmanoscritt\w*\b|"
+    r"\btesto\s+original\w*\b|\b(?:nella|nel)\s+(?:sua\s+)?(?:teoria|opera|pensiero|testo|scritti?)\b|"
+    r"\b(?:che\s+cosa|cosa)\s+(?:intende|significa)\b.{0,140}\b(?:concett\w*|termin\w*|espression\w*|simbol\w*|nozion\w*)\b)",
+    re.IGNORECASE,
+)
+
+
+def _looks_scholarly_query(message: str) -> bool:
+    return bool(_SCHOLARLY_QUERY_RE.search(str(message or "")))
+
 
 def _prefix(request: Request) -> str:
     value = request.headers.get("x-forwarded-prefix", "").strip()
@@ -422,7 +435,23 @@ def assistant_chat(payload: dict[str, Any]) -> Response:
             context["app_attachments"] = safe_rows
             outgoing["context"] = context
     internet_agent = bool(outgoing.pop("app_internet_agent", False))
-    scholarly = bool(outgoing.pop("app_scholarly", False))
+    explicit_scholarly = bool(outgoing.pop("app_scholarly", False))
+    classification_message = str(outgoing.get("message") or "").strip()
+    if classification_message.casefold() in {"riprova", "riprovaci", "prova di nuovo", "di nuovo"}:
+        history = outgoing.get("history")
+        if isinstance(history, list):
+            for item in reversed(history):
+                if not isinstance(item, dict) or str(item.get("role") or "") != "user":
+                    continue
+                previous = str(item.get("content") or "").strip()
+                if previous:
+                    classification_message = previous
+                    break
+    scholarly = explicit_scholarly or (
+        not internet_agent
+        and bool(SCHOLARLY_BACKEND)
+        and _looks_scholarly_query(classification_message)
+    )
     if internet_agent:
         original = str(outgoing.get("message") or "").strip()
         if original.casefold() in {"riprova", "riprovaci", "prova di nuovo", "di nuovo"}:
