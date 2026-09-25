@@ -698,3 +698,39 @@ def test_goal_blocked_marker_releases_without_completion_notification(tmp_path: 
     assert "[[BOTTAZZI_GOAL_BLOCKED]]" not in saved.last_assistant_text
     assert notices == []
     assert report["actions"][0]["reason"] == "goal_blocked"
+
+
+def test_goal_marker_wins_over_stale_stop_button_and_turn_count_mismatch(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    cdp = FakeCdp(
+        ui={
+            "user_turns": 6,
+            "assistant_turns": 2,
+            "response_in_progress": True,
+            "response_pending": True,
+            "response_idle_ms": 61_000,
+            "progress_idle_ms": 61_000,
+        },
+        companion={
+            "busy": True,
+            "assistant_turns": 2,
+            "last_assistant_text": "Il GOAL è verificato.\n[[BOTTAZZI_GOAL_REACHED]]",
+        },
+    )
+    notices = []
+    runner = GptQueueShepherd(
+        queue,
+        cdp,
+        policy=GptQueueShepherdPolicy(complete_idle_ms=60_000, stalled_idle_ms=180_000),
+        completion_notifier=lambda title: notices.append(title) or {"ok": True},
+    )
+
+    report = runner.run_once(auto_start=False)
+
+    saved = queue.get_job(job_id)
+    assert saved.state is GptJobState.REVIEW
+    assert saved.target_id is None
+    assert cdp.stopped == ["managed"]
+    assert cdp.messages == []
+    assert notices == ["Managed"]
+    assert report["actions"][0]["reason"] == "goal_complete"

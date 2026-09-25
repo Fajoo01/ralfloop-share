@@ -343,6 +343,39 @@ class GptQueueShepherd:
                 self.queue.reset_watchdog_transport_failures(job.job_id)
             final_text = response_text or saved_text
             answered = user_turns > 0 and assistant_turns >= user_turns
+            explicit_goal_reached = GOAL_MARKER in final_text
+            explicit_goal_blocked = GOAL_BLOCKED_MARKER in final_text
+
+            if (
+                (explicit_goal_reached or explicit_goal_blocked)
+                and idle_ms >= self.policy.complete_idle_ms
+                and not (focused and human_composer_chars)
+            ):
+                if response_in_progress:
+                    try:
+                        stopped = self.cdp.stop_chatgpt_response(job.target_id)
+                        partial = self._substantive_response_text(stopped.get("last_assistant_text"))
+                        if partial:
+                            final_text = partial
+                    except (CdpError, OSError, RuntimeError, ValueError):
+                        pass
+                clean_final_text = final_text.replace(GOAL_MARKER, "").replace(GOAL_BLOCKED_MARKER, "").strip()
+                clean_saved_text = saved_text.replace(GOAL_MARKER, "").replace(GOAL_BLOCKED_MARKER, "").strip()
+                persisted_text = clean_final_text
+                if clean_saved_text:
+                    minimum_final_chars = max(120, len(clean_saved_text) // 2)
+                    if not clean_final_text or len(clean_final_text) < minimum_final_chars:
+                        persisted_text = clean_saved_text
+                if persisted_text:
+                    self.queue.set_last_assistant_text(job.job_id, persisted_text)
+                self.controller.release_job(job.job_id)
+                if explicit_goal_blocked:
+                    self.queue.set_state(job.job_id, GptJobState.REVIEW, last_error="goal_blocked")
+                    actions.append({"job_id": job.job_id, "action": "released", "reason": "goal_blocked", "response_idle_ms": idle_ms})
+                else:
+                    notification = self.completion_notifier(job.title)
+                    actions.append({"job_id": job.job_id, "action": "released", "reason": "goal_complete", "response_idle_ms": idle_ms, "telegram_notification": notification})
+                continue
 
             if (
                 user_turns == 0
