@@ -51,6 +51,47 @@ def test_cdp_transport_timeout_is_wrapped(monkeypatch) -> None:
         ChromeCdp("http://127.0.0.1:9238")._rpc("ws://example.invalid", "Runtime.evaluate", {})
 
 
+def test_chatgpt_ui_telemetry_uses_polling_not_persistent_mutation_observer(monkeypatch) -> None:
+    cdp = ChromeCdp("http://127.0.0.1:9238")
+    target = BrowserTarget(
+        target_id="chat-1",
+        target_type="page",
+        url="https://chatgpt.com/c/example",
+        title="Example",
+        websocket_url="ws://example.invalid/devtools/page/chat-1",
+    )
+    monkeypatch.setattr(cdp, "targets", lambda: [target])
+    expressions = []
+
+    def page_call(websocket_url, method, params=None, **kwargs):
+        assert websocket_url == target.websocket_url
+        assert method == "Runtime.evaluate"
+        expression = (params or {}).get("expression", "")
+        expressions.append(expression)
+        if "/api/auth/session" in expression:
+            return {"result": {"value": json.dumps({"authenticated": True})}}
+        return {
+            "result": {
+                "value": json.dumps(
+                    {
+                        "composer_ready": True,
+                        "page_settled": True,
+                        "temporary_access_limited": False,
+                        "title": "Example",
+                    }
+                )
+            }
+        }
+
+    monkeypatch.setattr(cdp, "_page_call", page_call)
+    state = cdp.chatgpt_ui_state("chat-1")
+
+    assert state["ready"] is True
+    assert "new MutationObserver" not in expressions[0]
+    assert "existingObserver.disconnect()" in expressions[0]
+    assert "telemetry_observer_active: false" in expressions[0]
+
+
 def test_rollover_turn_limit() -> None:
     decision = evaluate_rollover(SessionMetrics(turns=36))
     assert decision.rollover is True

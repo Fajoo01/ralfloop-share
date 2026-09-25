@@ -295,13 +295,11 @@ class ChromeCdp:
               goal_reached_marker: assistantText.includes('[[BOTTAZZI_GOAL_REACHED]]'),
             };
           };
-          if (!window[observerKey]) {
-            const observer = new MutationObserver(() => {
-              try { sampleTelemetry(); } catch (_error) { }
-            });
-            observer.observe(document.documentElement, {subtree: true, childList: true, characterData: true});
-            window[observerKey] = observer;
+          const existingObserver = window[observerKey];
+          if (existingObserver && typeof existingObserver.disconnect === 'function') {
+            try { existingObserver.disconnect(); } catch (_error) { }
           }
+          window[observerKey] = null;
           const telemetry = sampleTelemetry();
           return JSON.stringify({
             ready: Boolean(composer) && authenticatedHint && pageSettled,
@@ -322,7 +320,7 @@ class ChromeCdp:
             last_response_latency_ms: telemetry.last_response_latency_ms,
             consecutive_errors: telemetry.consecutive_errors,
             goal_reached_marker: Boolean(telemetry.goal_reached_marker),
-            telemetry_observer_active: Boolean(window[observerKey]),
+            telemetry_observer_active: false,
             page_age_minutes: Math.max(0, Math.floor(performance.now() / 60000)),
             interaction_required: !authenticatedHint || !composer || /ci siamo quasi/i.test(document.title || ''),
             composer_kind: composer ? (composer.id || composer.tagName || '').toLowerCase() : null,
