@@ -1022,6 +1022,29 @@ def test_normative_admin_question_routes_to_grounded_research():
     assert plan.assignments[0].arguments["profile"] == "italy_third_sector_normative"
 
 
+def test_research_deep_adapter_hides_raw_runtime_error():
+    planner = UnifiedPlanner(UnifiedRegistryFacade())
+    assignment = planner.plan("ricerca approfondita su Aby Warburg").assignments[0]
+
+    class FakeEnvelope:
+        ok = False
+        error_type = "tool_runtime_error"
+        warnings = ["AgentGpuBusy", "agent_gpu_lock_busy"]
+        tool_id = "deep_web_research_agentcpm_v1"
+        output = {}
+
+    class FakeManager:
+        def invoke(self, tool_id, payload):
+            return FakeEnvelope()
+
+    artifact = research_deep_adapter(assignment, {"user.goal": assignment.objective}, manager=FakeManager())
+
+    assert artifact.status == "unavailable"
+    assert "tool_runtime_error" not in artifact.payload["message"]
+    assert "Riprova" in artifact.payload["message"]
+    assert artifact.payload["error_type"] == "tool_runtime_error"
+
+
 def test_research_deep_adapter_requires_cited_read_only_evidence():
     planner = UnifiedPlanner(UnifiedRegistryFacade())
     assignment = planner.plan("Cos'è una APS in Italia?").assignments[0]

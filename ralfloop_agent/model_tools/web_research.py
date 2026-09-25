@@ -388,7 +388,9 @@ class _SearchHTMLParser(HTMLParser):
 
 
 def _search_searx(query: str, *, endpoint: str, limit: int, timeout: float) -> list[dict[str, str]]:
-    url = endpoint.rstrip("/") + "/search?q=" + quote_plus(query) + "&format=json"
+    engines = os.getenv("RALFLOOP_SEARXNG_ENGINES", "bing").strip()
+    engine_query = "&engines=" + quote_plus(engines) if engines else ""
+    url = endpoint.rstrip("/") + "/search?q=" + quote_plus(query) + "&format=json" + engine_query
     request = Request(url, method="GET", headers={"User-Agent": "Ralfloop-DeepWebResearch/1.0"})
     with build_opener().open(request, timeout=timeout) as response:
         payload = json.loads(response.read(MAX_PAGE_BYTES).decode("utf-8", "replace"))
@@ -1052,7 +1054,11 @@ def web_search(query: str, *, limit: int = 8, timeout: float = 8.0) -> tuple[lis
             errors.append(f"searxng_empty:{endpoint}")
         except Exception as exc:
             errors.append(f"searxng_unavailable:{endpoint}:{type(exc).__name__}")
-    rows = _search_duckduckgo(query, limit=candidate_limit, timeout=timeout)
+    try:
+        rows = _search_duckduckgo(query, limit=candidate_limit, timeout=timeout)
+    except Exception as exc:
+        errors.append(f"duckduckgo_unavailable:{type(exc).__name__}")
+        return [], "search_unavailable", errors
     return (
         _rank_search_rows(query, rows, limit=limit),
         "duckduckgo_html_explicit_fallback",

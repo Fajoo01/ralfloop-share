@@ -744,6 +744,18 @@ def test_search_backend_fallback_warnings_do_not_mark_success_partial(
     assert result["errors"] == []
 
 
+def test_web_search_all_backends_timeout_returns_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr(web_research, "_search_searx", lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError("searx timeout")))
+    monkeypatch.setattr(web_research, "_search_duckduckgo", lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError("ddg timeout")))
+
+    rows, provider, errors = web_research.web_search("Aby Warburg Umfangsbestimmung", limit=4, timeout=0.1)
+
+    assert rows == []
+    assert provider == "search_unavailable"
+    assert any(item.startswith("searxng_unavailable:") for item in errors)
+    assert "duckduckgo_unavailable:TimeoutError" in errors
+
+
 def test_system_prompt_requires_contextual_single_source_evidence() -> None:
     prompt = web_research._system_prompt(
         "Verify release terms, identifier, and intended use.",

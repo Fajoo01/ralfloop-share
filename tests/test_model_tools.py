@@ -275,6 +275,44 @@ def test_resident_agentcpm_reuse_skips_duplicate_handoff_and_vram_gate(
         assert state == {"enabled": False, "resident_agentcpm": True}
 
 
+def test_agentcpm_gpu_session_waits_for_transient_lock_and_reuses_resident(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _spec(
+        tmp_path, capability="deep_web_research", backend="agentcpm_llama_cpp",
+        device="cuda", timeout_sec=10, max_vram_mb=6000,
+    )
+    resident_checks = {"count": 0}
+
+    def resident(_selected):
+        resident_checks["count"] += 1
+        return resident_checks["count"] >= 3
+
+    class _LockState:
+        held = True
+
+    class _Arbiter:
+        def status(self, *, clean_stale=False):
+            return _LockState()
+
+    class _Coordinator:
+        def __init__(self):
+            self.arbiter = _Arbiter()
+
+        def agent_session(self, **_kwargs):
+            raise AssertionError("duplicate GPU handoff must not start")
+
+    import ralfloop_agent.providers.agent_gpu_handoff as handoff
+    monkeypatch.setattr(model_tool_manager, "_resident_agentcpm_ready", resident)
+    monkeypatch.setattr(model_tool_manager.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(handoff, "AgentGpuCoordinator", _Coordinator)
+    monkeypatch.setenv("RALF_MODEL_TOOL_GPU_WAIT_SEC", "1")
+
+    with model_tool_manager._gpu_session(spec, spec.tool_id) as state:
+        assert state["resident_agentcpm"] is True
+        assert state["waited_for_gpu"] is True
+
+
 def test_document_tool_rejects_path_outside_allowlist(tmp_path: Path, monkeypatch) -> None:
     spec = _spec(tmp_path, capability="document_to_markdown")
     forbidden = tmp_path / "outside.pdf"

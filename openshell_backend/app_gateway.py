@@ -435,9 +435,7 @@ def assistant_chat(payload: dict[str, Any]) -> Response:
                         original = previous
                         break
         outgoing["message"] = (
-            "Fai una ricerca approfondita su Internet in sola lettura, con fonti e provenance. "
-            "Usa prima fonti primarie o manuali ufficiali, poi GitHub upstream e forum tecnici quando pertinenti. "
-            "Rispondi alla domanda originale senza trasformarla in un'altra richiesta. Domanda originale: " + original
+            "Ricerca approfondita. Domanda originale: " + original
         )[:32_000]
         outgoing["allow_tools"] = True
         context = dict(outgoing.get("context") or {})

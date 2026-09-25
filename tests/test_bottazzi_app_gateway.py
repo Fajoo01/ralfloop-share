@@ -70,6 +70,8 @@ def test_app_internet_agent_stays_gateway_bounded(client: TestClient, monkeypatc
     assert seen["allow_tools"] is True
     assert "app_internet_agent" not in seen
     assert seen["context"]["app_internet_agent"] is True
+    assert "ricerca approfondita" in seen["message"].casefold()
+    assert "github" not in seen["message"].casefold()
 
 
 def test_app_internet_agent_retry_reuses_previous_user_question(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

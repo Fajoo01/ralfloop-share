@@ -203,9 +203,28 @@ def _gpu_session(spec: ModelToolSpec, tool_id: str) -> AbstractContextManager[di
         return nullcontext({"enabled": False})
     if _resident_agentcpm_ready(spec):
         return nullcontext({"enabled": False, "resident_agentcpm": True})
+
     from ralfloop_agent.providers.agent_gpu_handoff import AgentGpuCoordinator
 
-    return AgentGpuCoordinator().agent_session(models=(), task_id=f"model-tool-{tool_id}"[:64])
+    coordinator = AgentGpuCoordinator()
+    # A short DS4/Qwen handoff may temporarily own the shared GPU lock while
+    # AgentCPM is stopped and then restored. Deep research is a long-running
+    # read operation, so queue behind that handoff instead of surfacing a
+    # transient agent_gpu_lock_busy error to the user. If AgentCPM comes back
+    # while we wait, reuse the resident server and skip a duplicate handoff.
+    try:
+        configured_wait = float(os.getenv("RALF_MODEL_TOOL_GPU_WAIT_SEC", "120"))
+    except ValueError:
+        configured_wait = 120.0
+    wait_sec = max(0.0, min(configured_wait, max(0.0, float(spec.timeout_sec) - 5.0)))
+    deadline = time.monotonic() + wait_sec
+    while coordinator.arbiter.status(clean_stale=True).held and time.monotonic() < deadline:
+        if _resident_agentcpm_ready(spec):
+            return nullcontext({"enabled": False, "resident_agentcpm": True, "waited_for_gpu": True})
+        time.sleep(0.25)
+    if _resident_agentcpm_ready(spec):
+        return nullcontext({"enabled": False, "resident_agentcpm": True, "waited_for_gpu": True})
+    return coordinator.agent_session(models=(), task_id=f"model-tool-{tool_id}"[:64])
 
 
 def _subprocess_runner(spec: ModelToolSpec, snapshot: Path, payload: dict[str, Any]) -> dict[str, Any]:

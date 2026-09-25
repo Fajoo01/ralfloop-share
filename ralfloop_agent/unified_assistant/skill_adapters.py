@@ -111,14 +111,20 @@ def research_deep_adapter(
 
     envelope = active_manager.invoke("deep_web_research_agentcpm_v1", payload)
     if not envelope.ok:
+        error_type = envelope.error_type or "unknown_error"
+        message = (
+            "La ricerca non è riuscita per un problema temporaneo del motore. Riprova."
+            if error_type == "tool_runtime_error"
+            else "La ricerca grounded non è disponibile in questo momento. Riprova."
+        )
         return StructuredArtifact.create(
             artifact_type="grounded_research",
             status="unavailable",
             producer_task_id=assignment.task_id,
             payload={
-                "message": f"Ricerca grounded non disponibile: {envelope.error_type or 'unknown_error'}.",
+                "message": message,
                 "tool_id": envelope.tool_id,
-                "error_type": envelope.error_type,
+                "error_type": error_type,
                 "warnings": list(envelope.warnings),
                 "content_boundary": "tool_failure_is_data",
             },
