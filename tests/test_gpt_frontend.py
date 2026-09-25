@@ -117,6 +117,75 @@ def make_queue(tmp_path: Path) -> GptWorkQueue:
     return GptWorkQueue(tmp_path / "queue.sqlite3", clock=lambda: 1_000_000)
 
 
+def test_dashboard_distinguishes_real_progress_from_stale_busy_flag(tmp_path: Path) -> None:
+    queue = make_queue(tmp_path)
+    job = queue.create_job(
+        "Stalled",
+        conversation_url="https://chatgpt.com/c/job",
+        conversation_context_url="https://chatgpt.com/c/job",
+        target_id="managed",
+        state=GptJobState.ACTIVE,
+    )
+
+    class ActivityCdp(FakeCdp):
+        def __init__(self) -> None:
+            super().__init__()
+            self._targets = [BrowserTarget("managed", "page", "https://chatgpt.com/c/job", "Stalled", "ws://managed")]
+
+        def chatgpt_companion_state(self, target_id: str):
+            return {
+                "ghost": False,
+                "focused": False,
+                "busy": True,
+                "composer_chars": 0,
+                "user_turns": 2,
+                "assistant_turns": 1,
+                "tool_activity_count": 0,
+                "last_assistant_text": "Risposta precedente",
+            }
+
+    controller = GptWorkController(queue, ActivityCdp())
+    snapshot = controller.dashboard_snapshot()
+    current = next(item for item in snapshot["jobs"] if item["job_id"] == job.job_id)
+    assert current["live_busy"] is False
+    assert current["live_pending"] is True
+
+
+def test_dashboard_marks_current_assistant_turn_as_real_work(tmp_path: Path) -> None:
+    queue = make_queue(tmp_path)
+    job = queue.create_job(
+        "Working",
+        conversation_url="https://chatgpt.com/c/job",
+        conversation_context_url="https://chatgpt.com/c/job",
+        target_id="managed",
+        state=GptJobState.ACTIVE,
+    )
+
+    class ActivityCdp(FakeCdp):
+        def __init__(self) -> None:
+            super().__init__()
+            self._targets = [BrowserTarget("managed", "page", "https://chatgpt.com/c/job", "Working", "ws://managed")]
+
+        def chatgpt_companion_state(self, target_id: str):
+            return {
+                "ghost": False,
+                "focused": False,
+                "busy": True,
+                "composer_chars": 0,
+                "user_turns": 1,
+                "assistant_turns": 1,
+                "tool_activity_count": 0,
+                "streaming_current": True,
+                "last_assistant_text": "Risposta corrente",
+            }
+
+    controller = GptWorkController(queue, ActivityCdp())
+    snapshot = controller.dashboard_snapshot()
+    current = next(item for item in snapshot["jobs"] if item["job_id"] == job.job_id)
+    assert current["live_busy"] is True
+    assert current["live_pending"] is False
+
+
 def free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -197,6 +266,51 @@ def test_reconcile_rebinds_changed_target_id_by_conversation(tmp_path: Path) -> 
     assert rebound.state is GptJobState.ACTIVE
     assert rebound.target_id == "replacement"
     assert rebound.conversation_context_url == "https://chatgpt.com/c/chat-1"
+
+
+def test_dashboard_distinguishes_pending_stop_button_from_real_streaming(tmp_path: Path) -> None:
+    queue = make_queue(tmp_path)
+    job = queue.create_job(
+        "One",
+        conversation_url="https://chatgpt.com/c/chat-1",
+        conversation_context_url="https://chatgpt.com/c/chat-1",
+        target_id="target-1",
+        state=GptJobState.ACTIVE,
+    )
+    cdp = FakeCdp()
+    cdp._targets = [BrowserTarget("target-1", "page", "https://chatgpt.com/c/chat-1", "One", "ws://target-1")]
+    cdp.chatgpt_companion_state = lambda target_id: {
+        "ghost": False,
+        "focused": False,
+        "busy": True,
+        "streaming_current": False,
+        "composer_chars": 0,
+        "user_turns": 2,
+        "assistant_turns": 1,
+        "tool_activity_count": 0,
+        "last_assistant_text": "Risposta vecchia",
+    }
+    controller = GptWorkController(queue, cdp)
+
+    pending = next(item for item in controller.dashboard_snapshot()["jobs"] if item["job_id"] == job.job_id)
+    assert pending["live_busy"] is False
+    assert pending["live_pending"] is True
+
+    controller._companion_cache.clear()
+    cdp.chatgpt_companion_state = lambda target_id: {
+        "ghost": False,
+        "focused": False,
+        "busy": True,
+        "streaming_current": True,
+        "composer_chars": 0,
+        "user_turns": 2,
+        "assistant_turns": 2,
+        "tool_activity_count": 0,
+        "last_assistant_text": "Nuovo testo live",
+    }
+    streaming = next(item for item in controller.dashboard_snapshot()["jobs"] if item["job_id"] == job.job_id)
+    assert streaming["live_busy"] is True
+    assert streaming["live_pending"] is False
 
 
 def test_missing_active_target_moves_to_review_without_deleting_job(tmp_path: Path) -> None:

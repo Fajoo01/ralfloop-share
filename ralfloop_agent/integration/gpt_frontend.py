@@ -294,10 +294,10 @@ class GptWorkController:
                 break
         return {"started": started, "errors": errors, **self.runtime_state(reconcile=False)}
 
-    def start_job(self, job_id: str) -> dict[str, Any]:
+    def start_job(self, job_id: str, *, reset_watchdog: bool = True) -> dict[str, Any]:
         browser = self.reconcile()
         job = self.queue.get_job(job_id)
-        if job.state is not GptJobState.ACTIVE:
+        if reset_watchdog and job.state is not GptJobState.ACTIVE:
             self.queue.reset_watchdog(job_id)
         if job.state is GptJobState.ACTIVE:
             try:
@@ -1048,6 +1048,16 @@ class GptWorkController:
             key = (target.target_id, conversation_url)
             job_id = binding_to_job.get(key)
             project_url = chatgpt_project_new_chat_url(target.url)
+            user_turns = int(companion.get("user_turns") or 0)
+            assistant_turns = int(companion.get("assistant_turns") or 0)
+            tool_activity_count = int(companion.get("tool_activity_count") or 0)
+            assistant_text = str(companion.get("last_assistant_text") or "")
+            raw_busy = bool(companion.get("busy"))
+            if "streaming_current" in companion:
+                streaming_current = bool(companion.get("streaming_current"))
+            else:
+                streaming_current = bool(assistant_text.strip()) and (user_turns == 0 or assistant_turns >= user_turns)
+            working = raw_busy and (streaming_current or tool_activity_count > 0)
             rows.append(
                 {
                     "target_id": target.target_id,
@@ -1057,10 +1067,13 @@ class GptWorkController:
                     "project_url": project_url,
                     "project_name": "Progetto ChatGPT" if project_url else "",
                     "focused": bool(companion.get("focused")),
-                    "busy": bool(companion.get("busy")),
+                    "busy": raw_busy,
+                    "working": working,
                     "composer_chars": int(companion.get("composer_chars") or 0),
-                    "assistant_turns": int(companion.get("assistant_turns") or 0),
-                    "last_assistant_text": str(companion.get("last_assistant_text") or ""),
+                    "user_turns": user_turns,
+                    "assistant_turns": assistant_turns,
+                    "tool_activity_count": tool_activity_count,
+                    "last_assistant_text": assistant_text,
                     "sample_cached": sample_cached,
                     "managed": bool(job_id),
                     "queued": bool(job_id),
@@ -1077,7 +1090,8 @@ class GptWorkController:
         for job in base.get("jobs", []):
             live = live_by_job.get(job.get("job_id"))
             job["live_assistant_text"] = str((live or {}).get("last_assistant_text") or "")
-            job["live_busy"] = bool((live or {}).get("busy"))
+            job["live_busy"] = bool((live or {}).get("working"))
+            job["live_pending"] = bool((live or {}).get("busy")) and not bool((live or {}).get("working"))
             job["live_cached"] = bool((live or {}).get("sample_cached"))
         limit = int(base["settings"]["max_open_chats"])
         managed = sum(1 for row in browser_rows if row["managed"])

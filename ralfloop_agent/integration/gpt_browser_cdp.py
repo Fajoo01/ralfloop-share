@@ -1573,6 +1573,11 @@ class ChromeCdp:
           const composerText = composer ? String(composer.value || composer.innerText || composer.textContent || '').trim() : '';
           const humanComposer = document.getElementById('bottazzi-human-composer');
           const humanComposerText = humanComposer ? String(humanComposer.value || humanComposer.innerText || humanComposer.textContent || '').trim() : '';
+          const userSections = Array.from(document.querySelectorAll('section[data-turn="user"]'));
+          const userRoleNodes = Array.from(document.querySelectorAll('[data-message-author-role="user"]'));
+          const userLabelNodes = Array.from(document.querySelectorAll('h4.sr-only'))
+            .filter((el) => /^(?:hai detto|you said|tu hai detto)\s*:?$/i.test(String(el.textContent || '').trim()));
+          const userNodes = userSections.length ? userSections : (userRoleNodes.length ? userRoleNodes : userLabelNodes);
           const assistantSections = Array.from(document.querySelectorAll('section[data-turn="assistant"]'));
           const assistantRoleNodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
           const assistantLabelNodes = Array.from(document.querySelectorAll('h4.sr-only'))
@@ -1587,6 +1592,7 @@ class ChromeCdp:
           const assistantNodes = assistantSections.length ? assistantSections : (assistantRoleNodes.length ? assistantRoleNodes : assistantLabelNodes);
           const lastAssistant = assistantNodes.length ? assistantNodes[assistantNodes.length - 1] : null;
           const streamingNode = lastAssistant ? lastAssistant.querySelector('[data-streaming-response-status]') : null;
+          const toolActivityCount = lastAssistant ? lastAssistant.querySelectorAll('[data-testid="cot-v5-native-tool-icon"]').length : 0;
           const lastAssistantText = lastAssistant
             ? String((responseInProgress && streamingNode ? streamingNode.innerText || streamingNode.textContent : lastAssistant.innerText || lastAssistant.textContent) || '').trim().slice(-24000)
             : '';
@@ -1596,9 +1602,12 @@ class ChromeCdp:
             ghost: Boolean(window.__bottazziGhostTabV1),
             ghost_close_at: Number((window.__bottazziGhostTabV1 || {}).close_at || 0),
             busy: responseInProgress || responsePending,
+            streaming_current: Boolean(responseInProgress && streamingNode && lastAssistantText),
             composer_chars: composerText.length,
             human_composer_chars: humanComposerText.length,
-            "assistant_turns": assistantNodes.length,
+            user_turns: userNodes.length,
+            assistant_turns: assistantNodes.length,
+            tool_activity_count: toolActivityCount,
             last_assistant_text: lastAssistantText,
           });
         })()'''
