@@ -1876,6 +1876,7 @@ class ChromeCdp:
           try { delete window.__bottazziHumanInputTargetV2; } catch (_) { window.__bottazziHumanInputTargetV2 = null; }
           const priorState = window.__bottazziHumanInputTargetV3;
           if (priorState && priorState.observer) priorState.observer.disconnect();
+          if (priorState && priorState.observerTimer) clearTimeout(priorState.observerTimer);
           if (priorState && priorState.onStorage) window.removeEventListener('storage', priorState.onStorage);
           if (priorState && priorState.onFocus) window.removeEventListener('focus', priorState.onFocus);
           try { delete window.__bottazziHumanInputTargetV3; } catch (_) { window.__bottazziHumanInputTargetV3 = null; }
@@ -2078,19 +2079,27 @@ class ChromeCdp:
           };
           window.name = 'bottazzi-active';
           try { localStorage.setItem(activeKey, config.context_url); } catch (_) {}
-          let state = {version:3};
-          if (!state.onStorage) {
-            state.onStorage = event => { if (event.key === draftKey) setTimeout(importDraft, 0); };
-            window.addEventListener('storage', state.onStorage);
-          }
-          if (!state.onFocus) {
-            state.onFocus = () => setTimeout(importDraft, 0);
-            window.addEventListener('focus', state.onFocus);
-          }
-          if (!state.observer) {
-            state.observer = new MutationObserver(() => { lockNative(); importDraft(); });
-            state.observer.observe(document.documentElement, {subtree:true, childList:true});
-          }
+          let state = window[stateKey];
+          if (!state || typeof state !== 'object') state = {};
+          if (state.observer) state.observer.disconnect();
+          if (state.observerTimer) clearTimeout(state.observerTimer);
+          if (state.onStorage) window.removeEventListener('storage', state.onStorage);
+          if (state.onFocus) window.removeEventListener('focus', state.onFocus);
+          state.version = 4;
+          state.onStorage = event => { if (event.key === draftKey) setTimeout(importDraft, 0); };
+          state.onFocus = () => setTimeout(importDraft, 0);
+          window.addEventListener('storage', state.onStorage);
+          window.addEventListener('focus', state.onFocus);
+          state.observerTimer = null;
+          state.observer = new MutationObserver(() => {
+            if (state.observerTimer) return;
+            state.observerTimer = setTimeout(() => {
+              state.observerTimer = null;
+              lockNative();
+              importDraft();
+            }, 250);
+          });
+          state.observer.observe(document.documentElement, {subtree:true, childList:true});
           state.conversation_url = config.conversation_url;
           state.importDraft = importDraft;
           state.updateHumanUi = updateHumanUi;
@@ -2428,11 +2437,17 @@ class ChromeCdp:
               if (text && limitRe.test(text)) el.style.display = 'none';
             }
           };
-          const activeState = window.__bottazziHumanInputTargetV2;
-          if (activeState && activeState.observer) activeState.observer.disconnect();
-          if (activeState && activeState.onStorage) window.removeEventListener('storage', activeState.onStorage);
-          if (activeState && activeState.onFocus) window.removeEventListener('focus', activeState.onFocus);
+          const activeStateV2 = window.__bottazziHumanInputTargetV2;
+          if (activeStateV2 && activeStateV2.observer) activeStateV2.observer.disconnect();
+          if (activeStateV2 && activeStateV2.onStorage) window.removeEventListener('storage', activeStateV2.onStorage);
+          if (activeStateV2 && activeStateV2.onFocus) window.removeEventListener('focus', activeStateV2.onFocus);
           try { delete window.__bottazziHumanInputTargetV2; } catch (_) { window.__bottazziHumanInputTargetV2 = null; }
+          const activeStateV3 = window.__bottazziHumanInputTargetV3;
+          if (activeStateV3 && activeStateV3.observer) activeStateV3.observer.disconnect();
+          if (activeStateV3 && activeStateV3.observerTimer) clearTimeout(activeStateV3.observerTimer);
+          if (activeStateV3 && activeStateV3.onStorage) window.removeEventListener('storage', activeStateV3.onStorage);
+          if (activeStateV3 && activeStateV3.onFocus) window.removeEventListener('focus', activeStateV3.onFocus);
+          try { delete window.__bottazziHumanInputTargetV3; } catch (_) { window.__bottazziHumanInputTargetV3 = null; }
           if (window.name === 'bottazzi-active') window.name = '';
           let panel = document.getElementById(panelId);
           if (panel && panel.dataset.bottazziMode !== 'relay') panel.remove();
@@ -2524,13 +2539,19 @@ class ChromeCdp:
           const handoffOverlay = document.getElementById(handoffOverlayId);
           if (handoffOverlay) handoffOverlay.remove();
           try { delete window[handoffStateKey]; } catch (_) { window[handoffStateKey] = null; }
-          const activeState = window.__bottazziHumanInputTargetV2;
-          if (activeState && activeState.observer) activeState.observer.disconnect();
-          if (activeState && activeState.onStorage) window.removeEventListener('storage', activeState.onStorage);
-          if (activeState && activeState.onFocus) window.removeEventListener('focus', activeState.onFocus);
+          const activeStateV2 = window.__bottazziHumanInputTargetV2;
+          if (activeStateV2 && activeStateV2.observer) activeStateV2.observer.disconnect();
+          if (activeStateV2 && activeStateV2.onStorage) window.removeEventListener('storage', activeStateV2.onStorage);
+          if (activeStateV2 && activeStateV2.onFocus) window.removeEventListener('focus', activeStateV2.onFocus);
+          try { delete window.__bottazziHumanInputTargetV2; } catch (_) { window.__bottazziHumanInputTargetV2 = null; }
+          const activeStateV3 = window.__bottazziHumanInputTargetV3;
+          if (activeStateV3 && activeStateV3.observer) activeStateV3.observer.disconnect();
+          if (activeStateV3 && activeStateV3.observerTimer) clearTimeout(activeStateV3.observerTimer);
+          if (activeStateV3 && activeStateV3.onStorage) window.removeEventListener('storage', activeStateV3.onStorage);
+          if (activeStateV3 && activeStateV3.onFocus) window.removeEventListener('focus', activeStateV3.onFocus);
+          try { delete window.__bottazziHumanInputTargetV3; } catch (_) { window.__bottazziHumanInputTargetV3 = null; }
           const activePanel = document.getElementById('bottazzi-human-panel');
           if (activePanel) activePanel.remove();
-          try { delete window.__bottazziHumanInputTargetV2; } catch (_) { window.__bottazziHumanInputTargetV2 = null; }
           window.name = '';
           const stateKey = '__bottazziGhostTabV1';
           const bannerId = 'bottazzi-human-panel';

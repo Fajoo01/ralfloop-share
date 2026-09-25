@@ -98,6 +98,7 @@ class GptWorkController:
         self._project_url_cache: dict[str, str] = {}
         self._companion_cache: dict[str, tuple[float, str, dict[str, Any]]] = {}
         self._companion_cache_ttl_s = 8.0
+        self._companion_probe_interval_s = 4.0
 
     def browser_snapshot(self) -> BrowserSnapshot:
         by_id: dict[str, Any] = {}
@@ -1028,16 +1029,20 @@ class GptWorkController:
                 continue
             sample_cached = False
             now = time.monotonic()
-            try:
-                companion = self.cdp.chatgpt_companion_state(target.target_id)
-                self._companion_cache[target.target_id] = (now, conversation_url, dict(companion))
-            except (AttributeError, CdpError):
-                cached = self._companion_cache.get(target.target_id)
-                if cached and cached[1] == conversation_url and now - cached[0] <= self._companion_cache_ttl_s:
-                    companion = dict(cached[2])
-                    sample_cached = True
-                else:
-                    companion = {}
+            cached = self._companion_cache.get(target.target_id)
+            if cached and cached[1] == conversation_url and now - cached[0] < self._companion_probe_interval_s:
+                companion = dict(cached[2])
+            else:
+                try:
+                    companion = self.cdp.chatgpt_companion_state(target.target_id)
+                    self._companion_cache[target.target_id] = (now, conversation_url, dict(companion))
+                except (AttributeError, CdpError):
+                    cached = self._companion_cache.get(target.target_id)
+                    if cached and cached[1] == conversation_url and now - cached[0] <= self._companion_cache_ttl_s:
+                        companion = dict(cached[2])
+                        sample_cached = True
+                    else:
+                        companion = {}
             if bool(companion.get("ghost")):
                 continue
             key = (target.target_id, conversation_url)

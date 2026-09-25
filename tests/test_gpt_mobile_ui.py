@@ -303,6 +303,18 @@ def test_live_sample_cache_masks_single_probe_failure() -> None:
     assert 'job["live_cached"]' in frontend
     assert "ultimo campione valido" in html
     assert "aggiornamento in ritardo" in html
+    assert "self._companion_probe_interval_s = 4.0" in frontend
+    assert "now - cached[0] < self._companion_probe_interval_s" in frontend
+
+
+def test_human_input_observers_are_reused_and_throttled() -> None:
+    source = (Path(__file__).resolve().parents[1] / "ralfloop_agent" / "integration" / "gpt_browser_cdp.py").read_text(encoding="utf-8")
+    assert "if (priorState && priorState.observerTimer) clearTimeout(priorState.observerTimer)" in source
+    assert "state.observerTimer = setTimeout" in source
+    assert "}, 250);" in source
+    assert "const activeStateV3 = window.__bottazziHumanInputTargetV3" in source
+    assert "if (activeStateV3 && activeStateV3.observer) activeStateV3.observer.disconnect()" in source
+    assert "if (activeStateV3 && activeStateV3.observerTimer) clearTimeout(activeStateV3.observerTimer)" in source
 
 
 def test_gpt_browser_mobile_surface_is_distinct_from_bottazzi_chat_app() -> None:
