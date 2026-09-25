@@ -22,7 +22,9 @@ from ralfloop_agent.call_recordings import CallRecordingStore
 
 APP_NAME = "Bot-tazzi — App"
 UI_PATH = Path(__file__).with_name("bottazzi_ui.html")
+GPT_UI_PATH = Path(__file__).with_name("bottazzi_gpt_mobile_ui.html")
 BACKEND = os.getenv("BOTTAZZI_APP_BACKEND", "http://127.0.0.1:19090").rstrip("/")
+GPT_QUEUE = os.getenv("BOTTAZZI_APP_GPT_QUEUE", "http://127.0.0.1:19201").rstrip("/")
 SCHOLARLY_BACKEND = os.getenv("BOTTAZZI_APP_SCHOLARLY_BACKEND", "").rstrip("/")
 UPLOAD_ROOT = Path(os.getenv("BOTTAZZI_APP_UPLOAD_ROOT", "/var/lib/ralfloop-bottazzi-call-recordings/app-uploads"))
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
@@ -236,6 +238,11 @@ def assistant_ui() -> HTMLResponse:
     return _ui()
 
 
+@app.get("/assistant/v1/gpt-ui", response_class=HTMLResponse)
+def gpt_mobile_ui() -> HTMLResponse:
+    return HTMLResponse(GPT_UI_PATH.read_text(encoding="utf-8"), headers={"cache-control": "no-store"})
+
+
 def _proxy_response(upstream: requests.Response) -> Response:
     media_type = upstream.headers.get("content-type", "application/json").split(";", 1)[0]
     return Response(content=upstream.content, status_code=upstream.status_code, media_type=media_type)
@@ -279,6 +286,32 @@ async def assistant_tasks(request: Request, rest_of_path: str = "") -> Response:
         )
     except requests.RequestException:
         return JSONResponse({"detail": "assistant_backend_unavailable"}, status_code=503)
+    return _proxy_response(upstream)
+
+
+@app.api_route("/assistant/v1/gpt", methods=["GET"])
+@app.api_route(
+    "/assistant/v1/gpt/{rest_of_path:path}",
+    methods=["GET", "POST", "PATCH", "DELETE"],
+)
+async def gpt_queue_proxy(request: Request, rest_of_path: str = "") -> Response:
+    upstream_path = "/api/snapshot" if not rest_of_path else f"/api/{rest_of_path}"
+    headers = {"X-Bottazzi-Frontend": "1"}
+    for key in ("content-type", "x-bottazzi-file-name", "x-bottazzi-image"):
+        value = request.headers.get(key)
+        if value:
+            headers[key] = value
+    try:
+        upstream = requests.request(
+            request.method,
+            f"{GPT_QUEUE}{upstream_path}",
+            params=list(request.query_params.multi_items()),
+            data=await request.body(),
+            headers=headers,
+            timeout=int(os.getenv("BOTTAZZI_APP_GPT_TIMEOUT", "120")),
+        )
+    except requests.RequestException:
+        return JSONResponse({"detail": "gpt_queue_unavailable"}, status_code=503)
     return _proxy_response(upstream)
 
 
