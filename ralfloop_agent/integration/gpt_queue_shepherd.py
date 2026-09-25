@@ -337,7 +337,17 @@ class GptQueueShepherd:
                 try:
                     submitted = self.cdp.submit_chatgpt_composer(job.target_id)
                     if not bool(submitted.get("submitted")):
-                        raise CdpError(str(submitted.get("reason") or "composer_submit_failed"))
+                        reason = str(submitted.get("reason") or "composer_submit_failed")
+                        if reason == "composer_empty":
+                            actions.append({
+                                "job_id": job.job_id,
+                                "action": "preserved",
+                                "reason": "composer_already_consumed",
+                                "progress_idle_ms": idle_ms,
+                                "watchdog": self.queue.watchdog_state(job.job_id),
+                            })
+                            continue
+                        raise CdpError(reason)
                     watchdog = self.queue.mark_watchdog_recovery(job.job_id)
                     actions.append({
                         "job_id": job.job_id,

@@ -277,6 +277,32 @@ def test_stalled_unanswered_job_is_recovered_before_review(tmp_path: Path) -> No
     assert report["actions"][0]["reason"] == "unanswered_restarted"
 
 
+def test_composer_consumed_between_probe_and_recovery_spends_no_retry(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+
+    class ConsumedCdp(FakeCdp):
+        def submit_chatgpt_composer(self, target_id: str, *, wait_timeout_s: float = 8.0):
+            return {"submitted": False, "reason": "composer_empty", "composer_chars": 0}
+
+    cdp = ConsumedCdp(
+        ui={
+            "user_turns": 1,
+            "assistant_turns": 1,
+            "response_in_progress": False,
+            "response_pending": False,
+            "response_idle_ms": 0,
+            "progress_idle_ms": 61_000,
+        },
+        companion={"composer_chars": 12},
+    )
+
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    assert queue.get_job(job_id).state is GptJobState.ACTIVE
+    assert queue.watchdog_state(job_id)["recovery_count"] == 0
+    assert report["actions"][0]["reason"] == "composer_already_consumed"
+
+
 def test_stale_nonempty_composer_is_resubmitted(tmp_path: Path) -> None:
     queue, job_id = queue_with_active(tmp_path)
     cdp = FakeCdp(
