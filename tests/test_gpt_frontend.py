@@ -368,6 +368,7 @@ def test_start_job_recovers_project_chat_on_fresh_target_when_deeplink_fails(tmp
 
         def create_project_conversation_target(self, url: str, *, background: bool = True, wait_timeout_s: float = 12.0):
             assert url == context_url
+            assert wait_timeout_s == 30.0
             target_id = "fresh-project-target"
             self._targets.append(BrowserTarget(target_id, "page", context_url, "Project recovery", f"ws://{target_id}"))
             return {"new_target_id": target_id, "conversation_context_url": context_url, "recovered_via_project": True}

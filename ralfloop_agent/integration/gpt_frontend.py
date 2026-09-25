@@ -329,7 +329,7 @@ class GptWorkController:
                         recovered = self.cdp.create_project_conversation_target(
                             context_url,
                             background=True,
-                            wait_timeout_s=12.0,
+                            wait_timeout_s=30.0,
                         )
                         replacement_id = str(recovered.get("new_target_id") or "")
                         if not replacement_id:

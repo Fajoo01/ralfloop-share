@@ -1343,7 +1343,7 @@ class ChromeCdp:
         context_url: str,
         *,
         background: bool = True,
-        wait_timeout_s: float = 12.0,
+        wait_timeout_s: float = 30.0,
     ) -> dict[str, Any]:
         parts = _chatgpt_project_conversation_parts(context_url)
         if parts is None:
@@ -1426,7 +1426,7 @@ class ChromeCdp:
             return self._navigate_chatgpt_conversation_via_project(
                 target_id,
                 context_url,
-                wait_timeout_s=max(4.0, min(float(wait_timeout_s), 12.0)),
+                wait_timeout_s=max(8.0, min(float(wait_timeout_s), 30.0)),
             )
         raise CdpError(f"conversation_navigation_timeout:{normalized}")
 
