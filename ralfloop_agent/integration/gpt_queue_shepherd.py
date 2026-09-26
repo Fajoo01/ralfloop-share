@@ -12,6 +12,9 @@ from .gpt_work_queue import GptJobState, GptWorkQueue
 GOAL_MARKER = "[[BOTTAZZI_GOAL_REACHED]]"
 GOAL_BLOCKED_MARKER = "[[BOTTAZZI_GOAL_BLOCKED]]"
 GOAL_CONTINUE_MARKER = "[[BOTTAZZI_GOAL_CONTINUE]]"
+STATUS_PROBE = "A che punto sei? Hai risolto? Rispondi con lo stato reale del lavoro e cosa resta da fare."
+STATUS_PROBE_PENDING = "status_probe_pending"
+
 GOAL_CONTINUATION = (
     "Continua automaticamente dal punto raggiunto verso il GOAL iniziale, senza ripetere lavoro già verificato. "
     "Mantieni il repository/issue GitHub associato come diario tecnico persistente e fonte di verità; non affidarti alla sola memoria della chat. "
@@ -204,6 +207,8 @@ class GptQueueShepherd:
             recycled = self.controller.recycle_job_target(job.job_id)
             current = self.queue.get_job(job.job_id)
             recovery = self.controller.send_message(job.job_id, self._recovery_prompt(job.job_id))
+            if current.last_error == STATUS_PROBE_PENDING:
+                self.queue.set_state(job.job_id, GptJobState.ACTIVE, last_error=None)
             watchdog = self.queue.mark_watchdog_recovery(job.job_id)
             actions.append(
                 {
@@ -428,6 +433,8 @@ class GptQueueShepherd:
                 and idle_ms >= self.policy.complete_idle_ms
                 and not (focused and human_composer_chars)
             ):
+                if current_job.last_error == STATUS_PROBE_PENDING:
+                    self.queue.set_state(job.job_id, GptJobState.ACTIVE, last_error=None)
                 if response_in_progress:
                     try:
                         stopped = self.cdp.stop_chatgpt_response(job.target_id)
@@ -615,22 +622,27 @@ class GptQueueShepherd:
                     self._rebind_stalled(job, actions, reason="stalled_stream_fresh_target", idle_ms=idle_ms)
                     continue
                 try:
-                    wake = self.cdp.wake_stalled_chatgpt(job.target_id)
-                    if bool(wake.get("submitted")):
-                        watchdog = self.queue.mark_watchdog_recovery(job.job_id)
-                        actions.append({
-                            "job_id": job.job_id,
-                            "action": "recovered",
-                            "reason": "stalled_stream_woken",
-                            "progress_idle_ms": idle_ms,
-                            "watchdog": watchdog,
-                            "wake": wake,
-                        })
-                        continue
+                    wake = {"submitted": False, "reason": "status_probe_already_pending"}
+                    if current_job.last_error != STATUS_PROBE_PENDING:
+                        wake = self.cdp.wake_stalled_chatgpt(job.target_id, text=STATUS_PROBE)
+                        if bool(wake.get("submitted")):
+                            self.queue.set_state(job.job_id, GptJobState.ACTIVE, last_error=STATUS_PROBE_PENDING)
+                            watchdog = self.queue.mark_watchdog_recovery(job.job_id)
+                            actions.append({
+                                "job_id": job.job_id,
+                                "action": "recovered",
+                                "reason": "stalled_stream_status_probe",
+                                "progress_idle_ms": idle_ms,
+                                "watchdog": watchdog,
+                                "wake": wake,
+                            })
+                            continue
                     stopped = self.cdp.stop_chatgpt_response(job.target_id)
                     partial = self._substantive_response_text(stopped.get("last_assistant_text"))
                     if partial:
                         self.queue.set_last_assistant_text(job.job_id, partial)
+                    if current_job.last_error == STATUS_PROBE_PENDING:
+                        self.queue.set_state(job.job_id, GptJobState.ACTIVE, last_error=None)
                     continuation = self.controller.send_message(job.job_id, self._recovery_prompt(job.job_id))
                     watchdog = self.queue.mark_watchdog_recovery(job.job_id)
                     actions.append({
@@ -690,6 +702,28 @@ class GptQueueShepherd:
                 goal_reached = GOAL_MARKER in final_text
                 goal_blocked = GOAL_BLOCKED_MARKER in final_text
                 goal_continue = GOAL_CONTINUE_MARKER in final_text
+                if current_job.last_error == STATUS_PROBE_PENDING and not (goal_reached or goal_blocked or goal_continue):
+                    try:
+                        self.queue.set_state(job.job_id, GptJobState.ACTIVE, last_error=None)
+                        continuation = self.controller.send_message(job.job_id, GOAL_CONTINUATION)
+                        self.queue.reset_watchdog(job.job_id)
+                        actions.append({
+                            "job_id": job.job_id,
+                            "action": "continued",
+                            "reason": "status_probe_resumed",
+                            "user_turns": user_turns,
+                            "assistant_turns": assistant_turns,
+                            "response_idle_ms": idle_ms,
+                            "continuation": continuation,
+                        })
+                    except (CdpError, OSError, RuntimeError, ValueError) as exc:
+                        if self._is_queue_busy(exc):
+                            actions.append({"job_id": job.job_id, "action": "preserved", "reason": "delivery_already_queued"})
+                        elif self._is_transport_error(exc):
+                            self._transport_failure(job, actions, phase="status_probe_resume", exc=exc)
+                        else:
+                            actions.append({"job_id": job.job_id, "action": "preserved", "reason": f"status_probe_resume_failed:{str(exc)[:200]}"})
+                    continue
                 clean_final_text = (
                     final_text.replace(GOAL_MARKER, "").replace(GOAL_BLOCKED_MARKER, "").replace(GOAL_CONTINUE_MARKER, "").strip()
                 )
@@ -787,13 +821,19 @@ class GptQueueShepherd:
                     self._rebind_stalled(job, actions, reason="unanswered_fresh_target", idle_ms=idle_ms)
                     continue
                 try:
-                    recovery = self.controller.send_message(job.job_id, self._recovery_prompt(job.job_id))
+                    probing = current_job.last_error != STATUS_PROBE_PENDING
+                    message = STATUS_PROBE if probing else self._recovery_prompt(job.job_id)
+                    if not probing:
+                        self.queue.set_state(job.job_id, GptJobState.ACTIVE, last_error=None)
+                    recovery = self.controller.send_message(job.job_id, message)
+                    if probing:
+                        self.queue.set_state(job.job_id, GptJobState.ACTIVE, last_error=STATUS_PROBE_PENDING)
                     watchdog = self.queue.mark_watchdog_recovery(job.job_id)
                     actions.append(
                         {
                             "job_id": job.job_id,
                             "action": "recovered",
-                            "reason": "unanswered_restarted",
+                            "reason": "unanswered_status_probe" if probing else "unanswered_restarted",
                             "user_turns": user_turns,
                             "assistant_turns": assistant_turns,
                             "progress_idle_ms": idle_ms,

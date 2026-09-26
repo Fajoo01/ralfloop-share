@@ -1896,7 +1896,7 @@ class ChromeCdp:
             time.sleep(0.2)
         raise CdpError("composer_submit_not_confirmed")
 
-    def wake_stalled_chatgpt(self, target_id: str, *, text: str = "prosegui", wait_timeout_s: float = 4.0) -> dict[str, Any]:
+    def wake_stalled_chatgpt(self, target_id: str, *, text: str = "A che punto sei? Hai risolto?", wait_timeout_s: float = 4.0) -> dict[str, Any]:
         """Probe a stale Stop state by typing a short continuation and submit only if Send becomes available."""
         target = self._wait_target(target_id)
         if not target.websocket_url or not target.is_chatgpt:

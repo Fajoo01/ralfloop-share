@@ -64,7 +64,7 @@ class FakeCdp:
         self.submitted_composers.append(target_id)
         return {"submitted": True, "confirmed": True}
 
-    def wake_stalled_chatgpt(self, target_id: str, *, text: str = "prosegui", wait_timeout_s: float = 4.0):
+    def wake_stalled_chatgpt(self, target_id: str, *, text: str = "A che punto sei? Hai risolto?", wait_timeout_s: float = 4.0):
         self.wake_calls.append(target_id)
         return {"submitted": False, "reason": "send_missing_after_wake"}
 
@@ -475,10 +475,11 @@ def test_silent_pending_job_recovers_without_human_wakeup(tmp_path: Path) -> Non
     assert job.state is GptJobState.ACTIVE
     assert job.target_id == "managed"
     assert len(cdp.messages) == 1
-    assert "Riprendi" in cdp.messages[0][2]
-    assert "ultimo punto utile" in cdp.messages[0][2]
+    assert "A che punto sei?" in cdp.messages[0][2]
+    assert "Hai risolto?" in cdp.messages[0][2]
+    assert queue.get_job(job_id).last_error == "status_probe_pending"
     assert queue.watchdog_state(job_id)["recovery_count"] == 1
-    assert report["actions"][0]["reason"] == "unanswered_restarted"
+    assert report["actions"][0]["reason"] == "unanswered_status_probe"
 
 
 def test_fresh_silent_pending_job_is_not_recovered_too_early(tmp_path: Path) -> None:
@@ -524,9 +525,11 @@ def test_stalled_unanswered_job_is_recovered_before_review(tmp_path: Path) -> No
     assert job.target_id == "managed"
     assert cdp.closed == []
     assert len(cdp.messages) == 1
-    assert "Riprendi dall'ultimo punto utile" in cdp.messages[0][2]
+    assert "A che punto sei?" in cdp.messages[0][2]
+    assert "Hai risolto?" in cdp.messages[0][2]
+    assert queue.get_job(job_id).last_error == "status_probe_pending"
     assert queue.watchdog_state(job_id)["recovery_count"] == 1
-    assert report["actions"][0]["reason"] == "unanswered_restarted"
+    assert report["actions"][0]["reason"] == "unanswered_status_probe"
 
 
 def test_composer_consumed_between_probe_and_recovery_spends_no_retry(tmp_path: Path) -> None:
@@ -579,11 +582,11 @@ def test_stale_nonempty_composer_is_resubmitted(tmp_path: Path) -> None:
 
 
 
-def test_stale_stop_is_woken_by_typing_prosegui_before_hard_restart(tmp_path: Path) -> None:
+def test_stale_stop_is_woken_by_status_probe_before_hard_restart(tmp_path: Path) -> None:
     queue, job_id = queue_with_active(tmp_path)
 
     class WakeCdp(FakeCdp):
-        def wake_stalled_chatgpt(self, target_id: str, *, text: str = "prosegui", wait_timeout_s: float = 4.0):
+        def wake_stalled_chatgpt(self, target_id: str, *, text: str = "A che punto sei? Hai risolto?", wait_timeout_s: float = 4.0):
             self.wake_calls.append(target_id)
             return {"submitted": True, "confirmed": True, "text": text}
 
@@ -606,7 +609,8 @@ def test_stale_stop_is_woken_by_typing_prosegui_before_hard_restart(tmp_path: Pa
     assert cdp.stopped == []
     assert cdp.messages == []
     assert queue.watchdog_state(job_id)["recovery_count"] == 1
-    assert report["actions"][0]["reason"] == "stalled_stream_woken"
+    assert queue.get_job(job_id).last_error == "status_probe_pending"
+    assert report["actions"][0]["reason"] == "stalled_stream_status_probe"
 
 
 def test_stale_stream_is_stopped_and_restarted_in_same_chat(tmp_path: Path) -> None:
@@ -828,6 +832,22 @@ def test_queue_busy_is_existing_delivery_not_failed_recovery(tmp_path: Path) -> 
     assert queue.get_job(job_id).state is GptJobState.ACTIVE
     assert queue.watchdog_state(job_id)["recovery_count"] == 0
     assert report["actions"][0]["reason"] == "delivery_already_queued"
+
+
+def test_status_probe_reply_resumes_goal_in_same_chat(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    queue.set_state(job_id, GptJobState.ACTIVE, last_error="status_probe_pending")
+    cdp = FakeCdp(
+        ui={"user_turns": 2, "assistant_turns": 2, "response_in_progress": False, "response_pending": False, "response_idle_ms": 61_000, "progress_idle_ms": 61_000},
+        companion={"busy": False, "last_assistant_text": "Sono fermo al passo X; resta da completare Y."},
+    )
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+    saved = queue.get_job(job_id)
+    assert saved.state is GptJobState.ACTIVE
+    assert saved.last_error is None
+    assert len(cdp.messages) == 1
+    assert "Continua automaticamente dal punto raggiunto" in cdp.messages[0][2]
+    assert report["actions"][0]["reason"] == "status_probe_resumed"
 
 
 def test_goal_reply_without_status_marker_stops_in_review_instead_of_looping(tmp_path: Path) -> None:
