@@ -3281,6 +3281,7 @@ class ChromeCdp:
         self._page_call(target.websocket_url, "Input.dispatchKeyEvent", {"type":"keyUp", **common})
         deadline=time.monotonic()+max(5.0,float(wait_timeout_s))
         baseline_text=str(baseline.get("last_assistant_text") or "")
+        baseline_count=int(baseline.get("candidate_count") or 0)
         seen_generation=False
         stable_text=""; stable_since=0.0
         while time.monotonic()<deadline:
@@ -3292,7 +3293,7 @@ class ChromeCdp:
             current=str(state.get("last_assistant_text") or "").strip()
             if state.get("response_in_progress"):
                 seen_generation=True
-            changed=bool(current and current!=baseline_text and current!=clean)
+            changed=bool(current and current!=clean and (current!=baseline_text or int(state.get("candidate_count") or 0)>baseline_count))
             if changed:
                 if current!=stable_text:
                     stable_text=current; stable_since=time.monotonic()
