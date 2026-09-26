@@ -42,64 +42,38 @@ export function installBottazziAvatarSurface() {
     const parent=face.parentNode;if(!parent)return null;
     const rig=document.createElement('span');rig.className='teacher-face-rig';
     parent.insertBefore(rig,face);rig.append(face);face.classList.add('teacher-face-base');
-    const jaw=face.cloneNode(true);jaw.classList.add('teacher-face-jaw');jaw.alt='';jaw.setAttribute('aria-hidden','true');
-    rig.append(jaw);return rig;
+    face.src='/assets/tutor-avatar.svg';
+    const mouth=document.createElement('span');mouth.className='teacher-face-mouth';mouth.setAttribute('aria-hidden','true');
+    rig.append(mouth);return rig;
   };
   const setRig=(face,state,mouthLevel=0)=>{
     const rig=rigFace(face);if(!rig)return;
     const level=state==='speaking'?Math.max(0,Math.min(1,Number(mouthLevel)||0)):0;
     rig.dataset.state=state;rig.style.setProperty('--mouth-level',String(level));
-    rig.style.setProperty('--jaw-scale',String(1+level*.15));
-    rig.style.setProperty('--jaw-shift',`${(level*2.4).toFixed(3)}%`);
+    rig.style.setProperty('--mouth-open',String(1+level*3.5));
   };
-  rigFace(source);
   const apply=(state,mouthLevel=0)=>{
-    const selected=labels[state]?state:'idle';setRig(source,selected,mouthLevel);
+    const selected=labels[state]?state:'idle';
     for(const surface of surfaces()){
       const face=surface.querySelector('img:not(.teacher-face-jaw)');
       const status=surface.querySelector('[data-teacher-avatar-status]');
       surface.dataset.state=selected;
-      if(status)status.textContent=labels[selected];
+      if(status && status.textContent!==labels[selected])status.textContent=labels[selected];
       setRig(face,selected,mouthLevel);
     }
   };
   const sync=()=>apply(source.dataset.state||'idle',Number(source.dataset.mouthLevel||0));
-  const decorateFeedback=feedback=>{
-    if(!(feedback instanceof HTMLElement) || feedback.dataset.teacherAvatarDecorated==='1')return;
-    if(feedback.closest('.tutor-dialogue')){feedback.dataset.teacherAvatarDecorated='1';return;}
-    const text=feedback.textContent||'';
-    const surface=document.createElement('span');
-    surface.className='teacher-avatar-inline';
-    surface.dataset.teacherAvatarSurface='1';
-    surface.dataset.state=source.dataset.state||'idle';
-    surface.setAttribute('aria-hidden','true');
-    const face=document.createElement('img');
-    face.src='/assets/bot-tazzi.jpeg';
-    face.alt='';
-    face.width=84;
-    face.height=84;
-    const copy=document.createElement('span');
-    copy.className='teacher-feedback-text';
-    copy.textContent=text;
-    surface.append(face);
-    feedback.dataset.teacherAvatarDecorated='1';
-    feedback.replaceChildren(surface,copy);
-    sync();
-  };
   const observer=new MutationObserver(sync);
   observer.observe(source,{attributes:true,attributeFilter:['data-state','data-mouth-level']});
   const feedbackObserver=new MutationObserver(records=>{
     for(const record of records){
       for(const node of record.addedNodes){
         if(!(node instanceof HTMLElement))continue;
-        if(node.matches('p.feedback'))decorateFeedback(node);
-        node.querySelectorAll?.('p.feedback').forEach(decorateFeedback);
         if(node.matches('[data-teacher-avatar-surface]')||node.querySelector?.('[data-teacher-avatar-surface]'))sync();
       }
     }
   });
   feedbackObserver.observe(document.body,{childList:true,subtree:true});
-  document.querySelectorAll('p.feedback').forEach(decorateFeedback);
   sync();
 
   const marker='__ralfTeacherAvatarFetchWrapped';

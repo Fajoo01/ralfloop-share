@@ -345,18 +345,28 @@ def test_validation_errors_never_echo_credentials(http):
     assert "student_id" not in response.text
 
 
-def test_client_rejects_extra_discovered_capability(monkeypatch):
+@pytest.mark.parametrize("extra,missing,accepted", [
+    (["shell.run"], [], False),
+    (["teacher.mindmap_generate", "teacher.study_audio_generate"], [], True),
+    ([], ["teacher.explain"], False),
+])
+def test_client_validates_required_and_optional_capabilities(monkeypatch,extra,missing,accepted):
     import ralfloop_agent.teacher.web.client as module
     from types import SimpleNamespace
     class Session:
         closed=False
         def __init__(self,*args,**kwargs): pass
         def initialize(self): pass
-        def list_tools(self): return [SimpleNamespace(name=name) for name in [*ALL_TOOLS,"shell.run"]]
+        def list_tools(self): return [SimpleNamespace(name=name) for name in [*ALL_TOOLS,*extra] if name not in missing]
         def close(self): Session.closed=True
     monkeypatch.setattr(module,"MCPClientSession",Session)
-    with pytest.raises(ValueError,match="surface_mismatch"):
-        TeacherClient(transport_factory=lambda:None).health()
+    if accepted:
+        assert TeacherClient(transport_factory=lambda:None).health()
+        with pytest.raises(ValueError,match="tool_not_allowed"):
+            TeacherClient.call(None, extra[0], {})
+    else:
+        with pytest.raises(ValueError,match="surface_mismatch"):
+            TeacherClient(transport_factory=lambda:None).health()
     assert Session.closed
 
 

@@ -372,7 +372,7 @@ def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", sec
 
     @app.get("/assets/{name}")
     def asset(name: str):
-        if name not in ("app.js", "style.css", "bot-tazzi.jpeg", "avatar_controller.js"):
+        if name not in ("app.js", "style.css", "bot-tazzi.jpeg", "avatar_controller.js", "tutor-theme.css", "tutor-avatar.svg"):
             raise HTTPException(404)
         return FileResponse(STATIC / name)
 
