@@ -574,6 +574,50 @@ def test_history_resume_reopens_existing_conversation_without_creating_chat(tmp_
     assert cdp.installed[-1][1] == "https://chatgpt.com/c/history-1"
 
 
+def test_history_resume_inserts_at_requested_queue_rank(tmp_path: Path) -> None:
+    queue = make_queue(tmp_path)
+    first = queue.create_job("First", prompt="one")
+    second = queue.create_job("Second", prompt="two")
+    cdp = FakeCdp()
+    cdp._targets = [BrowserTarget("home", "page", "https://chatgpt.com/", "ChatGPT", "ws://home")]
+    with running_frontend(queue, cdp) as (port, origin):
+        status, resumed = request(
+            port,
+            "POST",
+            "/api/history/resume",
+            origin=origin,
+            payload={
+                "conversation_url": "https://chatgpt.com/c/history-ranked",
+                "title": "Ranked history",
+                "rank": 1,
+            },
+        )
+
+    assert status == 200
+    assert resumed["job"]["rank"] == 1
+    assert [job.job_id for job in queue.list_jobs()] == [resumed["job"]["job_id"], first.job_id, second.job_id]
+
+
+def test_open_chat_import_inserts_at_requested_queue_rank(tmp_path: Path) -> None:
+    queue = make_queue(tmp_path)
+    first = queue.create_job("First", prompt="one")
+    second = queue.create_job("Second", prompt="two")
+    cdp = FakeCdp()
+    cdp._targets = [BrowserTarget("external", "page", "https://chatgpt.com/c/external-ranked", "External", "ws://external")]
+    with running_frontend(queue, cdp) as (port, origin):
+        status, imported = request(
+            port,
+            "POST",
+            "/api/jobs/import",
+            origin=origin,
+            payload={"target_id": "external", "rank": 1},
+        )
+
+    assert status == 200
+    assert imported["job"]["rank"] == 1
+    assert [job.job_id for job in queue.list_jobs()] == [imported["job"]["job_id"], first.job_id, second.job_id]
+
+
 def test_account_history_exposes_projects_and_project_chat_context(tmp_path: Path) -> None:
     queue = make_queue(tmp_path)
     cdp = FakeCdp()

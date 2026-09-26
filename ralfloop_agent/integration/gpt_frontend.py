@@ -45,6 +45,7 @@ class CreateJob(ApiInput):
 
 class ImportChat(ApiInput):
     target_id: str = Field(min_length=1, max_length=160)
+    rank: int | None = Field(default=None, ge=1, le=10_000)
 
 
 class ResumeChat(ApiInput):
@@ -53,6 +54,7 @@ class ResumeChat(ApiInput):
     title: str = Field(default="Chat GPT", min_length=1, max_length=300)
     project_name: str = Field(default="", max_length=300)
     project_url: str | None = Field(default=None, max_length=1200)
+    rank: int | None = Field(default=None, ge=1, le=10_000)
 
 
 class OpenProject(ApiInput):
@@ -422,7 +424,7 @@ class GptWorkController:
         self.queue.reorder(job_id, 1)
         return self.pump(max_to_start=1)
 
-    def import_target(self, target_id: str) -> GptWorkJob:
+    def import_target(self, target_id: str, *, rank: int | None = None) -> GptWorkJob:
         browser = self.reconcile()
         target = browser.targets_by_id.get(str(target_id))
         if target is None:
@@ -442,7 +444,7 @@ class GptWorkController:
         for job in self.queue.list_jobs():
             if job.conversation_url == conversation_url:
                 if job.target_id == target.target_id and job.state is GptJobState.ACTIVE:
-                    return job
+                    return self.queue.reorder(job.job_id, rank) if rank is not None else job
                 raise ValueError("conversation_already_queued")
         if len(self._occupied_job_ids(browser)) >= self.queue.settings().max_open_chats:
             raise ValueError("chat_slot_limit_reached")
@@ -456,7 +458,7 @@ class GptWorkController:
                 project_name=project_name,
                 project_url=project_url,
             )
-            return self.queue.bind_chat(
+            imported = self.queue.bind_chat(
                 terminal_match.job_id,
                 conversation_url=conversation_url,
                 conversation_context_url=target.url,
@@ -464,7 +466,8 @@ class GptWorkController:
                 state=GptJobState.ACTIVE,
                 last_error=None,
             )
-        return self.queue.create_job(
+            return self.queue.reorder(imported.job_id, rank) if rank is not None else imported
+        imported = self.queue.create_job(
             target.title or "Chat GPT",
             prompt=self._goal_managed_prompt("Porta a compimento il GOAL corrente già definito in questa conversazione, senza ripartire da zero."),
             project_name=project_name,
@@ -474,6 +477,7 @@ class GptWorkController:
             target_id=target.target_id,
             state=GptJobState.ACTIVE,
         )
+        return self.queue.reorder(imported.job_id, rank) if rank is not None else imported
 
     def resolve_project_url_by_name(self, project_name: str) -> str:
         name = str(project_name or "").strip()
@@ -714,6 +718,7 @@ class GptWorkController:
         conversation_context_url: str | None = None,
         project_name: str = "",
         project_url: str | None = None,
+        rank: int | None = None,
     ) -> dict[str, Any]:
         canonical = _canonical_chatgpt_conversation_url(conversation_url)
         if not canonical:
@@ -753,6 +758,8 @@ class GptWorkController:
                 state=GptJobState.REVIEW,
                 last_error=None,
             )
+        if rank is not None:
+            existing = self.queue.reorder(existing.job_id, rank)
         result = self.start_job(existing.job_id)
         return {"job": self.queue.get_job(existing.job_id).model_dump(mode="json"), "start": result, "server_chat_created": False}
 
@@ -1475,7 +1482,7 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
                 if payload is None:
                     return
                 assert isinstance(payload, ResumeChat)
-                self._send_json(200, {"ok": True, **controller.resume_history_chat(payload.conversation_url, payload.title, conversation_context_url=payload.conversation_context_url, project_name=payload.project_name, project_url=payload.project_url)})
+                self._send_json(200, {"ok": True, **controller.resume_history_chat(payload.conversation_url, payload.title, conversation_context_url=payload.conversation_context_url, project_name=payload.project_name, project_url=payload.project_url, rank=payload.rank)})
                 return
             if path == "/api/jobs":
                 payload = self._validated(CreateJob)
@@ -1501,7 +1508,7 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
                 if payload is None:
                     return
                 assert isinstance(payload, ImportChat)
-                job = controller.import_target(payload.target_id)
+                job = controller.import_target(payload.target_id, rank=payload.rank)
                 self._send_json(200, {"ok": True, "job": job.model_dump(mode="json")})
                 return
             if path == "/api/settings":
