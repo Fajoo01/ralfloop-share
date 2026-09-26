@@ -836,6 +836,13 @@ def test_queue_busy_is_existing_delivery_not_failed_recovery(tmp_path: Path) -> 
 
 def test_status_probe_reply_resumes_goal_in_same_chat(tmp_path: Path) -> None:
     queue, job_id = queue_with_active(tmp_path)
+    queue.set_last_assistant_text(job_id, "Vecchio stato")
+    queue.set_status_probe_baseline(
+        job_id,
+        assistant_turns=1,
+        user_turns=2,
+        assistant_text="Vecchio stato",
+    )
     queue.set_state(job_id, GptJobState.ACTIVE, last_error="status_probe_pending")
     cdp = FakeCdp(
         ui={"user_turns": 2, "assistant_turns": 2, "response_in_progress": False, "response_pending": False, "response_idle_ms": 61_000, "progress_idle_ms": 61_000},
@@ -847,7 +854,63 @@ def test_status_probe_reply_resumes_goal_in_same_chat(tmp_path: Path) -> None:
     assert saved.last_error is None
     assert len(cdp.messages) == 1
     assert "Continua automaticamente dal punto raggiunto" in cdp.messages[0][2]
+    assert queue.status_probe_state(job_id)["sent_at"] == 0
     assert report["actions"][0]["reason"] == "status_probe_resumed"
+
+
+def test_status_probe_new_text_beats_stale_stop_and_turn_mismatch(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    old_text = "Sto ancora lavorando al passo precedente."
+    queue.set_last_assistant_text(job_id, old_text)
+    queue.set_status_probe_baseline(
+        job_id,
+        assistant_turns=2,
+        user_turns=5,
+        assistant_text=old_text,
+    )
+    queue.set_state(job_id, GptJobState.ACTIVE, last_error="status_probe_pending")
+    cdp = FakeCdp(
+        ui={"user_turns": 6, "assistant_turns": 2, "response_in_progress": True, "response_pending": True, "response_idle_ms": 61_000, "progress_idle_ms": 61_000, "tool_activity_count": 0},
+        companion={"busy": True, "last_assistant_text": "Il probe ha risposto: resta da completare il passo finale."},
+    )
+
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    saved = queue.get_job(job_id)
+    assert saved.state is GptJobState.ACTIVE
+    assert saved.last_error is None
+    assert cdp.stopped == ["managed"]
+    assert len(cdp.messages) == 1
+    assert "Continua automaticamente dal punto raggiunto" in cdp.messages[0][2]
+    assert queue.status_probe_state(job_id)["sent_at"] == 0
+    assert report["actions"][0]["reason"] == "status_probe_resumed"
+
+
+def test_status_probe_unchanged_text_does_not_false_resume_stale_stop(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    old_text = "Sto ancora lavorando al passo precedente."
+    queue.set_last_assistant_text(job_id, old_text)
+    queue.set_status_probe_baseline(
+        job_id,
+        assistant_turns=2,
+        user_turns=5,
+        assistant_text=old_text,
+    )
+    queue.set_state(job_id, GptJobState.ACTIVE, last_error="status_probe_pending")
+    cdp = FakeCdp(
+        ui={"user_turns": 6, "assistant_turns": 2, "response_in_progress": True, "response_pending": True, "response_idle_ms": 61_000, "progress_idle_ms": 61_000, "tool_activity_count": 0},
+        companion={"busy": True, "last_assistant_text": old_text},
+    )
+
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    saved = queue.get_job(job_id)
+    assert saved.state is GptJobState.ACTIVE
+    assert saved.last_error == "status_probe_pending"
+    assert cdp.stopped == []
+    assert cdp.messages == []
+    assert queue.status_probe_state(job_id)["sent_at"] > 0
+    assert report["actions"][0]["reason"] == "response_in_progress_silent"
 
 
 def test_goal_reply_without_status_marker_stops_in_review_instead_of_looping(tmp_path: Path) -> None:

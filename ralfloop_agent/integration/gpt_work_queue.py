@@ -153,6 +153,18 @@ class GptWorkQueue:
                 conn.execute(
                     "ALTER TABLE gpt_job_watchdog ADD COLUMN last_transport_failure_at INTEGER NOT NULL DEFAULT 0"
                 )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS gpt_job_status_probe (
+                    job_id TEXT PRIMARY KEY,
+                    assistant_turns INTEGER NOT NULL DEFAULT 0,
+                    user_turns INTEGER NOT NULL DEFAULT 0,
+                    assistant_text TEXT NOT NULL DEFAULT '',
+                    sent_at INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY(job_id) REFERENCES gpt_jobs(job_id) ON DELETE CASCADE
+                )
+                """
+            )
 
     @staticmethod
     def _project_url(value: str | None) -> str | None:
@@ -437,6 +449,51 @@ class GptWorkQueue:
             if result.rowcount != 1:
                 raise KeyError(job_id)
         return self.get_job(job_id)
+
+    def set_status_probe_baseline(
+        self,
+        job_id: str,
+        *,
+        assistant_turns: int,
+        user_turns: int,
+        assistant_text: str,
+    ) -> dict[str, int | str]:
+        self.get_job(job_id)
+        now = int(self.clock())
+        clean_text = str(assistant_text or "").strip()[-24_000:]
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO gpt_job_status_probe(job_id, assistant_turns, user_turns, assistant_text, sent_at)
+                VALUES(?,?,?,?,?)
+                ON CONFLICT(job_id) DO UPDATE SET
+                    assistant_turns=excluded.assistant_turns,
+                    user_turns=excluded.user_turns,
+                    assistant_text=excluded.assistant_text,
+                    sent_at=excluded.sent_at
+                """,
+                (job_id, max(0, int(assistant_turns)), max(0, int(user_turns)), clean_text, now),
+            )
+        return self.status_probe_state(job_id)
+
+    def status_probe_state(self, job_id: str) -> dict[str, int | str]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT assistant_turns, user_turns, assistant_text, sent_at FROM gpt_job_status_probe WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            return {"assistant_turns": 0, "user_turns": 0, "assistant_text": "", "sent_at": 0}
+        return {
+            "assistant_turns": max(0, int(row["assistant_turns"] or 0)),
+            "user_turns": max(0, int(row["user_turns"] or 0)),
+            "assistant_text": str(row["assistant_text"] or ""),
+            "sent_at": max(0, int(row["sent_at"] or 0)),
+        }
+
+    def clear_status_probe(self, job_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM gpt_job_status_probe WHERE job_id=?", (job_id,))
 
     def watchdog_state(self, job_id: str) -> dict[str, int]:
         with self._connect() as conn:

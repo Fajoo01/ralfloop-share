@@ -414,6 +414,21 @@ class GptQueueShepherd:
             idle_ms = self._idle_ms(ui)
             current_job = self.queue.get_job(job.job_id)
             saved_text = self._substantive_response_text(current_job.last_assistant_text)
+            probe_state = (
+                self.queue.status_probe_state(job.job_id)
+                if current_job.last_error == STATUS_PROBE_PENDING
+                else {"assistant_turns": 0, "user_turns": 0, "assistant_text": "", "sent_at": 0}
+            )
+            probe_has_baseline = int(probe_state.get("sent_at", 0) or 0) > 0
+            probe_reply_advanced = (
+                current_job.last_error == STATUS_PROBE_PENDING
+                and probe_has_baseline
+                and bool(response_text)
+                and (
+                    assistant_turns > int(probe_state.get("assistant_turns", 0) or 0)
+                    or response_text != self._substantive_response_text(probe_state.get("assistant_text"))
+                )
+            )
             if response_text and response_text != saved_text:
                 self.queue.reset_watchdog(job.job_id)
                 self.queue.reset_watchdog_transport_failures(job.job_id)
@@ -435,6 +450,7 @@ class GptQueueShepherd:
             ):
                 if current_job.last_error == STATUS_PROBE_PENDING:
                     self.queue.set_state(job.job_id, GptJobState.ACTIVE, last_error=None)
+                    self.queue.clear_status_probe(job.job_id)
                 if response_in_progress:
                     try:
                         stopped = self.cdp.stop_chatgpt_response(job.target_id)
@@ -473,6 +489,37 @@ class GptQueueShepherd:
                         self._transport_failure(job, actions, phase="goal_continue_marker", exc=exc)
                     else:
                         actions.append({"job_id": job.job_id, "action": "preserved", "reason": f"goal_continue_failed:{str(exc)[:200]}"})
+                continue
+
+            if (
+                current_job.last_error == STATUS_PROBE_PENDING
+                and probe_reply_advanced
+                and idle_ms >= self.policy.complete_idle_ms
+                and not (focused and human_composer_chars)
+            ):
+                try:
+                    if response_in_progress:
+                        self.cdp.stop_chatgpt_response(job.target_id)
+                    continuation = self.controller.send_message(job.job_id, GOAL_CONTINUATION)
+                    self.queue.set_state(job.job_id, GptJobState.ACTIVE, last_error=None)
+                    self.queue.clear_status_probe(job.job_id)
+                    self.queue.reset_watchdog(job.job_id)
+                    actions.append({
+                        "job_id": job.job_id,
+                        "action": "continued",
+                        "reason": "status_probe_resumed",
+                        "user_turns": user_turns,
+                        "assistant_turns": assistant_turns,
+                        "response_idle_ms": idle_ms,
+                        "continuation": continuation,
+                    })
+                except (CdpError, OSError, RuntimeError, ValueError) as exc:
+                    if self._is_queue_busy(exc):
+                        actions.append({"job_id": job.job_id, "action": "preserved", "reason": "delivery_already_queued"})
+                    elif self._is_transport_error(exc):
+                        self._transport_failure(job, actions, phase="status_probe_resume", exc=exc)
+                    else:
+                        actions.append({"job_id": job.job_id, "action": "preserved", "reason": f"status_probe_resume_failed:{str(exc)[:200]}"})
                 continue
 
             if (
@@ -589,6 +636,40 @@ class GptQueueShepherd:
                         })
                 continue
 
+            if (
+                current_job.last_error == STATUS_PROBE_PENDING
+                and not probe_has_baseline
+                and idle_ms >= self.policy.complete_idle_ms
+            ):
+                try:
+                    if response_in_progress:
+                        reprobe = self.cdp.wake_stalled_chatgpt(job.target_id, text=STATUS_PROBE)
+                    else:
+                        reprobe = self.controller.send_message(job.job_id, STATUS_PROBE)
+                    self.queue.set_status_probe_baseline(
+                        job.job_id,
+                        assistant_turns=assistant_turns,
+                        user_turns=user_turns,
+                        assistant_text=final_text,
+                    )
+                    watchdog = self.queue.mark_watchdog_recovery(job.job_id)
+                    actions.append({
+                        "job_id": job.job_id,
+                        "action": "recovered",
+                        "reason": "status_probe_rebaselined",
+                        "progress_idle_ms": idle_ms,
+                        "watchdog": watchdog,
+                        "recovery": reprobe,
+                    })
+                except (CdpError, OSError, RuntimeError, ValueError) as exc:
+                    if self._is_queue_busy(exc):
+                        actions.append({"job_id": job.job_id, "action": "preserved", "reason": "delivery_already_queued"})
+                    elif self._is_transport_error(exc):
+                        self._transport_failure(job, actions, phase="status_probe_rebaseline", exc=exc)
+                    else:
+                        actions.append({"job_id": job.job_id, "action": "preserved", "reason": f"status_probe_rebaseline_failed:{str(exc)[:200]}"})
+                continue
+
             if response_in_progress:
                 silent_stream = assistant_turns < user_turns and tool_activity_count == 0
                 stream_stall_limit_ms = (
@@ -626,6 +707,12 @@ class GptQueueShepherd:
                     if current_job.last_error != STATUS_PROBE_PENDING:
                         wake = self.cdp.wake_stalled_chatgpt(job.target_id, text=STATUS_PROBE)
                         if bool(wake.get("submitted")):
+                            self.queue.set_status_probe_baseline(
+                                job.job_id,
+                                assistant_turns=assistant_turns,
+                                user_turns=user_turns,
+                                assistant_text=final_text,
+                            )
                             self.queue.set_state(job.job_id, GptJobState.ACTIVE, last_error=STATUS_PROBE_PENDING)
                             watchdog = self.queue.mark_watchdog_recovery(job.job_id)
                             actions.append({
@@ -643,6 +730,7 @@ class GptQueueShepherd:
                         self.queue.set_last_assistant_text(job.job_id, partial)
                     if current_job.last_error == STATUS_PROBE_PENDING:
                         self.queue.set_state(job.job_id, GptJobState.ACTIVE, last_error=None)
+                        self.queue.clear_status_probe(job.job_id)
                     continuation = self.controller.send_message(job.job_id, self._recovery_prompt(job.job_id))
                     watchdog = self.queue.mark_watchdog_recovery(job.job_id)
                     actions.append({
@@ -706,6 +794,7 @@ class GptQueueShepherd:
                     try:
                         self.queue.set_state(job.job_id, GptJobState.ACTIVE, last_error=None)
                         continuation = self.controller.send_message(job.job_id, GOAL_CONTINUATION)
+                        self.queue.clear_status_probe(job.job_id)
                         self.queue.reset_watchdog(job.job_id)
                         actions.append({
                             "job_id": job.job_id,
@@ -825,8 +914,15 @@ class GptQueueShepherd:
                     message = STATUS_PROBE if probing else self._recovery_prompt(job.job_id)
                     if not probing:
                         self.queue.set_state(job.job_id, GptJobState.ACTIVE, last_error=None)
+                        self.queue.clear_status_probe(job.job_id)
                     recovery = self.controller.send_message(job.job_id, message)
                     if probing:
+                        self.queue.set_status_probe_baseline(
+                            job.job_id,
+                            assistant_turns=assistant_turns,
+                            user_turns=user_turns,
+                            assistant_text=final_text,
+                        )
                         self.queue.set_state(job.job_id, GptJobState.ACTIVE, last_error=STATUS_PROBE_PENDING)
                     watchdog = self.queue.mark_watchdog_recovery(job.job_id)
                     actions.append(
