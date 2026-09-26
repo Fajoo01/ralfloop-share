@@ -3224,14 +3224,16 @@ class ChromeCdp:
           }
           const stopRe=/(?:stop|停止|interrompi|annulla|cancel)/i;
           const responseInProgress=[...document.querySelectorAll('button')].some(b=>visible(b)&&stopRe.test(`${b.getAttribute('aria-label')||''} ${b.getAttribute('title')||''} ${textOf(b)}`));
-          const loginVisible=[...document.querySelectorAll('button,a')].some(el=>visible(el)&&/^(?:login|log in|sign in|accedi|登录)$/i.test(textOf(el)));
+          const bodyText=String(document.body?.innerText||'');
+          const loginVisible=[...document.querySelectorAll('button,a')].some(el=>visible(el)&&/^(?:login|log in|sign in|accedi|登录)$/i.test(textOf(el))) || /(?:微信扫码登录|手机号码登录|发送验证码|登录以同步历史会话|sign in|log in|accedi)/i.test(bodyText);
+          const challengeVisible=/(?:captcha|verify you are human|robot|机器人|人机验证|安全验证|verification)/i.test(bodyText);
           const composerText=composer ? String(composer.value ?? composer.innerText ?? composer.textContent ?? '').trim() : '';
           return JSON.stringify({
             ready:Boolean(composer), url:location.href, title:document.title||'',
             composer_ready:Boolean(composer), composer_chars:composerText.length,
-            response_in_progress:responseInProgress, login_visible:loginVisible,
+            response_in_progress:responseInProgress, login_visible:loginVisible, challenge_visible:challengeVisible,
             candidate_count:candidates.length, last_assistant_text:candidates.length?candidates[candidates.length-1]:'',
-            body_text:String(document.body?.innerText||'').slice(-16000)
+            body_text:bodyText.slice(-16000)
           });
         })()"""
         result = self._page_call(target.websocket_url, "Runtime.evaluate", {"expression": expression, "returnByValue": True})
@@ -3283,8 +3285,9 @@ class ChromeCdp:
         while time.monotonic()<deadline:
             time.sleep(0.35)
             state=self.kimi_ui_state(target_id)
-            if state.get("login_visible"):
-                raise CdpError("kimi_query_failed:login_required")
+            if state.get("login_visible") or state.get("challenge_visible"):
+                reason = "challenge_required" if state.get("challenge_visible") else "login_required"
+                raise CdpError(f"kimi_query_failed:{reason}")
             current=str(state.get("last_assistant_text") or "").strip()
             if state.get("response_in_progress"):
                 seen_generation=True
@@ -3299,7 +3302,7 @@ class ChromeCdp:
         if stable_text:
             return {"provider":"kimi","target_id":target_id,"response":stable_text,"url":self._wait_target(target_id).url,"timed_out":True}
         final=self.kimi_ui_state(target_id)
-        reason="login_required" if final.get("login_visible") else "response_timeout"
+        reason=("challenge_required" if final.get("challenge_visible") else "login_required" if final.get("login_visible") else "response_timeout")
         raise CdpError(f"kimi_query_failed:{reason}")
 
     def create_target(self, url: str, *, background: bool = False) -> str:
