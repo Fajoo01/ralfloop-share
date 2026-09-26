@@ -1,0 +1,31 @@
+plugins {
+    id 'com.android.application'
+}
+
+if (!providers.gradleProperty('CALENDAR_APP_URL').isPresent()) {
+    throw new GradleException('CALENDAR_APP_URL must be supplied at build time')
+}
+def calendarUrl = providers.gradleProperty('CALENDAR_APP_URL').get()
+
+android {
+    namespace 'org.tiremminnanz.bottazzi.calendar'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'org.tiremminnanz.bottazzi.calendar'
+        minSdk 26
+        targetSdk 36
+        versionCode 1
+        versionName '0.1.0'
+        buildConfigField 'String', 'CALENDAR_URL', '"' + calendarUrl.replace('"', '"') + '"'
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
