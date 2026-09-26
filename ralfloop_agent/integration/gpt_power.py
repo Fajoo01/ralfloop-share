@@ -32,5 +32,8 @@ class PowerGuardedCdp:
             with browser_operation(self.queue):
                 if not self.queue.power_enabled():
                     raise CdpError("gpt_browser_power_off")
+                budget = self.queue.work_budget_status()
+                if budget["rest_remaining_seconds"] or budget["rest_stop_pending"]:
+                    raise CdpError("gpt_work_cooldown")
                 return value(*args, **kwargs)
         return guarded

@@ -105,6 +105,9 @@ class GptWorkController:
         self._companion_probe_interval_s = 4.0
 
     def set_power(self, enabled: bool) -> dict[str, Any]:
+        budget = self.queue.work_budget_status()
+        if enabled and (budget["rest_remaining_seconds"] or budget["rest_stop_pending"]):
+            return {"ok": False, "error": "gpt_work_cooldown", **self.queue.power_status()}
         # Close the gate before waiting for an in-flight browser operation.
         if not enabled:
             self.queue.set_power_enabled(False)
@@ -115,16 +118,37 @@ class GptWorkController:
                 self.queue.set_power_enabled(True)
             else:
                 self.queue.set_power_enabled(False)
-                for job in self.queue.list_jobs():
-                    if not job.target_id:
-                        continue
-                    try:
-                        self.cdp.raw.stop_chatgpt_response(job.target_id)
-                        self.cdp.raw.close_target(job.target_id)
-                    except (CdpError, OSError, RuntimeError) as exc:
-                        errors.append({"job_id": job.job_id, "error": str(exc)[:200]})
+                errors = self._close_managed_for_stop("manual_close_hold")
                 self.queue.set_power_stop_complete(not errors)
         return {"ok": not errors, **self.queue.power_status(), "errors": errors}
+
+    def _close_managed_for_stop(self, reason: str) -> list[dict[str, str]]:
+        jobs = [job for job in self.queue.list_jobs() if job.target_id and job.state not in {GptJobState.DONE, GptJobState.CANCELLED}]
+        targets = {target.target_id for target in self.cdp.raw.targets()} if jobs else set()
+        errors = []
+        for job in jobs:
+            try:
+                if job.target_id in targets:
+                    try:
+                        self.cdp.raw.stop_chatgpt_response(job.target_id)
+                    except (AttributeError, CdpError, OSError, RuntimeError):
+                        pass
+                    self.cdp.raw.close_target(job.target_id)
+                self.queue.bind_chat(job.job_id, conversation_url=job.conversation_url,
+                    conversation_context_url=job.conversation_context_url, target_id=None,
+                    state=GptJobState.REVIEW, last_error=reason)
+            except (CdpError, OSError, RuntimeError) as exc:
+                errors.append({"job_id": job.job_id, "error": str(exc)[:200]})
+        return errors
+
+    def enforce_work_budget(self) -> dict[str, Any]:
+        budget = self.queue.work_budget_status()
+        if budget["rest_stop_pending"]:
+            with browser_operation(self.queue):
+                if not self._close_managed_for_stop("work_limit_reached"):
+                    self.queue.confirm_rest_stop()
+            budget = self.queue.work_budget_status()
+        return budget
 
     def browser_snapshot(self) -> BrowserSnapshot:
         by_id: dict[str, Any] = {}
@@ -319,6 +343,7 @@ class GptWorkController:
                 errors.append({"job_id": job.job_id, "error": "prompt_required"})
                 continue
             self.queue.set_state(job.job_id, GptJobState.STARTING)
+            self.queue.start_work_budget(job.job_id)
             target_id: str | None = None
             try:
                 result = self.cdp.start_chatgpt_job(
@@ -354,6 +379,7 @@ class GptWorkController:
         return {"started": started, "errors": errors, **self.runtime_state(reconcile=False)}
 
     def start_job(self, job_id: str, *, reset_watchdog: bool = True) -> dict[str, Any]:
+        self.queue.start_work_budget(job_id)
         browser = self.reconcile()
         job = self.queue.get_job(job_id)
         if reset_watchdog and job.state is not GptJobState.ACTIVE:
@@ -833,6 +859,7 @@ class GptWorkController:
         }
 
     def send_message(self, job_id: str, text: str) -> dict[str, Any]:
+        self.queue.start_work_budget(job_id)
         job = self.queue.get_job(job_id)
         if job.state is not GptJobState.ACTIVE:
             if job.last_error == "temporary_access_limited":
@@ -1155,7 +1182,8 @@ class GptWorkController:
         return self.queue.set_state(job.job_id, state)
 
     def runtime_state(self, *, reconcile: bool = True) -> dict[str, Any]:
-        enabled = self.queue.power_enabled()
+        budget = self.enforce_work_budget()
+        enabled = self.queue.power_enabled() and not (budget["rest_remaining_seconds"] or budget["rest_stop_pending"])
         browser = (self.reconcile() if reconcile else self.browser_snapshot()) if enabled else BrowserSnapshot({}, {}, frozenset(), 0, 0)
         occupied = self._occupied_job_ids(browser)
         settings = self.queue.settings()
@@ -1262,9 +1290,10 @@ class GptWorkController:
         return rows
 
     def dashboard_snapshot(self) -> dict[str, Any]:
+        budget = self.enforce_work_budget()
         base = self.queue.snapshot()
         base["power"] = self.queue.power_status()
-        if not base["power"]["enabled"]:
+        if not base["power"]["enabled"] or budget["rest_remaining_seconds"] or budget["rest_stop_pending"]:
             base["browser"] = {"ok": True, "open_chats": [], "power_off": True}
             return base
         browser_rows = self.browser_rows()

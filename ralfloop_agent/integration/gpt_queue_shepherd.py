@@ -295,6 +295,9 @@ class GptQueueShepherd:
         )
 
     def run_once(self, *, auto_start: bool = True) -> dict[str, Any]:
+        budget = self.controller.enforce_work_budget()
+        if budget["rest_remaining_seconds"] or budget["rest_stop_pending"]:
+            return {"ok": True, "cooldown": budget, "actions": []}
         if not self.queue.power_enabled():
             return {"ok": True, "power_off": True, "actions": []}
         self.controller.reconcile()

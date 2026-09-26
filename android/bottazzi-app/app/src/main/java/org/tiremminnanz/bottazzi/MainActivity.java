@@ -37,6 +37,7 @@ public final class MainActivity extends Activity {
     private ValueCallback<Uri[]> fileCallback;
     private Uri pendingCameraUri;
     private TextToSpeech textToSpeech;
+    private volatile boolean speechReady;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -91,8 +92,9 @@ public final class MainActivity extends Activity {
             }
         });
         textToSpeech = new TextToSpeech(this, status -> {
-            if (status == TextToSpeech.SUCCESS) {
-                textToSpeech.setLanguage(Locale.ITALIAN);
+            if (status == TextToSpeech.SUCCESS && textToSpeech != null) {
+                int language = textToSpeech.setLanguage(Locale.ITALIAN);
+                speechReady = language != TextToSpeech.LANG_MISSING_DATA && language != TextToSpeech.LANG_NOT_SUPPORTED;
             }
         });
         webView.addJavascriptInterface(new SpeechBridge(), "BotTazziNative");
@@ -288,12 +290,18 @@ public final class MainActivity extends Activity {
 
     private final class SpeechBridge {
         @JavascriptInterface
-        public void speak(String text) {
+        public boolean speak(String text) {
+            if (!speechReady || text == null || text.trim().isEmpty()) return false;
             runOnUiThread(() -> {
                 if (textToSpeech != null) {
-                    textToSpeech.speak(String.valueOf(text), TextToSpeech.QUEUE_FLUSH, null, "bottazzi-message");
+                    int size = Math.min(3500, TextToSpeech.getMaxSpeechInputLength() - 1);
+                    for (int i = 0; i < text.length(); i += size) {
+                        textToSpeech.speak(text.substring(i, Math.min(text.length(), i + size)),
+                            i == 0 ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD, null, "bottazzi-message-" + i);
+                    }
                 }
             });
+            return true;
         }
 
         @JavascriptInterface

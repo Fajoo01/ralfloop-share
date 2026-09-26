@@ -3,7 +3,7 @@ import threading
 
 import pytest
 
-from ralfloop_agent.integration.gpt_browser_cdp import CdpError
+from ralfloop_agent.integration.gpt_browser_cdp import BrowserTarget, CdpError
 from ralfloop_agent.integration.gpt_frontend import GptWorkController
 from ralfloop_agent.integration.gpt_power import PowerGuardedCdp
 from ralfloop_agent.integration.gpt_queue_shepherd import GptQueueShepherd
@@ -75,9 +75,55 @@ def test_shutdown_stops_managed_chat_and_preserves_queue(tmp_path):
     cdp.stop_chatgpt_response = lambda target: stopped.append(target)
     controller = GptWorkController(queue, cdp)
     job = queue.create_job("Keep history", prompt="Work")
+    cdp._targets.append(BrowserTarget("managed", "page", "https://chatgpt.com/c/kept", "ChatGPT", "ws://managed"))
     queue.bind_chat(job.job_id, conversation_url="https://chatgpt.com/c/kept",
                     target_id="managed", state=GptJobState.ACTIVE)
     assert controller.set_power(False)["ok"]
     assert stopped == ["managed"] and cdp.closed == ["managed"]
     assert queue.get_job(job.job_id).conversation_url == "https://chatgpt.com/c/kept"
+    assert controller.set_power(False)["ok"]  # Idempotent across both apps.
     assert controller.set_power(True)["enabled"]
+
+
+def test_two_hour_budget_forces_global_hour_rest_and_survives_restart(tmp_path):
+    now = [100_000]
+    queue = GptWorkQueue(tmp_path / "queue.db", clock=lambda: now[0])
+    cdp = FakeCdp()
+    controller = GptWorkController(queue, cdp)
+    job = queue.create_job("Long work", prompt="Work")
+    cdp._targets.append(BrowserTarget("managed", "page", "https://chatgpt.com/c/long", "ChatGPT", "ws://managed"))
+    queue.bind_chat(job.job_id, conversation_url="https://chatgpt.com/c/long",
+                    target_id="managed", state=GptJobState.ACTIVE)
+    now[0] += 7199
+    assert queue.work_budget_status()["rest_remaining_seconds"] == 0
+    now[0] += 1
+    with pytest.raises(CdpError, match="cooldown"):
+        controller.cdp.queue_human_message("managed", "https://chatgpt.com/c/long", "Continue")
+    assert not cdp.messages
+    report = GptQueueShepherd(queue, cdp).run_once()
+    assert report["cooldown"]["rest_remaining_seconds"] == 3600
+    assert cdp.closed == ["managed"]
+    assert queue.get_job(job.job_id).last_error == "work_limit_reached"
+    reopened = GptWorkQueue(queue.path, clock=lambda: now[0])
+    assert reopened.work_budget_status()["rest_remaining_seconds"] == 3600
+    assert not GptWorkController(reopened, cdp).set_power(True)["ok"]
+    now[0] += 3599
+    with pytest.raises(ValueError, match="cooldown"):
+        reopened.start_work_budget(job.job_id)
+    now[0] += 1
+    reopened.start_work_budget(job.job_id)
+    assert reopened.work_budget_status()["rest_remaining_seconds"] == 0
+    assert GptWorkController(reopened, cdp).set_power(True)["ok"]
+
+
+def test_rebinding_and_manual_power_toggle_cannot_reset_work_budget(tmp_path):
+    now = [100_000]
+    queue = GptWorkQueue(tmp_path / "queue.db", clock=lambda: now[0])
+    job = queue.create_job("Keep budget", prompt="Work")
+    queue.start_work_budget(job.job_id)
+    now[0] += 7100
+    queue.set_power_enabled(False)
+    queue.set_power_enabled(True)
+    queue.start_work_budget(job.job_id)
+    now[0] += 100
+    assert queue.work_budget_status()["rest_remaining_seconds"] == 3600

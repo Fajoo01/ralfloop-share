@@ -61,6 +61,8 @@ class GptWorkQueue:
     """
 
     DEFAULT_MAX_OPEN_CHATS = 3
+    MAX_WORK_SECONDS = 2 * 60 * 60
+    MIN_REST_SECONDS = 60 * 60
 
     def __init__(self, path: str | Path, *, clock: Callable[[], float] = time.time) -> None:
         self.path = Path(path)
@@ -101,7 +103,42 @@ class GptWorkQueue:
     def power_status(self) -> dict:
         with self._connect() as conn:
             row = conn.execute("SELECT setting_value FROM gpt_queue_settings WHERE setting_key='power_stop_complete'").fetchone()
-        return {"enabled": self.power_enabled(), "stop_complete": row is not None and row[0] == "1"}
+        return {"enabled": self.power_enabled(), "stop_complete": row is not None and row[0] == "1", **self.work_budget_status()}
+
+    def start_work_budget(self, job_id: str) -> None:
+        budget = self.work_budget_status()
+        if budget["rest_remaining_seconds"] or budget["rest_stop_pending"]:
+            raise ValueError("gpt_work_cooldown")
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO gpt_work_budgets(job_id, started_at, exhausted) VALUES(?, ?, 0) "
+                "ON CONFLICT(job_id) DO UPDATE SET started_at=excluded.started_at, exhausted=0 WHERE exhausted=1",
+                (job_id, int(self.clock())),
+            )
+
+    def work_budget_status(self) -> dict:
+        now = int(self.clock())
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            values = dict(conn.execute("SELECT setting_key, setting_value FROM gpt_queue_settings WHERE setting_key IN ('rest_until', 'rest_stop_pending')").fetchall())
+            rest_until = int(values.get("rest_until", "0"))
+            pending = values.get("rest_stop_pending", "0") == "1"
+            expired = conn.execute(
+                "SELECT b.job_id FROM gpt_work_budgets b JOIN gpt_jobs j ON j.job_id=b.job_id "
+                "WHERE b.exhausted=0 AND b.started_at<=? AND j.state NOT IN ('done','cancelled')",
+                (now - self.MAX_WORK_SECONDS,),
+            ).fetchall()
+            if expired:
+                rest_until = max(rest_until, now + self.MIN_REST_SECONDS)
+                pending = True
+                conn.execute("UPDATE gpt_work_budgets SET exhausted=1 WHERE exhausted=0")
+                conn.executemany("INSERT OR REPLACE INTO gpt_queue_settings VALUES(?, ?)", [("rest_until", str(rest_until)), ("rest_stop_pending", "1")])
+        return {"max_work_seconds": self.MAX_WORK_SECONDS, "min_rest_seconds": self.MIN_REST_SECONDS,
+                "rest_until": rest_until, "rest_remaining_seconds": max(0, rest_until - now), "rest_stop_pending": pending}
+
+    def confirm_rest_stop(self) -> None:
+        with self._connect() as conn:
+            conn.execute("INSERT OR REPLACE INTO gpt_queue_settings VALUES('rest_stop_pending', '0')")
 
     def set_power_stop_complete(self, complete: bool) -> None:
         with self._connect() as conn:
@@ -133,6 +170,7 @@ class GptWorkQueue:
                 """
             )
             columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(gpt_jobs)").fetchall()}
+            conn.execute("CREATE TABLE IF NOT EXISTS gpt_work_budgets (job_id TEXT PRIMARY KEY REFERENCES gpt_jobs(job_id) ON DELETE CASCADE, started_at INTEGER NOT NULL, exhausted INTEGER NOT NULL DEFAULT 0)")
             if "conversation_context_url" not in columns:
                 conn.execute("ALTER TABLE gpt_jobs ADD COLUMN conversation_context_url TEXT")
             if "last_assistant_text" not in columns:
@@ -440,6 +478,8 @@ class GptWorkQueue:
                 )
                 if result.rowcount != 1:
                     raise KeyError(job_id)
+                if state_value in {GptJobState.ACTIVE, GptJobState.STARTING}:
+                    conn.execute("INSERT OR IGNORE INTO gpt_work_budgets(job_id, started_at, exhausted) VALUES(?, ?, 0)", (job_id, now))
         except sqlite3.IntegrityError as exc:
             raise ValueError("conversation_already_queued") from exc
         return self.get_job(job_id)

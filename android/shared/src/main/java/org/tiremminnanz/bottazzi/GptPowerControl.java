@@ -76,6 +76,7 @@ public final class GptPowerControl extends LinearLayout {
         new Thread(() -> {
             String message;
             Boolean active = null;
+            long restSeconds = 0;
             HttpURLConnection connection = null;
             try {
                 URL url = new URL(powerUrl + (enabled == null ? "" : enabled ? "/on" : "/off"));
@@ -101,12 +102,13 @@ public final class GptPowerControl extends LinearLayout {
                     while ((size = input.read(buffer)) != -1) out.write(buffer, 0, size);
                     JSONObject result = new JSONObject(out.toString("UTF-8"));
                     active = result.getBoolean("enabled");
+                    restSeconds = result.optLong("rest_remaining_seconds", 0);
                     if (!active && !result.optBoolean("stop_complete", false)) {
                         active = null;
                         throw new IllegalStateException("Invii bloccati · stop da verificare");
                     }
                 }
-                message = active ? "GPT attivo" : "GPT spento";
+                message = restSeconds > 0 ? "Pausa GPT: " + ((restSeconds + 59) / 60) + " min" : active ? "GPT attivo · max 2 h" : "GPT spento";
             } catch (Exception exc) {
                 message = exc instanceof IllegalStateException ? exc.getMessage() : "GPT: stato non verificato";
             } finally {
@@ -114,12 +116,13 @@ public final class GptPowerControl extends LinearLayout {
             }
             final String label = message;
             final Boolean confirmed = active;
+            final long remainingRest = restSeconds;
             handler.post(() -> {
                 busy = false;
                 if (!attached) return;
                 status.setText(label);
                 off.setEnabled(confirmed == null || confirmed);
-                on.setEnabled(confirmed != null && !confirmed);
+                on.setEnabled(confirmed != null && !confirmed && remainingRest == 0);
                 if (confirmed != null && activity.getPackageName().equals("org.tiremminnanz.gptbrowser")) {
                     activity.getSharedPreferences("gpt_power", 0).edit().putBoolean("enabled", confirmed).apply();
                     Intent service = new Intent(activity, BotTazziNotifyService.class);
