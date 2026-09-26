@@ -68,6 +68,20 @@ def test_shutdown_waits_for_inflight_and_rejects_next_browser_call(tmp_path):
         guarded.send()
 
 
+@pytest.mark.parametrize("provider", ["chatgpt", "deepseek", "kimi"])
+def test_provider_open_respects_shutdown(tmp_path, provider):
+    queue = GptWorkQueue(tmp_path / "queue.db")
+    queue.set_power_enabled(False)
+    cdp = FakeCdp()
+    with running_frontend(queue, cdp) as (port, origin):
+        status, body = request(port, "POST", "/api/providers/open", origin=origin,
+                               payload={"provider": provider})
+        assert status == 409 and body["error"] == "gpt_browser_power_off"
+        assert not cdp.started
+    with pytest.raises(CdpError, match="power_off"):
+        GptWorkController(queue, cdp).open_provider(provider)
+
+
 def test_shutdown_stops_managed_chat_and_preserves_queue(tmp_path):
     queue = GptWorkQueue(tmp_path / "queue.db")
     cdp = FakeCdp()
