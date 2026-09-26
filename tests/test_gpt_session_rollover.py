@@ -96,6 +96,47 @@ def test_chatgpt_ui_telemetry_uses_polling_not_persistent_mutation_observer(monk
     assert 'article[data-turn="assistant"]' in expressions[0]
 
 
+def test_wake_stalled_confirms_when_composer_clears_with_stale_turn_count(monkeypatch) -> None:
+    cdp = ChromeCdp("http://127.0.0.1:9238")
+    target = BrowserTarget(
+        target_id="chat-1",
+        target_type="page",
+        url="https://chatgpt.com/c/example",
+        title="Example",
+        websocket_url="ws://example.invalid/devtools/page/chat-1",
+    )
+    monkeypatch.setattr(cdp, "_wait_target", lambda target_id: target)
+    states = iter(
+        [
+            {"user_turns": 6, "composer_chars": 0, "response_in_progress": True},
+            {"user_turns": 6, "composer_chars": 0, "response_in_progress": True},
+        ]
+    )
+    monkeypatch.setattr(cdp, "chatgpt_ui_state", lambda target_id: next(states))
+    monkeypatch.setattr(
+        cdp,
+        "_page_call",
+        lambda *args, **kwargs: {
+            "result": {
+                "value": json.dumps(
+                    {
+                        "submitted": True,
+                        "woke": True,
+                        "had_stop": True,
+                        "text": "A che punto sei? Hai risolto?",
+                    }
+                )
+            }
+        },
+    )
+
+    result = cdp.wake_stalled_chatgpt("chat-1", wait_timeout_s=1.0)
+
+    assert result["submitted"] is True
+    assert result["confirmed"] is True
+    assert result["confirm_reason"] == "composer_cleared_after_submit"
+
+
 def test_rollover_turn_limit() -> None:
     decision = evaluate_rollover(SessionMetrics(turns=36))
     assert decision.rollover is True

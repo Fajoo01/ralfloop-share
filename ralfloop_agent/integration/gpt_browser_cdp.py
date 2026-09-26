@@ -1990,6 +1990,8 @@ class ChromeCdp:
             current = self.chatgpt_ui_state(target_id)
             if int(current.get("user_turns") or 0) > baseline_user_turns:
                 return {**state, "confirmed": True, "confirm_reason": "user_turn_advanced"}
+            if int(current.get("composer_chars") or 0) == 0:
+                return {**state, "confirmed": True, "confirm_reason": "composer_cleared_after_submit"}
             time.sleep(0.2)
         return {**state, "confirmed": False, "confirm_reason": "submit_clicked_unconfirmed"}
 
