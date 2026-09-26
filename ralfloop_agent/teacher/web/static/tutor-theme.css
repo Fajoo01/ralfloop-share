@@ -15,7 +15,7 @@ h1,h2,h3{font-family:inherit;color:#25362e;letter-spacing:-.035em}h1{font-size:c
 .hero{position:relative;background:#2d473b;color:#eef4ea;padding:28px 32px;border:0;border-radius:18px;margin:28px 0 24px;overflow:hidden}
 .hero h2{color:#fff;font-size:28px;margin:8px 0}.hero p{color:#d5e1d3}.hero .eyebrow{color:#cbdac3}.hero button{background:#e8c799;color:#2d392f;border-radius:10px}
 .card{background:white;border:1px solid #e0e5dc;border-radius:16px;padding:22px;box-shadow:0 2px 3px #28362903;margin:8px 0}.card h2,.card h3{margin-top:0}
-.grid{gap:18px;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr))}
+.grid{gap:18px;align-items:start;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr))}
 button,.button{border-radius:10px;background:#395740;font-size:.88em;min-height:44px;padding:10px 16px;box-shadow:none;transition:background .15s,box-shadow .15s}.button{color:white}
 button.secondary{background:#f0f3ed;color:#435842;border:1px solid #e3e8df}button:hover:not(:disabled){filter:none;box-shadow:0 2px 6px #25362e18}button:disabled{cursor:default}
 input,textarea,select{border:1px solid #ccd5c8;border-radius:10px;color:#25362e;background:white;font-size:.95em;min-height:46px}textarea{resize:vertical}label{font-size:.9em}input:focus,textarea:focus,select:focus{border-color:#55774f}
