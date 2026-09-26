@@ -238,8 +238,11 @@ class ChromeCdp:
               .filter(visible)
               .some((el) => responseErrorRe.test((el.innerText || el.textContent || '').trim()));
             const lastAssistant = assistantNodes.length ? assistantNodes[assistantNodes.length - 1] : null;
-            const lastAssistantError = Boolean(lastAssistant && responseErrorRe.test((lastAssistant.innerText || lastAssistant.textContent || '').trim()));
-            const assistantText = lastAssistant ? (lastAssistant.innerText || lastAssistant.textContent || '') : '';
+            const assistantContent = lastAssistant
+              ? (lastAssistant.querySelector('[data-message-author-role="assistant"] .markdown, [data-message-author-role="assistant"]') || lastAssistant.querySelector('.markdown') || lastAssistant)
+              : null;
+            const lastAssistantError = Boolean(assistantContent && responseErrorRe.test((assistantContent.innerText || assistantContent.textContent || '').trim()));
+            const assistantText = assistantContent ? (assistantContent.innerText || assistantContent.textContent || '') : '';
             let assistantHash = 2166136261;
             const hashStep = Math.max(1, Math.floor(assistantText.length / 128));
             for (let i = 0; i < assistantText.length; i += hashStep) {
@@ -1878,6 +1881,7 @@ class ChromeCdp:
           const assistantLabelNodes = allRoleLabels
             .filter((el) => assistantLabelRe.test(String(el.textContent || '').trim()))
             .map((el) => {
+              const roleLabel = /^(?:hai detto|you said|tu hai detto|chatgpt ha detto|chatgpt said)\s*:?$/i;
               let node = el.parentElement;
               let best = node;
               for (let i = 0; node && i < 8; i++, node = node.parentElement) {
@@ -1917,9 +1921,12 @@ class ChromeCdp:
           const assistantNodes = assistantSections.length ? assistantSections : (assistantRoleNodes.length ? assistantRoleNodes : (assistantLabelNodes.length ? assistantLabelNodes : pairedAssistantTurns()));
           const lastAssistant = assistantNodes.length ? assistantNodes[assistantNodes.length - 1] : null;
           const streamingNode = lastAssistant ? lastAssistant.querySelector('[data-streaming-response-status]') : null;
+          const assistantContent = lastAssistant
+            ? (lastAssistant.querySelector('[data-message-author-role="assistant"] .markdown, [data-message-author-role="assistant"]') || lastAssistant.querySelector('.markdown') || lastAssistant)
+            : null;
           const toolActivityCount = lastAssistant ? lastAssistant.querySelectorAll('[data-testid="cot-v5-native-tool-icon"]').length : 0;
-          const lastAssistantText = lastAssistant
-            ? String((responseInProgress && streamingNode ? streamingNode.innerText || streamingNode.textContent : lastAssistant.innerText || lastAssistant.textContent) || '').trim().slice(-24000)
+          const lastAssistantText = assistantContent
+            ? String((responseInProgress && streamingNode ? streamingNode.innerText || streamingNode.textContent : assistantContent.innerText || assistantContent.textContent) || '').trim().slice(-24000)
             : '';
           const statusNodes = Array.from(document.querySelectorAll('[role="status"]')).filter(visible);
           const statusText = statusNodes.length
@@ -2172,6 +2179,7 @@ class ChromeCdp:
           const assistantLabelNodes = allRoleLabels
             .filter((el) => assistantLabelRe.test(String(el.textContent || '').trim()))
             .map((el) => {
+              const roleLabel = /^(?:hai detto|you said|tu hai detto|chatgpt ha detto|chatgpt said)\s*:?$/i;
               let node = el.parentElement;
               let best = node;
               for (let i = 0; node && i < 8; i++, node = node.parentElement) {
@@ -2208,8 +2216,11 @@ class ChromeCdp:
           const assistantNodes = assistantSections.length ? assistantSections : (assistantRoleNodes.length ? assistantRoleNodes : (assistantLabelNodes.length ? assistantLabelNodes : pairedAssistantTurns()));
           const lastAssistant = assistantNodes.length ? assistantNodes[assistantNodes.length - 1] : null;
           const streamingNode = lastAssistant ? lastAssistant.querySelector('[data-streaming-response-status]') : null;
-          const lastAssistantText = lastAssistant
-            ? String((streamingNode ? streamingNode.innerText || streamingNode.textContent : lastAssistant.innerText || lastAssistant.textContent) || '').trim().slice(-24000)
+          const assistantContent = lastAssistant
+            ? (lastAssistant.querySelector('[data-message-author-role="assistant"] .markdown, [data-message-author-role="assistant"]') || lastAssistant.querySelector('.markdown') || lastAssistant)
+            : null;
+          const lastAssistantText = assistantContent
+            ? String((streamingNode ? streamingNode.innerText || streamingNode.textContent : assistantContent.innerText || assistantContent.textContent) || '').trim().slice(-24000)
             : '';
           if (!stop) return JSON.stringify({stopped:false, reason:'not_running', last_assistant_text:lastAssistantText});
           stop.click();

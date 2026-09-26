@@ -702,6 +702,8 @@ class GptWorkController:
         else:
             target_id = self.cdp.create_target(spec["url"], background=False)
             created = True
+        if hasattr(self.cdp, "raise_browser_window"):
+            self.cdp.raise_browser_window()
         return {
             "action": "provider_opened",
             "provider": name,
