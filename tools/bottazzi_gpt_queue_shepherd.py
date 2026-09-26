@@ -24,6 +24,8 @@ def main() -> int:
     parser.add_argument("--endpoint", default=os.getenv("BOTTAZZI_GPT_CDP_ENDPOINT", "http://127.0.0.1:9238"))
     parser.add_argument("--db", default=os.getenv("BOTTAZZI_GPT_WORK_QUEUE_DB", "/home/bandi/.local/state/bottazzi/gpt-session/work-queue.sqlite3"))
     parser.add_argument("--complete-idle-ms", type=int, default=int(os.getenv("BOTTAZZI_GPT_COMPLETE_IDLE_MS", "60000")))
+    parser.add_argument("--status-probe-reply-idle-ms", type=int, default=int(os.getenv("BOTTAZZI_GPT_STATUS_PROBE_REPLY_IDLE_MS", "15000")))
+    parser.add_argument("--silent-stream-stalled-ms", type=int, default=int(os.getenv("BOTTAZZI_GPT_SILENT_STREAM_STALLED_MS", "120000")))
     parser.add_argument("--stalled-idle-ms", type=int, default=int(os.getenv("BOTTAZZI_GPT_STALLED_IDLE_MS", "180000")))
     parser.add_argument("--recovery-cooldown-ms", type=int, default=int(os.getenv("BOTTAZZI_GPT_RECOVERY_COOLDOWN_MS", "90000")))
     parser.add_argument("--max-recoveries", type=int, default=int(os.getenv("BOTTAZZI_GPT_MAX_RECOVERIES", "2")))
@@ -34,6 +36,8 @@ def main() -> int:
     cdp = ChromeCdp(args.endpoint)
     policy = GptQueueShepherdPolicy(
         complete_idle_ms=args.complete_idle_ms,
+        status_probe_reply_idle_ms=args.status_probe_reply_idle_ms,
+        silent_stream_stalled_ms=args.silent_stream_stalled_ms,
         stalled_idle_ms=args.stalled_idle_ms,
         recovery_cooldown_ms=args.recovery_cooldown_ms,
         max_recoveries=args.max_recoveries,
