@@ -3209,17 +3209,18 @@ class ChromeCdp:
           }
           const textOf = el => String(el?.innerText || el?.textContent || '').replace(/\s+/g,' ').trim();
           const candidates=[];
-          const selectors=[
-            '[data-role="assistant"]', '[data-message-role="assistant"]',
-            '[class*="markdown"]', '[class*="Markdown"]',
-            '[class*="segment-content"]', '[class*="message-content"]',
-            '[class*="chat-content"]'
+          const finalSelectors=[
+            '.chat-content-item-assistant .markdown-container:not(.toolcall-content-text)',
+            '.segment-assistant .markdown-container:not(.toolcall-content-text)',
+            '[data-role="assistant"] .markdown-container:not(.toolcall-content-text)',
+            '[data-message-role="assistant"] .markdown-container:not(.toolcall-content-text)'
           ];
           const seen=new Set();
-          for (const selector of selectors) for (const el of document.querySelectorAll(selector)) {
+          for (const selector of finalSelectors) for (const el of document.querySelectorAll(selector)) {
             if (!visible(el) || el===composer || el.contains(composer) || composer?.contains(el)) continue;
+            if (el.closest('.thinking-container,.toolcall-content,.toolcall-flow__body')) continue;
             const text=textOf(el);
-            if (!text || text.length<2 || text.length>120000 || seen.has(text)) continue;
+            if (!text || text.length<1 || text.length>120000 || seen.has(text)) continue;
             seen.add(text); candidates.push(text);
           }
           const stopRe=/(?:stop|停止|interrompi|annulla|cancel)/i;
