@@ -456,6 +456,7 @@ class ChromeCdp:
 
         target = self._wait_target(str(state["target_id"]))
         baseline_user_turns = int(state.get("user_turns") or 0)
+        shared_branch_source = _safe_chatgpt_shared_url(target.url) is not None
         if not target.websocket_url:
             raise CdpError("chatgpt_target_missing_websocket")
         focus_expression = r"""(() => {
@@ -550,6 +551,19 @@ class ChromeCdp:
                 current_target = self._wait_target(target.target_id)
                 if not current_target.is_chatgpt:
                     raise CdpError("submit_interaction_required")
+                if shared_branch_source:
+                    branched_url = _canonical_chatgpt_conversation_url(current_target.url)
+                    if branched_url:
+                        return {
+                            "target_id": target.target_id,
+                            "injected": True,
+                            "submitted": False,
+                            "submit_confirmed": False,
+                            "submit_method": submit_method,
+                            "share_branch_created": True,
+                            "conversation_url": branched_url,
+                            "conversation_context_url": current_target.url,
+                        }
                 current_state = self.chatgpt_ui_state(target.target_id)
                 if int(current_state.get("user_turns") or 0) > baseline_user_turns:
                     submit_confirmed = True
@@ -1240,6 +1254,23 @@ class ChromeCdp:
                     if not canonical:
                         continue
                     if current.target_id == target_id or (clicked and current.target_id not in previous_ids):
+                        if click_label == "composer_branch" and current.websocket_url:
+                            clear_expression = r'''(() => {
+                              const el = document.querySelector('#prompt-textarea') || document.querySelector('textarea') || document.querySelector('[contenteditable="true"]');
+                              if (!el) return false;
+                              if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) el.value = '';
+                              else el.replaceChildren();
+                              el.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'deleteContentBackward', data:null}));
+                              return true;
+                            })()'''
+                            try:
+                                self._page_call(
+                                    current.websocket_url,
+                                    "Runtime.evaluate",
+                                    {"expression": clear_expression, "returnByValue": True},
+                                )
+                            except CdpError:
+                                pass
                         if current.target_id != target_id:
                             try:
                                 self.close_target(target_id)
@@ -1291,6 +1322,23 @@ class ChromeCdp:
                 if state.get("clicked"):
                     clicked = True
                     click_label = str(state.get("label") or "")[:120]
+                elif not clicked:
+                    try:
+                        ui = self.chatgpt_ui_state(target_id)
+                    except CdpError:
+                        ui = {}
+                    if bool(ui.get("composer_ready")) and (
+                        int(ui.get("user_turns") or 0) + int(ui.get("assistant_turns") or 0) > 0
+                    ):
+                        branch = self.inject_prompt(
+                            "\u2060",
+                            target_id=target_id,
+                            submit=True,
+                            wait_timeout_s=max(2.0, min(8.0, deadline - time.monotonic())),
+                        )
+                        if branch.get("share_branch_created"):
+                            clicked = True
+                            click_label = "composer_branch"
                 time.sleep(0.3)
             if clicked:
                 raise CdpError("shared_conversation_continue_timeout")
