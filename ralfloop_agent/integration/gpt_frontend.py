@@ -89,6 +89,12 @@ class SendMessage(ApiInput):
     text: str = Field(min_length=1, max_length=32_000)
 
 
+class ProviderQuery(ApiInput):
+    provider: str = Field(min_length=1, max_length=40)
+    text: str = Field(min_length=1, max_length=32_000)
+    timeout_seconds: int = Field(default=90, ge=5, le=180)
+
+
 class MoveJob(ApiInput):
     rank: int = Field(ge=1, le=10_000)
 
@@ -675,6 +681,7 @@ class GptWorkController:
                 "target_id": matches[-1].target_id if matches else None,
                 "open_count": len(matches),
                 "queue_managed": name == "chatgpt",
+                "prompt_managed": name in {"chatgpt", "kimi"},
             })
         return rows
 
@@ -703,6 +710,17 @@ class GptWorkController:
             "created": created,
             "queue_managed": name == "chatgpt",
         }
+
+    def query_provider(self, provider: str, text: str, *, timeout_seconds: int = 90) -> dict[str, Any]:
+        name = str(provider or "").strip().lower()
+        if name != "kimi":
+            raise ValueError("provider_query_not_supported")
+        opened = self.open_provider(name)
+        target_id = str(opened.get("target_id") or "")
+        if not target_id:
+            raise CdpError("provider_target_missing")
+        result = self.cdp.query_kimi(target_id, text, wait_timeout_s=float(timeout_seconds))
+        return {"action": "provider_response", **result}
 
     def open_project(self, project_url: str) -> dict[str, Any]:
         url = _safe_chatgpt_new_chat_url(project_url)
@@ -1746,6 +1764,19 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
                     return
                 assert isinstance(payload, OpenProvider)
                 self._send_json(200, {"ok": True, **controller.open_provider(payload.provider)})
+                return
+            if path == "/api/providers/query":
+                payload = self._validated(ProviderQuery)
+                if payload is None:
+                    return
+                assert isinstance(payload, ProviderQuery)
+                try:
+                    result = controller.query_provider(payload.provider, payload.text, timeout_seconds=payload.timeout_seconds)
+                    self._send_json(200, {"ok": True, **result})
+                except ValueError as exc:
+                    self._error(422, str(exc))
+                except (CdpError, OSError, RuntimeError) as exc:
+                    self._error(409, str(exc))
                 return
             if path == "/api/projects/open":
                 payload = self._validated(OpenProject)
