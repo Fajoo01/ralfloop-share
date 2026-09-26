@@ -38,18 +38,20 @@ def critical_report():
 
 
 class StorageResearchQueueTests(unittest.TestCase):
-    def test_no_trigger_does_not_post(self):
+    def test_no_trigger_does_not_call_queue(self):
         with tempfile.TemporaryDirectory() as tmp:
             def fail(*args, **kwargs):
                 raise AssertionError("opener must not be called")
             result = srq.enqueue_report({"research_trigger": None}, state_dir=Path(tmp), opener=fail)
         self.assertEqual(result, {"action": "no_trigger"})
 
-    def test_critical_trigger_enqueues_and_persists_marker(self):
+    def test_critical_trigger_enqueues_durably_and_persists_marker(self):
         calls = []
 
         def opener(req, timeout):
             calls.append((req, timeout))
+            if req.get_method() == "GET":
+                return FakeResponse({"queue": {"jobs": []}})
             return FakeResponse({"ok": True, "job": {"job_id": "job-123"}})
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -58,13 +60,16 @@ class StorageResearchQueueTests(unittest.TestCase):
             marker = json.loads((state / "last-enqueued-trigger.json").read_text(encoding="utf-8"))
         self.assertEqual(result, {"action": "enqueued", "job_id": "job-123"})
         self.assertEqual(marker["job_id"], "job-123")
-        self.assertEqual(len(calls), 1)
-        payload = json.loads(calls[0][0].data.decode("utf-8"))
-        self.assertTrue(payload["auto_start"])
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][0].get_method(), "GET")
+        self.assertTrue(calls[0][0].full_url.endswith("/api/state"))
+        self.assertEqual(calls[1][0].get_method(), "POST")
+        payload = json.loads(calls[1][0].data.decode("utf-8"))
+        self.assertFalse(payload["auto_start"])
         self.assertIn("Filesystem critici", payload["prompt"])
-        self.assertEqual(calls[0][0].headers.get("X-bottazzi-frontend"), "1")
+        self.assertEqual(calls[1][0].headers.get("X-bottazzi-frontend"), "1")
 
-    def test_duplicate_trigger_is_not_posted_again(self):
+    def test_local_marker_skips_queue_lookup_and_post(self):
         report = critical_report()
         with tempfile.TemporaryDirectory() as tmp:
             state = Path(tmp)
@@ -74,10 +79,40 @@ class StorageResearchQueueTests(unittest.TestCase):
             )
 
             def fail(*args, **kwargs):
-                raise AssertionError("duplicate must not post")
+                raise AssertionError("duplicate must not touch queue")
 
             result = srq.enqueue_report(report, state_dir=state, opener=fail)
         self.assertEqual(result, {"action": "duplicate_skipped", "job_id": "job-existing"})
+
+    def test_queue_duplicate_is_persisted_without_post(self):
+        report = critical_report()
+        trigger_text = srq._canonical(report["research_trigger"])
+        calls = []
+
+        def opener(req, timeout):
+            calls.append((req, timeout))
+            if req.get_method() != "GET":
+                raise AssertionError("existing queue job must prevent POST")
+            return FakeResponse({
+                "queue": {
+                    "jobs": [
+                        {
+                            "job_id": "job-queued",
+                            "state": "failed",
+                            "prompt": "prefix\nTrigger: " + trigger_text + "\nsuffix",
+                        }
+                    ]
+                }
+            })
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            result = srq.enqueue_report(report, state_dir=state, opener=opener)
+            marker = json.loads((state / "last-enqueued-trigger.json").read_text(encoding="utf-8"))
+        self.assertEqual(result, {"action": "queue_duplicate_skipped", "job_id": "job-queued"})
+        self.assertEqual(marker["job_id"], "job-queued")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0].get_method(), "GET")
 
 
 if __name__ == "__main__":
