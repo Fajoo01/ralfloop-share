@@ -8,6 +8,7 @@ Type=simple
 User=bandi
 Group=ralf-mcp
 Environment=HOME=/home/bandi
+Environment=DISPLAY=:1
 Environment=BOTTAZZI_GPT_CDP_ENDPOINT=http://127.0.0.1:9238
 Environment=BOTTAZZI_GPT_FRONTEND_ORIGIN=http://127.0.0.1:19201
 Environment=BOTTAZZI_GPT_FRONTEND_BIND=0.0.0.0
