@@ -238,7 +238,7 @@ def test_review_content_unavailable_rolls_into_new_chat_without_human_wakeup(tmp
     )
 
 
-def test_closed_active_chat_is_reopened_on_exact_conversation(tmp_path: Path) -> None:
+def test_closed_active_chat_is_held_for_manual_resume(tmp_path: Path) -> None:
     queue, job_id = queue_with_active(tmp_path)
 
     class ReopenCdp(FakeCdp):
@@ -262,11 +262,65 @@ def test_closed_active_chat_is_reopened_on_exact_conversation(tmp_path: Path) ->
     report = shepherd(queue, cdp).run_once(auto_start=False)
 
     saved = queue.get_job(job_id)
-    assert saved.state is GptJobState.ACTIVE
-    assert saved.target_id is not None and saved.target_id.startswith("fresh-")
-    target = next(target for target in cdp.targets() if target.target_id == saved.target_id)
-    assert target.url == "https://chatgpt.com/c/job"
-    assert report["actions"][0]["reason"] == "closed_chat_reopened"
+    assert saved.state is GptJobState.REVIEW
+    assert saved.target_id is None
+    assert saved.last_error == "manual_close_hold"
+    assert cdp.created == 0
+    assert report["actions"][0]["reason"] == "manual_close_hold"
+
+
+def test_temporary_access_limit_starts_global_backoff_without_prompting(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    cdp = FakeCdp(
+        ui={
+            "user_turns": 2,
+            "assistant_turns": 1,
+            "response_in_progress": False,
+            "response_pending": False,
+            "response_idle_ms": 240_000,
+            "progress_idle_ms": 240_000,
+            "temporary_access_limited": True,
+        },
+        companion={"busy": False, "last_assistant_text": "Risposta precedente"},
+    )
+
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    assert queue.get_job(job_id).state is GptJobState.ACTIVE
+    assert cdp.messages == []
+    assert cdp.wake_calls == []
+    assert cdp.stopped == []
+    assert report["actions"][0]["reason"] == "temporary_access_limited_backoff"
+    pacing = queue.automation_pacing_state()
+    assert pacing["rate_limit_count"] == 1
+    assert pacing["rate_limit_active"] == 1
+    assert pacing["backoff_until"] == 1_000_300
+
+
+def test_rate_limit_backoff_persists_after_banner_disappears(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    queue.note_temporary_access_limit(initial_backoff_s=300, max_backoff_s=3600)
+    cdp = FakeCdp(
+        ui={
+            "user_turns": 2,
+            "assistant_turns": 1,
+            "response_in_progress": False,
+            "response_pending": False,
+            "response_idle_ms": 240_000,
+            "progress_idle_ms": 240_000,
+            "temporary_access_limited": False,
+        },
+        companion={"busy": False, "last_assistant_text": "Risposta precedente"},
+    )
+
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    assert queue.get_job(job_id).state is GptJobState.ACTIVE
+    assert cdp.messages == []
+    assert cdp.wake_calls == []
+    assert cdp.stopped == []
+    assert report["actions"][0]["reason"] == "rate_limit_backoff"
+    assert report["actions"][0]["backoff_until"] == 1_000_300
 
 
 def test_fresh_streaming_reply_is_never_recovered(tmp_path: Path) -> None:

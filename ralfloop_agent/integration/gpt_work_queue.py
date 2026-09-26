@@ -165,6 +165,20 @@ class GptWorkQueue:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS gpt_automation_pacing (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                    rate_limit_count INTEGER NOT NULL DEFAULT 0,
+                    backoff_until INTEGER NOT NULL DEFAULT 0,
+                    rate_limit_active INTEGER NOT NULL DEFAULT 0,
+                    last_rate_limit_at INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO gpt_automation_pacing(singleton) VALUES(1)"
+            )
 
     @staticmethod
     def _project_url(value: str | None) -> str | None:
@@ -494,6 +508,49 @@ class GptWorkQueue:
     def clear_status_probe(self, job_id: str) -> None:
         with self._connect() as conn:
             conn.execute("DELETE FROM gpt_job_status_probe WHERE job_id=?", (job_id,))
+
+    def automation_pacing_state(self) -> dict[str, int]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT rate_limit_count, backoff_until, rate_limit_active, last_rate_limit_at FROM gpt_automation_pacing WHERE singleton=1"
+            ).fetchone()
+        if row is None:
+            return {"rate_limit_count": 0, "backoff_until": 0, "rate_limit_active": 0, "last_rate_limit_at": 0}
+        return {
+            "rate_limit_count": max(0, int(row["rate_limit_count"] or 0)),
+            "backoff_until": max(0, int(row["backoff_until"] or 0)),
+            "rate_limit_active": 1 if int(row["rate_limit_active"] or 0) else 0,
+            "last_rate_limit_at": max(0, int(row["last_rate_limit_at"] or 0)),
+        }
+
+    def note_temporary_access_limit(self, *, initial_backoff_s: int = 300, max_backoff_s: int = 3600) -> dict[str, int]:
+        now = int(self.clock())
+        initial_backoff_s = max(60, int(initial_backoff_s))
+        max_backoff_s = max(initial_backoff_s, int(max_backoff_s))
+        state = self.automation_pacing_state()
+        count = state["rate_limit_count"]
+        backoff_until = state["backoff_until"]
+        if not state["rate_limit_active"] or now >= backoff_until:
+            count += 1
+            delay = min(max_backoff_s, initial_backoff_s * (2 ** max(0, count - 1)))
+            backoff_until = now + delay
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE gpt_automation_pacing SET rate_limit_count=?, backoff_until=?, rate_limit_active=1, last_rate_limit_at=? WHERE singleton=1",
+                (count, backoff_until, now),
+            )
+        return self.automation_pacing_state()
+
+    def clear_temporary_access_limit(self) -> dict[str, int]:
+        now = int(self.clock())
+        state = self.automation_pacing_state()
+        if now < state["backoff_until"]:
+            return state
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE gpt_automation_pacing SET rate_limit_active=0, rate_limit_count=0, backoff_until=0 WHERE singleton=1"
+            )
+        return self.automation_pacing_state()
 
     def watchdog_state(self, job_id: str) -> dict[str, int]:
         with self._connect() as conn:

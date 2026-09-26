@@ -44,6 +44,8 @@ class GptQueueShepherdPolicy:
     silent_stream_stalled_ms: int = 120_000
     stalled_idle_ms: int = 180_000
     recovery_cooldown_ms: int = 90_000
+    rate_limit_initial_backoff_ms: int = 300_000
+    rate_limit_max_backoff_ms: int = 3_600_000
     max_recoveries: int = 2
 
     def __post_init__(self) -> None:
@@ -59,6 +61,10 @@ class GptQueueShepherdPolicy:
             raise ValueError("stalled_idle_ms_before_silent_stream_stalled_ms")
         if self.recovery_cooldown_ms < 5_000:
             raise ValueError("recovery_cooldown_ms_too_small")
+        if self.rate_limit_initial_backoff_ms < 60_000:
+            raise ValueError("rate_limit_initial_backoff_ms_too_small")
+        if self.rate_limit_max_backoff_ms < self.rate_limit_initial_backoff_ms:
+            raise ValueError("rate_limit_max_backoff_before_initial")
         if self.max_recoveries < 1:
             raise ValueError("max_recoveries_too_small")
 
@@ -331,9 +337,25 @@ class GptQueueShepherd:
                         }
                     )
 
-        # If an ACTIVE chat tab was closed externally, reconcile() demotes it to
-        # REVIEW with chat_not_open_locally. Recover that exact conversation
-        # automatically instead of leaving a false-finished row in the queue.
+        # A locally closed managed tab is treated as an explicit human hold.
+        # Do not reopen it automatically: closing/reopening must never be used to
+        # evade service throttling, and a deliberate user close must be respected.
+        for job in list(self.queue.list_jobs()):
+            if (
+                job.state is GptJobState.REVIEW
+                and job.last_error == "chat_not_open_locally"
+                and job.conversation_url
+                and not job.target_id
+            ):
+                self.queue.set_state(job.job_id, GptJobState.REVIEW, last_error="manual_close_hold")
+                actions.append({
+                    "job_id": job.job_id,
+                    "action": "preserved",
+                    "reason": "manual_close_hold",
+                })
+
+        # Legacy auto-reopen path is retained below for compatibility, but the
+        # explicit hold above consumes current chat_not_open_locally events.
         for job in list(self.queue.list_jobs()):
             if (
                 job.state is GptJobState.REVIEW
@@ -400,6 +422,32 @@ class GptQueueShepherd:
                             "reason": f"probe_failed:{str(exc)[:200]}",
                         }
                     )
+                continue
+
+            temporary_access_limited = bool(ui.get("temporary_access_limited"))
+            now = int(self.queue.clock())
+            if temporary_access_limited:
+                pacing = self.queue.note_temporary_access_limit(
+                    initial_backoff_s=self.policy.rate_limit_initial_backoff_ms // 1000,
+                    max_backoff_s=self.policy.rate_limit_max_backoff_ms // 1000,
+                )
+                actions.append({
+                    "job_id": job.job_id,
+                    "action": "preserved",
+                    "reason": "temporary_access_limited_backoff",
+                    "backoff_until": pacing["backoff_until"],
+                    "rate_limit_count": pacing["rate_limit_count"],
+                })
+                continue
+            pacing = self.queue.clear_temporary_access_limit()
+            if now < pacing["backoff_until"]:
+                actions.append({
+                    "job_id": job.job_id,
+                    "action": "preserved",
+                    "reason": "rate_limit_backoff",
+                    "backoff_until": pacing["backoff_until"],
+                    "rate_limit_count": pacing["rate_limit_count"],
+                })
                 continue
 
             focused = bool(companion.get("focused"))
