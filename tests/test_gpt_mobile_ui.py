@@ -357,6 +357,22 @@ def test_gpt_browser_whatsapp_surface_has_apk_voice_attachments_and_completion_n
     assert '"bottazzi_gpt_notifications_v2"' in service
 
 
+def test_gpt_browser_mobile_queue_can_add_link_reorder_and_remove_without_server_delete() -> None:
+    root = Path(__file__).resolve().parents[1]
+    html = (root / "openshell_backend" / "bottazzi_gpt_mobile_ui.html").read_text(encoding="utf-8")
+    frontend = (root / "ralfloop_agent" / "integration" / "gpt_frontend.py").read_text(encoding="utf-8")
+    assert 'id="chatUrl"' in html
+    assert 'id="linkAdd"' in html
+    assert "gpt('history/resume'" in html
+    assert 'data-qaction="up"' in html
+    assert 'data-qaction="down"' in html
+    assert 'data-qaction="remove"' in html
+    assert "jobs/${id}/rank" in html
+    assert "JSON.stringify({state:'cancelled'})" in html
+    assert "La conversazione su ChatGPT non verrà cancellata" in html
+    assert 'server_chat_deleted": False' in frontend
+
+
 def test_gpt_browser_surfaces_live_activity_and_bounded_goal_protocol() -> None:
     root = Path(__file__).resolve().parents[1]
     html = (root / "openshell_backend" / "bottazzi_gpt_mobile_ui.html").read_text(encoding="utf-8")
