@@ -491,7 +491,13 @@ class FrontendDesigner:
         screenshot = run_dir / "screen.png"
         with screenshot.open("wb") as stream:
             shot = subprocess.run([adb, "-s", serial, "exec-out", "screencap", "-p"], check=False, stdout=stream, stderr=subprocess.PIPE, timeout=30)
-        dump = self._run([adb, "-s", serial, "shell", "uiautomator", "dump", "/sdcard/window.xml"], timeout=30)
+        dump_argv = [adb, "-s", serial, "shell", "uiautomator", "dump", "/sdcard/window.xml"]
+        try:
+            dump = self._run(dump_argv, timeout=90)
+        except subprocess.TimeoutExpired:
+            dump = subprocess.CompletedProcess(
+                dump_argv, returncode=124, stdout="", stderr="uiautomator_dump_timeout"
+            )
         xml = self._run([adb, "-s", serial, "shell", "cat", "/sdcard/window.xml"], timeout=30) if dump.returncode == 0 else dump
         (run_dir / "ui.xml").write_text(xml.stdout, encoding="utf-8")
         size = self._run([adb, "-s", serial, "shell", "wm", "size"], timeout=20)
@@ -506,6 +512,8 @@ class FrontendDesigner:
             "package_visible": package_visible,
             "screenshot": str(screenshot),
             "ui_dump": str(run_dir / "ui.xml"),
+            "ui_dump_ok": dump.returncode == 0,
+            "ui_dump_error": dump.stderr[-500:] if dump.returncode != 0 else "",
             "artifacts": str(run_dir),
             "gate": "emulator_first",
             "writes": 1,

@@ -19,14 +19,15 @@ Environment=ANDROID_AVD_HOME=/home/sibilla-cumana/Dati/android-avd
 Environment=RALF_FRONTEND_ANDROID_AVD=ralf_frontend_ci_api23
 Environment=RALF_TIREMM_ANDROID_INTERNAL_URL=http://127.0.0.1:19232/mcp
 Environment=RALF_MCP_REMOTE_BIN=/opt/ralf-canva-mcp/node_modules/.bin/mcp-remote
-ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_arci_mcp_broker.py --socket /run/ralf-frontend-designer-mcp/mcp.sock --allow-group ralf-mcp --command /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_frontend_designer_mcp_server.py --idle-timeout 300 --max-clients 2
+WorkingDirectory=/home/sibilla-cumana/ralf-frontend-designer-mcp/current
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralf-frontend-designer-mcp/current/scripts/ralf_arci_mcp_broker.py --socket /run/ralf-frontend-designer-mcp/mcp.sock --allow-group ralf-mcp --command /home/sibilla-cumana/ralf-frontend-designer-mcp/current/scripts/ralf_frontend_designer_mcp_server.py --idle-timeout 300 --max-clients 2
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadOnlyPaths=/home/sibilla-cumana/ralfloop-production/current /home/sibilla-cumana/Dati/android-sdk /opt/ralf-canva-mcp
+ReadOnlyPaths=/home/sibilla-cumana/ralf-frontend-designer-mcp/current /home/sibilla-cumana/Dati/android-sdk /opt/ralf-canva-mcp
 ReadWritePaths=/home/sibilla-cumana/tmp /home/sibilla-cumana/Dati/android-avd -/home/bandi/.android -/home/bandi/.cache
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
