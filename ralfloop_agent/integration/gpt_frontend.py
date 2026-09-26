@@ -1392,6 +1392,7 @@ class GptWorkController:
         budget = self.enforce_work_budget()
         base = self.queue.snapshot()
         base["power"] = self.queue.power_status()
+        base["active_provider"] = self.queue.active_provider()
         if not base["power"]["enabled"] or budget["rest_remaining_seconds"] or budget["rest_stop_pending"]:
             base["browser"] = {"ok": True, "open_chats": [], "power_off": True}
             return base
@@ -1719,6 +1720,16 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
                 return
             result = controller.set_power(path.endswith("/on"))
             self._send_json(200 if result["ok"] else 503, result)
+            return
+        if path == "/api/providers/select":
+            if not self._mutation_allowed():
+                return
+            payload = self._validated(OpenProvider)
+            if payload is None:
+                return
+            assert isinstance(payload, OpenProvider)
+            provider = queue.set_active_provider(payload.provider)
+            self._send_json(200, {"ok": True, "active_provider": provider})
             return
         if not queue.power_enabled():
             self._error(409, "gpt_browser_power_off")

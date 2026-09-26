@@ -147,6 +147,26 @@ class GptWorkQueue:
                 ("1" if complete else "0",),
             )
 
+    def active_provider(self) -> str:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT setting_value FROM gpt_queue_settings WHERE setting_key='active_provider'"
+            ).fetchone()
+        value = str(row["setting_value"] if row is not None else "chatgpt").strip().lower()
+        return value if value in {"chatgpt", "kimi", "deepseek"} else "chatgpt"
+
+    def set_active_provider(self, provider: str) -> str:
+        value = str(provider or "").strip().lower()
+        if value not in {"chatgpt", "kimi", "deepseek"}:
+            raise ValueError("provider_not_supported")
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO gpt_queue_settings(setting_key, setting_value) VALUES('active_provider', ?) "
+                "ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value",
+                (value,),
+            )
+        return value
+
     def _init_schema(self) -> None:
         with self._connect() as conn:
             conn.execute(
