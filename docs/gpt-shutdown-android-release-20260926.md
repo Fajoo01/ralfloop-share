@@ -38,3 +38,24 @@ The gateway retains `bottazzi_ui.before-work-queue.html` and `bottazzi_gpt_mobil
 ## Call recording check
 
 ShizuCallRecorder 1.3.3 is installed; Shizuku was running and its permission was granted when USB was available. The displayed detection mode was InCallService. No test call or recording was started. These facts alone do not confirm that automatic recording is currently enabled or that both audio directions are captured.
+# Follow-up fixes — 2026-09-27
+
+- Bot-tazzi 1.4.4 (code 10) keeps the pending WebView microphone request until
+  Android returns the permission result. Permission is requested on use, avoiding
+  overlapping notification/microphone dialogs at launch. Xiaomi installer confirms
+  this version installed. ASR transcribed a synthetic Italian voice sample correctly.
+- Tuya broker failed because `scripts/bot-tazzi-tuya-mcp` in the active memory
+  release was mode 0444. Restored 0555 and restarted the broker. Real kitchen-light
+  state read succeeded with zero writes. Preserve executable bits in future releases.
+- Disabled the legacy `bottazzi-browser-bridge.service`; it ignored the queue power
+  setting. Chrome now starts on `about:blank` without restoring the prior session.
+- Integrated the concurrent provider-selector/Kimi changes through 8c228cf with
+  shutdown and work budgets. 100 scoped tests pass, including off-state provider
+  opens. No model prompt was sent during validation.
+- Concurrent deployments twice replaced `runtime-current` with versions lacking
+  power controls. Queue and shepherd now use `runtime-shutdown-verified`, currently
+  runtime-9ec225b-integrated, via 90-shutdown-runtime.conf service drop-ins. Future
+  upgrades must promote this pointer only after power/budget checks pass.
+- Live GET /api/power reports disabled; provider opening is rejected while off.
+- Bot-tazzi APK SHA256:
+  f75b2ec1e4a02668c304e6b0b240d7d92a5145282e8273ac92d7b9a1244dee13.
