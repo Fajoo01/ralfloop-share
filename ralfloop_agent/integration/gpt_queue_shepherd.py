@@ -427,6 +427,11 @@ class GptQueueShepherd:
             temporary_access_limited = bool(ui.get("temporary_access_limited"))
             now = int(self.queue.clock())
             if temporary_access_limited:
+                try:
+                    if hasattr(self.cdp, "set_human_queue_hold"):
+                        self.cdp.set_human_queue_hold(job.target_id, True)
+                except (CdpError, OSError, RuntimeError, ValueError):
+                    pass
                 pacing = self.queue.note_temporary_access_limit(
                     initial_backoff_s=self.policy.rate_limit_initial_backoff_ms // 1000,
                     max_backoff_s=self.policy.rate_limit_max_backoff_ms // 1000,
@@ -458,19 +463,6 @@ class GptQueueShepherd:
             response_text = self._substantive_response_text(companion.get("last_assistant_text"))
             response_in_progress = bool(ui.get("response_in_progress"))
             pending = bool(ui.get("response_pending"))
-            temporary_access_limited = bool(ui.get("temporary_access_limited"))
-            if temporary_access_limited:
-                try:
-                    if hasattr(self.cdp, "set_human_queue_hold"):
-                        self.cdp.set_human_queue_hold(job.target_id, True)
-                except (CdpError, OSError, RuntimeError, ValueError):
-                    pass
-                actions.append({
-                    "job_id": job.job_id,
-                    "action": "preserved",
-                    "reason": "temporary_access_limited",
-                })
-                continue
             user_turns = self._int(ui.get("user_turns"))
             assistant_turns = max(
                 self._int(ui.get("assistant_turns")),

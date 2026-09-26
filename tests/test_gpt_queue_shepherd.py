@@ -290,6 +290,7 @@ def test_temporary_access_limit_starts_global_backoff_without_prompting(tmp_path
     assert cdp.messages == []
     assert cdp.wake_calls == []
     assert cdp.stopped == []
+    assert cdp.holds == [("managed", True)]
     assert report["actions"][0]["reason"] == "temporary_access_limited_backoff"
     pacing = queue.automation_pacing_state()
     assert pacing["rate_limit_count"] == 1
@@ -915,7 +916,7 @@ def test_temporary_access_limit_holds_queue_and_sends_nothing(tmp_path: Path) ->
     assert cdp.messages == []
     assert cdp.wake_calls == []
     assert cdp.closed == []
-    assert report["actions"][0]["reason"] == "temporary_access_limited"
+    assert report["actions"][0]["reason"] == "temporary_access_limited_backoff"
 
 
 def test_status_probe_reply_uses_short_settle_window(tmp_path: Path) -> None:

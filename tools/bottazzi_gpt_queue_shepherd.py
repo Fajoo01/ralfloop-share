@@ -28,6 +28,8 @@ def main() -> int:
     parser.add_argument("--silent-stream-stalled-ms", type=int, default=int(os.getenv("BOTTAZZI_GPT_SILENT_STREAM_STALLED_MS", "120000")))
     parser.add_argument("--stalled-idle-ms", type=int, default=int(os.getenv("BOTTAZZI_GPT_STALLED_IDLE_MS", "180000")))
     parser.add_argument("--recovery-cooldown-ms", type=int, default=int(os.getenv("BOTTAZZI_GPT_RECOVERY_COOLDOWN_MS", "90000")))
+    parser.add_argument("--rate-limit-initial-backoff-ms", type=int, default=int(os.getenv("BOTTAZZI_GPT_RATE_LIMIT_INITIAL_BACKOFF_MS", "300000")))
+    parser.add_argument("--rate-limit-max-backoff-ms", type=int, default=int(os.getenv("BOTTAZZI_GPT_RATE_LIMIT_MAX_BACKOFF_MS", "3600000")))
     parser.add_argument("--max-recoveries", type=int, default=int(os.getenv("BOTTAZZI_GPT_MAX_RECOVERIES", "2")))
     parser.add_argument("--no-auto-start", action="store_true")
     args = parser.parse_args()
@@ -40,6 +42,8 @@ def main() -> int:
         silent_stream_stalled_ms=args.silent_stream_stalled_ms,
         stalled_idle_ms=args.stalled_idle_ms,
         recovery_cooldown_ms=args.recovery_cooldown_ms,
+        rate_limit_initial_backoff_ms=args.rate_limit_initial_backoff_ms,
+        rate_limit_max_backoff_ms=args.rate_limit_max_backoff_ms,
         max_recoveries=args.max_recoveries,
     )
     report = GptQueueShepherd(queue, cdp, policy=policy).run_once(
