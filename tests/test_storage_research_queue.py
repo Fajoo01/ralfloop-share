@@ -59,7 +59,9 @@ class StorageResearchQueueTests(unittest.TestCase):
         self.assertEqual(result, {"action": "enqueued", "job_id": "job-123"})
         self.assertEqual(marker["job_id"], "job-123")
         self.assertEqual(len(calls), 1)
-        payload = json.loads(calls[0][0].data.decode("utf-8"))
+        request_obj = calls[0][0]
+        payload = json.loads(request_obj.data.decode("utf-8"))
+        self.assertEqual(request_obj.get_header("X-bottazzi-frontend"), "1")
         self.assertTrue(payload["auto_start"])
         self.assertIn("Filesystem critici", payload["prompt"])
 
