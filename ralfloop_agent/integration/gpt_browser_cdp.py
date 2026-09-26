@@ -2853,6 +2853,125 @@ class ChromeCdp:
             "cache_cleared": True,
         }
 
+    def kimi_ui_state(self, target_id: str) -> dict[str, Any]:
+        target = self._wait_target(target_id)
+        try:
+            host = (urllib.parse.urlparse(target.url).hostname or "").lower()
+        except ValueError as exc:
+            raise CdpError("kimi_target_invalid") from exc
+        if host not in {"kimi.com", "www.kimi.com", "www.kimi.ai", "kimi.ai"} or not target.websocket_url:
+            raise CdpError("kimi_target_invalid")
+        expression = r"""(() => {
+          const visible = el => {
+            if (!el) return false;
+            const r=el.getBoundingClientRect(), s=getComputedStyle(el);
+            return r.width>0 && r.height>0 && s.display!=='none' && s.visibility!=='hidden';
+          };
+          const composerSelectors = [
+            '[contenteditable="true"][role="textbox"]',
+            '.ProseMirror[contenteditable="true"]',
+            'textarea'
+          ];
+          let composer=null;
+          for (const selector of composerSelectors) {
+            composer=[...document.querySelectorAll(selector)].find(visible)||null;
+            if (composer) break;
+          }
+          const textOf = el => String(el?.innerText || el?.textContent || '').replace(/\s+/g,' ').trim();
+          const candidates=[];
+          const selectors=[
+            '[data-role="assistant"]', '[data-message-role="assistant"]',
+            '[class*="markdown"]', '[class*="Markdown"]',
+            '[class*="segment-content"]', '[class*="message-content"]',
+            '[class*="chat-content"]'
+          ];
+          const seen=new Set();
+          for (const selector of selectors) for (const el of document.querySelectorAll(selector)) {
+            if (!visible(el) || el===composer || el.contains(composer) || composer?.contains(el)) continue;
+            const text=textOf(el);
+            if (!text || text.length<2 || text.length>120000 || seen.has(text)) continue;
+            seen.add(text); candidates.push(text);
+          }
+          const stopRe=/(?:stop|停止|interrompi|annulla|cancel)/i;
+          const responseInProgress=[...document.querySelectorAll('button')].some(b=>visible(b)&&stopRe.test(`${b.getAttribute('aria-label')||''} ${b.getAttribute('title')||''} ${textOf(b)}`));
+          const loginVisible=[...document.querySelectorAll('button,a')].some(el=>visible(el)&&/^(?:login|log in|sign in|accedi|登录)$/i.test(textOf(el)));
+          const composerText=composer ? String(composer.value ?? composer.innerText ?? composer.textContent ?? '').trim() : '';
+          return JSON.stringify({
+            ready:Boolean(composer), url:location.href, title:document.title||'',
+            composer_ready:Boolean(composer), composer_chars:composerText.length,
+            response_in_progress:responseInProgress, login_visible:loginVisible,
+            candidate_count:candidates.length, last_assistant_text:candidates.length?candidates[candidates.length-1]:'',
+            body_text:String(document.body?.innerText||'').slice(-16000)
+          });
+        })()"""
+        result = self._page_call(target.websocket_url, "Runtime.evaluate", {"expression": expression, "returnByValue": True})
+        raw = (result.get("result") or {}).get("value")
+        try:
+            state = json.loads(raw) if isinstance(raw, str) else {}
+        except json.JSONDecodeError as exc:
+            raise CdpError("kimi_ui_state_invalid") from exc
+        if not isinstance(state, dict):
+            raise CdpError("kimi_ui_state_invalid")
+        state["target_id"] = target.target_id
+        return state
+
+    def query_kimi(self, target_id: str, prompt: str, *, wait_timeout_s: float = 90.0) -> dict[str, Any]:
+        clean = str(prompt or "").strip()
+        if not clean:
+            raise CdpError("empty_prompt")
+        baseline = self.kimi_ui_state(target_id)
+        if not baseline.get("composer_ready"):
+            raise CdpError("kimi_not_ready:composer_missing")
+        target = self._wait_target(target_id)
+        if not target.websocket_url:
+            raise CdpError("kimi_target_missing_websocket")
+        focus = r"""(() => {
+          const visible=el=>{if(!el)return false;const r=el.getBoundingClientRect(),s=getComputedStyle(el);return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden'};
+          const selectors=['[contenteditable="true"][role="textbox"]','.ProseMirror[contenteditable="true"]','textarea'];
+          let el=null;for(const selector of selectors){el=[...document.querySelectorAll(selector)].find(visible)||null;if(el)break}
+          if(!el)return JSON.stringify({ok:false,reason:'composer_not_found'});
+          el.focus();
+          if(el instanceof HTMLTextAreaElement||el instanceof HTMLInputElement)el.select();
+          else{const sel=getSelection(),range=document.createRange();range.selectNodeContents(el);sel.removeAllRanges();sel.addRange(range)}
+          return JSON.stringify({ok:true});
+        })()"""
+        focused = self._page_call(target.websocket_url, "Runtime.evaluate", {"expression": focus, "returnByValue": True})
+        try:
+            focus_state=json.loads((focused.get("result") or {}).get("value") or "{}")
+        except json.JSONDecodeError:
+            focus_state={}
+        if not focus_state.get("ok"):
+            raise CdpError("kimi_prompt_focus_failed")
+        self._page_call(target.websocket_url, "Input.insertText", {"text": clean})
+        common={"key":"Enter","code":"Enter","windowsVirtualKeyCode":13,"nativeVirtualKeyCode":13}
+        self._page_call(target.websocket_url, "Input.dispatchKeyEvent", {"type":"keyDown", **common})
+        self._page_call(target.websocket_url, "Input.dispatchKeyEvent", {"type":"keyUp", **common})
+        deadline=time.monotonic()+max(5.0,float(wait_timeout_s))
+        baseline_text=str(baseline.get("last_assistant_text") or "")
+        seen_generation=False
+        stable_text=""; stable_since=0.0
+        while time.monotonic()<deadline:
+            time.sleep(0.35)
+            state=self.kimi_ui_state(target_id)
+            if state.get("login_visible"):
+                raise CdpError("kimi_query_failed:login_required")
+            current=str(state.get("last_assistant_text") or "").strip()
+            if state.get("response_in_progress"):
+                seen_generation=True
+            changed=bool(current and current!=baseline_text and current!=clean)
+            if changed:
+                if current!=stable_text:
+                    stable_text=current; stable_since=time.monotonic()
+                elif not state.get("response_in_progress") and time.monotonic()-stable_since>=1.0:
+                    return {"provider":"kimi","target_id":target_id,"response":current,"url":state.get("url"),"login_visible":bool(state.get("login_visible"))}
+            if seen_generation and changed and not state.get("response_in_progress"):
+                return {"provider":"kimi","target_id":target_id,"response":current,"url":state.get("url"),"login_visible":bool(state.get("login_visible"))}
+        if stable_text:
+            return {"provider":"kimi","target_id":target_id,"response":stable_text,"url":self._wait_target(target_id).url,"timed_out":True}
+        final=self.kimi_ui_state(target_id)
+        reason="login_required" if final.get("login_visible") else "response_timeout"
+        raise CdpError(f"kimi_query_failed:{reason}")
+
     def create_target(self, url: str, *, background: bool = False) -> str:
         params: dict[str, Any] = {"url": url}
         if background:

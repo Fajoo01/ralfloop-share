@@ -382,15 +382,19 @@ def test_dedicated_browser_exposes_deepseek_and_kimi_provider_switches(tmp_path:
     html = (root / "web" / "gpt_queue.html").read_text(encoding="utf-8")
     mobile = (root / "openshell_backend" / "bottazzi_gpt_mobile_ui.html").read_text(encoding="utf-8")
     frontend = (root / "ralfloop_agent" / "integration" / "gpt_frontend.py").read_text(encoding="utf-8")
-    assert 'data-provider="chatgpt"' in html
-    assert 'data-provider="deepseek"' in html
-    assert 'data-provider="kimi"' in html
+    assert 'id="llm-provider"' in html
+    assert '<option value="chatgpt">ChatGPT</option>' in html
+    assert '<option value="kimi">Kimi</option>' in html
+    assert '<option value="deepseek">DeepSeek</option>' in html
+    assert "bottazzi-gpt-provider" in html
     assert "/api/providers/open" in html
-    assert 'data-provider-open="deepseek"' in mobile
-    assert 'data-provider-open="kimi"' in mobile
+    assert 'id="mobileProvider"' in mobile
+    assert "bottazzi-gpt-provider" in mobile
     assert "https://chat.deepseek.com/" in frontend
     assert "https://www.kimi.com/" in frontend
     assert '"queue_managed": name == "chatgpt"' in frontend
+    assert '"prompt_managed": name in {"chatgpt", "kimi"}' in frontend
+    assert '/api/providers/query' in frontend
 
     class ProviderCdp(FakeCdp):
         def __init__(self):
@@ -421,3 +425,4 @@ def test_dedicated_browser_exposes_deepseek_and_kimi_provider_switches(tmp_path:
     assert providers["chatgpt"]["queue_managed"] is True
     assert providers["deepseek"]["open"] is True
     assert providers["kimi"]["open"] is True
+    assert providers["kimi"]["prompt_managed"] is True
