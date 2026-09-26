@@ -40,6 +40,18 @@ _TIREMM_RE = re.compile(r"\b(?:tiremm|associazione|aps|partner|progetto)\b", re.
 _RELATIONAL_RE = re.compile(r"\b(?:rsc|abc|relazional[ei]|formula\s+loop)\b", re.I)
 _INFRA_RE = re.compile(r"\b(?:agentcpm|servizi[oa]?|spazio\s+libero|disco|server|amule)\b", re.I)
 _CODE_RE = re.compile(r"\b(?:codice|repository|repo|bug|debug|test|stacktrace)\b", re.I)
+_FRONTEND_RE = re.compile(
+    r"\b(?:front[\s-]?end|ui|ux|responsive|mobile[\s-]?first|interfaccia\s+utente|"
+    r"design\s+(?:web|app|mobile)|layout\s+(?:web|app|mobile)|viewport)\b",
+    re.I,
+)
+_FRONTEND_APPLY_RE = re.compile(r"\b(?:applica|implementa|modifica|ridisegna|sistema|correggi|rifai|fix)\b", re.I)
+_FRONTEND_WEB_TEST_RE = re.compile(r"\b(?:test\s+web|responsive\s+test|screenshot|viewport)\b", re.I)
+_FRONTEND_ANDROID_TEST_RE = re.compile(r"\b(?:apk|test\s+android|android\s+test|emulatore)\b", re.I)
+_FRONTEND_PHONE_RE = re.compile(r"\b(?:telefono\s+(?:reale|fisico)|real\s+phone|physical\s+phone)\b", re.I)
+_FRONTEND_PATH_RE = re.compile(r"(?<![A-Za-z0-9])(?P<path>/(?:[^\s\"']+))")
+_FRONTEND_URL_RE = re.compile(r"https?://[^\s\"']+", re.I)
+_FRONTEND_PACKAGE_RE = re.compile(r"\b(?:package|pacchetto)\s*[:=]\s*(?P<value>[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+)\b", re.I)
 _DOCUMENT_RE = re.compile(r"\b(?:pdf|document[oi]|allegat[oi]|estrai)\b", re.I)
 _SIGN_RE = re.compile(r"\b(?:firma(?:re|to|ta)?|firmalo|firmala|firmare|firma\s+digitale|digitalmente|arubasign|p7m)\b", re.I)
 _SIGN_PATH_RE = re.compile(r"(?P<path>/(?:[^\s\"']|\\ )+\.(?:pdf|docx|odt|p7m))\b", re.I)
@@ -114,6 +126,39 @@ def _pec_write_args(goal: str) -> dict[str, object]:
     attachments = _PEC_ATTACHMENTS_RE.search(goal)
     if attachments:
         args["attachment_paths"] = [item.strip().strip('"\'') for item in attachments.group("value").split(",") if item.strip()]
+    return args
+
+
+def _frontend_args(goal: str) -> dict[str, object]:
+    args: dict[str, object] = {}
+    lowered = goal.casefold()
+    path_match = _FRONTEND_PATH_RE.search(goal)
+    url_match = _FRONTEND_URL_RE.search(goal)
+    package_match = _FRONTEND_PACKAGE_RE.search(goal)
+    if path_match:
+        args["workdir"] = path_match.group("path").rstrip(".,;:")
+    if url_match:
+        args["url"] = url_match.group(0).rstrip(".,;:")
+    if package_match:
+        args["package"] = package_match.group("value")
+    if _FRONTEND_WEB_TEST_RE.search(goal):
+        args["operation"] = "test_web"
+    elif _FRONTEND_ANDROID_TEST_RE.search(goal):
+        args["operation"] = "test_android"
+    elif _FRONTEND_APPLY_RE.search(goal):
+        args["operation"] = "apply"
+    else:
+        args["operation"] = "contract"
+    if "android" in lowered or "apk" in lowered or "emulatore" in lowered:
+        args["target"] = "android"
+    elif "mobile" in lowered or "telefono" in lowered or "smartphone" in lowered:
+        args["target"] = "mobile"
+    elif "web" in lowered or "responsive" in lowered or "viewport" in lowered:
+        args["target"] = "web"
+    else:
+        args["target"] = "auto"
+    if _FRONTEND_PHONE_RE.search(goal):
+        args["use_phone"] = True
     return args
 
 
@@ -708,6 +753,11 @@ class UnifiedPlanner:
             return self._single(goal, "documents", "documents.extract", PolicyClass.READ)
         if _RESEARCH_RE.search(goal):
             return self._single(goal, "research", "research.deep", PolicyClass.READ)
+        if _FRONTEND_RE.search(goal):
+            return self._single(
+                goal, "code", "frontend.design", PolicyClass.AUTO_WRITE,
+                arguments=_frontend_args(goal),
+            )
         if _CODE_RE.search(goal):
             return self._single(goal, "code", "code.inspect", PolicyClass.READ)
         if _EDITORIAL_RE.search(goal):

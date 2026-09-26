@@ -226,6 +226,10 @@ class UnifiedRegistryFacade:
         arubasign_path = Path(os.getenv("BOTTAZZI_ARUBASIGN_PATH", "/home/bandi/Scaricati/ArubaSign-latest-LINUX/app/lin-x64/ArubaSign"))
         openssl_path = Path(os.getenv("BOTTAZZI_OPENSSL_PATH", "/usr/bin/openssl"))
         browser_socket = Path("/run/ralf-browser-playwright-mcp/mcp.sock")
+        frontend_socket = Path(os.getenv(
+            "RALF_FRONTEND_DESIGNER_MCP_SOCKET",
+            "/run/ralf-frontend-designer-mcp/mcp.sock",
+        ))
         rows = [UnifiedToolSpec(
             id="document.sign.arubasign",
             capabilities=("document.sign.prepare", "document.sign.handoff", "document.sign.verify"),
@@ -290,6 +294,28 @@ class UnifiedRegistryFacade:
             health="Unix stdio relay + exact eight-tool allowlist",
             verification_method="strict MCP tool discovery; local A4 PDF/PNG/HTML output; no email/print/shell/browser",
             source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "editorial_mcp_adapter.py"),
+        ), UnifiedToolSpec(
+            id="frontend.designer.mcp.read",
+            capabilities=("frontend.inspect", "frontend.design.contract"),
+            input_schema="strict worktree path + frontend design brief/target",
+            output_schema="project inspection or structured UI design contract",
+            classification=PolicyClass.READ,
+            side_effect_class="none",
+            availability="available" if _observable_path_exists(frontend_socket) else "constrained:broker_unavailable",
+            health="Unix MCP broker + exact frontend tool allowlist",
+            verification_method="worktree allowlist + deterministic contract; writes=0",
+            source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "frontend_designer_mcp_adapter.py"),
+        ), UnifiedToolSpec(
+            id="frontend.designer.mcp.execute",
+            capabilities=("frontend.design.apply", "frontend.validate.web", "frontend.validate.android"),
+            input_schema="bounded frontend worktree mutation or platform validation request",
+            output_schema="Programmatore candidate plus screenshot/emulator/phone verification evidence",
+            classification=PolicyClass.AUTO_WRITE,
+            side_effect_class="bounded_local_worktree_and_test_device_actions",
+            availability="available" if _observable_path_exists(frontend_socket) else "constrained:broker_unavailable",
+            health="Unix MCP broker; exact configured AVD identity; Tiremm phone gated by successful emulator report",
+            verification_method="isolated worktree + web viewport artifacts + emulator-first Android evidence + optional phone after gate",
+            source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "frontend_designer_mcp_adapter.py"),
         ), UnifiedToolSpec(
             id="browser.playwright.read_only",
             capabilities=("browser.snapshot.read", "browser.tabs.read"),

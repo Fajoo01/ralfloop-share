@@ -365,6 +365,7 @@
       "description": "Sandboxed code context and remote-code workflow; no free-form shell execution.",
       "supported_skills": [
         "code.inspect",
+        "frontend.design",
         "github.read"
       ],
       "allowed_memory_namespaces": [
@@ -1256,6 +1257,26 @@
       "classification": "READ",
       "workflow": "ralfloop_agent.model_tools.remote_code",
       "verification_method": "sandbox audit + artifact hash",
+      "status": "ready"
+    },
+    {
+      "id": "frontend.design",
+      "domains": [
+        "code"
+      ],
+      "required_arguments": [
+        "objective"
+      ],
+      "required_capabilities": [
+        "frontend.inspect",
+        "frontend.design.contract",
+        "frontend.design.apply",
+        "frontend.validate.web",
+        "frontend.validate.android"
+      ],
+      "classification": "AUTO_WRITE",
+      "workflow": "ralfloop_agent.unified_assistant.frontend_designer_mcp_adapter.FrontendDesignerMCPContext",
+      "verification_method": "strict MCP allowlist + isolated worktree + emulator-first Android evidence + optional phone after gate",
       "status": "ready"
     },
     {

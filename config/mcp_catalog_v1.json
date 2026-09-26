@@ -60,6 +60,10 @@
     {
       "id": "mobile_use",
       "socket": "/run/ralf-mobile-use-mcp/mcp.sock"
+    },
+    {
+      "id": "frontend_designer",
+      "socket": "/run/ralf-frontend-designer-mcp/mcp.sock"
     }
   ],
   "provider_globs": [
@@ -67,6 +71,27 @@
     "/tmp/ralf-*-mcp/mcp.sock"
   ],
   "term_aliases": {
+    "frontend": [
+      "frontend",
+      "design",
+      "ui",
+      "responsive"
+    ],
+    "interfaccia": [
+      "frontend",
+      "design",
+      "ui"
+    ],
+    "grafica": [
+      "frontend",
+      "design",
+      "ui"
+    ],
+    "design": [
+      "frontend",
+      "design",
+      "ui"
+    ],
     "baffoflix": [
       "jellyfin",
       "access",
@@ -154,6 +179,12 @@
     "schermo": [
       "screenshot",
       "snapshot"
+    ],
+    "ui": [
+      "frontend",
+      "design",
+      "ui",
+      "responsive"
     ]
   }
 }
