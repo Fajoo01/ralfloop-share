@@ -43,8 +43,8 @@ BROWSER_PROVIDERS = {
     },
     "kimi": {
         "label": "Kimi",
-        "url": "https://www.kimi.com/",
-        "hosts": ("www.kimi.com", "kimi.com"),
+        "url": "https://www.kimi.ai/?chat_enter_method=new_chat",
+        "hosts": ("www.kimi.ai", "kimi.ai", "www.kimi.com", "kimi.com"),
     },
 }
 
@@ -593,12 +593,14 @@ class GptWorkController:
         pages = [target for target in self.cdp.targets() if target.target_type == "page"]
         for name, spec in BROWSER_PROVIDERS.items():
             matches = [target for target in pages if self._provider_for_url(target.url) == name]
+            if name == "kimi":
+                matches.sort(key=lambda target: (0 if "kimi.ai" in target.url else 1, target.target_id))
             rows.append({
                 "provider": name,
                 "label": spec["label"],
                 "url": spec["url"],
                 "open": bool(matches),
-                "target_id": matches[-1].target_id if matches else None,
+                "target_id": (matches[0].target_id if name == "kimi" else matches[-1].target_id) if matches else None,
                 "open_count": len(matches),
                 "queue_managed": name == "chatgpt",
                 "prompt_managed": name in {"chatgpt", "kimi"},
@@ -617,7 +619,9 @@ class GptWorkController:
         ]
         created = False
         if pages:
-            target_id = pages[-1].target_id
+            if name == "kimi":
+                pages.sort(key=lambda target: (0 if "kimi.ai" in target.url else 1, target.target_id))
+            target_id = pages[0].target_id if name == "kimi" else pages[-1].target_id
             self.cdp._browser_call("Target.activateTarget", {"targetId": target_id})
         else:
             target_id = self.cdp.create_target(spec["url"], background=False)
