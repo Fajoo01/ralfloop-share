@@ -38,6 +38,7 @@ public final class MainActivity extends Activity {
     private Uri pendingCameraUri;
     private TextToSpeech textToSpeech;
     private volatile boolean speechReady;
+    private PermissionRequest pendingAudioRequest;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -83,6 +84,11 @@ public final class MainActivity extends Activity {
             }
 
             @Override
+            public void onPermissionRequestCanceled(PermissionRequest request) {
+                if (pendingAudioRequest == request) pendingAudioRequest = null;
+            }
+
+            @Override
             public boolean onShowFileChooser(
                 WebView webView,
                 ValueCallback<Uri[]> callback,
@@ -101,7 +107,6 @@ public final class MainActivity extends Activity {
         webView.loadUrl(BuildConfig.APP_URL);
 
         requestNotificationPermission();
-        requestAudioPermission();
         startNotificationService();
     }
 
@@ -178,13 +183,29 @@ public final class MainActivity extends Activity {
             request.deny();
             return;
         }
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            request.deny();
-            requestAudioPermission();
-            return;
-        }
         String[] resources = request.getResources();
         if (resources.length == 1 && PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resources[0])) {
+            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                request.grant(new String[] {PermissionRequest.RESOURCE_AUDIO_CAPTURE});
+            } else {
+                if (pendingAudioRequest != null) pendingAudioRequest.deny();
+                pendingAudioRequest = request;
+                requestAudioPermission();
+            }
+        } else {
+            request.deny();
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != AUDIO_PERMISSION_REQUEST || pendingAudioRequest == null) return;
+        PermissionRequest request = pendingAudioRequest;
+        pendingAudioRequest = null;
+        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED
+                && sameOrigin(BuildConfig.APP_URL, request.getOrigin())
+                && webView.getUrl() != null && sameOrigin(BuildConfig.APP_URL, Uri.parse(webView.getUrl()))) {
             request.grant(new String[] {PermissionRequest.RESOURCE_AUDIO_CAPTURE});
         } else {
             request.deny();
@@ -331,6 +352,10 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (pendingAudioRequest != null) {
+            pendingAudioRequest.deny();
+            pendingAudioRequest = null;
+        }
         if (fileCallback != null) {
             fileCallback.onReceiveValue(null);
             fileCallback = null;

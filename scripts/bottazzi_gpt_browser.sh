@@ -7,7 +7,7 @@ CACHE_DIR="${BOTTAZZI_GPT_CACHE_DIR:-/run/bottazzi-gpt-browser-cache}"
 CONFIG_DIR="${BOTTAZZI_GPT_CONFIG_DIR:-/home/bandi/.local/share/bottazzi-gpt-browser/config}"
 CDP_PORT="${BOTTAZZI_GPT_CDP_PORT:-9238}"
 HEADLESS="${BOTTAZZI_GPT_HEADLESS:-1}"
-START_URL="${BOTTAZZI_GPT_START_URL:-https://chatgpt.com/}"
+START_URL="${BOTTAZZI_GPT_START_URL:-about:blank}"
 WORKSPACE="${BOTTAZZI_GPT_WORKSPACE:-3}"
 
 if [[ ! -x "$CHROME_BIN" ]]; then
@@ -26,7 +26,6 @@ args=(
   --disk-cache-size=67108864
   --no-first-run
   --no-default-browser-check
-  --restore-last-session
   --disable-default-apps
   --disable-sync
   --disable-breakpad
