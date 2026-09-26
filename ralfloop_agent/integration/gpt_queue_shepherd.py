@@ -505,6 +505,7 @@ class GptQueueShepherd:
             explicit_goal_reached = GOAL_MARKER in final_text
             explicit_goal_blocked = GOAL_BLOCKED_MARKER in final_text
             explicit_goal_continue = GOAL_CONTINUE_MARKER in final_text
+            goal_continue_text = final_text if explicit_goal_continue else ""
 
             if (
                 (explicit_goal_reached or explicit_goal_blocked or explicit_goal_continue)
@@ -541,8 +542,12 @@ class GptQueueShepherd:
                     self.controller.release_job(job.job_id)
                     actions.append({"job_id": job.job_id, "action": "released", "reason": "goal_complete", "response_idle_ms": idle_ms, "telegram_notification": notification})
                     continue
+                if self.queue.goal_continue_already_sent(job.job_id, assistant_turns=assistant_turns, assistant_text=goal_continue_text):
+                    actions.append({"job_id": job.job_id, "action": "preserved", "reason": "goal_continue_already_sent", "response_idle_ms": idle_ms})
+                    continue
                 try:
                     continuation = self.controller.send_message(job.job_id, GOAL_CONTINUATION)
+                    self.queue.set_goal_continue_baseline(job.job_id, assistant_turns=assistant_turns, assistant_text=goal_continue_text)
                     self.queue.reset_watchdog(job.job_id)
                     actions.append({"job_id": job.job_id, "action": "continued", "reason": "goal_continue_marker", "response_idle_ms": idle_ms, "continuation": continuation})
                 except (CdpError, OSError, RuntimeError, ValueError) as exc:
@@ -919,8 +924,12 @@ class GptQueueShepherd:
                     )
                     continue
                 if goal_continue:
+                    if self.queue.goal_continue_already_sent(job.job_id, assistant_turns=assistant_turns, assistant_text=final_text):
+                        actions.append({"job_id": job.job_id, "action": "preserved", "reason": "goal_continue_already_sent", "response_idle_ms": idle_ms})
+                        continue
                     try:
                         continuation = self.controller.send_message(job.job_id, GOAL_CONTINUATION)
+                        self.queue.set_goal_continue_baseline(job.job_id, assistant_turns=assistant_turns, assistant_text=final_text)
                         self.queue.reset_watchdog(job.job_id)
                         actions.append(
                             {

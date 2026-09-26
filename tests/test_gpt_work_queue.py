@@ -81,6 +81,22 @@ def test_watchdog_recovery_counter_is_durable(tmp_path: Path) -> None:
     assert first.watchdog_state(job.job_id)["recovery_count"] == 0
 
 
+def test_goal_continue_baseline_is_durable_per_assistant_turn(tmp_path: Path) -> None:
+    path = tmp_path / "queue.sqlite3"
+    first = GptWorkQueue(path, clock=lambda: 1_000_000)
+    job = first.create_job("Goal loop", state=GptJobState.ACTIVE)
+    first.set_goal_continue_baseline(job.job_id, assistant_turns=4, assistant_text="Fase completata. [[BOTTAZZI_GOAL_CONTINUE]]")
+
+    second = GptWorkQueue(path, clock=lambda: 1_000_015)
+    state = second.goal_continue_state(job.job_id)
+
+    assert state["assistant_turns"] == 4
+    assert state["sent_at"] == 1_000_000
+    assert second.goal_continue_already_sent(job.job_id, assistant_turns=4, assistant_text="Fase completata. [[BOTTAZZI_GOAL_CONTINUE]]")
+    assert not second.goal_continue_already_sent(job.job_id, assistant_turns=5, assistant_text="Fase completata. [[BOTTAZZI_GOAL_CONTINUE]]")
+    assert not second.goal_continue_already_sent(job.job_id, assistant_turns=4, assistant_text="Nuova fase. [[BOTTAZZI_GOAL_CONTINUE]]")
+
+
 def test_terminal_job_leaves_active_queue(tmp_path: Path) -> None:
     q = queue(tmp_path)
     first = q.create_job("Uno", prompt="1")

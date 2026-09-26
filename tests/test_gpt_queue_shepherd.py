@@ -1082,6 +1082,36 @@ def test_goal_continue_marker_auto_continues_same_chat_without_notification(tmp_
     assert report["actions"][0]["reason"]=="goal_continue_marker"
 
 
+def test_goal_continue_marker_is_sent_once_until_assistant_turn_changes(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    marker_text = "Ho completato una fase.\n[[BOTTAZZI_GOAL_CONTINUE]]"
+    first_cdp = FakeCdp(
+        ui={"user_turns": 1, "assistant_turns": 1, "response_in_progress": False, "response_pending": False, "response_idle_ms": 61_000},
+        companion={"busy": False, "last_assistant_text": marker_text},
+    )
+    first = shepherd(queue, first_cdp).run_once(auto_start=False)
+    assert len(first_cdp.messages) == 1
+    assert first["actions"][0]["reason"] == "goal_continue_marker"
+
+    reopened = GptWorkQueue(queue.path, clock=lambda: 1_000_015)
+    second_cdp = FakeCdp(
+        ui={"user_turns": 2, "assistant_turns": 1, "response_in_progress": False, "response_pending": False, "response_idle_ms": 76_000},
+        companion={"busy": False, "last_assistant_text": marker_text},
+    )
+    second = shepherd(reopened, second_cdp).run_once(auto_start=False)
+    assert second_cdp.messages == []
+    assert second["actions"][0]["reason"] == "goal_continue_already_sent"
+
+    next_text = "Ho completato anche la fase successiva.\n[[BOTTAZZI_GOAL_CONTINUE]]"
+    third_cdp = FakeCdp(
+        ui={"user_turns": 2, "assistant_turns": 2, "response_in_progress": False, "response_pending": False, "response_idle_ms": 61_000},
+        companion={"busy": False, "last_assistant_text": next_text},
+    )
+    third = shepherd(reopened, third_cdp).run_once(auto_start=False)
+    assert len(third_cdp.messages) == 1
+    assert third["actions"][0]["reason"] == "goal_continue_marker"
+
+
 def test_goal_marker_releases_and_notifies(tmp_path: Path) -> None:
     queue,job_id=queue_with_active(tmp_path)
     with queue._connect() as conn:
