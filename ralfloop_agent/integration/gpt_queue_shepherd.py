@@ -40,7 +40,8 @@ EXTERNAL_ONLY_RECOVERY = (
 @dataclass(frozen=True)
 class GptQueueShepherdPolicy:
     complete_idle_ms: int = 60_000
-    silent_stream_stalled_ms: int = 75_000
+    status_probe_reply_idle_ms: int = 15_000
+    silent_stream_stalled_ms: int = 120_000
     stalled_idle_ms: int = 180_000
     recovery_cooldown_ms: int = 90_000
     max_recoveries: int = 2
@@ -48,6 +49,10 @@ class GptQueueShepherdPolicy:
     def __post_init__(self) -> None:
         if self.complete_idle_ms < 5_000:
             raise ValueError("complete_idle_ms_too_small")
+        if self.status_probe_reply_idle_ms < 5_000:
+            raise ValueError("status_probe_reply_idle_ms_too_small")
+        if self.status_probe_reply_idle_ms > self.complete_idle_ms:
+            raise ValueError("status_probe_reply_idle_ms_after_complete_idle_ms")
         if self.silent_stream_stalled_ms < self.complete_idle_ms:
             raise ValueError("silent_stream_stalled_before_complete_idle_ms")
         if self.stalled_idle_ms < self.silent_stream_stalled_ms:
@@ -106,7 +111,7 @@ class GptQueueShepherd:
     def _notify_completion(title: str) -> dict[str, Any]:
         socket_path = os.getenv("BOTTAZZI_TELEMETRY_SOCKET", "/run/bottazzi-telemetry.sock")
         clean_title = " ".join(str(title or "Lavoro GPT").split())[:240]
-        message = f"BOT-TAZZI · lavoro completato: {clean_title}"
+        message = f"✅ {clean_title} — completato"
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as client:
                 client.connect(socket_path)
@@ -405,6 +410,19 @@ class GptQueueShepherd:
             response_text = self._substantive_response_text(companion.get("last_assistant_text"))
             response_in_progress = bool(ui.get("response_in_progress"))
             pending = bool(ui.get("response_pending"))
+            temporary_access_limited = bool(ui.get("temporary_access_limited"))
+            if temporary_access_limited:
+                try:
+                    if hasattr(self.cdp, "set_human_queue_hold"):
+                        self.cdp.set_human_queue_hold(job.target_id, True)
+                except (CdpError, OSError, RuntimeError, ValueError):
+                    pass
+                actions.append({
+                    "job_id": job.job_id,
+                    "action": "preserved",
+                    "reason": "temporary_access_limited",
+                })
+                continue
             user_turns = self._int(ui.get("user_turns"))
             assistant_turns = max(
                 self._int(ui.get("assistant_turns")),
@@ -429,6 +447,11 @@ class GptQueueShepherd:
                     or response_text != self._substantive_response_text(probe_state.get("assistant_text"))
                 )
             )
+            settle_idle_ms = (
+                self.policy.status_probe_reply_idle_ms
+                if probe_reply_advanced
+                else self.policy.complete_idle_ms
+            )
             if response_text and response_text != saved_text:
                 self.queue.reset_watchdog(job.job_id)
                 self.queue.reset_watchdog_transport_failures(job.job_id)
@@ -445,7 +468,7 @@ class GptQueueShepherd:
 
             if (
                 (explicit_goal_reached or explicit_goal_blocked or explicit_goal_continue)
-                and idle_ms >= self.policy.complete_idle_ms
+                and idle_ms >= settle_idle_ms
                 and not (focused and human_composer_chars)
             ):
                 if current_job.last_error == STATUS_PROBE_PENDING:
@@ -494,7 +517,7 @@ class GptQueueShepherd:
             if (
                 current_job.last_error == STATUS_PROBE_PENDING
                 and probe_reply_advanced
-                and idle_ms >= self.policy.complete_idle_ms
+                and idle_ms >= self.policy.status_probe_reply_idle_ms
                 and not (focused and human_composer_chars)
             ):
                 try:

@@ -361,8 +361,20 @@ def test_gpt_browser_whatsapp_surface_has_apk_voice_attachments_and_completion_n
     assert "textToSpeechReady" in main
     assert "jobs/${j.job_id}/attachment" in html
     assert '"review".equals(current)' in service
-    assert '"Lavoro finito"' in service
+    assert '"✅ Finito · "' in service
+    assert '"✋ Serve una tua azione · "' in service
+    assert '"⏳ GPT in pausa · "' in service
+    assert '"🔥 Priorità alta · "' in service
     assert '"bottazzi_gpt_notifications_v2"' in service
+
+
+def test_gpt_rate_limit_hold_survives_tab_recycle_and_warning_stays_visible() -> None:
+    root = Path(__file__).resolve().parents[1]
+    cdp = (root / "ralfloop_agent" / "integration" / "gpt_browser_cdp.py").read_text(encoding="utf-8")
+    assert "BOTTAZZI_GPT_RATE_LIMIT_HOLD_MS" in cdp
+    assert "now - heldAt >= rateLimitHoldMs" in cdp
+    assert "hideRateLimitUi" not in cdp
+    assert "bottazziRateLimitHidden" not in cdp
 
 
 def test_gpt_browser_mobile_queue_can_add_link_reorder_and_remove_without_server_delete() -> None:

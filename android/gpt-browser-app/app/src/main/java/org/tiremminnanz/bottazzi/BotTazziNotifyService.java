@@ -40,7 +40,7 @@ public final class BotTazziNotifyService extends Service {
         createChannels();
         startForeground(
             LINK_NOTIFICATION_ID,
-            linkNotification("Connessione a GPT Browser…")
+            linkNotification("🔄 Connessione a GPT Browser…")
         );
         running = true;
         worker = new Thread(this::runLoop, "bottazzi-native-notify");
@@ -92,17 +92,17 @@ public final class BotTazziNotifyService extends Service {
                 int count = jobs == null ? 0 : jobs.length();
                 notifications.notify(
                     LINK_NOTIFICATION_ID,
-                    linkNotification("GPT attivo · " + count + " lavori")
+                    linkNotification("🟢 Attivo · " + count + (count == 1 ? " lavoro" : " lavori"))
                 );
             } catch (SecurityException exc) {
                 notifications.notify(
                     LINK_NOTIFICATION_ID,
-                    linkNotification("Permesso notifiche da verificare")
+                    linkNotification("🔔 Controlla il permesso notifiche")
                 );
             } catch (Exception exc) {
                 notifications.notify(
                     LINK_NOTIFICATION_ID,
-                    linkNotification("Backend non raggiungibile")
+                    linkNotification("🔴 Backend GPT non raggiungibile")
                 );
             }
             try {
@@ -161,6 +161,40 @@ public final class BotTazziNotifyService extends Service {
         return out.toString();
     }
 
+    private static String shortJobTitle(JSONObject job) {
+        String title = job.optString("title", "Lavoro GPT").trim();
+        if (title.isEmpty()) {
+            title = "Lavoro GPT";
+        }
+        return title.length() > 72 ? title.substring(0, 69) + "…" : title;
+    }
+
+    private static String attentionTitle(String error, String jobTitle) {
+        if ("goal_blocked".equals(error)) {
+            return "✋ Serve una tua azione · " + jobTitle;
+        }
+        if ("temporary_access_limited".equals(error)) {
+            return "⏳ GPT in pausa · " + jobTitle;
+        }
+        return "⚠️ Controlla · " + jobTitle;
+    }
+
+    private static String attentionText(String error) {
+        if ("goal_blocked".equals(error)) {
+            return "Serve un tuo dato, permesso o intervento per continuare.";
+        }
+        if ("goal_status_missing".equals(error)) {
+            return "Il turno è finito senza indicare se continuare: apri il lavoro e controlla l'esito.";
+        }
+        if ("temporary_access_limited".equals(error)) {
+            return "ChatGPT ha limitato temporaneamente l'accesso. Bot-tazzi aspetta prima di inviare altri prompt.";
+        }
+        if (error.contains("stalled") || error.contains("unavailable_after_retries")) {
+            return "Il lavoro si è fermato e il recupero automatico non è riuscito: aprilo per controllare.";
+        }
+        return "Il lavoro richiede attenzione. Apri GPT Browser per vedere cosa manca.";
+    }
+
     private void processSnapshot(JSONObject snapshot) {
         JSONArray jobs = snapshot.optJSONArray("jobs");
         if (jobs == null) {
@@ -187,11 +221,12 @@ public final class BotTazziNotifyService extends Service {
             if (initialized) {
                 boolean newReview = "review".equals(current)
                     && (!"review".equals(previous) || !textHash.equals(previousHash));
+                String jobTitle = shortJobTitle(job);
                 if (newReview && error.isEmpty() && !text.isEmpty()) {
                     notifyUser(
                         (jobId + ":review:" + textHash).hashCode(),
-                        "Lavoro finito",
-                        job.optString("title", "GPT Browser ha finito il lavoro")
+                        "✅ Finito · " + jobTitle,
+                        "Il lavoro è completato ed è pronto da leggere."
                     );
                 } else if (
                     ("failed".equals(current) || "blocked".equals(current) || ("review".equals(current) && !error.isEmpty()))
@@ -199,8 +234,8 @@ public final class BotTazziNotifyService extends Service {
                 ) {
                     notifyUser(
                         (jobId + ":attention:" + current + ":" + error).hashCode(),
-                        "GPT Browser richiede attenzione",
-                        job.optString("title", "Controlla il lavoro")
+                        attentionTitle(error, jobTitle),
+                        attentionText(error)
                     );
                 }
             }
@@ -257,8 +292,8 @@ public final class BotTazziNotifyService extends Service {
         if (kind == NativeCore.NOTIFY_PRIORITY_CONFLICT && markFirst(key)) {
             notifyUser(
                 key.hashCode(),
-                "Conflitto di priorità",
-                "JEV propone una priorità diversa da un ordine fissato da te."
+                "⚠️ Priorità da controllare",
+                "L'ordine fissato da te e la priorità automatica non coincidono."
             );
         }
     }
@@ -280,16 +315,29 @@ public final class BotTazziNotifyService extends Service {
             return;
         }
 
-        String title;
-        if (kind == NativeCore.NOTIFY_APPROVAL_REQUIRED) {
-            title = "GPT Browser richiede conferma";
-        } else if (kind == NativeCore.NOTIFY_HIGH_PRIORITY) {
-            title = "Priorità JEV";
-        } else {
-            title = "Prossimo compito GPT Browser";
+        String taskTitle = task.optString("title", "Lavoro in coda").trim();
+        if (taskTitle.isEmpty()) {
+            taskTitle = "Lavoro in coda";
         }
-        String body = task.optString("title", "Compito in coda");
-        notifyUser(key.hashCode(), title, body);
+        if (kind == NativeCore.NOTIFY_APPROVAL_REQUIRED) {
+            notifyUser(
+                key.hashCode(),
+                "✋ Conferma richiesta · " + taskTitle,
+                "Apri GPT Browser per approvare o rifiutare."
+            );
+        } else if (kind == NativeCore.NOTIFY_HIGH_PRIORITY) {
+            notifyUser(
+                key.hashCode(),
+                "🔥 Priorità alta · " + taskTitle,
+                "Questo lavoro è stato segnalato come prioritario."
+            );
+        } else {
+            notifyUser(
+                key.hashCode(),
+                "▶️ Prossimo lavoro · " + taskTitle,
+                "È il prossimo lavoro pronto nella coda GPT."
+            );
+        }
     }
 
     private boolean markFirst(String key) {

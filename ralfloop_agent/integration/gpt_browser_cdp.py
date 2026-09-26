@@ -2343,7 +2343,19 @@ class ChromeCdp:
         target = self._wait_target(target_id)
         if not target.websocket_url or not target.is_chatgpt:
             raise CdpError("human_input_target_invalid")
-        config = json.dumps({"conversation_url": normalized, "context_url": context_url}, ensure_ascii=False)
+        try:
+            rate_limit_hold_ms = int(os.getenv("BOTTAZZI_GPT_RATE_LIMIT_HOLD_MS", "300000"))
+        except ValueError:
+            rate_limit_hold_ms = 300_000
+        rate_limit_hold_ms = max(60_000, min(1_800_000, rate_limit_hold_ms))
+        config = json.dumps(
+            {
+                "conversation_url": normalized,
+                "context_url": context_url,
+                "rate_limit_hold_ms": rate_limit_hold_ms,
+            },
+            ensure_ascii=False,
+        )
         expression = r'''(() => {
           const config = __CONFIG__;
           const relayState = window.__bottazziHumanRelayV1;
@@ -2426,15 +2438,8 @@ class ChromeCdp:
           const hasPendingDraft = () => {
             try { return Boolean(localStorage.getItem(draftKey)); } catch (_) { return false; }
           };
-          const hideRateLimitUi = () => {
-            const limitRe = /(?:temporarily limited access to (?:your )?conversations|temporaneamente (?:limitato )?l['’]?accesso alle conversazioni|attendere qualche minuto prima di riprovare|wait a few minutes before trying again)/i;
-            for (const el of document.querySelectorAll('[role="alert"],[role="dialog"],[data-testid*="error"]')) {
-              const text = String(el.innerText || el.textContent || '').trim();
-              if (text && limitRe.test(text)) el.style.display = 'none';
-            }
-          };
+          const rateLimitHoldMs = Math.max(60000, Number(config.rate_limit_hold_ms || 300000));
           const updateHumanUi = () => {
-            hideRateLimitUi();
             const box = document.getElementById(humanBoxId);
             const send = document.getElementById(sendId);
             const status = document.getElementById(statusId);
@@ -2465,10 +2470,19 @@ class ChromeCdp:
               const holdKey = '__bottazziQueueHoldV1';
               const limited = limitRe.test(String(document.body ? document.body.innerText || '' : ''));
               const previousHold = String(localStorage.getItem(holdKey) || '');
+              const now = Date.now();
               if (limited) {
                 localStorage.setItem(holdKey, `rate:${Date.now()}`);
-              } else if (previousHold && (/^\d+$/.test(previousHold) || previousHold.startsWith('rate:'))) {
-                localStorage.removeItem(holdKey);
+              } else if (previousHold.startsWith('rate:')) {
+                const heldAt = Number(previousHold.slice(5));
+                if (!Number.isFinite(heldAt) || heldAt <= 0 || now - heldAt >= rateLimitHoldMs) {
+                  localStorage.removeItem(holdKey);
+                }
+              } else if (/^\d+$/.test(previousHold)) {
+                const heldAt = Number(previousHold);
+                if (!Number.isFinite(heldAt) || heldAt <= 0 || now - heldAt >= rateLimitHoldMs) {
+                  localStorage.removeItem(holdKey);
+                }
               }
               if (localStorage.getItem(holdKey)) { updateHumanUi(); return false; }
             } catch (_) {}
@@ -2628,25 +2642,10 @@ class ChromeCdp:
         expression = r'''(() => {
           const config = __CONFIG__;
           const key = '__bottazziQueueHoldV1';
-          const limitRe = /(?:temporarily limited access to (?:your )?conversations|temporaneamente (?:limitato )?l['’]?accesso alle conversazioni|attendere qualche minuto prima di riprovare|wait a few minutes before trying again)/i;
           try {
             if (config.held) localStorage.setItem(key, `rate:${Date.now()}`);
             else localStorage.removeItem(key);
           } catch (_) {}
-          for (const el of document.querySelectorAll('[role="alert"],[role="dialog"],[data-testid*="error"]')) {
-            const text = String(el.innerText || el.textContent || '').trim();
-            if (!text || !limitRe.test(text)) continue;
-            if (config.held) {
-              if (!el.dataset.bottazziOldDisplay) el.dataset.bottazziOldDisplay = el.style.display || '__empty__';
-              el.dataset.bottazziRateLimitHidden = '1';
-              el.style.display = 'none';
-            }
-          }
-          if (!config.held) {
-            for (const el of document.querySelectorAll('[data-bottazzi-rate-limit-hidden="1"]')) {
-              el.style.display = 'none';
-            }
-          }
           const state = window.__bottazziHumanInputTargetV3 || window.__bottazziHumanInputTargetV2;
           if (state && typeof state.updateHumanUi === 'function') state.updateHumanUi();
           if (!config.held && state && typeof state.importDraft === 'function') setTimeout(state.importDraft, 0);
@@ -2910,13 +2909,6 @@ class ChromeCdp:
           const draftKey = '__bottazziHumanDraftV2';
           const activeKey = '__bottazziActiveConversationV2';
           const relayKey = '__bottazziHumanRelayV1';
-          const limitRe = /(?:temporarily limited access to (?:your )?conversations|temporaneamente (?:limitato )?l['’]?accesso alle conversazioni|attendere qualche minuto prima di riprovare|wait a few minutes before trying again)/i;
-          const hideRateLimitUi = () => {
-            for (const el of document.querySelectorAll('[role="alert"],[role="dialog"],[data-testid*="error"]')) {
-              const text = String(el.innerText || el.textContent || '').trim();
-              if (text && limitRe.test(text)) el.style.display = 'none';
-            }
-          };
           const activeStateV2 = window.__bottazziHumanInputTargetV2;
           if (activeStateV2 && activeStateV2.observer) activeStateV2.observer.disconnect();
           if (activeStateV2 && activeStateV2.onStorage) window.removeEventListener('storage', activeStateV2.onStorage);
@@ -2973,10 +2965,8 @@ class ChromeCdp:
           let relayState = window[relayKey];
           if (!relayState || typeof relayState !== 'object') relayState = {};
           if (relayState.observer) relayState.observer.disconnect();
-          relayState.observer = new MutationObserver(hideRateLimitUi);
-          relayState.observer.observe(document.documentElement, {subtree:true, childList:true});
+          relayState.observer = null;
           window[relayKey] = relayState;
-          hideRateLimitUi();
           try { localStorage.setItem(activeKey, config.active_url); } catch (_) {}
           return JSON.stringify({ok:true, relay:true, active_url:config.active_url, human_composer:Boolean(document.getElementById(boxId))});
         })()'''.replace("__CONFIG__", config)

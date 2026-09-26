@@ -20,6 +20,7 @@ class FakeCdp:
         self.submitted_composers: list[str] = []
         self.wake_calls: list[str] = []
         self.stopped: list[str] = []
+        self.holds: list[tuple[str, bool]] = []
         self.created = 0
         self._targets = [
             BrowserTarget(
@@ -67,6 +68,10 @@ class FakeCdp:
     def wake_stalled_chatgpt(self, target_id: str, *, text: str = "A che punto sei? Hai risolto?", wait_timeout_s: float = 4.0):
         self.wake_calls.append(target_id)
         return {"submitted": False, "reason": "send_missing_after_wake"}
+
+    def set_human_queue_hold(self, target_id: str, held: bool):
+        self.holds.append((target_id, held))
+        return {"ok": True, "held": held}
 
     def stop_chatgpt_response(self, target_id: str):
         self.stopped.append(target_id)
@@ -294,8 +299,8 @@ def test_silent_stream_is_recovered_before_full_stall_timeout(tmp_path: Path) ->
             "assistant_turns": 0,
             "response_in_progress": True,
             "response_pending": True,
-            "response_idle_ms": 91_000,
-            "progress_idle_ms": 91_000,
+            "response_idle_ms": 121_000,
+            "progress_idle_ms": 121_000,
             "tool_activity_count": 0,
         },
         companion={"busy": True, "last_assistant_text": ""},
@@ -332,8 +337,8 @@ def test_silent_stream_with_only_old_assistant_turn_is_recovered(tmp_path: Path)
             "assistant_turns": 1,
             "response_in_progress": True,
             "response_pending": True,
-            "response_idle_ms": 76_000,
-            "progress_idle_ms": 76_000,
+            "response_idle_ms": 121_000,
+            "progress_idle_ms": 121_000,
             "tool_activity_count": 0,
         },
         companion={"busy": True, "assistant_turns": 1, "last_assistant_text": "Risposta precedente"},
@@ -438,8 +443,8 @@ def test_inactive_human_draft_does_not_block_stall_recovery(tmp_path: Path) -> N
             "assistant_turns": 0,
             "response_in_progress": True,
             "response_pending": True,
-            "response_idle_ms": 76_000,
-            "progress_idle_ms": 76_000,
+            "response_idle_ms": 121_000,
+            "progress_idle_ms": 121_000,
             "tool_activity_count": 0,
         },
         companion={"focused": True, "human_composer_chars": 19, "human_composer_active": False, "busy": True, "last_assistant_text": ""},
@@ -462,8 +467,8 @@ def test_silent_pending_job_recovers_without_human_wakeup(tmp_path: Path) -> Non
             "assistant_turns": 1,
             "response_in_progress": False,
             "response_pending": True,
-            "response_idle_ms": 76_000,
-            "progress_idle_ms": 76_000,
+            "response_idle_ms": 121_000,
+            "progress_idle_ms": 121_000,
             "tool_activity_count": 0,
         },
         companion={"busy": False, "last_assistant_text": "Risposta precedente"},
@@ -490,8 +495,8 @@ def test_fresh_silent_pending_job_is_not_recovered_too_early(tmp_path: Path) -> 
             "assistant_turns": 1,
             "response_in_progress": False,
             "response_pending": True,
-            "response_idle_ms": 74_000,
-            "progress_idle_ms": 74_000,
+            "response_idle_ms": 119_000,
+            "progress_idle_ms": 119_000,
             "tool_activity_count": 0,
         },
         companion={"busy": False, "last_assistant_text": "Risposta precedente"},
@@ -832,6 +837,76 @@ def test_queue_busy_is_existing_delivery_not_failed_recovery(tmp_path: Path) -> 
     assert queue.get_job(job_id).state is GptJobState.ACTIVE
     assert queue.watchdog_state(job_id)["recovery_count"] == 0
     assert report["actions"][0]["reason"] == "delivery_already_queued"
+
+
+def test_temporary_access_limit_holds_queue_and_sends_nothing(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    cdp = FakeCdp(
+        ui={
+            "user_turns": 2,
+            "assistant_turns": 1,
+            "response_in_progress": False,
+            "response_pending": True,
+            "response_idle_ms": 999_999,
+            "progress_idle_ms": 999_999,
+            "temporary_access_limited": True,
+        },
+        companion={"busy": False, "last_assistant_text": "Risposta precedente"},
+    )
+
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    assert queue.get_job(job_id).state is GptJobState.ACTIVE
+    assert cdp.holds == [("managed", True)]
+    assert cdp.messages == []
+    assert cdp.wake_calls == []
+    assert cdp.closed == []
+    assert report["actions"][0]["reason"] == "temporary_access_limited"
+
+
+def test_status_probe_reply_uses_short_settle_window(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    queue.set_last_assistant_text(job_id, "Vecchio stato")
+    queue.set_status_probe_baseline(
+        job_id,
+        assistant_turns=1,
+        user_turns=2,
+        assistant_text="Vecchio stato",
+    )
+    queue.set_state(job_id, GptJobState.ACTIVE, last_error="status_probe_pending")
+    cdp = FakeCdp(
+        ui={"user_turns": 2, "assistant_turns": 2, "response_in_progress": False, "response_pending": False, "response_idle_ms": 16_000, "progress_idle_ms": 16_000},
+        companion={"busy": False, "last_assistant_text": "Sono fermo al passo X; resta da completare Y."},
+    )
+
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    assert queue.get_job(job_id).last_error is None
+    assert len(cdp.messages) == 1
+    assert "Continua automaticamente dal punto raggiunto" in cdp.messages[0][2]
+    assert report["actions"][0]["reason"] == "status_probe_resumed"
+
+
+def test_status_probe_reply_does_not_continue_before_short_settle(tmp_path: Path) -> None:
+    queue, job_id = queue_with_active(tmp_path)
+    queue.set_last_assistant_text(job_id, "Vecchio stato")
+    queue.set_status_probe_baseline(
+        job_id,
+        assistant_turns=1,
+        user_turns=2,
+        assistant_text="Vecchio stato",
+    )
+    queue.set_state(job_id, GptJobState.ACTIVE, last_error="status_probe_pending")
+    cdp = FakeCdp(
+        ui={"user_turns": 2, "assistant_turns": 2, "response_in_progress": False, "response_pending": False, "response_idle_ms": 14_000, "progress_idle_ms": 14_000},
+        companion={"busy": False, "last_assistant_text": "Sono fermo al passo X; resta da completare Y."},
+    )
+
+    report = shepherd(queue, cdp).run_once(auto_start=False)
+
+    assert queue.get_job(job_id).last_error == "status_probe_pending"
+    assert cdp.messages == []
+    assert report["actions"][0]["reason"] == "awaiting_settle"
 
 
 def test_status_probe_reply_resumes_goal_in_same_chat(tmp_path: Path) -> None:
