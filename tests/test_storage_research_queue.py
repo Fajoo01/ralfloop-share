@@ -62,7 +62,7 @@ class StorageResearchQueueTests(unittest.TestCase):
         request_obj = calls[0][0]
         payload = json.loads(request_obj.data.decode("utf-8"))
         self.assertEqual(request_obj.get_header("X-bottazzi-frontend"), "1")
-        self.assertTrue(payload["auto_start"])
+        self.assertFalse(payload["auto_start"])
         self.assertIn("Filesystem critici", payload["prompt"])
 
     def test_duplicate_trigger_is_not_posted_again(self):

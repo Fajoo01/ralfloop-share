@@ -38,7 +38,11 @@ def build_job_payload(report: dict[str, Any]) -> dict[str, Any]:
         "prompt": prompt,
         "project_name": "",
         "project_url": None,
-        "auto_start": True,
+        # Create first, persist the dedupe marker, then let the queue shepherd
+        # start queued work. A synchronous auto-start can take longer than the
+        # HTTP client timeout after the job is already committed, which would
+        # otherwise create the same storage-research job again on the next cron.
+        "auto_start": False,
     }
 
 
