@@ -21,7 +21,7 @@ Verified Sibilla runtime paths:
 
 - Android SDK: `/home/sibilla-cumana/Dati/android-sdk`
 - AVD home: `/home/sibilla-cumana/Dati/android-avd`
-- frontend AVD: `ralf_frontend_ci_api23`
+- frontend AVD: `ralf_frontend_ci_api35`
 - Tiremm Android MCP: `http://127.0.0.1:19232/mcp`
 - MCP HTTP bridge: `/opt/ralf-canva-mcp/node_modules/.bin/mcp-remote`
 

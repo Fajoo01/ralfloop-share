@@ -16,7 +16,7 @@ Environment=RALF_FRONTEND_WORKTREE_ROOTS=/home/sibilla-cumana/tmp
 Environment=RALF_FRONTEND_ARTIFACT_ROOT=/home/sibilla-cumana/tmp/ralf-frontend-designer
 Environment=RALF_ANDROID_SDK_ROOT=/home/sibilla-cumana/Dati/android-sdk
 Environment=ANDROID_AVD_HOME=/home/sibilla-cumana/Dati/android-avd
-Environment=RALF_FRONTEND_ANDROID_AVD=ralf_frontend_ci_api23
+Environment=RALF_FRONTEND_ANDROID_AVD=ralf_frontend_ci_api35
 Environment=RALF_TIREMM_ANDROID_INTERNAL_URL=http://127.0.0.1:19232/mcp
 Environment=RALF_MCP_REMOTE_BIN=/opt/ralf-canva-mcp/node_modules/.bin/mcp-remote
 ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_arci_mcp_broker.py --socket /run/ralf-frontend-designer-mcp/mcp.sock --allow-group ralf-mcp --command /home/sibilla-cumana/ralfloop-production/current/scripts/ralf_frontend_designer_mcp_server.py --idle-timeout 300 --max-clients 2

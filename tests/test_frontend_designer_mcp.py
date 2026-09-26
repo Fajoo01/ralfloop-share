@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 from ralfloop_agent.frontend_designer import FrontendDesigner, FrontendDesignerConfig
+from ralfloop_agent.frontend_designer.mcp import FrontendDesignerMCPServer
+from ralfloop_agent.unified_assistant.frontend_designer_mcp_adapter import FrontendDesignerMCPContext
 from src.mcp_transport import MCPClientSession, MCPError, StdioMCPTransport
 
 
@@ -75,3 +78,71 @@ def test_stdio_mcp_discovery_and_inspect_roundtrip(tmp_path):
         assert payload["result"]["writes"] == 0
     finally:
         transport.close()
+
+
+def test_environment_defaults_to_api35(tmp_path, monkeypatch):
+    monkeypatch.delenv("RALF_FRONTEND_ANDROID_AVD", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = FrontendDesignerConfig.from_environment(project_root=ROOT)
+    assert config.android_avd_name == "ralf_frontend_ci_api35"
+
+
+def test_run_timeout_returns_fail_closed_completed_process(monkeypatch):
+    def _timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(["fake"], 2, output=b"partial", stderr=b"late")
+
+    monkeypatch.setattr(subprocess, "run", _timeout)
+    result = FrontendDesigner._run(["fake"], timeout=2)
+    assert result.returncode == 124
+    assert result.stdout == "partial"
+    assert "frontend_subprocess_timeout:2s" in result.stderr
+
+
+def test_mcp_timeout_error_is_structured(tmp_path, monkeypatch):
+    designer = FrontendDesigner(_config(tmp_path))
+
+    def _timeout(_workdir):
+        raise subprocess.TimeoutExpired(["fake"], 7)
+
+    monkeypatch.setattr(designer, "inspect_project", _timeout)
+    result = FrontendDesignerMCPServer(designer).call(
+        "frontend_inspect_project", {"workdir": str(tmp_path / "work")}
+    )
+    assert result["isError"] is True
+    assert result["structuredContent"]["error"] == "frontend_subprocess_timeout:7s"
+
+
+def test_emulator_start_preserves_avd_hardware_profile(tmp_path, monkeypatch):
+    designer = FrontendDesigner(_config(tmp_path))
+    captured = {}
+
+    monkeypatch.setattr(designer, "emulator_status", lambda: {
+        "configured_running": [],
+        "configured_ready": False,
+        "available_avds": [designer.config.android_avd_name],
+    })
+    monkeypatch.setattr(designer, "_emulator", lambda: Path("/fake/emulator"))
+
+    class StopLaunch(Exception):
+        pass
+
+    def _popen(argv, **_kwargs):
+        captured["argv"] = list(argv)
+        raise StopLaunch
+
+    monkeypatch.setattr(subprocess, "Popen", _popen)
+    with pytest.raises(StopLaunch):
+        designer._ensure_emulator(timeout=1)
+    argv = captured["argv"]
+    assert "-no-snapshot-load" in argv
+    assert "-memory" not in argv
+    assert "-cores" not in argv
+
+
+def test_unified_adapter_uses_bounded_long_android_timeout(monkeypatch):
+    monkeypatch.delenv("RALF_FRONTEND_DESIGNER_MCP_TIMEOUT", raising=False)
+    assert FrontendDesignerMCPContext.from_environment().timeout == 600.0
+    monkeypatch.setenv("RALF_FRONTEND_DESIGNER_MCP_TIMEOUT", "9999")
+    assert FrontendDesignerMCPContext.from_environment().timeout == 1800.0
+    monkeypatch.setenv("RALF_FRONTEND_DESIGNER_MCP_TIMEOUT", "not-a-number")
+    assert FrontendDesignerMCPContext.from_environment().timeout == 600.0
