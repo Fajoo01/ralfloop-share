@@ -171,18 +171,23 @@ class ChromeCdp:
                 ? /^(?:hai detto|you said|tu hai detto)\s*:?$/i
                 : /^(?:chatgpt ha detto|chatgpt said)\s*:?$/i;
               return labels.filter((el) => matcher.test(String(el.textContent || '').trim())).map((el) => {
+                const roleLabel = /^(?:hai detto|you said|tu hai detto|chatgpt ha detto|chatgpt said)\s*:?$/i;
                 let node = el.parentElement;
+                let best = node;
                 for (let i = 0; node && i < 8; i++, node = node.parentElement) {
-                  if (node.classList && node.classList.contains('group')) return node;
+                  const roleLabels = Array.from(node.querySelectorAll('h4.sr-only'))
+                    .filter((label) => roleLabel.test(String(label.textContent || '').trim()));
+                  if (roleLabels.length > 1) break;
+                  best = node;
                 }
-                return el.parentElement || el;
+                return best || el.parentElement || el;
               });
             };
-            const userSections = Array.from(document.querySelectorAll('section[data-turn="user"]'));
+            const userSections = Array.from(document.querySelectorAll('article[data-turn="user"], section[data-turn="user"]'));
             const userRoleNodes = Array.from(document.querySelectorAll('[data-message-author-role="user"]'));
             const userNodes = userSections.length ? userSections : (userRoleNodes.length ? userRoleNodes : labelledTurns('user'));
             const userTurns = userNodes.length;
-            const assistantSections = Array.from(document.querySelectorAll('section[data-turn="assistant"]'));
+            const assistantSections = Array.from(document.querySelectorAll('article[data-turn="assistant"], section[data-turn="assistant"]'));
             const assistantRoleNodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
             const assistantNodes = assistantSections.length ? assistantSections : (assistantRoleNodes.length ? assistantRoleNodes : labelledTurns('assistant'));
             const assistantTurns = assistantNodes.length;
@@ -198,8 +203,11 @@ class ChromeCdp:
               .filter(visible)
               .some((el) => responseErrorRe.test((el.innerText || el.textContent || '').trim()));
             const lastAssistant = assistantNodes.length ? assistantNodes[assistantNodes.length - 1] : null;
-            const lastAssistantError = Boolean(lastAssistant && responseErrorRe.test((lastAssistant.innerText || lastAssistant.textContent || '').trim()));
-            const assistantText = lastAssistant ? (lastAssistant.innerText || lastAssistant.textContent || '') : '';
+            const assistantContent = lastAssistant
+              ? (lastAssistant.querySelector('[data-message-author-role="assistant"] .markdown, [data-message-author-role="assistant"]') || lastAssistant.querySelector('.markdown') || lastAssistant)
+              : null;
+            const lastAssistantError = Boolean(assistantContent && responseErrorRe.test((assistantContent.innerText || assistantContent.textContent || '').trim()));
+            const assistantText = assistantContent ? (assistantContent.innerText || assistantContent.textContent || '') : '';
             let assistantHash = 2166136261;
             const hashStep = Math.max(1, Math.floor(assistantText.length / 128));
             for (let i = 0; i < assistantText.length; i += hashStep) {
@@ -1698,28 +1706,36 @@ class ChromeCdp:
           const composerText = composer ? String(composer.value || composer.innerText || composer.textContent || '').trim() : '';
           const humanComposer = document.getElementById('bottazzi-human-composer');
           const humanComposerText = humanComposer ? String(humanComposer.value || humanComposer.innerText || humanComposer.textContent || '').trim() : '';
-          const userSections = Array.from(document.querySelectorAll('section[data-turn="user"]'));
+          const userSections = Array.from(document.querySelectorAll('article[data-turn="user"], section[data-turn="user"]'));
           const userRoleNodes = Array.from(document.querySelectorAll('[data-message-author-role="user"]'));
           const userLabelNodes = Array.from(document.querySelectorAll('h4.sr-only'))
             .filter((el) => /^(?:hai detto|you said|tu hai detto)\s*:?$/i.test(String(el.textContent || '').trim()));
           const userNodes = userSections.length ? userSections : (userRoleNodes.length ? userRoleNodes : userLabelNodes);
-          const assistantSections = Array.from(document.querySelectorAll('section[data-turn="assistant"]'));
+          const assistantSections = Array.from(document.querySelectorAll('article[data-turn="assistant"], section[data-turn="assistant"]'));
           const assistantRoleNodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
           const assistantLabelNodes = Array.from(document.querySelectorAll('h4.sr-only'))
             .filter((el) => /^(?:chatgpt ha detto|chatgpt said)\s*:?$/i.test(String(el.textContent || '').trim()))
             .map((el) => {
+              const roleLabel = /^(?:hai detto|you said|tu hai detto|chatgpt ha detto|chatgpt said)\s*:?$/i;
               let node = el.parentElement;
+              let best = node;
               for (let i = 0; node && i < 8; i++, node = node.parentElement) {
-                if (node.classList && node.classList.contains('group')) return node;
+                const roleLabels = Array.from(node.querySelectorAll('h4.sr-only'))
+                  .filter((label) => roleLabel.test(String(label.textContent || '').trim()));
+                if (roleLabels.length > 1) break;
+                best = node;
               }
-              return el.parentElement || el;
+              return best || el.parentElement || el;
             });
           const assistantNodes = assistantSections.length ? assistantSections : (assistantRoleNodes.length ? assistantRoleNodes : assistantLabelNodes);
           const lastAssistant = assistantNodes.length ? assistantNodes[assistantNodes.length - 1] : null;
           const streamingNode = lastAssistant ? lastAssistant.querySelector('[data-streaming-response-status]') : null;
+          const assistantContent = lastAssistant
+            ? (lastAssistant.querySelector('[data-message-author-role="assistant"] .markdown, [data-message-author-role="assistant"]') || lastAssistant.querySelector('.markdown') || lastAssistant)
+            : null;
           const toolActivityCount = lastAssistant ? lastAssistant.querySelectorAll('[data-testid="cot-v5-native-tool-icon"]').length : 0;
-          const lastAssistantText = lastAssistant
-            ? String((responseInProgress && streamingNode ? streamingNode.innerText || streamingNode.textContent : lastAssistant.innerText || lastAssistant.textContent) || '').trim().slice(-24000)
+          const lastAssistantText = assistantContent
+            ? String((responseInProgress && streamingNode ? streamingNode.innerText || streamingNode.textContent : assistantContent.innerText || assistantContent.textContent) || '').trim().slice(-24000)
             : '';
           const statusNodes = Array.from(document.querySelectorAll('[role="status"]')).filter(visible);
           const statusText = statusNodes.length
@@ -1865,22 +1881,30 @@ class ChromeCdp:
             stop = Array.from(document.querySelectorAll(selector)).find(visible) || null;
             if (stop) break;
           }
-          const assistantSections = Array.from(document.querySelectorAll('section[data-turn="assistant"]'));
+          const assistantSections = Array.from(document.querySelectorAll('article[data-turn="assistant"], section[data-turn="assistant"]'));
           const assistantRoleNodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
           const assistantLabelNodes = Array.from(document.querySelectorAll('h4.sr-only'))
             .filter((el) => /^(?:chatgpt ha detto|chatgpt said)\s*:?$/i.test(String(el.textContent || '').trim()))
             .map((el) => {
+              const roleLabel = /^(?:hai detto|you said|tu hai detto|chatgpt ha detto|chatgpt said)\s*:?$/i;
               let node = el.parentElement;
+              let best = node;
               for (let i = 0; node && i < 8; i++, node = node.parentElement) {
-                if (node.classList && node.classList.contains('group')) return node;
+                const roleLabels = Array.from(node.querySelectorAll('h4.sr-only'))
+                  .filter((label) => roleLabel.test(String(label.textContent || '').trim()));
+                if (roleLabels.length > 1) break;
+                best = node;
               }
-              return el.parentElement || el;
+              return best || el.parentElement || el;
             });
           const assistantNodes = assistantSections.length ? assistantSections : (assistantRoleNodes.length ? assistantRoleNodes : assistantLabelNodes);
           const lastAssistant = assistantNodes.length ? assistantNodes[assistantNodes.length - 1] : null;
           const streamingNode = lastAssistant ? lastAssistant.querySelector('[data-streaming-response-status]') : null;
-          const lastAssistantText = lastAssistant
-            ? String((streamingNode ? streamingNode.innerText || streamingNode.textContent : lastAssistant.innerText || lastAssistant.textContent) || '').trim().slice(-24000)
+          const assistantContent = lastAssistant
+            ? (lastAssistant.querySelector('[data-message-author-role="assistant"] .markdown, [data-message-author-role="assistant"]') || lastAssistant.querySelector('.markdown') || lastAssistant)
+            : null;
+          const lastAssistantText = assistantContent
+            ? String((streamingNode ? streamingNode.innerText || streamingNode.textContent : assistantContent.innerText || assistantContent.textContent) || '').trim().slice(-24000)
             : '';
           if (!stop) return JSON.stringify({stopped:false, reason:'not_running', last_assistant_text:lastAssistantText});
           stop.click();
