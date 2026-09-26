@@ -103,7 +103,7 @@ if [[ "$probe_ok" != "1" ]]; then
 fi
 if [[ -n "$recovery_target" ]]; then
   if [[ -n "$source_target_id" && "$recovery_target" == "$source_target_id" ]]; then
-    continue_result="$(printf '%s\n' 'prosegui' | run_json rate_limit_continue "$PY" "$TOOL" --endpoint "$ENDPOINT" companion-send --target-id "$source_target_id")" || continue_result=""
+    continue_result="$(printf '%s\n' 'A che punto sei? Hai risolto? Rispondi con lo stato reale del lavoro e cosa resta da fare.' | run_json rate_limit_continue "$PY" "$TOOL" --endpoint "$ENDPOINT" companion-send --target-id "$source_target_id")" || continue_result=""
     if [[ -n "$continue_result" ]]; then
       printf '%s\n' "$continue_result"
       if printf '%s' "$continue_result" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); raise SystemExit(0 if d.get("queued") else 1)' >/dev/null 2>&1; then

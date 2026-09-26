@@ -944,7 +944,7 @@ def test_guard_recovers_temporary_access_limit_after_short_cooldown() -> None:
     repo = Path(__file__).resolve().parents[1]
     guard = (repo / "scripts/bottazzi_gpt_shepherd_guard.sh").read_text(encoding="utf-8")
     assert "RATE_LIMIT_COOLDOWN_SECONDS=45" in guard
-    assert "'prosegui'" in guard
+    assert "'A che punto sei? Hai risolto? Rispondi con lo stato reale del lavoro e cosa resta da fare.'" in guard
     assert "--force-access-limit-handoff" in guard
     assert "RATE_LIMIT_SNOOZE_SECONDS=300" not in guard
 
