@@ -65,7 +65,12 @@ def enqueue_report(
 
     payload = build_job_payload(report)
     body = json.dumps(payload).encode("utf-8")
-    req = request.Request(queue_url, data=body, headers={"Content-Type": "application/json"}, method="POST")
+    req = request.Request(
+        queue_url,
+        data=body,
+        headers={"Content-Type": "application/json", "X-Bottazzi-Frontend": "1"},
+        method="POST",
+    )
     with opener(req, timeout=10) as response:
         result = json.loads(response.read().decode("utf-8"))
     job = result.get("job") or {}
