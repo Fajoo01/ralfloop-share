@@ -45,14 +45,23 @@ def _workdir_from_objective(objective: str) -> str:
 
 
 class FrontendDesignerMCPContext:
-    def __init__(self, socket_path: str = "/run/ralf-frontend-designer-mcp/mcp.sock", timeout: float = 120.0) -> None:
+    def __init__(self, socket_path: str = "/run/ralf-frontend-designer-mcp/mcp.sock", timeout: float = 600.0) -> None:
         self.socket_path = socket_path
         self.timeout = timeout
         self.session: MCPClientSession | None = None
 
     @classmethod
     def from_environment(cls) -> "FrontendDesignerMCPContext":
-        return cls(os.getenv("RALF_FRONTEND_DESIGNER_MCP_SOCKET", "/run/ralf-frontend-designer-mcp/mcp.sock"))
+        raw_timeout = os.getenv("RALF_FRONTEND_DESIGNER_MCP_TIMEOUT", "600").strip()
+        try:
+            timeout = float(raw_timeout)
+        except ValueError:
+            timeout = 600.0
+        timeout = max(30.0, min(timeout, 1800.0))
+        return cls(
+            os.getenv("RALF_FRONTEND_DESIGNER_MCP_SOCKET", "/run/ralf-frontend-designer-mcp/mcp.sock"),
+            timeout=timeout,
+        )
 
     def __enter__(self) -> "FrontendDesignerMCPContext":
         self.session = MCPClientSession(

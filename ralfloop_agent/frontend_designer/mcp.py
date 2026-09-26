@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 from typing import Any, Mapping
 
 from .core import FrontendDesigner
@@ -144,6 +145,8 @@ class FrontendDesignerMCPServer:
             return _error(f"MALFORMED_REQUEST:{exc}")
         except RuntimeError as exc:
             return _error(str(exc))
+        except subprocess.TimeoutExpired as exc:
+            return _error(f"frontend_subprocess_timeout:{exc.timeout:g}s")
         except OSError as exc:
             return _error(f"SOURCE_UNAVAILABLE:{type(exc).__name__}")
 

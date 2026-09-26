@@ -29,7 +29,7 @@ class FrontendDesignerConfig:
     artifact_root: Path
     android_sdk: Path
     android_avd_home: Path
-    android_avd_name: str = "ralf_frontend_ci_api23"
+    android_avd_name: str = "ralf_frontend_ci_api35"
     android_emulator_port: int | None = None
     phone_device_id: str | None = None
     remote_android_url: str = "http://127.0.0.1:19232/mcp"
@@ -65,7 +65,7 @@ class FrontendDesignerConfig:
             artifact_root=artifact_root,
             android_sdk=android_sdk,
             android_avd_home=android_avd_home,
-            android_avd_name=os.getenv("RALF_FRONTEND_ANDROID_AVD", "ralf_frontend_ci_api23").strip() or "ralf_frontend_ci_api23",
+            android_avd_name=os.getenv("RALF_FRONTEND_ANDROID_AVD", "ralf_frontend_ci_api35").strip() or "ralf_frontend_ci_api35",
             android_emulator_port=emulator_port,
             phone_device_id=os.getenv("RALF_FRONTEND_PHONE_DEVICE_ID", "").strip() or None,
             remote_android_url=os.getenv("RALF_TIREMM_ANDROID_INTERNAL_URL", "http://127.0.0.1:19232/mcp").strip(),
@@ -112,11 +112,25 @@ class FrontendDesigner:
 
     @staticmethod
     def _run(argv: Sequence[str], *, cwd: Path | None = None, timeout: float = 120.0) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            list(argv), cwd=str(cwd) if cwd else None, check=False, text=True,
-            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            timeout=timeout,
-        )
+        command = list(argv)
+        try:
+            return subprocess.run(
+                command, cwd=str(cwd) if cwd else None, check=False, text=True,
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            def _text(value: str | bytes | None) -> str:
+                if isinstance(value, bytes):
+                    return value.decode("utf-8", errors="replace")
+                return value or ""
+
+            return subprocess.CompletedProcess(
+                command,
+                124,
+                stdout=_text(exc.stdout),
+                stderr=(_text(exc.stderr) + f"\nfrontend_subprocess_timeout:{timeout:g}s").lstrip("\n"),
+            )
 
     def inspect_project(self, workdir: str | Path) -> dict[str, Any]:
         root = self._resolve_allowed(workdir)
@@ -414,12 +428,15 @@ class FrontendDesigner:
         if not configured:
             argv = [
                 str(self._emulator()), "-avd", self.config.android_avd_name,
-                "-no-window", "-no-audio", "-no-boot-anim", "-gpu", "swiftshader_indirect",
+                "-no-window", "-no-audio", "-no-boot-anim", "-no-snapshot-load",
+                "-gpu", "swiftshader_indirect",
             ]
             if self.config.android_emulator_port is not None:
                 argv.extend(["-port", str(self.config.android_emulator_port)])
             if not Path("/dev/kvm").exists():
-                argv.extend(["-accel", "off", "-cores", "1", "-memory", "1024"])
+                # Preserve the AVD's configured CPU/RAM profile. Forcing a tiny
+                # one-size-fits-all profile made API35 cold boots unreliable.
+                argv.extend(["-accel", "off"])
             env = os.environ.copy()
             env.update({
                 "ANDROID_HOME": str(self.config.android_sdk),
@@ -441,6 +458,20 @@ class FrontendDesigner:
                         log.close()
                     return row["serial"]
             if process is not None and process.poll() is not None:
+                # Another worker may have won the race to start the same
+                # dedicated AVD. If that AVD now exists, attach to it and keep
+                # waiting for readiness instead of failing on the duplicate
+                # launcher process.
+                same_avd = any(
+                    row.get("avd") == self.config.android_avd_name
+                    for row in self._running_emulators()
+                )
+                if same_avd:
+                    process = None
+                    if not log.closed:
+                        log.close()
+                    time.sleep(3)
+                    continue
                 if not log.closed:
                     log.close()
                 tail = log_path.read_text(encoding="utf-8", errors="replace")[-1600:] if log_path.is_file() else ""
