@@ -432,7 +432,7 @@ def test_dedicated_browser_exposes_deepseek_and_kimi_provider_switches(tmp_path:
     assert 'id="mobileProvider"' in mobile
     assert "bottazzi-gpt-provider" in mobile
     assert "https://chat.deepseek.com/" in frontend
-    assert "https://www.kimi.com/" in frontend
+    assert "https://www.kimi.ai/?chat_enter_method=new_chat" in frontend
     assert '"queue_managed": name == "chatgpt"' in frontend
     assert '"prompt_managed": name in {"chatgpt", "kimi"}' in frontend
     assert '/api/providers/query' in frontend
@@ -460,7 +460,7 @@ def test_dedicated_browser_exposes_deepseek_and_kimi_provider_switches(tmp_path:
     assert created["created"] is True
     assert created["queue_managed"] is False
     kimi_target = next(t for t in cdp.targets() if t.target_id == created["target_id"])
-    assert kimi_target.url == "https://www.kimi.com/"
+    assert kimi_target.url == "https://www.kimi.ai/?chat_enter_method=new_chat"
 
     providers = {row["provider"]: row for row in controller.provider_status()}
     assert providers["chatgpt"]["queue_managed"] is True
