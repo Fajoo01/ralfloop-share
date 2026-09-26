@@ -21,6 +21,7 @@ from .gpt_browser_cdp import (
     CdpError,
     _canonical_chatgpt_conversation_url,
     _safe_chatgpt_new_chat_url,
+    _safe_chatgpt_shared_url,
 )
 from .gpt_session_rollover import chatgpt_project_new_chat_url
 from .gpt_work_queue import GptJobState, GptWorkJob, GptWorkQueue
@@ -751,11 +752,21 @@ class GptWorkController:
         rank: int | None = None,
     ) -> dict[str, Any]:
         canonical = _canonical_chatgpt_conversation_url(conversation_url)
-        if not canonical:
-            raise ValueError("conversation_url_invalid")
-        context_url = conversation_context_url or canonical
-        if _canonical_chatgpt_conversation_url(context_url) != canonical:
-            raise ValueError("conversation_context_mismatch")
+        shared = _safe_chatgpt_shared_url(conversation_url)
+        continued_from_share = False
+        if not canonical and shared:
+            continued = self.cdp.continue_shared_conversation(shared, background=True, wait_timeout_s=25.0)
+            canonical = _canonical_chatgpt_conversation_url(str(continued.get("conversation_url") or ""))
+            context_url = str(continued.get("conversation_context_url") or canonical or "")
+            if not canonical or _canonical_chatgpt_conversation_url(context_url) != canonical:
+                raise CdpError("shared_conversation_binding_missing")
+            continued_from_share = True
+        else:
+            if not canonical:
+                raise ValueError("conversation_url_invalid")
+            context_url = conversation_context_url or canonical
+            if _canonical_chatgpt_conversation_url(context_url) != canonical:
+                raise ValueError("conversation_context_mismatch")
         inferred_project_url = chatgpt_project_new_chat_url(context_url)
         project_url = project_url or inferred_project_url
         if project_url and not project_name:
@@ -791,7 +802,12 @@ class GptWorkController:
         if rank is not None:
             existing = self.queue.reorder(existing.job_id, rank)
         result = self.start_job(existing.job_id)
-        return {"job": self.queue.get_job(existing.job_id).model_dump(mode="json"), "start": result, "server_chat_created": False}
+        return {
+            "job": self.queue.get_job(existing.job_id).model_dump(mode="json"),
+            "start": result,
+            "server_chat_created": False,
+            "continued_from_share": continued_from_share,
+        }
 
     def send_message(self, job_id: str, text: str) -> dict[str, Any]:
         job = self.queue.get_job(job_id)

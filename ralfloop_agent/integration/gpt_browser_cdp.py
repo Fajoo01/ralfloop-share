@@ -30,6 +30,20 @@ def _canonical_chatgpt_conversation_url(value: str) -> str | None:
     return f"https://chatgpt.com/c/{match.group(1)}"
 
 
+def _safe_chatgpt_shared_url(value: str) -> str | None:
+    try:
+        parsed = urllib.parse.urlparse(str(value or "").strip())
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").lower()
+    if host != "chatgpt.com" and not host.endswith(".chatgpt.com"):
+        return None
+    match = re.fullmatch(r"/share/([A-Za-z0-9-]+)", parsed.path.rstrip("/"))
+    if not match:
+        return None
+    return f"https://chatgpt.com/share/{match.group(1)}"
+
+
 def _chatgpt_project_conversation_parts(value: str) -> tuple[str, str] | None:
     try:
         parsed = urllib.parse.urlparse(str(value or ""))
@@ -1202,6 +1216,91 @@ class ChromeCdp:
         self._page_call(target.websocket_url, "Page.enable")
         self._page_call(target.websocket_url, "Page.navigate", {"url": CHATGPT_ORIGIN})
         return target_id
+
+    def continue_shared_conversation(
+        self,
+        share_url: str,
+        *,
+        background: bool = True,
+        wait_timeout_s: float = 25.0,
+    ) -> dict[str, Any]:
+        shared = _safe_chatgpt_shared_url(share_url)
+        if not shared:
+            raise CdpError("shared_conversation_url_invalid")
+        previous_ids = {target.target_id for target in self.targets()}
+        target_id = self.create_target(shared, background=background)
+        clicked = False
+        click_label = ""
+        try:
+            deadline = time.monotonic() + max(5.0, min(float(wait_timeout_s), 45.0))
+            while time.monotonic() < deadline:
+                targets = self.targets()
+                for current in targets:
+                    canonical = _canonical_chatgpt_conversation_url(current.url)
+                    if not canonical:
+                        continue
+                    if current.target_id == target_id or (clicked and current.target_id not in previous_ids):
+                        if current.target_id != target_id:
+                            try:
+                                self.close_target(target_id)
+                            except CdpError:
+                                pass
+                        return {
+                            "new_target_id": current.target_id,
+                            "conversation_url": canonical,
+                            "conversation_context_url": current.url,
+                            "source_share_url": shared,
+                            "continued_from_share": True,
+                            "continue_control": click_label,
+                            "server_chat_deleted": False,
+                        }
+                current = next((item for item in targets if item.target_id == target_id), None)
+                if current is None:
+                    time.sleep(0.2)
+                    continue
+                if clicked or not current.websocket_url:
+                    time.sleep(0.25)
+                    continue
+                expression = r'''(() => {
+                  const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
+                  const visible = el => {
+                    if (!el || el.disabled) return false;
+                    const r = el.getBoundingClientRect();
+                    const s = getComputedStyle(el);
+                    return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+                  };
+                  const wanted = /^(?:continue(?: this)? conversation|continue in chatgpt|continua(?: questa)? conversazione|continua in chatgpt)$/i;
+                  const controls = [...document.querySelectorAll('button,a,[role="button"]')].filter(visible);
+                  const control = controls.find(el => wanted.test(clean(el.innerText || el.textContent || el.getAttribute('aria-label'))));
+                  if (!control) return JSON.stringify({clicked:false});
+                  const label = clean(control.innerText || control.textContent || control.getAttribute('aria-label'));
+                  control.click();
+                  return JSON.stringify({clicked:true,label});
+                })()'''
+                result = self._page_call(
+                    current.websocket_url,
+                    "Runtime.evaluate",
+                    {"expression": expression, "returnByValue": True},
+                    timeout_s=max(1.0, min(self.timeout_s, 5.0)),
+                )
+                raw = (result.get("result") or {}).get("value")
+                try:
+                    state = json.loads(raw) if isinstance(raw, str) else {}
+                except json.JSONDecodeError:
+                    state = {}
+                if state.get("clicked"):
+                    clicked = True
+                    click_label = str(state.get("label") or "")[:120]
+                time.sleep(0.3)
+            if clicked:
+                raise CdpError("shared_conversation_continue_timeout")
+            raise CdpError("shared_conversation_continue_control_missing")
+        except Exception:
+            try:
+                self.close_target(target_id)
+            except CdpError:
+                pass
+            raise
 
     def start_chatgpt_job(
         self,

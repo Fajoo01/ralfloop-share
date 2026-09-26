@@ -868,3 +868,47 @@ def test_start_job_recovers_plain_chat_via_sidebar_when_deeplink_fails(tmp_path:
     assert rebound.conversation_context_url == "https://chatgpt.com/c/plain-chat"
     assert result["errors"] == []
     assert any(target_id.startswith("reopen-") for target_id in cdp.closed)
+
+
+def test_resume_shared_link_continues_private_copy_before_queueing(tmp_path: Path) -> None:
+    queue = make_queue(tmp_path)
+
+    class SharedLinkCdp(FakeCdp):
+        def __init__(self) -> None:
+            super().__init__()
+            self.shared_urls: list[str] = []
+
+        def continue_shared_conversation(self, share_url: str, *, background: bool = True, wait_timeout_s: float = 25.0):
+            self.shared_urls.append(share_url)
+            target_id = "continued-share-target"
+            canonical = "https://chatgpt.com/c/private-copy-1"
+            self._targets.append(BrowserTarget(target_id, "page", canonical, "Shared copy", f"ws://{target_id}"))
+            return {
+                "new_target_id": target_id,
+                "conversation_url": canonical,
+                "conversation_context_url": canonical,
+                "continued_from_share": True,
+                "server_chat_deleted": False,
+            }
+
+    cdp = SharedLinkCdp()
+    with running_frontend(queue, cdp) as (port, origin):
+        status, body = request(
+            port,
+            "POST",
+            "/api/history/resume",
+            origin=origin,
+            payload={
+                "conversation_url": "https://chatgpt.com/share/6ab726f8-ff9c-83ed-b072-d4f3cfda89a7?ogimg=plain",
+                "conversation_context_url": None,
+                "title": "Chat condivisa",
+                "project_name": "",
+                "project_url": None,
+            },
+        )
+
+    assert status == 200
+    assert cdp.shared_urls == ["https://chatgpt.com/share/6ab726f8-ff9c-83ed-b072-d4f3cfda89a7"]
+    assert body["continued_from_share"] is True
+    assert body["job"]["conversation_url"] == "https://chatgpt.com/c/private-copy-1"
+    assert body["job"]["state"] == "active"

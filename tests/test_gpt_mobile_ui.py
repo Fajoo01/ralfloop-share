@@ -346,11 +346,19 @@ def test_gpt_browser_whatsapp_surface_has_apk_voice_attachments_and_completion_n
     root = Path(__file__).resolve().parents[1]
     html = (root / "openshell_backend" / "bottazzi_gpt_mobile_ui.html").read_text(encoding="utf-8")
     service = (root / "android" / "gpt-browser-app" / "app" / "src" / "main" / "java" / "org" / "tiremminnanz" / "bottazzi" / "BotTazziNotifyService.java").read_text(encoding="utf-8")
+    main = (root / "android" / "gpt-browser-app" / "app" / "src" / "main" / "java" / "org" / "tiremminnanz" / "bottazzi" / "MainActivity.java").read_text(encoding="utf-8")
     assert 'id="attachBtn"' in html
     assert 'id="sendMic"' in html
     assert 'id="apkBtn"' in html
     assert "/gpt-browser.apk" in html
     assert "navigator.mediaDevices.getUserMedia({audio:true})" in html
+    assert "r.start(250)" in html
+    assert "Registrazione… tocca ■ per inviare" in html
+    assert "addEventListener('pointerdown'" not in html
+    assert "window.BotTazziNative.speak(text)===true" in html
+    assert "speechSynthesis.speak(u)" in html
+    assert "public boolean speak(String text)" in main
+    assert "textToSpeechReady" in main
     assert "jobs/${j.job_id}/attachment" in html
     assert '"review".equals(current)' in service
     assert '"Lavoro finito"' in service
