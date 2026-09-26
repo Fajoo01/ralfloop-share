@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 from urllib import request
+from urllib.parse import urlsplit, urlunsplit
 
 DEFAULT_QUEUE_URL = "http://127.0.0.1:19201/api/jobs"
 
@@ -16,6 +17,21 @@ def _canonical(value: Any) -> str:
 
 def _critical_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
     return [row for row in report.get("filesystems", []) if row.get("severity") == "critical"]
+
+
+def _queue_state_url(queue_url: str) -> str:
+    parsed = urlsplit(queue_url)
+    path = parsed.path[:-len("/jobs")] + "/state" if parsed.path.endswith("/jobs") else "/api/state"
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
+def _existing_job_for_trigger(trigger: Any, queue_url: str, opener: Callable[..., Any]) -> dict[str, Any] | None:
+    needle = f"Trigger: {_canonical(trigger)}"
+    req = request.Request(_queue_state_url(queue_url), method="GET")
+    with opener(req, timeout=10) as response:
+        state = json.loads(response.read().decode("utf-8"))
+    jobs = ((state.get("queue") or {}).get("jobs") or [])
+    return next((job for job in jobs if needle in str(job.get("prompt") or "")), None)
 
 
 def build_job_payload(report: dict[str, Any]) -> dict[str, Any]:
@@ -38,7 +54,7 @@ def build_job_payload(report: dict[str, Any]) -> dict[str, Any]:
         "prompt": prompt,
         "project_name": "",
         "project_url": None,
-        "auto_start": True,
+        "auto_start": False,
     }
 
 
@@ -62,6 +78,15 @@ def enqueue_report(
             previous = {}
         if _canonical(previous.get("trigger")) == _canonical(trigger):
             return {"action": "duplicate_skipped", "job_id": previous.get("job_id")}
+
+    existing = _existing_job_for_trigger(trigger, queue_url, opener)
+    if existing is not None:
+        job_id = existing.get("job_id")
+        marker_path.write_text(
+            json.dumps({"trigger": trigger, "job_id": job_id}, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return {"action": "queue_duplicate_skipped", "job_id": job_id}
 
     payload = build_job_payload(report)
     body = json.dumps(payload).encode("utf-8")
