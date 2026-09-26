@@ -1198,3 +1198,26 @@ def test_goal_marker_wins_over_stale_stop_button_and_turn_count_mismatch(tmp_pat
     assert cdp.messages == []
     assert notices == ["Managed"]
     assert report["actions"][0]["reason"] == "goal_complete"
+
+
+def test_default_completion_notifier_uses_telemetry_prefix(monkeypatch):
+    sent = {}
+
+    class FakeSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def connect(self, path):
+            sent["path"] = path
+
+        def send(self, payload):
+            sent["payload"] = payload
+            return len(payload)
+
+    monkeypatch.setattr("ralfloop_agent.integration.gpt_queue_shepherd.socket.socket", lambda *args, **kwargs: FakeSocket())
+    result = GptQueueShepherd._notify_completion("Calendario")
+    assert result == {"ok": True, "message": "BOT-TAZZI · ✅ Calendario — completato"}
+    assert sent["payload"] == "BOT-TAZZI · ✅ Calendario — completato".encode("utf-8")

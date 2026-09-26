@@ -117,7 +117,7 @@ class GptQueueShepherd:
     def _notify_completion(title: str) -> dict[str, Any]:
         socket_path = os.getenv("BOTTAZZI_TELEMETRY_SOCKET", "/run/bottazzi-telemetry.sock")
         clean_title = " ".join(str(title or "Lavoro GPT").split())[:240]
-        message = f"✅ {clean_title} — completato"
+        message = f"BOT-TAZZI · ✅ {clean_title} — completato"
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as client:
                 client.connect(socket_path)
