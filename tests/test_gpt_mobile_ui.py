@@ -375,3 +375,49 @@ def test_gpt_browser_surfaces_live_activity_and_bounded_goal_protocol() -> None:
     assert "window.__bottazziGptTelemetryV3 || window.__bottazziGptTelemetryV2" in cdp
     assert "[[BOTTAZZI_GOAL_CONTINUE]]" in shepherd
     assert 'last_error="goal_status_missing"' in shepherd
+
+
+def test_dedicated_browser_exposes_deepseek_and_kimi_provider_switches(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[1]
+    html = (root / "web" / "gpt_queue.html").read_text(encoding="utf-8")
+    mobile = (root / "openshell_backend" / "bottazzi_gpt_mobile_ui.html").read_text(encoding="utf-8")
+    frontend = (root / "ralfloop_agent" / "integration" / "gpt_frontend.py").read_text(encoding="utf-8")
+    assert 'data-provider="chatgpt"' in html
+    assert 'data-provider="deepseek"' in html
+    assert 'data-provider="kimi"' in html
+    assert "/api/providers/open" in html
+    assert 'data-provider-open="deepseek"' in mobile
+    assert 'data-provider-open="kimi"' in mobile
+    assert "https://chat.deepseek.com/" in frontend
+    assert "https://www.kimi.com/" in frontend
+    assert '"queue_managed": name == "chatgpt"' in frontend
+
+    class ProviderCdp(FakeCdp):
+        def __init__(self):
+            super().__init__()
+            self.browser_calls = []
+
+        def _browser_call(self, method, params=None):
+            self.browser_calls.append((method, dict(params or {})))
+            return {}
+
+    cdp = ProviderCdp()
+    cdp._targets.append(BrowserTarget("deepseek-existing", "page", "https://chat.deepseek.com/a/chat/s/test", "DeepSeek", "ws://deepseek-existing"))
+    controller = GptWorkController(make_queue(tmp_path), cdp)
+
+    existing = controller.open_provider("deepseek")
+    assert existing["target_id"] == "deepseek-existing"
+    assert existing["created"] is False
+    assert existing["queue_managed"] is False
+    assert cdp.browser_calls[-1] == ("Target.activateTarget", {"targetId": "deepseek-existing"})
+
+    created = controller.open_provider("kimi")
+    assert created["created"] is True
+    assert created["queue_managed"] is False
+    kimi_target = next(t for t in cdp.targets() if t.target_id == created["target_id"])
+    assert kimi_target.url == "https://www.kimi.com/"
+
+    providers = {row["provider"]: row for row in controller.provider_status()}
+    assert providers["chatgpt"]["queue_managed"] is True
+    assert providers["deepseek"]["open"] is True
+    assert providers["kimi"]["open"] is True

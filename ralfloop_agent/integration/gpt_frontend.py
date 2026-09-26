@@ -30,6 +30,24 @@ ROOT = Path(__file__).resolve().parents[2]
 UI_PATH = ROOT / "web" / "gpt_queue.html"
 OCCUPYING_STATES = {GptJobState.STARTING, GptJobState.ACTIVE}
 
+BROWSER_PROVIDERS = {
+    "chatgpt": {
+        "label": "ChatGPT",
+        "url": "https://chatgpt.com/",
+        "hosts": ("chatgpt.com",),
+    },
+    "deepseek": {
+        "label": "DeepSeek",
+        "url": "https://chat.deepseek.com/",
+        "hosts": ("chat.deepseek.com",),
+    },
+    "kimi": {
+        "label": "Kimi",
+        "url": "https://www.kimi.com/",
+        "hosts": ("www.kimi.com", "kimi.com"),
+    },
+}
+
 
 class ApiInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -59,6 +77,10 @@ class ResumeChat(ApiInput):
 
 class OpenProject(ApiInput):
     project_url: str = Field(min_length=1, max_length=1200)
+
+
+class OpenProvider(ApiInput):
+    provider: str = Field(min_length=1, max_length=40)
 
 
 class SendMessage(ApiInput):
@@ -547,6 +569,59 @@ class GptWorkController:
             "project": {"title": name, "url": project_url, "project_id": project_id},
             "chats": rows,
             "count": len(rows),
+        }
+
+    @staticmethod
+    def _provider_for_url(url: str) -> str | None:
+        try:
+            host = (urlparse(str(url or "")).hostname or "").lower()
+        except ValueError:
+            return None
+        for name, spec in BROWSER_PROVIDERS.items():
+            if host in spec["hosts"]:
+                return name
+        return None
+
+    def provider_status(self) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        pages = [target for target in self.cdp.targets() if target.target_type == "page"]
+        for name, spec in BROWSER_PROVIDERS.items():
+            matches = [target for target in pages if self._provider_for_url(target.url) == name]
+            rows.append({
+                "provider": name,
+                "label": spec["label"],
+                "url": spec["url"],
+                "open": bool(matches),
+                "target_id": matches[-1].target_id if matches else None,
+                "open_count": len(matches),
+                "queue_managed": name == "chatgpt",
+            })
+        return rows
+
+    def open_provider(self, provider: str) -> dict[str, Any]:
+        name = str(provider or "").strip().lower()
+        spec = BROWSER_PROVIDERS.get(name)
+        if spec is None:
+            raise ValueError("provider_not_supported")
+        pages = [
+            target
+            for target in self.cdp.targets()
+            if target.target_type == "page" and self._provider_for_url(target.url) == name
+        ]
+        created = False
+        if pages:
+            target_id = pages[-1].target_id
+            self.cdp._browser_call("Target.activateTarget", {"targetId": target_id})
+        else:
+            target_id = self.cdp.create_target(spec["url"], background=False)
+            created = True
+        return {
+            "action": "provider_opened",
+            "provider": name,
+            "label": spec["label"],
+            "target_id": target_id,
+            "created": created,
+            "queue_managed": name == "chatgpt",
         }
 
     def open_project(self, project_url: str) -> dict[str, Any]:
@@ -1132,6 +1207,7 @@ class GptWorkController:
             job["live_assistant_turns"] = int((live or {}).get("assistant_turns") or 0)
         limit = int(base["settings"]["max_open_chats"])
         managed = sum(1 for row in browser_rows if row["managed"])
+        base["providers"] = self.provider_status()
         base["browser"] = {
             "ok": True,
             "endpoint": self.cdp.endpoint,
@@ -1471,6 +1547,13 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
         if not self._mutation_allowed():
             return
         try:
+            if path == "/api/providers/open":
+                payload = self._validated(OpenProvider)
+                if payload is None:
+                    return
+                assert isinstance(payload, OpenProvider)
+                self._send_json(200, {"ok": True, **controller.open_provider(payload.provider)})
+                return
             if path == "/api/projects/open":
                 payload = self._validated(OpenProject)
                 if payload is None:
