@@ -25,6 +25,7 @@ from .gpt_browser_cdp import (
 )
 from .gpt_session_rollover import chatgpt_project_new_chat_url
 from .gpt_work_queue import GptJobState, GptWorkJob, GptWorkQueue
+from .gpt_power import PowerGuardedCdp, browser_operation
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -97,11 +98,33 @@ class GptWorkController:
 
     def __init__(self, queue: GptWorkQueue, cdp: ChromeCdp) -> None:
         self.queue = queue
-        self.cdp = cdp
+        self.cdp = PowerGuardedCdp(cdp, queue)
         self._project_url_cache: dict[str, str] = {}
         self._companion_cache: dict[str, tuple[float, str, dict[str, Any]]] = {}
         self._companion_cache_ttl_s = 8.0
         self._companion_probe_interval_s = 4.0
+
+    def set_power(self, enabled: bool) -> dict[str, Any]:
+        # Close the gate before waiting for an in-flight browser operation.
+        if not enabled:
+            self.queue.set_power_enabled(False)
+            self.queue.set_power_stop_complete(False)
+        errors = []
+        with browser_operation(self.queue):
+            if enabled:
+                self.queue.set_power_enabled(True)
+            else:
+                self.queue.set_power_enabled(False)
+                for job in self.queue.list_jobs():
+                    if not job.target_id:
+                        continue
+                    try:
+                        self.cdp.raw.stop_chatgpt_response(job.target_id)
+                        self.cdp.raw.close_target(job.target_id)
+                    except (CdpError, OSError, RuntimeError) as exc:
+                        errors.append({"job_id": job.job_id, "error": str(exc)[:200]})
+                self.queue.set_power_stop_complete(not errors)
+        return {"ok": not errors, **self.queue.power_status(), "errors": errors}
 
     def browser_snapshot(self) -> BrowserSnapshot:
         by_id: dict[str, Any] = {}
@@ -1132,11 +1155,13 @@ class GptWorkController:
         return self.queue.set_state(job.job_id, state)
 
     def runtime_state(self, *, reconcile: bool = True) -> dict[str, Any]:
-        browser = self.reconcile() if reconcile else self.browser_snapshot()
+        enabled = self.queue.power_enabled()
+        browser = (self.reconcile() if reconcile else self.browser_snapshot()) if enabled else BrowserSnapshot({}, {}, frozenset(), 0, 0)
         occupied = self._occupied_job_ids(browser)
         settings = self.queue.settings()
         jobs = self.queue.list_jobs()
         return {
+            "power": {"enabled": enabled},
             "browser": {
                 "ok": True,
                 "endpoint": self.cdp.endpoint,
@@ -1238,6 +1263,10 @@ class GptWorkController:
 
     def dashboard_snapshot(self) -> dict[str, Any]:
         base = self.queue.snapshot()
+        base["power"] = self.queue.power_status()
+        if not base["power"]["enabled"]:
+            base["browser"] = {"ok": True, "open_chats": [], "power_off": True}
+            return base
         browser_rows = self.browser_rows()
         live_by_job = {row["job_id"]: row for row in browser_rows if row.get("job_id")}
         for job in base.get("jobs", []):
@@ -1525,6 +1554,9 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
             except (CdpError, OSError) as exc:
                 self._error(503, str(exc))
             return
+        if path == "/api/power":
+            self._send_json(200, self.server.queue.power_status())
+            return
         if path == "/api/history":
             try:
                 self._send_json(200, {"ok": True, **self.server.controller.account_history(**{key: parse_qs(urlparse(self.path).query).get(key, [""])[0] for key in ("query", "project_id", "cursor")})})
@@ -1553,6 +1585,15 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         queue = self.server.queue
         controller = self.server.controller
+        if path in {"/api/power/off", "/api/power/on"}:
+            if not self._mutation_allowed():
+                return
+            result = controller.set_power(path.endswith("/on"))
+            self._send_json(200 if result["ok"] else 503, result)
+            return
+        if not queue.power_enabled():
+            self._error(409, "gpt_browser_power_off")
+            return
         if path == "/api/audio/transcribe":
             if not self._audio_mutation_allowed():
                 return

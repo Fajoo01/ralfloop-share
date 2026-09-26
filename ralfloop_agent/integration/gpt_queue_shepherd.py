@@ -85,8 +85,8 @@ class GptQueueShepherd:
         completion_notifier: Callable[[str], dict[str, Any]] | None = None,
     ) -> None:
         self.queue = queue
-        self.cdp = cdp
         self.controller = GptWorkController(queue, cdp)
+        self.cdp = self.controller.cdp
         self.policy = policy or GptQueueShepherdPolicy()
         self.completion_notifier = completion_notifier or self._notify_completion
 
@@ -295,6 +295,8 @@ class GptQueueShepherd:
         )
 
     def run_once(self, *, auto_start: bool = True) -> dict[str, Any]:
+        if not self.queue.power_enabled():
+            return {"ok": True, "power_off": True, "actions": []}
         self.controller.reconcile()
         actions: list[dict[str, Any]] = []
 

@@ -84,6 +84,32 @@ class GptWorkQueue:
         conn.execute("PRAGMA busy_timeout=5000")
         return conn
 
+    def power_enabled(self) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT setting_value FROM gpt_queue_settings WHERE setting_key='power_enabled'"
+            ).fetchone()
+        return row is None or row[0] == "1"
+
+    def set_power_enabled(self, enabled: bool) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO gpt_queue_settings(setting_key, setting_value) VALUES('power_enabled', ?)",
+                ("1" if enabled else "0",),
+            )
+
+    def power_status(self) -> dict:
+        with self._connect() as conn:
+            row = conn.execute("SELECT setting_value FROM gpt_queue_settings WHERE setting_key='power_stop_complete'").fetchone()
+        return {"enabled": self.power_enabled(), "stop_complete": row is not None and row[0] == "1"}
+
+    def set_power_stop_complete(self, complete: bool) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO gpt_queue_settings(setting_key, setting_value) VALUES('power_stop_complete', ?)",
+                ("1" if complete else "0",),
+            )
+
     def _init_schema(self) -> None:
         with self._connect() as conn:
             conn.execute(

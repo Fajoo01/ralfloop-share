@@ -87,6 +87,13 @@ public final class BotTazziNotifyService extends Service {
         while (running) {
             try {
                 JSONObject snapshot = fetchQueue();
+                JSONObject power = snapshot.optJSONObject("power");
+                if (power != null && !power.optBoolean("enabled", true)) {
+                    getSharedPreferences("gpt_power", MODE_PRIVATE).edit().putBoolean("enabled", false).apply();
+                    running = false;
+                    stopSelf();
+                    return;
+                }
                 processSnapshot(snapshot);
                 JSONArray jobs = snapshot.optJSONArray("jobs");
                 int count = jobs == null ? 0 : jobs.length();
@@ -121,7 +128,7 @@ public final class BotTazziNotifyService extends Service {
         connection.setConnectTimeout(5_000);
         connection.setReadTimeout(10_000);
         connection.setRequestProperty("Accept", "application/json");
-        String cookie = CookieManager.getInstance().getCookie(BuildConfig.APP_URL);
+        String cookie = CookieManager.getInstance().getCookie(gptSnapshotUrl());
         if (cookie != null && !cookie.trim().isEmpty()) {
             connection.setRequestProperty("Cookie", cookie);
         }

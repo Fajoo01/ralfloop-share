@@ -33,6 +33,7 @@ public final class MainActivity extends Activity {
     private static final int FILE_CHOOSER_REQUEST = 4103;
 
     private WebView webView;
+    private GptPowerControl powerControl;
     private ValueCallback<Uri[]> fileCallback;
     private Uri pendingCameraUri;
     private TextToSpeech textToSpeech;
@@ -51,6 +52,11 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
         );
+        powerControl = new GptPowerControl(this);
+        root.addView(powerControl, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            (int) (56 * getResources().getDisplayMetrics().density)
+        ));
         setContentView(root);
         installSafeInsets(root);
 
@@ -144,6 +150,9 @@ public final class MainActivity extends Activity {
                 right = insets.getSystemWindowInsetRight();
                 bottom = insets.getSystemWindowInsetBottom();
             }
+            powerControl.setTranslationY(top);
+            powerControl.setPadding(left, 0, right, 0);
+            top += (int) (56 * getResources().getDisplayMetrics().density);
             FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) webView.getLayoutParams();
             if (
                 params.leftMargin != left || params.topMargin != top
@@ -331,6 +340,7 @@ public final class MainActivity extends Activity {
     }
 
     private void startNotificationService() {
+        if (!getSharedPreferences("gpt_power", MODE_PRIVATE).getBoolean("enabled", true)) return;
         Intent intent = new Intent(this, BotTazziNotifyService.class);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent);
