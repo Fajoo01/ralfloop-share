@@ -189,10 +189,25 @@ public final class BotTazziNotifyService extends Service {
         if ("temporary_access_limited".equals(error)) {
             return "ChatGPT ha limitato temporaneamente l'accesso. Bot-tazzi aspetta prima di inviare altri prompt.";
         }
+        if ("job_start_binding_missing".equals(error)) {
+            return "Bot-tazzi non è riuscito a collegare questo lavoro alla nuova chat. Aprilo per riprovare.";
+        }
+        if ("job_has_no_open_target".equals(error)
+            || "job_target_not_open".equals(error)
+            || "job_target_assignment_mismatch".equals(error)
+            || "chat_not_open_locally".equals(error)) {
+            return "La chat collegata a questo lavoro non è più disponibile qui. Apri il lavoro per riprenderlo.";
+        }
+        if ("manual_close_hold".equals(error)) {
+            return "Hai chiuso la chat: il lavoro resta in pausa finché non lo riprendi.";
+        }
+        if ("prompt_required".equals(error)) {
+            return "Manca l'istruzione da inviare a GPT.";
+        }
         if (error.contains("stalled") || error.contains("unavailable_after_retries")) {
             return "Il lavoro si è fermato e il recupero automatico non è riuscito: aprilo per controllare.";
         }
-        return "Il lavoro richiede attenzione. Apri GPT Browser per vedere cosa manca.";
+        return "Problema tecnico del lavoro. Apri GPT Browser per vedere cosa serve e riprovare.";
     }
 
     private void processSnapshot(JSONObject snapshot) {

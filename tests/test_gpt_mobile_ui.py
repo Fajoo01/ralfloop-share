@@ -365,6 +365,11 @@ def test_gpt_browser_whatsapp_surface_has_apk_voice_attachments_and_completion_n
     assert '"✋ Serve una tua azione · "' in service
     assert '"⏳ GPT in pausa · "' in service
     assert '"🔥 Priorità alta · "' in service
+    assert "['⚠️ Avvio non riuscito','err']" in html
+    assert "GPT Browser non è riuscito a collegare questo lavoro alla nuova chat. Il lavoro va riprovato." in html
+    assert "return'Problema tecnico del lavoro. Apri GPT Browser per vedere cosa serve e riprovare.'" in html
+    assert '"job_start_binding_missing".equals(error)' in service
+    assert "Bot-tazzi non è riuscito a collegare questo lavoro alla nuova chat. Aprilo per riprovare." in service
     assert '"bottazzi_gpt_notifications_v2"' in service
 
 
