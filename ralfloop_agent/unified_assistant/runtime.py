@@ -428,6 +428,24 @@ def unified_route_probe(
             "mcp_used": [], "mcp_connectors": [], "write_policy": "policy_gated",
             "evidence_first": True, "requires_confirmation": True,
         }
+    if _ciav_password_recovery_intent(text) or _ciav_vault_reprovision_intent(text):
+        destructive = _ciav_vault_reprovision_intent(text)
+        task_mode = "external_action" if destructive else "tool_backed_read"
+        return {
+            "task_mode": task_mode,
+            "mode": task_mode,
+            "interaction_class": "EXTERNAL_ACTION" if destructive else "TOOL_BACKED_READ",
+            "intent": "ciav.vault.reprovision" if destructive else "ciav.password.recovery",
+            "arguments": {"explicit_data_loss_consent": destructive},
+            "domains": ["ciav"],
+            "skills_used": ["ciav.recovery"],
+            "domain_skills": ["ciav.recovery"],
+            "mcp_used": [],
+            "mcp_connectors": [],
+            "write_policy": "policy_gated" if destructive else "no_write",
+            "evidence_first": True,
+            "requires_confirmation": destructive,
+        }
     registry = UnifiedRegistryFacade()
     planner = _build_unified_planner(registry)
     plan = planner.validate(planner.plan(text))

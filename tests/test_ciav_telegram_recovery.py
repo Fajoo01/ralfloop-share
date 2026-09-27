@@ -105,3 +105,22 @@ def test_ciav_reprovision_approval_is_not_auto_executable():
     from ralfloop_agent.domains import telegram_approval_api
 
     assert "ciav_vault_reprovision" not in telegram_approval_api.MCP_AUTO_EXECUTE_ACTIONS
+
+
+def test_ciav_route_probe_keeps_meowgram_on_unified_backend(monkeypatch, tmp_path):
+    _configure(monkeypatch, tmp_path)
+    context = _context()
+
+    recovery = runtime.unified_route_probe("ho perso accesso CIAV", context)
+    assert recovery is not None
+    assert recovery["task_mode"] == "tool_backed_read"
+    assert recovery["intent"] == "ciav.password.recovery"
+    assert recovery["write_policy"] == "no_write"
+    assert recovery["requires_confirmation"] is False
+
+    reprovision = runtime.unified_route_probe("ricrea CIAV e perdo i dati", context)
+    assert reprovision is not None
+    assert reprovision["task_mode"] == "external_action"
+    assert reprovision["intent"] == "ciav.vault.reprovision"
+    assert reprovision["write_policy"] == "policy_gated"
+    assert reprovision["requires_confirmation"] is True
