@@ -359,6 +359,18 @@ def test_client_rejects_extra_discovered_capability(monkeypatch):
     assert Session.closed
 
 
+def test_client_accepts_known_optional_media_capabilities(monkeypatch):
+    import ralfloop_agent.teacher.web.client as module
+    from types import SimpleNamespace
+    class Session:
+        def __init__(self,*args,**kwargs): pass
+        def initialize(self): pass
+        def list_tools(self): return [SimpleNamespace(name=name) for name in [*ALL_TOOLS,*sorted(module.OPTIONAL_MEDIA_TOOLS)]]
+        def close(self): pass
+    monkeypatch.setattr(module,"MCPClientSession",Session)
+    assert TeacherClient(transport_factory=lambda:None).health() is True
+
+
 def test_malformed_semantic_result_awards_nothing(setup):
     state, app, (student,_), _ = setup
     a=app.generate(student,"fractions","free_answer")

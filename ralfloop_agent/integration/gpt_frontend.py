@@ -692,9 +692,10 @@ class GptWorkController:
         spec = BROWSER_PROVIDERS.get(name)
         if spec is None:
             raise ValueError("provider_not_supported")
+        provider_cdp = self.cdp.raw if name in {"kimi", "deepseek"} and hasattr(self.cdp, "raw") else self.cdp
         pages = [
             target
-            for target in self.cdp.targets()
+            for target in provider_cdp.targets()
             if target.target_type == "page" and self._provider_for_url(target.url) == name
         ]
         created = False
@@ -702,12 +703,12 @@ class GptWorkController:
             if name == "kimi":
                 pages.sort(key=lambda target: (0 if "kimi.ai" in target.url else 1, target.target_id))
             target_id = pages[0].target_id if name == "kimi" else pages[-1].target_id
-            self.cdp._browser_call("Target.activateTarget", {"targetId": target_id})
+            provider_cdp._browser_call("Target.activateTarget", {"targetId": target_id})
         else:
-            target_id = self.cdp.create_target(spec["url"], background=False)
+            target_id = provider_cdp.create_target(spec["url"], background=False)
             created = True
-        if hasattr(self.cdp, "raise_browser_window"):
-            self.cdp.raise_browser_window()
+        if hasattr(provider_cdp, "raise_browser_window"):
+            provider_cdp.raise_browser_window()
         return {
             "action": "provider_opened",
             "provider": name,
@@ -1734,6 +1735,23 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
             provider = queue.set_active_provider(payload.provider)
             self._send_json(200, {"ok": True, "active_provider": provider})
             return
+        if path == "/api/providers/open":
+            if not self._mutation_allowed():
+                return
+            payload = self._validated(OpenProvider)
+            if payload is None:
+                return
+            assert isinstance(payload, OpenProvider)
+            if payload.provider == "chatgpt" and not queue.power_enabled():
+                self._error(409, "gpt_browser_power_off")
+                return
+            try:
+                self._send_json(200, {"ok": True, **controller.open_provider(payload.provider)})
+            except ValueError as exc:
+                self._error(422, str(exc))
+            except (CdpError, OSError, RuntimeError) as exc:
+                self._error(409, str(exc))
+            return
         if not queue.power_enabled():
             self._error(409, "gpt_browser_power_off")
             return
@@ -1778,13 +1796,6 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
         if not self._mutation_allowed():
             return
         try:
-            if path == "/api/providers/open":
-                payload = self._validated(OpenProvider)
-                if payload is None:
-                    return
-                assert isinstance(payload, OpenProvider)
-                self._send_json(200, {"ok": True, **controller.open_provider(payload.provider)})
-                return
             if path == "/api/providers/query":
                 payload = self._validated(ProviderQuery)
                 if payload is None:
