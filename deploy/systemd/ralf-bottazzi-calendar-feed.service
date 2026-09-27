@@ -1,0 +1,25 @@
+[Unit]
+Description=Bot-tazzi Calendar VPN feed
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+Environment=BOTTAZZI_CALENDAR_FEED_HOST=10.252.14.7
+Environment=BOTTAZZI_CALENDAR_FEED_PORT=19218
+Environment=BOTTAZZI_NEXTCLOUD_COMPOSE=/home/bandi/selfhost/nextcloud/docker-compose.yml
+Environment=BOTTAZZI_NEXTCLOUD_CALENDAR_UID=bottazzi-agenda
+Environment=BOTTAZZI_NEXTCLOUD_CALENDAR_URI=bottazzi-agenda
+ExecStart=/usr/bin/python3 /home/bandi/.local/share/bottazzi-calendar-feed/ralf_bottazzi_calendar_feed.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/home/bandi/selfhost/nextcloud
+
+[Install]
+WantedBy=multi-user.target

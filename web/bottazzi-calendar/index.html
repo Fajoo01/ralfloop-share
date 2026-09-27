@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Bot-tazzi Calendar</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><div class="brand-mark">31</div><span>Bot-tazzi Calendar</span></div>
+  <button id="todayBtn" class="btn">Oggi</button>
+  <div class="nav-arrows"><button id="prevBtn" class="icon-btn">‹</button><button id="nextBtn" class="icon-btn">›</button></div>
+  <h1 id="periodTitle"></h1><div class="top-spacer"></div>
+  <input id="searchBox" class="search" type="search" placeholder="Cerca nel calendario">
+  <button id="refreshBtn" class="icon-btn" title="Aggiorna">↻</button>
+  <div class="view-switch"><button data-view="day">Giorno</button><button data-view="week">Settimana</button><button data-view="month" class="active">Mese</button></div>
+</header>
+<div class="shell">
+  <aside class="sidebar">
+    <button class="create-btn" id="createBtn"><span>＋</span> Crea</button>
+    <div class="mini-head"><strong id="miniTitle"></strong><div><button id="miniPrev">‹</button><button id="miniNext">›</button></div></div>
+    <div class="mini-week"><span>L</span><span>M</span><span>M</span><span>G</span><span>V</span><span>S</span><span>D</span></div>
+    <div id="miniCalendar" class="mini-grid"></div>
+    <div class="calendar-list"><h3>I miei calendari</h3><label><input type="checkbox" checked disabled><span class="dot"></span> Bot-tazzi Agenda</label><p class="source-note">Telefonate, email e WhatsApp</p></div>
+  </aside>
+  <main class="main"><div id="loading" class="loading">Caricamento calendario…</div><div id="calendar"></div></main>
+</div>
+<dialog id="eventDialog" class="event-dialog">
+  <button class="close-dialog" id="closeDialog">×</button>
+  <div class="event-color"></div>
+  <div class="event-body"><h2 id="eventTitle"></h2><p id="eventWhen"></p><p id="eventDescription" class="description"></p><p id="eventSource" class="event-source">Bot-tazzi Agenda</p><div class="event-actions"><button id="deleteEventBtn" class="btn danger">Elimina</button><button id="editEventBtn" class="btn primary">Modifica</button></div></div>
+</dialog>
+<dialog id="editorDialog" class="editor-dialog">
+  <form id="eventForm" method="dialog">
+    <input type="hidden" id="eventId">
+    <div class="editor-head"><h2 id="editorTitle">Nuovo evento</h2><button type="button" id="closeEditor" class="close-dialog">×</button></div>
+    <label>Titolo<input id="eventName" maxlength="500" required></label>
+    <div class="form-row"><label>Inizio<input id="eventStart" type="datetime-local" required></label><label>Fine<input id="eventEnd" type="datetime-local" required></label></div>
+    <label>Descrizione<textarea id="eventNotes" rows="5" maxlength="10000"></textarea></label>
+    <p id="editorError" class="editor-error"></p>
+    <div class="editor-actions"><button type="button" id="cancelEditor" class="btn">Annulla</button><button type="submit" class="btn primary">Salva</button></div>
+  </form>
+</dialog>
+<script src="/app.js"></script>
+</body>
+</html>
