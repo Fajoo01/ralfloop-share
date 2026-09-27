@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "policy_id": "print_submit_requires_fabio_approval",
+  "default": "deny",
+  "applies_to": [
+    "all_mcp_print_submit_actions",
+    "cups",
+    "ipp",
+    "lp",
+    "lpr",
+    "printer_gateway"
+  ],
+  "approval": {
+    "required": true,
+    "approver": "fabio",
+    "allowed_channels": ["telegram", "whatsapp"],
+    "must_reference_current_job": true,
+    "reusable": false,
+    "max_age_seconds": 3600,
+    "missing_or_unverifiable": "deny"
+  },
+  "before_approval": {
+    "allowed": ["prepare", "render", "preview", "validate"],
+    "forbidden": ["submit", "queue", "send_to_printer"]
+  },
+  "audit_required": [
+    "document_or_job_digest",
+    "printer",
+    "copies",
+    "approval_channel",
+    "approval_reference",
+    "approval_timestamp",
+    "submit_result"
+  ],
+  "notes": "No MCP or agent may submit a print job unless Fabio explicitly approves that exact job via Telegram or WhatsApp. Approval in chat, UI, shell, email or other channels does not unlock printing."
+}
