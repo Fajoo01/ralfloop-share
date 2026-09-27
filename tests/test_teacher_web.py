@@ -52,7 +52,7 @@ def test_migration_idempotent_backup_and_private_permissions(setup, tmp_path):
     state.backup(destination)
     with sqlite3.connect(destination) as conn:
         assert conn.execute("SELECT COUNT(*) FROM students").fetchone()[0] == 2
-        assert conn.execute("SELECT version FROM schema_version ORDER BY version").fetchall() == [(1,), (2,)]
+        assert conn.execute("SELECT version FROM schema_version ORDER BY version").fetchall() == [(1,), (2,), (3,)]
     assert state.path.stat().st_mode & 0o777 == 0o600
     assert "Credential!123" not in state.path.read_bytes().decode(errors="ignore")
 
@@ -376,3 +376,50 @@ def test_audio_preparation_is_idempotent(setup):
     first=app.material_action(student,material["material_id"],"audio")
     second=app.material_action(student,material["material_id"],"audio")
     assert first["audio_id"] == second["audio_id"]
+
+
+def test_portachiavi_oidc_requires_explicit_profile_link(setup):
+    state, _, profiles, _ = setup
+    assert state.login_oidc("member-subject-1") is None
+    link = state.begin_oidc_link("member-subject-1")
+    token = state.finish_oidc_link(link, "A", "Credential!123")
+    assert state.authenticate(token)["id"] == profiles[0]["id"]
+    repeat = state.login_oidc("member-subject-1")
+    assert state.authenticate(repeat)["id"] == profiles[0]["id"]
+    with state.connect() as conn:
+        rows = conn.execute("SELECT subject_hash,student FROM oidc_identities").fetchall()
+    assert len(rows) == 1
+    assert rows[0]["subject_hash"] != "member-subject-1"
+
+
+def test_portachiavi_oidc_http_flow_links_once(setup, monkeypatch):
+    from urllib.parse import parse_qs, urlparse
+    from ralfloop_agent.teacher.web import api as teacher_api
+
+    state, app, profiles, _ = setup
+    monkeypatch.setenv("TEACHER_WEB_AUTH_MODE", "oidc")
+    monkeypatch.setattr(teacher_api.oidc_auth, "authorization_url", lambda *, state: f"https://idp.example/authorize?state={state}")
+    monkeypatch.setattr(teacher_api.oidc_auth, "exchange_code", lambda code: {"sub": "member-subject-2"})
+    with TestClient(create_app(state, app.teacher, origin="http://testserver"), raise_server_exceptions=False) as client:
+        start = client.get("/oidc/login", follow_redirects=False)
+        assert start.status_code == 303
+        oidc_state = parse_qs(urlparse(start.headers["location"]).query)["state"][0]
+        callback = client.get(f"/oidc/callback?code=ok&state={oidc_state}", follow_redirects=False)
+        assert callback.status_code == 303
+        assert callback.headers["location"] == "/login?link=1"
+        assert "teacher_oidc_link=" in callback.headers["set-cookie"]
+        headers = {"origin": "http://testserver", "x-teacher-request": "1"}
+        linked = client.post(
+            "/api/oidc/link",
+            json={"membership_card_id": "A", "credential": "Credential!123"},
+            headers=headers,
+        )
+        assert linked.status_code == 200
+        assert "teacher_session=" in linked.headers["set-cookie"]
+        assert client.get("/api/home").status_code == 200
+        client.cookies.clear()
+        start = client.get("/oidc/login", follow_redirects=False)
+        oidc_state = parse_qs(urlparse(start.headers["location"]).query)["state"][0]
+        callback = client.get(f"/oidc/callback?code=ok&state={oidc_state}", follow_redirects=False)
+        assert callback.status_code == 303
+        assert callback.headers["location"] == "/home"

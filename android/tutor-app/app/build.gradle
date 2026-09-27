@@ -1,0 +1,42 @@
+plugins {
+    id 'com.android.application'
+}
+
+def requireHttpsProperty = { String name ->
+    if (!providers.gradleProperty(name).isPresent()) {
+        throw new GradleException(name + ' must be supplied at build time')
+    }
+    def value = providers.gradleProperty(name).get()
+    def parsed = new URI(value)
+    if (parsed.scheme != 'https' || !parsed.host) {
+        throw new GradleException(name + ' must be an https URL')
+    }
+    return value
+}
+
+def appUrl = requireHttpsProperty('TUTOR_APP_URL')
+def oidcOrigin = requireHttpsProperty('TUTOR_OIDC_ORIGIN')
+
+android {
+    namespace 'org.tiremminnanz.tutor'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'org.tiremminnanz.tutor'
+        minSdk 26
+        targetSdk 36
+        versionCode 1
+        versionName '1.0.0'
+        buildConfigField 'String', 'APP_URL', '"' + appUrl.replace('"', '\\"') + '"'
+        buildConfigField 'String', 'OIDC_ORIGIN', '"' + oidcOrigin.replace('"', '\\"') + '"'
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

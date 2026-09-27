@@ -5,6 +5,9 @@ from collections import defaultdict, deque
 import json
 import logging
 import os
+import secrets
+
+import requests
 import re
 from pathlib import Path
 import threading
@@ -12,9 +15,9 @@ import time
 import uuid
 from typing import Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..pedagogy import LearnerProfile
@@ -24,6 +27,7 @@ from .client import TeacherClient
 from .feedback_voice import FeedbackVoiceRegistry
 from .fish_tts import FishTTSCache
 from .state import State
+from . import oidc_auth
 
 STATIC = Path(__file__).with_name("static")
 log = logging.getLogger("teacher.web")
@@ -85,6 +89,11 @@ class AudioPrepare(Input):
 
 
 def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", secure_cookie=False, fish_tts=None):
+    prefix = os.environ.get("TEACHER_WEB_PREFIX", "").strip().rstrip("/")
+    if prefix and (not prefix.startswith("/") or "//" in prefix or ".." in prefix):
+        raise ValueError("invalid_teacher_web_prefix")
+    cookie_path = (prefix + "/") if prefix else "/"
+    public = lambda path: prefix + path
     state = state or State(os.environ.get("TEACHER_WEB_DB", "/var/lib/ralfloop-teacher-web/student.sqlite3"))
     learning = LearningApplication(state, teacher or TeacherClient())
     fish = fish_tts if fish_tts is not None else FishTTSCache.from_env()
@@ -196,8 +205,109 @@ def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", sec
             log.warning("health error_class=%s", type(exc).__name__)
             return JSONResponse({"status": "unavailable"}, status_code=503)
 
+    @app.get("/api/auth")
+    def auth_status(request: Request):
+        return {
+            "mode": oidc_auth.auth_mode(),
+            "pending_link": bool(request.cookies.get("teacher_oidc_link", "")),
+        }
+
+    @app.get("/oidc/login")
+    def oidc_login(request: Request):
+        if not oidc_auth.enabled():
+            return RedirectResponse(public("/login"), status_code=303)
+        oidc_state = secrets.token_urlsafe(32)
+        try:
+            target = oidc_auth.authorization_url(state=oidc_state)
+        except (RuntimeError, requests.RequestException, ValueError):
+            return JSONResponse({"error": "Portachiavi Tiremm non disponibile."}, status_code=503)
+        response = RedirectResponse(target, status_code=303)
+        response.set_cookie(
+            "teacher_oidc_state",
+            oidc_state,
+            max_age=600,
+            httponly=True,
+            secure=secure_cookie,
+            samesite="lax",
+            path=cookie_path,
+        )
+        return response
+
+    @app.get("/oidc/callback")
+    def oidc_callback(
+        request: Request,
+        code: str = "",
+        oidc_state: str = Query(default="", alias="state"),
+        error: str = "",
+    ):
+        expected = request.cookies.get("teacher_oidc_state", "")
+        if error or not code or not oidc_state or not expected or not secrets.compare_digest(expected, oidc_state):
+            return JSONResponse({"error": "Risposta Portachiavi non valida."}, status_code=400)
+        try:
+            identity = oidc_auth.exchange_code(code)
+            subject = str(identity["sub"])
+            token = state.login_oidc(subject)
+            if token is None:
+                link_token = state.begin_oidc_link(subject)
+                response = RedirectResponse(public("/login?link=1"), status_code=303)
+                response.set_cookie(
+                    "teacher_oidc_link",
+                    link_token,
+                    max_age=600,
+                    httponly=True,
+                    secure=secure_cookie,
+                    samesite="strict",
+                    path=cookie_path,
+                )
+            else:
+                response = RedirectResponse(public("/home"), status_code=303)
+                response.set_cookie(
+                    "teacher_session",
+                    token,
+                    httponly=True,
+                    secure=secure_cookie,
+                    samesite="strict",
+                    max_age=28800,
+                    path=cookie_path,
+                )
+        except (RuntimeError, requests.RequestException, ValueError, KeyError):
+            return JSONResponse({"error": "Accesso Portachiavi non riuscito."}, status_code=503)
+        response.delete_cookie("teacher_oidc_state", path=cookie_path)
+        return response
+
+    @app.post("/api/oidc/link")
+    def oidc_link(data: Login, request: Request):
+        if not oidc_auth.enabled():
+            raise HTTPException(404)
+        link_token = request.cookies.get("teacher_oidc_link", "")
+        if not link_token:
+            raise HTTPException(401, "Riapri Portachiavi Tiremm.")
+        try:
+            token = state.finish_oidc_link(
+                link_token,
+                data.membership_card_id,
+                data.credential,
+                request.client.host if request.client else "local",
+            )
+        except PermissionError:
+            raise HTTPException(401, "Profilo o associazione non validi.")
+        response = JSONResponse({"ok": True})
+        response.set_cookie(
+            "teacher_session",
+            token,
+            httponly=True,
+            secure=secure_cookie,
+            samesite="strict",
+            max_age=28800,
+            path=cookie_path,
+        )
+        response.delete_cookie("teacher_oidc_link", path=cookie_path)
+        return response
+
     @app.post("/api/login")
     def login(data: Login, request: Request):
+        if oidc_auth.enabled():
+            raise HTTPException(410, "Usa Portachiavi Tiremm.")
         try:
             token = state.login(data.membership_card_id, data.credential, request.client.host if request.client else "local")
         except PermissionError:
@@ -210,7 +320,7 @@ def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", sec
     def logout(request: Request, profile=Depends(student)):
         state.logout(request.cookies.get("teacher_session", ""))
         response = JSONResponse({"ok": True})
-        response.delete_cookie("teacher_session")
+        response.delete_cookie("teacher_session", path=cookie_path)
         return response
 
     @app.get("/api/home")

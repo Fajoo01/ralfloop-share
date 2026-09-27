@@ -1,5 +1,8 @@
 // All text, including model and material output, uses textContent. No HTML evaluation.
 import {BottazziAvatarController} from './avatar_controller.js';
+const appPrefix=new URL('..',import.meta.url).pathname.replace(/\/$/,'');
+const appUrl=path=>appPrefix+path;
+const resourceUrl=url=>(typeof url==='string'&&url.startsWith('/'))?appUrl(url):url;
 const avatarImage=document.querySelector('.brand img');
 const avatar=new BottazziAvatarController({onChange:controller=>{
   if(!avatarImage)return;
@@ -27,7 +30,7 @@ async function playTutorFeedbackVoice(url,generation,control){
   if(generation!==tutorVoiceGeneration || !url) return false;
   stopServerAudio();
   avatar.reset();
-  serverAudio=new Audio(url);
+  serverAudio=new Audio(resourceUrl(url));
   serverAudioCleanup=avatar.bindAudio(serverAudio);
   serverAudio.addEventListener('ended',()=>{if(generation===tutorVoiceGeneration)stopServerAudio();},{once:true});
   try{
@@ -85,14 +88,14 @@ function showError(error){notice.textContent=error.message||'Qualcosa non ha fun
 export async function api(path,data){
   const options={credentials:'same-origin',headers:{'X-Teacher-Request':'1'}};
   if(data!==undefined){options.method='POST';options.headers['Content-Type']='application/json';options.body=JSON.stringify(data);}
-  const response=await fetch('/api'+path,options);
+  const response=await fetch(appUrl('/api'+path),options);
   let body;try{body=await response.json();}catch{throw Error('Risposta non disponibile. Riprova.');}
   if(!response.ok){if(response.status===401 && path!='/login'){navigate('/login');}throw Error(typeof body.detail==='string'?body.detail:body.error||'Controlla i campi e riprova.');}
   return body;
 }
 
 export async function apiStream(path,data,onEvent){
-  const response=await fetch('/api'+path,{method:'POST',credentials:'same-origin',headers:{'X-Teacher-Request':'1','Content-Type':'application/json'},body:JSON.stringify(data)});
+  const response=await fetch(appUrl('/api'+path),{method:'POST',credentials:'same-origin',headers:{'X-Teacher-Request':'1','Content-Type':'application/json'},body:JSON.stringify(data)});
   if(!response.ok){let body={};try{body=await response.json();}catch{};throw Error(typeof body.detail==='string'?body.detail:body.error||'Streaming non disponibile. Riprova.');}
   if(!response.body)throw Error('Streaming non supportato dal browser.');
   const reader=response.body.getReader(),decoder=new TextDecoder();let pending='';
@@ -125,8 +128,8 @@ async function streamHelp(a,mode,question,feedback){
   if(!autoSpeak||(!window.speechSynthesis?.speaking&&!window.speechSynthesis?.pending))avatar.reset();
   return finalResult;
 }
-function navigate(path){history.pushState({},'',path);render().then(()=>window.scrollTo(0,0)).catch(showError);}
-document.addEventListener('click',e=>{const a=e.target.closest('a');if(a&&a.getAttribute('href')?.startsWith('/')&&!e.ctrlKey&&!e.metaKey){e.preventDefault();navigate(a.getAttribute('href'));}});
+function navigate(path){history.pushState({},'',appUrl(path));render().then(()=>window.scrollTo(0,0)).catch(showError);}
+document.addEventListener('click',e=>{const a=e.target.closest('a');if(!a||e.ctrlKey||e.metaKey)return;const u=new URL(a.href,location.href);if(u.origin===location.origin&&u.pathname.startsWith(appPrefix+'/')){e.preventDefault();navigate(u.pathname.slice(appPrefix.length)+(u.search||''));}});
 window.addEventListener('popstate',()=>render().catch(showError));
 function heading(title,sub){main.append(el('p','IL TUO DOPOSCUOLA',{class:'eyebrow'}),el('h1',title));if(sub)main.append(el('p',sub));}
 function field(form,label,name,type='text',value=''){const id='field-'+name;form.append(el('label',label,{for:id}));const input=el(type==='textarea'?'textarea':'input',null,{id,name,...(type==='textarea'?{rows:4}:{type}),required:'',maxlength:type==='textarea'?'10000':'256'});input.value=value;form.append(input);return input;}
@@ -134,7 +137,7 @@ function topicName(id){return home?.topics.find(t=>t.id===id)?.title||id;}
 function info(text){return el('p',text,{class:'feedback',role:'status'});}
 function tutorPersonSurface(){
   const surface=el('aside',null,{class:'tutor-person','data-teacher-avatar-surface':'1','data-state':'idle','aria-label':'Bot-tazzi Teacher'});
-  const face=el('img',null,{src:'/assets/bot-tazzi.jpeg',alt:'Bot-tazzi',width:'180',height:'180'});
+  const face=el('img',null,{src:appUrl('/assets/bot-tazzi.jpeg'),alt:'Bot-tazzi',width:'180',height:'180'});
   const meta=el('div',null,{class:'tutor-person-meta'});
   meta.append(el('strong','Bot-tazzi'),el('span','Pronto',{'data-teacher-avatar-status':'1',class:'tutor-person-status',role:'status','aria-live':'polite'}));
   surface.append(face,meta);return surface;
@@ -142,11 +145,18 @@ function tutorPersonSurface(){
 function stats(progress){const row=el('div',null,{class:'stats'});for(const [v,l] of [[progress.xp,'XP guadagnati'],[progress.level,'Livello personale'],[progress.streak,'Giorni di studio']])row.append(add(el('div'),el('strong',String(v)),el('span',l)));return row;}
 async function start(topic,kind){activity=await api('/activities',{topic,...(kind?{activity_type:kind}:{})});navigate('/activity?id='+activity.activity_id);}
 
-function login(){
-  const form=el('form',null,{class:'card login'});add(form,el('img',null,{src:'/assets/bot-tazzi.jpeg',alt:'Bot-tazzi ti dà il benvenuto',class:'welcome-logo',width:160,height:160}),el('p','BENVENUTO',{class:'eyebrow'}),el('h1','Il tuo prossimo passo comincia qui.'),el('p','Usa la tessera e la credenziale ricevuta dal doposcuola.'));
+async function login(){
+  const auth=await api('/auth');
+  const form=el('form',null,{class:'card login'});
+  add(form,el('img',null,{src:appUrl('/assets/bot-tazzi.jpeg'),alt:'Bot-tazzi ti dà il benvenuto',class:'welcome-logo',width:160,height:160}),el('p','BENVENUTO',{class:'eyebrow'}),el('h1','Il tuo prossimo passo comincia qui.'));
+  if(auth.mode==='oidc'&&!auth.pending_link){
+    form.append(el('p','Accedi con il Portachiavi Tiremm. Il Tutor non usa una password separata.'),button('Entra con Portachiavi Tiremm',async()=>{location.href=appUrl('/oidc/login');}));
+    main.append(form);return;
+  }
+  form.append(el('p',auth.pending_link?'Portachiavi verificato. Associa una sola volta il tuo profilo Tutor usando tessera e credenziale del doposcuola.':'Usa la tessera e la credenziale ricevuta dal doposcuola.'));
   const card=field(form,'Tessera','card');card.autocomplete='username';const credential=field(form,'Credenziale','credential','password');credential.autocomplete='current-password';
-  const submit=el('button','Entra',{type:'submit'});form.append(submit);
-  form.onsubmit=async e=>{e.preventDefault();submit.disabled=true;try{await api('/login',{membership_card_id:card.value,credential:credential.value});credential.value='';navigate('/home');}catch(error){showError(error);}finally{submit.disabled=false;}};
+  const submit=el('button',auth.pending_link?'Associa al Portachiavi':'Entra',{type:'submit'});form.append(submit);
+  form.onsubmit=async e=>{e.preventDefault();submit.disabled=true;try{await api(auth.pending_link?'/oidc/link':'/login',{membership_card_id:card.value,credential:credential.value});credential.value='';navigate('/home');}catch(error){showError(error);}finally{submit.disabled=false;}};
   main.append(form);
 }
 function dashboard(){
@@ -248,7 +258,7 @@ async function audioPage(){
     select.onchange=()=>{window.speechSynthesis?.cancel();stopServerAudio();avatar.reset();position=0;text.textContent=asset.tracks[Number(select.value)].text;};
     const save=()=>api('/audio/'+asset.id+'/position',{chapter:Number(select.value),position:Number(position)});
     const playBrowser=()=>{if(!('speechSynthesis' in window)||!speechSynthesis.getVoices().length)throw Error('Voce non disponibile sul dispositivo. Il testo è pronto; Bot-tazzi sta preparando l’audio.');stopServerAudio();speechSynthesis.cancel();avatar.reset();const track=asset.tracks[Number(select.value)];const offset=Math.min(position,track.text.length);const utterance=new SpeechSynthesisUtterance(track.text.slice(offset));avatar.bindSpeech(utterance);utterance.lang='it-IT';utterance.rate=Number(speed.value);utterance.onboundary=e=>{position=offset+e.charIndex;};utterance.onend=()=>{position=0;save().catch(showError);};speechSynthesis.speak(utterance);};
-    const playServer=async url=>{window.speechSynthesis?.cancel();stopServerAudio();avatar.reset();position=0;serverAudio=new Audio(url);serverAudio.playbackRate=Number(speed.value);serverAudioCleanup=avatar.bindAudio(serverAudio);serverAudio.addEventListener('ended',()=>{position=0;save().catch(showError);stopServerAudio();},{once:true});try{await serverAudio.play();}catch(error){stopServerAudio();throw Error('Audio di Bot-tazzi non disponibile. Riprova.');}};
+    const playServer=async url=>{window.speechSynthesis?.cancel();stopServerAudio();avatar.reset();position=0;serverAudio=new Audio(resourceUrl(url));serverAudio.playbackRate=Number(speed.value);serverAudioCleanup=avatar.bindAudio(serverAudio);serverAudio.addEventListener('ended',()=>{position=0;save().catch(showError);stopServerAudio();},{once:true});try{await serverAudio.play();}catch(error){stopServerAudio();throw Error('Audio di Bot-tazzi non disponibile. Riprova.');}};
     const play=async()=>{const chapter=Number(select.value);const prepared=await api('/audio/'+asset.id+'/prepare',{chapter});if(position===0&&prepared.status==='ready'&&prepared.url){await playServer(prepared.url);return;}playBrowser();};
     add(card,select,speed,text,button('Riproduci',play),button('Pausa',async()=>{if(serverAudio&&!serverAudio.paused)serverAudio.pause();else window.speechSynthesis?.pause();await save();},true),button('Riprendi',async()=>{if(serverAudio?.paused)await serverAudio.play();else if(window.speechSynthesis?.paused)speechSynthesis.resume();else await play();},true),el('p','La preparazione Peppone avviene in background. Se non è ancora pronta, la lettura browser parte senza attese.',{class:'muted'}));main.append(card);
   }
@@ -265,7 +275,7 @@ async function profilePage(){
   const mode=el('select',null,{'aria-label':'Modalità sessione'});for(const [v,l] of [['auto','Adattiva'],['micro','Micro'],['standard','Standard'],['doposcuola','Doposcuola'],['exam','Esame'],['scholar','Scholar'],['literacy_l2','Literacy / L2']])mode.append(el('option',l,{value:v}));mode.value=profile.session_preference||'auto';mode.onchange=()=>{profile.session_preference=mode.value;};form.append(el('label','Modalità di studio'),mode);
   profile.accessibility_support=access;form.append(button('Salva preferenze',async()=>{home.profile.learner_profile=await api('/learner-profile',profile);applyLearnerAccess();notice.textContent='Preferenze salvate.';}));main.append(form);
   if(['university','postgraduate','master'].includes(home.profile.school_level))main.append(el('section',null,{class:'card scholar-card'}),button('Apri i materiali Scholar',()=>navigate('/books')));
-  main.append(el('p','La tessera identifica il tuo profilo. La credenziale protegge l’accesso.'),button('Esci',async()=>{await api('/logout',{});window.speechSynthesis?.cancel();stopServerAudio();navigate('/login');},true));
+  main.append(el('p','Il Portachiavi Tiremm protegge l’accesso al tuo profilo Tutor.'),button('Esci',async()=>{await api('/logout',{});window.speechSynthesis?.cancel();stopServerAudio();navigate('/login');},true));
 }
 
 async function render(){
@@ -273,10 +283,10 @@ async function render(){
   window.speechSynthesis?.cancel();
   stopServerAudio();
   avatar.reset();
-  notice.textContent='';main.replaceChildren(el('p','Un momento…'));const path=location.pathname;
+  notice.textContent='';main.replaceChildren(el('p','Un momento…'));const rawPath=location.pathname;const path=appPrefix&&rawPath.startsWith(appPrefix)?(rawPath.slice(appPrefix.length)||'/'):rawPath;
   document.body.classList.toggle('activity-view',path==='/activity');
-  document.querySelectorAll('nav a').forEach(a=>{if(a.getAttribute('href')===path)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});
-  if(path==='/login'){main.replaceChildren();login();return;}
+  document.querySelectorAll('nav a').forEach(a=>{if(new URL(a.href,location.href).pathname===appUrl(path))a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});
+  if(path==='/login'){main.replaceChildren();await login();return;}
   home=await api('/home');applyLearnerAccess();main.replaceChildren();
   if(path==='/'||path==='/home')dashboard();else if(path==='/study')study();else if(path==='/quiz')study(true);else if(path==='/simulations')study(false,true);else if(path==='/activity')await activityPage();else if(path==='/progress')await progressPage();else if(path==='/badges')await progressPage(true);else if(path==='/books')await books();else if(path==='/audio')await audioPage();else if(path==='/profile')await profilePage();
 }

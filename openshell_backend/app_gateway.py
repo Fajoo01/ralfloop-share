@@ -26,6 +26,7 @@ GPT_UI_PATH = Path(__file__).with_name("bottazzi_gpt_mobile_ui.html")
 BACKEND = os.getenv("BOTTAZZI_APP_BACKEND", "http://127.0.0.1:19090").rstrip("/")
 GPT_QUEUE = os.getenv("BOTTAZZI_APP_GPT_QUEUE", "http://127.0.0.1:19201").rstrip("/")
 SCHOLARLY_BACKEND = os.getenv("BOTTAZZI_APP_SCHOLARLY_BACKEND", "").rstrip("/")
+TEACHER_WEB_BACKEND = os.getenv("BOTTAZZI_APP_TEACHER_WEB_BACKEND", "http://127.0.0.1:19139").rstrip("/")
 UPLOAD_ROOT = Path(os.getenv("BOTTAZZI_APP_UPLOAD_ROOT", "/var/lib/ralfloop-bottazzi-call-recordings/app-uploads"))
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 APP_APK_PATH = Path(os.getenv("BOTTAZZI_APP_APK_PATH", "/var/lib/ralfloop-bottazzi-apk/bottazzi.apk"))
@@ -112,6 +113,8 @@ def _secure_cookie(request: Request) -> bool:
 
 @app.middleware("http")
 async def app_auth(request: Request, call_next):
+    if request.url.path == "/tutor" or request.url.path.startswith("/tutor/"):
+        return await call_next(request)
     if request.url.path in PUBLIC_PATHS:
         return await call_next(request)
     if _session_ok(request.cookies.get(COOKIE)):
@@ -524,6 +527,41 @@ def assistant_chat(payload: dict[str, Any]) -> Response:
     except requests.RequestException:
         return JSONResponse({"detail": "assistant_backend_unavailable"}, status_code=503)
     return _proxy_response(upstream)
+
+
+@app.api_route("/tutor", methods=["GET", "HEAD", "POST"])
+@app.api_route("/tutor/{teacher_path:path}", methods=["GET", "HEAD", "POST"])
+async def tutor_proxy(request: Request, teacher_path: str = "") -> Response:
+    if request.url.path == "/tutor":
+        return RedirectResponse("/tutor/", status_code=308)
+    upstream_path = "/" + teacher_path
+    forwarded = {}
+    for name in ("host", "origin", "x-teacher-request", "content-type", "cookie", "user-agent", "accept", "range"):
+        value = request.headers.get(name)
+        if value:
+            forwarded[name] = value
+    try:
+        upstream = requests.request(
+            request.method,
+            TEACHER_WEB_BACKEND + upstream_path,
+            params=list(request.query_params.multi_items()),
+            data=await request.body(),
+            headers=forwarded,
+            timeout=int(os.getenv("BOTTAZZI_APP_TEACHER_WEB_TIMEOUT", "300")),
+            allow_redirects=False,
+        )
+    except requests.RequestException:
+        return JSONResponse({"detail": "teacher_web_unavailable"}, status_code=503)
+    response = Response(content=upstream.content, status_code=upstream.status_code)
+    for name in ("content-type", "cache-control", "content-range", "accept-ranges", "location", "x-content-type-options", "referrer-policy", "content-security-policy"):
+        value = upstream.headers.get(name)
+        if value:
+            response.headers[name] = value
+    getlist = getattr(upstream.raw.headers, "getlist", None)
+    cookies = getlist("Set-Cookie") if callable(getlist) else []
+    for cookie in cookies:
+        response.headers.append("set-cookie", cookie)
+    return response
 
 
 @app.get("/downloads/bottazzi.apk")

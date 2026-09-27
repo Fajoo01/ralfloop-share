@@ -46,11 +46,12 @@ class State:
         with self.connect() as conn:
             if conn.execute("SELECT 1 FROM sqlite_master WHERE name='schema_version'").fetchone():
                 version = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
-                if version and version > 2:
+                if version and version > 3:
                     raise ValueError("unsupported_schema_version")
             migrations = Path(__file__).with_name("migrations")
             conn.executescript(migrations.joinpath("001.sql").read_text())
             conn.executescript(migrations.joinpath("002_universal_tutor.sql").read_text())
+            conn.executescript(migrations.joinpath("003_oidc_portachiavi.sql").read_text())
             conn.execute("CREATE TABLE IF NOT EXISTS disabled_students(student TEXT PRIMARY KEY REFERENCES students(id))")
         os.chmod(self.path, 0o600)
 
@@ -192,6 +193,78 @@ class State:
             conn.execute("DELETE FROM web_sessions WHERE expires<=?", (now,))
             conn.execute("INSERT INTO web_sessions VALUES(?,?,?)", (digest(token), row["id"], now + 8 * 3600))
             conn.execute("DELETE FROM login_limits WHERE key=?", (card_key,))
+        return token
+
+    def login_oidc(self, subject):
+        now = self.clock()
+        subject_hash = digest("teacher-web-oidc:" + str(subject))
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT s.id FROM students s JOIN oidc_identities o ON o.student=s.id "
+                "WHERE o.subject_hash=? AND s.id NOT IN (SELECT student FROM disabled_students)",
+                (subject_hash,),
+            ).fetchone()
+            if row is None:
+                return None
+            token = secrets.token_urlsafe(32)
+            conn.execute("DELETE FROM web_sessions WHERE expires<=?", (now,))
+            conn.execute("INSERT INTO web_sessions VALUES(?,?,?)", (digest(token), row["id"], now + 8 * 3600))
+        return token
+
+    def begin_oidc_link(self, subject):
+        now = self.clock()
+        token = secrets.token_urlsafe(32)
+        with self.connect() as conn:
+            conn.execute("DELETE FROM oidc_pending_links WHERE expires<=?", (now,))
+            conn.execute(
+                "INSERT INTO oidc_pending_links(token_hash,subject_hash,expires) VALUES(?,?,?)",
+                (digest(token), digest("teacher-web-oidc:" + str(subject)), now + 600),
+            )
+        return token
+
+    def finish_oidc_link(self, link_token, card, credential, remote="local"):
+        now = self.clock()
+        link_hash = digest(str(link_token))
+        with self.connect() as conn:
+            pending = conn.execute(
+                "SELECT subject_hash FROM oidc_pending_links WHERE token_hash=? AND expires>?",
+                (link_hash, now),
+            ).fetchone()
+        if pending is None:
+            raise PermissionError("oidc_link_expired")
+        temporary = self.login(card, credential, remote)
+        try:
+            profile = self.authenticate(temporary)
+        finally:
+            self.logout(temporary)
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            pending = conn.execute(
+                "SELECT subject_hash FROM oidc_pending_links WHERE token_hash=? AND expires>?",
+                (link_hash, now),
+            ).fetchone()
+            if pending is None:
+                raise PermissionError("oidc_link_expired")
+            subject_owner = conn.execute(
+                "SELECT student FROM oidc_identities WHERE subject_hash=?",
+                (pending["subject_hash"],),
+            ).fetchone()
+            student_subject = conn.execute(
+                "SELECT subject_hash FROM oidc_identities WHERE student=?",
+                (profile["id"],),
+            ).fetchone()
+            if subject_owner and subject_owner["student"] != profile["id"]:
+                raise PermissionError("oidc_identity_conflict")
+            if student_subject and student_subject["subject_hash"] != pending["subject_hash"]:
+                raise PermissionError("oidc_student_conflict")
+            conn.execute(
+                "INSERT OR IGNORE INTO oidc_identities(subject_hash,student,created) VALUES(?,?,?)",
+                (pending["subject_hash"], profile["id"], now),
+            )
+            conn.execute("DELETE FROM oidc_pending_links WHERE token_hash=?", (link_hash,))
+            token = secrets.token_urlsafe(32)
+            conn.execute("DELETE FROM web_sessions WHERE expires<=?", (now,))
+            conn.execute("INSERT INTO web_sessions VALUES(?,?,?)", (digest(token), profile["id"], now + 8 * 3600))
         return token
 
     def authenticate(self, token):
