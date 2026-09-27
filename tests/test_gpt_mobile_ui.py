@@ -434,13 +434,18 @@ def test_dedicated_browser_exposes_deepseek_and_kimi_provider_switches(tmp_path:
     assert "https://chat.deepseek.com/" in frontend
     assert "https://www.kimi.ai/?chat_enter_method=new_chat" in frontend
     assert '"queue_managed": name == "chatgpt"' in frontend
-    assert '"prompt_managed": name in {"chatgpt", "kimi"}' in frontend
+    assert '"prompt_managed": name in {"chatgpt", "kimi", "deepseek"}' in frontend
     assert '/api/providers/query' in frontend
 
     class ProviderCdp(FakeCdp):
         def __init__(self):
             super().__init__()
             self.browser_calls = []
+            self.deepseek_queries = []
+
+        def query_deepseek(self, target_id, text, wait_timeout_s=90.0):
+            self.deepseek_queries.append((target_id, text, wait_timeout_s))
+            return {"provider":"deepseek","target_id":target_id,"response":"DS-OK","url":"https://chat.deepseek.com/"}
 
         def _browser_call(self, method, params=None):
             self.browser_calls.append((method, dict(params or {})))
@@ -465,5 +470,9 @@ def test_dedicated_browser_exposes_deepseek_and_kimi_provider_switches(tmp_path:
     providers = {row["provider"]: row for row in controller.provider_status()}
     assert providers["chatgpt"]["queue_managed"] is True
     assert providers["deepseek"]["open"] is True
+    assert providers["deepseek"]["prompt_managed"] is True
+    deep = controller.query_provider("deepseek", "ciao", timeout_seconds=12)
+    assert deep["response"] == "DS-OK"
+    assert cdp.deepseek_queries == [("deepseek-existing", "ciao", 12.0)]
     assert providers["kimi"]["open"] is True
     assert providers["kimi"]["prompt_managed"] is True

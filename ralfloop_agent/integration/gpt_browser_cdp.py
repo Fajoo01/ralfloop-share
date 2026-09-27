@@ -3307,6 +3307,74 @@ class ChromeCdp:
         reason=("challenge_required" if final.get("challenge_visible") else "login_required" if final.get("login_visible") else "response_timeout")
         raise CdpError(f"kimi_query_failed:{reason}")
 
+    def deepseek_ui_state(self, target_id: str) -> dict[str, Any]:
+        target = self._wait_target(target_id)
+        try:
+            host = (urllib.parse.urlparse(target.url).hostname or "").lower()
+        except ValueError as exc:
+            raise CdpError("deepseek_target_invalid") from exc
+        if host != "chat.deepseek.com" or not target.websocket_url:
+            raise CdpError("deepseek_target_invalid")
+        expression = r"""(() => {
+          const visible=el=>{if(!el)return false;const r=el.getBoundingClientRect(),s=getComputedStyle(el);return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden'};
+          const composer=[...document.querySelectorAll('textarea,[contenteditable="true"]')].find(el=>visible(el)&&((el.getAttribute('placeholder')||'').toLowerCase().includes('deepseek')||el.tagName==='TEXTAREA'))||null;
+          const textOf=el=>String(el?.innerText||el?.textContent||'').replace(/\s+/g,' ').trim();
+          const candidates=[]; const seen=new Set();
+          const selectors=['[data-role="assistant"]','.ds-message.assistant','[class*="assistant"] [class*="markdown"]','[class*="message"] [class*="markdown"]','.markdown-body','.markdown'];
+          for(const selector of selectors) for(const el of document.querySelectorAll(selector)){
+            if(!visible(el)||el===composer||el.contains(composer)||composer?.contains(el))continue;
+            if(el.closest('[class*="thinking"],[class*="reasoning"]'))continue;
+            const text=textOf(el); if(!text||text.length>120000||seen.has(text))continue; seen.add(text); candidates.push(text);
+          }
+          const bodyText=String(document.body?.innerText||'');
+          const loginVisible=/\b(?:sign in|log in|login|accedi|registrati)\b/i.test(bodyText)&&!composer;
+          const challengeVisible=/(?:captcha|verify you are human|robot|verifica.{0,30}(?:umana|robot)|security check|challenge)/i.test(bodyText);
+          const responseInProgress=[...document.querySelectorAll('button,[role="button"]')].some(el=>visible(el)&&/(?:stop|interrompi|annulla)/i.test(`${el.getAttribute('aria-label')||''} ${el.getAttribute('title')||''} ${textOf(el)}`));
+          const composerText=composer?String(composer.value??composer.innerText??composer.textContent??'').trim():'';
+          return JSON.stringify({ready:Boolean(composer),url:location.href,title:document.title||'',composer_ready:Boolean(composer),composer_chars:composerText.length,response_in_progress:responseInProgress,login_visible:loginVisible,challenge_visible:challengeVisible,candidate_count:candidates.length,last_assistant_text:candidates.length?candidates[candidates.length-1]:'',body_text:bodyText.slice(-16000)});
+        })()"""
+        result=self._page_call(target.websocket_url,"Runtime.evaluate",{"expression":expression,"returnByValue":True})
+        raw=(result.get("result") or {}).get("value")
+        try: state=json.loads(raw) if isinstance(raw,str) else {}
+        except json.JSONDecodeError as exc: raise CdpError("deepseek_ui_state_invalid") from exc
+        if not isinstance(state,dict): raise CdpError("deepseek_ui_state_invalid")
+        state["target_id"]=target.target_id
+        return state
+
+    def query_deepseek(self, target_id: str, prompt: str, *, wait_timeout_s: float = 90.0) -> dict[str, Any]:
+        clean=str(prompt or "").strip()
+        if not clean: raise CdpError("empty_prompt")
+        baseline=self.deepseek_ui_state(target_id)
+        if baseline.get("login_visible") or baseline.get("challenge_visible"):
+            reason="challenge_required" if baseline.get("challenge_visible") else "login_required"
+            raise CdpError(f"deepseek_query_failed:{reason}")
+        if not baseline.get("composer_ready"): raise CdpError("deepseek_not_ready:composer_missing")
+        target=self._wait_target(target_id)
+        if not target.websocket_url: raise CdpError("deepseek_target_missing_websocket")
+        focus=r"""(() => {const visible=el=>{if(!el)return false;const r=el.getBoundingClientRect(),s=getComputedStyle(el);return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden'};const el=[...document.querySelectorAll('textarea,[contenteditable="true"]')].find(el=>visible(el)&&((el.getAttribute('placeholder')||'').toLowerCase().includes('deepseek')||el.tagName==='TEXTAREA'))||null;if(!el)return JSON.stringify({ok:false});el.focus();if(el instanceof HTMLTextAreaElement||el instanceof HTMLInputElement)el.select();else{const sel=getSelection(),range=document.createRange();range.selectNodeContents(el);sel.removeAllRanges();sel.addRange(range)}return JSON.stringify({ok:true})})()"""
+        out=self._page_call(target.websocket_url,"Runtime.evaluate",{"expression":focus,"returnByValue":True})
+        try: fs=json.loads((out.get("result") or {}).get("value") or "{}")
+        except json.JSONDecodeError: fs={}
+        if not fs.get("ok"): raise CdpError("deepseek_prompt_focus_failed")
+        self._page_call(target.websocket_url,"Input.insertText",{"text":clean})
+        common={"key":"Enter","code":"Enter","windowsVirtualKeyCode":13,"nativeVirtualKeyCode":13}
+        self._page_call(target.websocket_url,"Input.dispatchKeyEvent",{"type":"keyDown",**common})
+        self._page_call(target.websocket_url,"Input.dispatchKeyEvent",{"type":"keyUp",**common})
+        deadline=time.monotonic()+max(5.0,float(wait_timeout_s)); baseline_text=str(baseline.get("last_assistant_text") or ""); baseline_count=int(baseline.get("candidate_count") or 0); stable_text=""; stable_since=0.0; seen_generation=False
+        while time.monotonic()<deadline:
+            time.sleep(0.35); state=self.deepseek_ui_state(target_id)
+            if state.get("login_visible") or state.get("challenge_visible"):
+                reason="challenge_required" if state.get("challenge_visible") else "login_required"; raise CdpError(f"deepseek_query_failed:{reason}")
+            current=str(state.get("last_assistant_text") or "").strip()
+            if state.get("response_in_progress"): seen_generation=True
+            changed=bool(current and current!=clean and (current!=baseline_text or int(state.get("candidate_count") or 0)>baseline_count))
+            if changed:
+                if current!=stable_text: stable_text=current; stable_since=time.monotonic()
+                elif not state.get("response_in_progress") and time.monotonic()-stable_since>=1.0: return {"provider":"deepseek","target_id":target_id,"response":current,"url":state.get("url"),"login_visible":False}
+            if seen_generation and changed and not state.get("response_in_progress"): return {"provider":"deepseek","target_id":target_id,"response":current,"url":state.get("url"),"login_visible":False}
+        if stable_text: return {"provider":"deepseek","target_id":target_id,"response":stable_text,"url":self._wait_target(target_id).url,"timed_out":True}
+        final=self.deepseek_ui_state(target_id); reason="challenge_required" if final.get("challenge_visible") else "login_required" if final.get("login_visible") else "response_timeout"; raise CdpError(f"deepseek_query_failed:{reason}")
+
     def create_target(self, url: str, *, background: bool = False) -> str:
         params: dict[str, Any] = {"url": url}
         if background:

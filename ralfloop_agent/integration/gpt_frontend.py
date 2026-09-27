@@ -683,7 +683,7 @@ class GptWorkController:
                 "target_id": (matches[0].target_id if name == "kimi" else matches[-1].target_id) if matches else None,
                 "open_count": len(matches),
                 "queue_managed": name == "chatgpt",
-                "prompt_managed": name in {"chatgpt", "kimi"},
+                "prompt_managed": name in {"chatgpt", "kimi", "deepseek"},
             })
         return rows
 
@@ -719,13 +719,16 @@ class GptWorkController:
 
     def query_provider(self, provider: str, text: str, *, timeout_seconds: int = 90) -> dict[str, Any]:
         name = str(provider or "").strip().lower()
-        if name != "kimi":
+        if name not in {"kimi", "deepseek"}:
             raise ValueError("provider_query_not_supported")
         opened = self.open_provider(name)
         target_id = str(opened.get("target_id") or "")
         if not target_id:
             raise CdpError("provider_target_missing")
-        result = self.cdp.query_kimi(target_id, text, wait_timeout_s=float(timeout_seconds))
+        if name == "kimi":
+            result = self.cdp.query_kimi(target_id, text, wait_timeout_s=float(timeout_seconds))
+        else:
+            result = self.cdp.query_deepseek(target_id, text, wait_timeout_s=float(timeout_seconds))
         return {"action": "provider_response", **result}
 
     def open_project(self, project_url: str) -> dict[str, Any]:
