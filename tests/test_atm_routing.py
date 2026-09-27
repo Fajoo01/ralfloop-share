@@ -2876,4 +2876,79 @@ def test_navigator_marks_second_leg_as_transfer(monkeypatch, tmp_path):
     assert view["seconds_to_vehicle"] == 600
 
 
+def test_telegram_location_starts_and_binds_navigator(monkeypatch, tmp_path):
+    monkeypatch.setattr(atm, "NAVIGATOR_DB_PATH", tmp_path / "navigator.sqlite3")
+    view = {
+        "session_id": "sid-start",
+        "state": "walking_to_stop",
+        "instruction": "Vai alla fermata.",
+        "seconds_to_vehicle": 300,
+        "margin_seconds": 180,
+        "destination_distance_m": 1200,
+        "replanned": False,
+    }
+    monkeypatch.setattr(atm, "navigator_start", lambda *a, **k: dict(view))
+
+    result = atm.telegram_webhook(atm.TelegramWebhookIn(message={
+        "chat": {"id": 42},
+        "text": "naviga tiremm",
+        "location": {"latitude": 45.5, "longitude": 9.2},
+    }))
+
+    assert result["navigator"] is True
+    assert result["session_id"] == "sid-start"
+    assert atm._navigator_session_for_client("telegram:42") == "sid-start"
+    assert "Mezzo tra 5:00" in result["reply"]
+
+
+def test_telegram_edited_live_location_updates_bound_session(monkeypatch, tmp_path):
+    monkeypatch.setattr(atm, "NAVIGATOR_DB_PATH", tmp_path / "navigator.sqlite3")
+    atm._navigator_bind_client("telegram:42", "sid-live")
+    calls = []
+
+    def fake_update(session_id, lat, lon, **kwargs):
+        calls.append((session_id, lat, lon))
+        return {
+            "session_id": session_id,
+            "state": "onboard",
+            "instruction": "Continua sul mezzo.",
+            "seconds_to_vehicle": None,
+            "margin_seconds": None,
+            "destination_distance_m": 700,
+            "replanned": False,
+        }
+
+    monkeypatch.setattr(atm, "navigator_update", fake_update)
+    result = atm.telegram_webhook(atm.TelegramWebhookIn(edited_message={
+        "chat": {"id": 42},
+        "location": {"latitude": 45.51, "longitude": 9.21},
+    }))
+
+    assert calls == [("sid-live", 45.51, 9.21)]
+    assert result["session_id"] == "sid-live"
+    assert "Continua sul mezzo" in result["reply"]
+
+
+def test_telegram_stop_unbinds_active_navigator(monkeypatch, tmp_path):
+    monkeypatch.setattr(atm, "NAVIGATOR_DB_PATH", tmp_path / "navigator.sqlite3")
+    atm._navigator_bind_client("telegram:42", "sid-stop")
+    monkeypatch.setattr(atm, "_navigator_delete", lambda sid: sid == "sid-stop")
+
+    result = atm.telegram_webhook(atm.TelegramWebhookIn(message={
+        "chat": {"id": 42},
+        "text": "stop navigazione",
+    }))
+
+    assert result["stopped"] is True
+    assert atm._navigator_session_for_client("telegram:42") is None
+
+
+def test_navigator_page_uses_continuous_browser_geolocation():
+    page = atm._page_html()
+    assert "watchPosition" in page
+    assert "/api/navigator/start" in page
+    assert "/api/navigator/update" in page
+    assert "Avvia navigatore" in page
+
+
 # ATM_REALTIME_NAVIGATOR_TESTS_END

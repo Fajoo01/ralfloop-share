@@ -188,6 +188,7 @@ class NavigatorStopIn(BaseModel):
 class TelegramWebhookIn(BaseModel):
     update_id: int | None = None
     message: dict[str, Any] | None = None
+    edited_message: dict[str, Any] | None = None
 
 
 class DestinationDeleteIn(BaseModel):
@@ -4831,8 +4832,13 @@ def render_reply(plan: dict[str, Any]) -> str:
 
 def _telegram_destination(message: dict[str, Any]) -> str:
     text = str(message.get("caption") or message.get("text") or "").strip()
-    text = re.sub(r"^(vai|andare|portami|destinazione|verso|a)\s+", "", text, flags=re.I).strip()
-    return text or "casa"
+    text = re.sub(
+        r"^(vai|andare|portami|naviga|navigami|destinazione|verso|a)\s+",
+        "",
+        text,
+        flags=re.I,
+    ).strip()
+    return text or "tiremm innanz"
 
 
 def _telegram_named_route(message: dict[str, Any]) -> tuple[str, str] | None:
@@ -4863,6 +4869,15 @@ def _navigator_connect() -> sqlite3.Connection:
             last_lon REAL NOT NULL,
             plan_generated_at REAL NOT NULL,
             plan_json TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS navigator_clients (
+            client_key TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            updated_at REAL NOT NULL
         )
         """
     )
@@ -4950,8 +4965,91 @@ def _navigator_delete(session_id: str) -> bool:
                 "DELETE FROM navigator_sessions WHERE session_id = ?",
                 (str(session_id or "").strip(),),
             )
+            conn.execute(
+                "DELETE FROM navigator_clients WHERE session_id = ?",
+                (str(session_id or "").strip(),),
+            )
             conn.commit()
             return cur.rowcount > 0
+        finally:
+            conn.close()
+
+
+def _navigator_bind_client(client_key: str, session_id: str) -> None:
+    key = str(client_key or "").strip()
+    sid = str(session_id or "").strip()
+    if not key or not sid:
+        return
+    with _NAVIGATOR_DB_LOCK:
+        conn = _navigator_connect()
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS navigator_clients (
+                    client_key TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO navigator_clients (client_key, session_id, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(client_key) DO UPDATE SET
+                    session_id=excluded.session_id,
+                    updated_at=excluded.updated_at
+                """,
+                (key, sid, time.time()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def _navigator_session_for_client(client_key: str) -> str | None:
+    key = str(client_key or "").strip()
+    if not key:
+        return None
+    with _NAVIGATOR_DB_LOCK:
+        conn = _navigator_connect()
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS navigator_clients (
+                    client_key TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+            row = conn.execute(
+                "SELECT session_id FROM navigator_clients WHERE client_key = ?",
+                (key,),
+            ).fetchone()
+        finally:
+            conn.close()
+    return str(row["session_id"]) if row is not None else None
+
+
+def _navigator_unbind_client(client_key: str) -> None:
+    key = str(client_key or "").strip()
+    if not key:
+        return
+    with _NAVIGATOR_DB_LOCK:
+        conn = _navigator_connect()
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS navigator_clients (
+                    client_key TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute("DELETE FROM navigator_clients WHERE client_key = ?", (key,))
+            conn.commit()
         finally:
             conn.close()
 
@@ -5099,6 +5197,36 @@ def navigator_start(
     return _navigator_view(session, now=now)
 
 
+def _navigator_compact_reply(view: dict[str, Any]) -> str:
+    state = str(view.get("state") or "")
+    icon = {
+        "walking_to_stop": "🚶",
+        "waiting": "⏳",
+        "onboard": "🚌",
+        "transfer": "🔁",
+        "final_walk": "🚶",
+        "arrived": "🏁",
+        "missed": "⏭️",
+        "replanning": "🔄",
+    }.get(state, "📍")
+    parts = [f"{icon} {view.get('instruction') or state}"]
+    seconds = view.get("seconds_to_vehicle")
+    if seconds is not None:
+        seconds = max(0, int(seconds))
+        parts.append(f"Mezzo tra {seconds // 60}:{seconds % 60:02d}")
+    margin = view.get("margin_seconds")
+    if margin is not None:
+        margin = int(margin)
+        if margin >= 0:
+            parts.append(f"Margine {margin // 60}:{margin % 60:02d}")
+    distance = view.get("destination_distance_m")
+    if distance is not None:
+        parts.append(f"Destinazione ~{int(distance)} m")
+    if view.get("replanned"):
+        parts.append("Percorso aggiornato in tempo reale")
+    return "\n".join(parts)
+
+
 def navigator_update(
     session_id: str,
     lat: float,
@@ -5244,16 +5372,75 @@ def api_navigator_stop(req: NavigatorStopIn) -> dict[str, Any]:
 
 @router.post("/telegram-webhook")
 def telegram_webhook(req: TelegramWebhookIn) -> dict[str, Any]:
-    msg = req.message or {}
+    msg = req.edited_message or req.message or {}
     named = _telegram_named_route(msg)
     if named:
         plan = build_named_plan(named[0], named[1])
         return {"ok": True, "reply": render_reply(plan), "plan": plan}
+
+    chat = msg.get("chat") or {}
+    sender = msg.get("from") or {}
+    raw_client = chat.get("id") if chat.get("id") is not None else sender.get("id")
+    client_key = f"telegram:{raw_client}" if raw_client is not None else ""
+    text = str(msg.get("caption") or msg.get("text") or "").strip()
+    low = text.casefold()
+
+    if low in {"stop navigazione", "ferma navigazione", "stop navigator", "stop"}:
+        session_id = _navigator_session_for_client(client_key)
+        stopped = bool(session_id and _navigator_delete(session_id))
+        _navigator_unbind_client(client_key)
+        return {
+            "ok": True,
+            "navigator": True,
+            "stopped": stopped,
+            "reply": "Navigazione fermata." if stopped else "Nessuna navigazione attiva.",
+        }
+
     loc = msg.get("location") or {}
     if "latitude" not in loc or "longitude" not in loc:
+        session_id = _navigator_session_for_client(client_key)
+        if session_id:
+            session = _navigator_load(session_id)
+            if session is not None:
+                view = _navigator_view(session, now=time.time())
+                return {
+                    "ok": True,
+                    "navigator": True,
+                    "session_id": session_id,
+                    "reply": _navigator_compact_reply(view),
+                    "navigation": view,
+                }
         return {"ok": False, "error": "missing_telegram_location"}
-    plan = build_plan(float(loc["latitude"]), float(loc["longitude"]), _telegram_destination(msg))
-    return {"ok": True, "reply": render_reply(plan), "plan": plan}
+
+    lat = float(loc["latitude"])
+    lon = float(loc["longitude"])
+    session_id = _navigator_session_for_client(client_key)
+    explicit_destination = bool(text)
+
+    if session_id and not explicit_destination:
+        try:
+            view = navigator_update(session_id, lat, lon)
+        except HTTPException:
+            session_id = None
+        else:
+            return {
+                "ok": True,
+                "navigator": True,
+                "session_id": session_id,
+                "reply": _navigator_compact_reply(view),
+                "navigation": view,
+            }
+
+    destination = _telegram_destination(msg)
+    view = navigator_start(lat, lon, destination)
+    _navigator_bind_client(client_key, view["session_id"])
+    return {
+        "ok": True,
+        "navigator": True,
+        "session_id": view["session_id"],
+        "reply": _navigator_compact_reply(view),
+        "navigation": view,
+    }
 
 
 def _page_html() -> str:
@@ -5265,6 +5452,8 @@ def _page_html() -> str:
 <label>Destinazione</label><select id="dest"></select>
 <div class="row"><label>Lat origine<input id="lat" placeholder="45.x"></label><label>Lon origine<input id="lon" placeholder="9.x"></label></div>
 <button id="geo">Usa posizione browser</button><button id="plan">Calcola</button>
+<div class="row"><button id="navstart">Avvia navigatore</button><button id="navstop" style="background:#666">Ferma navigazione</button></div>
+<div id="navstatus" class="small">Navigatore non attivo</div>
 <label>Nuovo luogo</label><input id="name" placeholder="casa / palestra / ...">
 <div class="row"><input id="addr" placeholder="cerca indirizzo"><button id="search">Cerca</button></div>
 <div id="results"></div>
@@ -5274,13 +5463,17 @@ def _page_html() -> str:
 <p class="small">Click mappa = imposta lat/lon luogo. Telegram: invia location + testo destinazione.</p><pre id="out"></pre>
 </aside><div id="map"></div></main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>
-let destinations={destinations}; let map=L.map('map').setView([45.4642,9.19],12); L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',{{maxZoom:19,attribution:'© OpenStreetMap'}}).addTo(map); let marker;
+let destinations={destinations}; let map=L.map('map').setView([45.4642,9.19],12); L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',{{maxZoom:19,attribution:'© OpenStreetMap'}}).addTo(map); let marker; let navSession=null; let navWatch=null; let navLastSent=0;
 function fill(){{let s=document.getElementById('dest'); let list=document.getElementById('list'); s.innerHTML=''; list.innerHTML=''; destinations.forEach(d=>{{let o=document.createElement('option'); o.value=d.name; o.textContent=d.label||d.name; s.appendChild(o); L.marker([d.lat,d.lon]).addTo(map).bindPopup(d.label||d.name); let row=document.createElement('div'); row.style.cssText='display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;border-top:1px solid #ddd;padding:8px 0;font-size:13px'; row.innerHTML='<span><b>'+ (d.label||d.name) +'</b><br><span class=\"small\">alias: '+((d.aliases||[]).join(', ')||'nessuno')+'</span></span><button data-edit=\"'+d.name+'\" style=\"background:#555\">Modifica</button><button data-del=\"'+d.name+'\" style=\"background:#8b1a1a\">Elimina</button>'; list.appendChild(row);}}); list.querySelectorAll('button[data-edit]').forEach(b=>b.onclick=()=>{{let d=destinations.find(x=>x.name===b.dataset.edit); if(!d)return; document.getElementById('name').value=d.name||''; document.getElementById('aliases').value=(d.aliases||[]).join(', '); document.getElementById('dlat').value=(+d.lat).toFixed(6); document.getElementById('dlon').value=(+d.lon).toFixed(6); document.getElementById('note').value=d.note||''; map.setView([d.lat,d.lon],16); if(marker)marker.remove(); marker=L.marker([d.lat,d.lon]).addTo(map).bindPopup(d.label||d.name).openPopup(); document.getElementById('out').textContent='Modifica '+(d.label||d.name)+': cambia alias e premi Salva luogo'; }}); list.querySelectorAll('button[data-del]').forEach(b=>b.onclick=async()=>{{if(!confirm('Eliminare '+b.dataset.del+'?'))return;let r=await fetch('/atm-telegram/api/destinations/delete',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{name:b.dataset.del}})}});let j=await r.json();destinations=j.destinations;fill();document.getElementById('out').textContent='eliminato '+b.dataset.del;}})}} fill();
 map.on('click',e=>{{document.getElementById('dlat').value=e.latlng.lat.toFixed(6);document.getElementById('dlon').value=e.latlng.lng.toFixed(6); if(marker) marker.remove(); marker=L.marker(e.latlng).addTo(map);}});
 document.getElementById('geo').onclick=()=>navigator.geolocation.getCurrentPosition(p=>{{document.getElementById('lat').value=p.coords.latitude.toFixed(6);document.getElementById('lon').value=p.coords.longitude.toFixed(6);map.setView([p.coords.latitude,p.coords.longitude],15);}});
 document.getElementById('search').onclick=async()=>{{const resultsEl=document.getElementById('results');const addrEl=document.getElementById('addr');resultsEl.textContent='cerco...';let r=await fetch('/atm-telegram/api/geocode',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{q:addrEl.value}})}});let j=await r.json();resultsEl.innerHTML='';(j.results||[]).forEach(x=>{{let b=document.createElement('button');b.style.background='#444';b.textContent=x.label;b.onclick=()=>{{document.getElementById('dlat').value=(+x.lat).toFixed(6);document.getElementById('dlon').value=(+x.lon).toFixed(6);map.setView([x.lat,x.lon],16);if(marker)marker.remove();marker=L.marker([x.lat,x.lon]).addTo(map).bindPopup(x.label).openPopup();const nameEl=document.getElementById('name');if(!nameEl.value)nameEl.value=addrEl.value;}};resultsEl.appendChild(b);}});if(!(j.results||[]).length)resultsEl.textContent='nessun risultato';}};
 document.getElementById('save').onclick=async()=>{{let body={{name:document.getElementById('name').value,label:document.getElementById('name').value,aliases:document.getElementById('aliases').value,lat:+document.getElementById('dlat').value,lon:+document.getElementById('dlon').value,note:document.getElementById('note').value}};let r=await fetch('/atm-telegram/api/destinations',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(body)}});let j=await r.json();destinations=j.destinations;fill();document.getElementById('out').textContent='salvato '+body.name;}};
 document.getElementById('plan').onclick=async()=>{{const outEl=document.getElementById('out');outEl.textContent='calcolo...';let r=await fetch('/atm-telegram/api/plan',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{lat:+document.getElementById('lat').value,lon:+document.getElementById('lon').value,destination:document.getElementById('dest').value}})}});let j=await r.json();outEl.textContent=j.reply||JSON.stringify(j,null,2); if(j.nearest_origin_stop) L.marker([j.nearest_origin_stop.lat,j.nearest_origin_stop.lon]).addTo(map).bindPopup('Fermata: '+j.nearest_origin_stop.name).openPopup();}};
+function showNav(j){{let bits=[j.state||'',j.instruction||''];if(j.seconds_to_vehicle!=null)bits.push('mezzo '+Math.floor(j.seconds_to_vehicle/60)+':'+String(j.seconds_to_vehicle%60).padStart(2,'0'));if(j.margin_seconds!=null&&j.margin_seconds>=0)bits.push('margine '+Math.floor(j.margin_seconds/60)+':'+String(j.margin_seconds%60).padStart(2,'0'));if(j.replanned)bits.push('percorso aggiornato');document.getElementById('navstatus').textContent=bits.filter(Boolean).join(' · ');document.getElementById('out').textContent=(j.instruction||'')+'\n'+(j.reply||'');}}
+async function navUpdatePosition(p,force=false){{if(!navSession)return;let now=Date.now();if(!force&&now-navLastSent<10000)return;navLastSent=now;let lat=p.coords.latitude,lon=p.coords.longitude;document.getElementById('lat').value=lat.toFixed(6);document.getElementById('lon').value=lon.toFixed(6);let r=await fetch('/atm-telegram/api/navigator/update',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{session_id:navSession,lat:lat,lon:lon,force_replan:force}})}});if(!r.ok)return;let j=await r.json();showNav(j);map.setView([lat,lon],15);}}
+document.getElementById('navstart').onclick=()=>{{if(!navigator.geolocation){{document.getElementById('navstatus').textContent='GPS browser non disponibile';return;}}navigator.geolocation.getCurrentPosition(async p=>{{let lat=p.coords.latitude,lon=p.coords.longitude;let r=await fetch('/atm-telegram/api/navigator/start',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{lat:lat,lon:lon,destination:document.getElementById('dest').value}})}});let j=await r.json();navSession=j.session_id;navLastSent=Date.now();showNav(j);if(navWatch!==null)navigator.geolocation.clearWatch(navWatch);navWatch=navigator.geolocation.watchPosition(p2=>navUpdatePosition(p2),e=>{{document.getElementById('navstatus').textContent='GPS: '+e.message;}},{{enableHighAccuracy:true,maximumAge:5000,timeout:15000}});}},e=>{{document.getElementById('navstatus').textContent='GPS: '+e.message;}},{{enableHighAccuracy:true,timeout:15000}});}};
+document.getElementById('navstop').onclick=async()=>{{if(navWatch!==null){{navigator.geolocation.clearWatch(navWatch);navWatch=null;}}if(navSession){{await fetch('/atm-telegram/api/navigator/stop',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{session_id:navSession}})}});}}navSession=null;document.getElementById('navstatus').textContent='Navigatore non attivo';}};
 </script></body></html>"""
 
 def main_cli(argv: list[str] | None = None) -> int:
