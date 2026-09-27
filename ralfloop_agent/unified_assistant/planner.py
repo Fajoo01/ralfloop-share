@@ -59,6 +59,7 @@ _NORMATIVE_INFO_RE = re.compile(
     re.I,
 )
 _EDITORIAL_RE = re.compile(r"\b(?:volantin[oi]|flyer|locandin[ae]|manifest[oi]|poster)\b", re.I)
+_FGAS_RE = re.compile(r"\b(?:f[- ]?gas|modulo\s+(?:di\s+)?installazione|modulo\s+condizionatore|installazione\s+(?:condizionatore|climatizzatore)|documento\s+f[- ]?gas)\b", re.I)
 _MEDIA_RE = re.compile(r"\b(?:video|audio|immagine|ffmpeg|sottotitol[oi])\b", re.I)
 _JELLYFIN_RE = re.compile(r"\bjellyfin\b", re.I)
 _BROWSER_RE = re.compile(r"\b(?:browser|playwright|pagina\s+web|schede?\s+browser)\b", re.I)
@@ -554,6 +555,8 @@ class UnifiedPlanner:
                     policy=PolicyClass.CONFIRM_WRITE,
                 ),),
             )
+        if _FGAS_RE.search(goal):
+            return self._single(goal, "fgas", "fgas.installation", PolicyClass.AUTO_WRITE)
         if _WHATSAPP_RE.search(goal):
             return self._single(goal, "whatsapp", "whatsapp.read", PolicyClass.READ)
         if is_email_search_request(goal):

@@ -220,6 +220,7 @@ class UnifiedRegistryFacade:
         mailchimp_socket = Path("/run/ralf-mailchimp-mcp/mcp.sock")
         meteo_socket = Path("/run/ralf-meteo-mcp/mcp.sock")
         editorial_socket = Path("/tmp/ralf-editorial-mcp/mcp.sock")
+        fgas_socket = Path(os.getenv("RALF_FGAS_MCP_SOCKET", "/run/ralf-fgas-mcp/mcp.sock"))
         bandi_socket = Path(os.getenv("RALF_BANDI_MCP_SOCKET", "/run/ralf-bandi-mcp/mcp.sock"))
         pec_socket = Path(os.getenv("RALF_PEC_MCP_SOCKET", "/run/ralf-pec-mcp/mcp.sock"))
         pec_write_socket = Path(os.getenv("RALF_PEC_WRITE_MCP_SOCKET", "/run/ralf-pec-write-mcp/mcp.sock"))
@@ -279,6 +280,23 @@ class UnifiedRegistryFacade:
             health="Unix MCP broker + exact four-tool allowlist",
             verification_method="official-source-first bounded research; persisted report provenance; writes=0; sends=0",
             source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "bandi_mcp_adapter.py"),
+        ), UnifiedToolSpec(
+            id="fgas.installation.mcp",
+            capabilities=(
+                "fgas_drive_status",
+                "fgas_extract_from_text",
+                "fgas_validate_installation",
+                "fgas_render_installation",
+                "fgas_prepare_from_whatsapp",
+            ),
+            input_schema="strict F-Gas MCP schemas; WhatsApp evidence and local render only",
+            output_schema="validated installation record plus local DOCX/PDF artifact paths",
+            classification=PolicyClass.AUTO_WRITE,
+            side_effect_class="local_artifact_generation_only",
+            availability="available" if _observable_path_exists(fgas_socket) else "constrained:broker_unavailable",
+            health="Unix MCP broker + exact five-tool allowlist",
+            verification_method="strict MCP discovery; external_writes=0; external_sends=0; faithful DOCX/PDF render",
+            source_registry=str(PROJECT_ROOT / "ralfloop_agent" / "unified_assistant" / "fgas_mcp_adapter.py"),
         ), UnifiedToolSpec(
             id="editorial.flyer.mcp",
             capabilities=("flyer_create", "flyer_update", "flyer_projects", "flyer_brief", "flyer_review", "flyer_marketing_review", "flyer_media_review", "flyer_render"),

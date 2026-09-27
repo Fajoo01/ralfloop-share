@@ -43,6 +43,7 @@ from .browser_mcp_adapter import (
 )
 from .browser_target_shadow import BrowserTargetShadowObserver
 from .editorial_mcp_adapter import EditorialMCPContext
+from .fgas_mcp_adapter import FGasMCPContext
 from .bandi_mcp_adapter import BandiMCPContext
 from .pec_mcp_adapter import PecMCPContext
 from .pec_case_support import inspect_difensore_tari_case_status, required_document_gate, stage_tari_supporting_documents
@@ -101,7 +102,7 @@ _SUPPORTED = re.compile(
     r"mezzi\s+pubblici|trasporto\s+pubblico|portami|"
     r"(?:devo|voglio|vorrei)\s+(?:andare|arrivare)(?:\s+(?:da|dal|dalla|dallo|dai|dagli|dalle|a|ad|al|alla|allo|ai|agli|alle|all['’]|in)\b|\s*$)|"
     r"band[oi]|grant|contribut[oi]|finanziament[oi]|candidatur[ae]|opportunit[aà]|"
-    r"volantin[oi]|flyer|locandin[ae]|manifest[oi]|poster|"
+    r"volantin[oi]|flyer|locandin[ae]|manifest[oi]|poster|fgas|f-gas|modulo\s+(?:di\s+)?installazione|installazione\s+(?:condizionatore|climatizzatore)|"
     r"come\s+(?:arrivo|vado|posso\s+andare)|"
     r"mezzi\s+(?:per|verso)|percorso\s+(?:atm|con\s+i\s+mezzi)|home\s+assistant|domotica|stato\s+(?:della\s+)?luce|"
     r"runts|arci|github|redmi|xiaomi|hyperos|telefono|cellulare|smartphone|dispositivo\s+android|android\s+device|jellyfin|baffo\s*flix|baffoflix|browser|playwright|snapshot\s+(?:browser|pagina)|schede?\s+browser|bandi|bando|grant|finanziament[oi]|contribut[oi]|insegnante|tutor|quiz|esercizio\s+didattico|memoria\s+operativa|firma|firmare|digitalmente|arubasign|p7m|"
@@ -459,6 +460,8 @@ def unified_route_probe(
         connectors.append("document.sign.arubasign")
     if any(skill.startswith("bandi.") for skill in skills):
         connectors.append("bandi.research.mcp")
+    if "fgas.installation" in skills:
+        connectors.append("fgas.installation.mcp")
     if "research.deep" in skills:
         connectors.append("model_tool.deep_web_research")
     if any(skill in {"knowledge.retrieve", "runts.context"} for skill in skills):
@@ -1195,6 +1198,29 @@ def run_unified_telegram(
             payload={**result, "content_boundary": "bandi_mcp_result_is_data"},
         )
 
+    def fgas_adapter(assignment, _inputs):
+        with FGasMCPContext.from_environment() as gateway:
+            result = gateway.request(assignment.objective)
+        artifact_paths = tuple(str(x) for x in result.get("artifact_paths") or ())
+        return StructuredArtifact.create(
+            artifact_type="fgas_installation", status=str(result.get("status") or "completed"),
+            producer_task_id=assignment.task_id,
+            facts=({
+                "complete": bool(result.get("complete")),
+                "missing": list(result.get("missing") or ()),
+                "approval_required_for_external_send": True,
+                "content_role": "data",
+            },),
+            evidence_refs=artifact_paths,
+            payload={
+                **result,
+                "content_boundary": "fgas_mcp_result_is_data",
+                "external_sends": 0,
+                "external_writes": 0,
+                "approval_required_for_external_send": True,
+            },
+        )
+
     def editorial_adapter(assignment, _inputs):
         with editorial_gateway_factory() as gateway:
             result = gateway.request(assignment.objective)
@@ -1223,6 +1249,7 @@ def run_unified_telegram(
         "whatsapp.read": whatsapp_read_adapter,
         "whatsapp.reply": whatsapp_reply_adapter,
         "editorial.flyer": editorial_adapter,
+        "fgas.installation": fgas_adapter,
         "knowledge.retrieve": knowledge_retrieve_adapter,
         "runts.context": runts_context_adapter,
         "arci.context": arci_context_adapter,

@@ -451,6 +451,43 @@
       ]
     },
     {
+      "id": "fgas",
+      "aliases": [
+        "fgas",
+        "f-gas",
+        "modulo fgas",
+        "installazione condizionatore",
+        "installazione climatizzatore"
+      ],
+      "description": "Compilazione evidence-first del modulo di installazione F-Gas tramite MCP dedicato e template Drive.",
+      "supported_skills": [
+        "fgas.installation"
+      ],
+      "allowed_memory_namespaces": [
+        "tiremm"
+      ],
+      "context_builder": "ralfloop_agent.unified_assistant.fgas_mcp_adapter.FGasMCPContext",
+      "policy": "generazione artefatti locali; nessun invio, upload o condivisione esterna; gli invii richiedono sempre approvazione applicativa separata",
+      "validators": [
+        "strict MCP allowlist",
+        "source provenance",
+        "missing fields fail closed",
+        "external_writes=0",
+        "external_sends=0",
+        "faithful PDF render"
+      ],
+      "specialist_capabilities": [
+        "fgas_prepare_from_whatsapp",
+        "fgas_validate_installation",
+        "fgas_render_installation"
+      ],
+      "status": "ready",
+      "source_refs": [
+        "ralfloop_agent/unified_assistant/fgas_mcp_adapter.py",
+        "scripts/ralf_fgas_installation_mcp_server.py"
+      ]
+    },
+    {
       "id": "projects",
       "aliases": [
         "progetti",
@@ -1315,6 +1352,23 @@
       "classification": "AUTO_WRITE",
       "workflow": "ralfloop_agent.unified_assistant.editorial_mcp_adapter.EditorialMCPContext.request",
       "verification_method": "strict MCP discovery + source provenance + marketing/media preflight + local artifact output",
+      "status": "ready"
+    },
+    {
+      "id": "fgas.installation",
+      "domains": [
+        "fgas",
+        "tiremm"
+      ],
+      "required_arguments": [
+        "objective"
+      ],
+      "required_capabilities": [
+        "fgas_prepare_from_whatsapp"
+      ],
+      "classification": "AUTO_WRITE",
+      "workflow": "ralfloop_agent.unified_assistant.fgas_mcp_adapter.FGasMCPContext.request",
+      "verification_method": "strict five-tool MCP allowlist + local artifacts only + external_writes=0 + external_sends=0",
       "status": "ready"
     },
     {

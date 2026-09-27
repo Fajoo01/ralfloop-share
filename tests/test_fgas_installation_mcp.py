@@ -191,6 +191,21 @@ def test_prepare_from_whatsapp_stops_on_missing_fields():
     assert "serial" in payload["missing"]
 
 
+def test_prepare_from_whatsapp_uses_configured_default_chat(monkeypatch):
+    seen = {}
+
+    class CapturingWhatsApp:
+        def collect(self, **kwargs):
+            seen.update(kwargs)
+            return {"ok": True, "status": "READY", "chat_id": "wa_chat_" + "a" * 16, "message_ids": [], "text": "Cliente: Mario Rossi", "media": [], "side_effects": 0}
+
+    monkeypatch.setenv("RALF_FGAS_DEFAULT_WHATSAPP_CHAT_TITLE", "Fabio")
+    server = FGasMCPServer(drive=_FakeDrive(), whatsapp=CapturingWhatsApp())
+    result = server.call("fgas_prepare_from_whatsapp", {})
+    assert result["structuredContent"]["status"] == "INCOMPLETE"
+    assert seen["chat_title"] == "Fabio"
+
+
 def test_mcp_rejects_schema_violations_before_execution():
     server = FGasMCPServer(drive=_FakeDrive(), whatsapp=_FakeWhatsApp())
     bad_path = server.call("fgas_render_installation", {

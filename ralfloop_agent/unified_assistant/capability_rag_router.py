@@ -136,6 +136,11 @@ CAPABILITY_HINTS: dict[str, tuple[str, ...]] = {
     "education.tutor": ("insegnante", "tutor", "spiegami", "quiz", "esercizio didattico"),
     "bandi.research": ("bandi aperti", "bandi disponibili", "opportunita finanziamento", "contributi aps", "finanziamenti tiremm", "grant opportunities"),
     "browser.inspect": ("browser", "playwright", "snapshot browser", "snapshot pagina", "ispeziona pagina web", "leggi pagina web", "schede browser", "tab browser"),
+    "fgas.installation": (
+        "fgas", "f-gas", "modulo fgas", "modulo installazione",
+        "installazione condizionatore", "installazione climatizzatore",
+        "documento fgas", "r32 installazione",
+    ),
     "accounting.read": (
         "commercialista", "contabilita", "contabilità", "bilancio", "bilancio ets",
         "rendiconto", "rendiconto ets", "rendiconto per cassa", "modello d", "modello e",

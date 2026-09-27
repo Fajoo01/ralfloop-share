@@ -224,7 +224,7 @@ class FGasMCPServer:
             if name == "fgas_render_installation":
                 return _mcp_result(self._render(arguments["record"], basename=str(arguments.get("output_basename") or "MODULO_INSTALLAZIONE_COMPILATO"), allow_incomplete=bool(arguments.get("allow_incomplete", False))))
             if name == "fgas_prepare_from_whatsapp":
-                source = self.whatsapp.collect(chat_id=str(arguments.get("chat_id") or ""), chat_title=str(arguments.get("chat_title") or ""), message_ids=list(arguments.get("message_ids") or ()))
+                source = self.whatsapp.collect(chat_id=str(arguments.get("chat_id") or ""), chat_title=str(arguments.get("chat_title") or os.getenv("RALF_FGAS_DEFAULT_WHATSAPP_CHAT_TITLE", "")), message_ids=list(arguments.get("message_ids") or ()))
                 if not source.get("ok"):
                     return _mcp_result(source, error=True)
                 source_text = _repair_truncated_years(
