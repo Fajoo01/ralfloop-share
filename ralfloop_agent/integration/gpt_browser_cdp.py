@@ -3320,10 +3320,10 @@ class ChromeCdp:
           const composer=[...document.querySelectorAll('textarea,[contenteditable="true"]')].find(el=>visible(el)&&((el.getAttribute('placeholder')||'').toLowerCase().includes('deepseek')||el.tagName==='TEXTAREA'))||null;
           const textOf=el=>String(el?.innerText||el?.textContent||'').replace(/\s+/g,' ').trim();
           const candidates=[]; const seen=new Set();
-          const selectors=['[data-role="assistant"]','.ds-message.assistant','[class*="assistant"] [class*="markdown"]','[class*="message"] [class*="markdown"]','.markdown-body','.markdown'];
+          const selectors=['.ds-assistant-message-main-content','[data-role="assistant"] .ds-markdown'];
           for(const selector of selectors) for(const el of document.querySelectorAll(selector)){
             if(!visible(el)||el===composer||el.contains(composer)||composer?.contains(el))continue;
-            if(el.closest('[class*="thinking"],[class*="reasoning"]'))continue;
+            if(el.closest('.ds-think-content,[class*="thinking"],[class*="reasoning"]'))continue;
             const text=textOf(el); if(!text||text.length>120000||seen.has(text))continue; seen.add(text); candidates.push(text);
           }
           const bodyText=String(document.body?.innerText||'');
