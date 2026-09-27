@@ -91,7 +91,7 @@ def reconcile():
     provider.property_mappings.set(mappings)
     app, app_created = Application.objects.update_or_create(
         slug=SLUG,
-        defaults={"name": APP_NAME, "provider": provider, "meta_description": "Bot-tazzi via Portachiavi Tiremm"},
+        defaults={"name": APP_NAME, "provider": provider, "meta_description": "Bot-tazzi via CIAV"},
     )
     PolicyBinding.objects.update_or_create(
         target=app,
