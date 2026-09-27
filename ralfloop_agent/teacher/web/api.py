@@ -20,7 +20,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..pedagogy import LearnerProfile
 
 from .application import LearningApplication
-from .browser_provider import BrowserTeachingProvider, ALLOWED_PROVIDERS
 from .client import TeacherClient
 from .feedback_voice import FeedbackVoiceRegistry
 from .fish_tts import FishTTSCache
@@ -52,7 +51,6 @@ class Answer(Input):
 class Help(Input):
     mode: Literal["hint", "different", "explain"]
     question: str = Field(default="", max_length=2000)
-    provider: Literal["local", "chatgpt", "kimi", "deepseek"] = "local"
 
 
 class Simulation(Input):
@@ -86,12 +84,11 @@ class AudioPrepare(Input):
     chapter: int = Field(ge=0, le=100)
 
 
-def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", secure_cookie=False, fish_tts=None, browser_provider=None):
+def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", secure_cookie=False, fish_tts=None):
     state = state or State(os.environ.get("TEACHER_WEB_DB", "/var/lib/ralfloop-teacher-web/student.sqlite3"))
     learning = LearningApplication(state, teacher or TeacherClient())
     fish = fish_tts if fish_tts is not None else FishTTSCache.from_env()
     voices = FeedbackVoiceRegistry(fish)
-    browser_teacher = browser_provider if browser_provider is not None else BrowserTeachingProvider()
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.state.learning = learning
     app.state.fish_tts = fish
@@ -217,12 +214,7 @@ def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", sec
         return response
 
     @app.get("/api/home")
-    def home(profile=Depends(student)):
-        result = learning.home(profile)
-        default_provider = os.environ.get("TEACHER_DEFAULT_PROVIDER", "local").strip().lower()
-        if default_provider not in {"local", *ALLOWED_PROVIDERS}:
-            default_provider = "local"
-        return {**result, "llm_providers": ["local", "chatgpt", "kimi", "deepseek"], "default_provider": default_provider}
+    def home(profile=Depends(student)): return learning.home(profile)
 
     @app.get("/api/progress")
     def progress(profile=Depends(student)): return state.progress(profile["id"])
@@ -257,20 +249,9 @@ def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", sec
         result = locked(profile, learning.answer, activity_id, data.answer, data.request_key)
         return voices.attach(profile["id"], result)
 
-    def browser_help(profile, activity_id: str, data: Help):
-        prompt, fallback = learning.external_help_prompt(profile, activity_id, data.mode, data.question)
-        try:
-            result = browser_teacher.query(data.provider, prompt, timeout_seconds=90)
-            return {"feedback": str(result["response"])[:4000], "source": "browser_provider", "provider": data.provider}
-        except Exception:
-            return {"feedback": fallback, "source": "original_fallback", "provider": data.provider}
-
     @app.post("/api/activities/{activity_id}/help")
     def help_activity(activity_id: str, data: Help, profile=Depends(student)):
-        if data.provider == "local":
-            result = locked(profile, learning.help, activity_id, data.mode, data.question)
-        else:
-            result = locked(profile, browser_help, activity_id, data)
+        result = locked(profile, learning.help, activity_id, data.mode, data.question)
         return voices.attach(profile["id"], result)
 
     @app.post("/api/activities/{activity_id}/help/stream")
@@ -296,14 +277,6 @@ def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", sec
                 }
 
             try:
-                if data.provider != "local":
-                    result = browser_help(profile, activity_id, data)
-                    text = str(result.get("feedback") or "")
-                    if text:
-                        yield json.dumps({"type":"delta","text":text}, ensure_ascii=False, separators=(",", ":")) + "\n"
-                        yield json.dumps(voice_event(text), ensure_ascii=False, separators=(",", ":")) + "\n"
-                    yield json.dumps({"type":"done","result":voices.attach(profile["id"], result)}, ensure_ascii=False, separators=(",", ":")) + "\n"
-                    return
                 for event in learning.help_stream(profile, activity_id, data.mode, data.question):
                     if event.get("type") == "delta":
                         text = event.get("text")

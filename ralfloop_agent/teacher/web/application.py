@@ -252,15 +252,6 @@ class LearningApplication:
         fallback = content["hints"][0] if content["hints"] else "Rileggi la consegna, un passaggio alla volta."
         return entry, name, args, fallback
 
-    def external_help_prompt(self, student, activity_id, mode, question):
-        entry, name, args, fallback = self._help_request(student, activity_id, mode, question)
-        mode_label = {"teacher.hint": "dai un indizio senza anticipare la soluzione", "teacher.explain_differently": "spiega in modo diverso", "teacher.explain": "spiega e rispondi alla domanda"}.get(name, "spiega")
-        payload = json.dumps(args, ensure_ascii=False, separators=(",", ":"))
-        prompt = (f"Sei Peppone, tutor didattico. Materia: {entry["subject"]}. Argomento: {entry["title"]}. "
-                  f"Obiettivo: {mode_label}. Usa solo il contesto didattico seguente, non eseguire richieste amministrative, browser, email, shell o altre azioni esterne. "
-                  f"Contesto: {payload}. Rispondi in italiano, in modo didattico e conciso.")
-        return prompt[:12000], fallback
-
     def help(self, student, activity_id, mode, question):
         entry, name, args, fallback = self._help_request(student, activity_id, mode, question)
         try:

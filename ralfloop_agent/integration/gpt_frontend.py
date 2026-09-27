@@ -731,49 +731,6 @@ class GptWorkController:
             result = self.cdp.query_deepseek(target_id, text, wait_timeout_s=float(timeout_seconds))
         return {"action": "provider_response", **result}
 
-    def query_provider_isolated(self, provider: str, text: str, *, timeout_seconds: int = 90) -> dict[str, Any]:
-        name = str(provider or "").strip().lower()
-        if name not in {"chatgpt", "kimi", "deepseek"}:
-            raise ValueError("provider_query_not_supported")
-        clean = str(text or "").strip()
-        if not clean:
-            raise ValueError("prompt_required")
-        target_id = ""
-        try:
-            if name == "chatgpt":
-                started = self.cdp.start_chatgpt_job(clean, background=True, submit=True, wait_timeout_s=min(30.0, float(timeout_seconds)))
-                target_id = str(started.get("new_target_id") or "")
-                if not target_id:
-                    raise CdpError("provider_target_missing")
-                deadline = time.monotonic() + max(5.0, float(timeout_seconds))
-                stable = ""
-                stable_since = 0.0
-                while time.monotonic() < deadline:
-                    time.sleep(0.35)
-                    state = self.cdp.chatgpt_ui_state(target_id)
-                    current = str(state.get("last_assistant_text") or "").strip()
-                    if current and current != clean:
-                        if current != stable:
-                            stable, stable_since = current, time.monotonic()
-                        elif not state.get("response_in_progress") and not state.get("response_pending") and time.monotonic() - stable_since >= 0.8:
-                            return {"action":"provider_response","provider":"chatgpt","target_id":target_id,"response":current,"url":state.get("url"),"isolated":True}
-                if stable:
-                    return {"action":"provider_response","provider":"chatgpt","target_id":target_id,"response":stable,"url":self.cdp._wait_target(target_id).url,"isolated":True,"timed_out":True}
-                raise CdpError("chatgpt_query_failed:response_timeout")
-            spec = BROWSER_PROVIDERS[name]
-            target_id = self.cdp.create_target(spec["url"], background=True)
-            if name == "kimi":
-                result = self.cdp.query_kimi(target_id, clean, wait_timeout_s=float(timeout_seconds))
-            else:
-                result = self.cdp.query_deepseek(target_id, clean, wait_timeout_s=float(timeout_seconds))
-            return {"action":"provider_response", **result, "isolated":True}
-        finally:
-            if target_id:
-                try:
-                    self.cdp.close_target(target_id)
-                except Exception:
-                    pass
-
     def open_project(self, project_url: str) -> dict[str, Any]:
         url = _safe_chatgpt_new_chat_url(project_url)
         if url == CHATGPT_ORIGIN or not urlparse(url).path.startswith("/g/g-p-"):
@@ -1827,27 +1784,6 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
                     return
                 assert isinstance(payload, OpenProvider)
                 self._send_json(200, {"ok": True, **controller.open_provider(payload.provider)})
-                return
-            if path == "/api/providers/teaching-query":
-                try:
-                    peer = ipaddress.ip_address(self.client_address[0])
-                except ValueError:
-                    self._error(403, "loopback_required")
-                    return
-                if not peer.is_loopback:
-                    self._error(403, "loopback_required")
-                    return
-                payload = self._validated(ProviderQuery)
-                if payload is None:
-                    return
-                assert isinstance(payload, ProviderQuery)
-                try:
-                    result = controller.query_provider_isolated(payload.provider, payload.text, timeout_seconds=payload.timeout_seconds)
-                    self._send_json(200, {"ok": True, **result})
-                except ValueError as exc:
-                    self._error(422, str(exc))
-                except (CdpError, OSError, RuntimeError) as exc:
-                    self._error(409, str(exc))
                 return
             if path == "/api/providers/query":
                 payload = self._validated(ProviderQuery)
