@@ -482,7 +482,7 @@ def assistant_v1_chat(
             }, provenance, execution_claim_blocked=claim_blocked),
         )
     active_provider: ChatProvider | ChatProviderError = provider
-    if model_lane == "fast" and request.model is None and fast_provider is not None:
+    if model_lane in {"fast", "general"} and request.model is None and fast_provider is not None:
         active_provider = fast_provider
     if isinstance(active_provider, ChatProviderError):
         _record_adaptive_model_outcome(

@@ -331,6 +331,24 @@ def test_fast_lane_can_use_dedicated_provider(monkeypatch: pytest.MonkeyPatch) -
     assert default.calls == []
 
 
+def test_general_lane_uses_dedicated_fast_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOTTAZZI_ASSISTANT_FAST_MODEL", "qwen2.5-3b")
+    default = FakeProvider("default")
+    fast = FakeProvider("general-local")
+    client = _client(default, route_probe=_no_route, unified_runner=_unexpected_unified)
+    client.app.dependency_overrides[assistant_v1_api.get_fast_lane_provider] = lambda: fast
+
+    payload = client.post(
+        "/assistant/v1/chat",
+        json={"message": "Spiegami la fotosintesi"},
+    ).json()
+
+    assert payload["response"] == "general-local"
+    assert payload["metadata"]["model_lane"] == "general"
+    assert fast.calls[0][1] == "qwen2.5-3b"
+    assert default.calls == []
+
+
 def test_explicit_model_bypasses_dedicated_fast_provider() -> None:
     default = FakeProvider("explicit")
     fast = FakeProvider("fast")
