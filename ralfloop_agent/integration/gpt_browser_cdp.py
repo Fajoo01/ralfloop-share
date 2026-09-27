@@ -3252,16 +3252,7 @@ class ChromeCdp:
         clean = str(prompt or "").strip()
         if not clean:
             raise CdpError("empty_prompt")
-        ready_deadline = time.monotonic() + max(5.0, min(float(wait_timeout_s), 20.0))
-        baseline = {}
-        while time.monotonic() < ready_deadline:
-            baseline = self.kimi_ui_state(target_id)
-            if baseline.get("login_visible") or baseline.get("challenge_visible"):
-                reason = "challenge_required" if baseline.get("challenge_visible") else "login_required"
-                raise CdpError(f"kimi_query_failed:{reason}")
-            if baseline.get("composer_ready"):
-                break
-            time.sleep(0.25)
+        baseline = self.kimi_ui_state(target_id)
         if not baseline.get("composer_ready"):
             raise CdpError("kimi_not_ready:composer_missing")
         target = self._wait_target(target_id)
@@ -3353,13 +3344,10 @@ class ChromeCdp:
     def query_deepseek(self, target_id: str, prompt: str, *, wait_timeout_s: float = 90.0) -> dict[str, Any]:
         clean=str(prompt or "").strip()
         if not clean: raise CdpError("empty_prompt")
-        ready_deadline=time.monotonic()+max(5.0,min(float(wait_timeout_s),20.0)); baseline={}
-        while time.monotonic()<ready_deadline:
-            baseline=self.deepseek_ui_state(target_id)
-            if baseline.get("login_visible") or baseline.get("challenge_visible"):
-                reason="challenge_required" if baseline.get("challenge_visible") else "login_required"; raise CdpError(f"deepseek_query_failed:{reason}")
-            if baseline.get("composer_ready"): break
-            time.sleep(0.25)
+        baseline=self.deepseek_ui_state(target_id)
+        if baseline.get("login_visible") or baseline.get("challenge_visible"):
+            reason="challenge_required" if baseline.get("challenge_visible") else "login_required"
+            raise CdpError(f"deepseek_query_failed:{reason}")
         if not baseline.get("composer_ready"): raise CdpError("deepseek_not_ready:composer_missing")
         target=self._wait_target(target_id)
         if not target.websocket_url: raise CdpError("deepseek_target_missing_websocket")
