@@ -14,6 +14,7 @@ import threading
 import time
 import uuid
 from typing import Literal
+from urllib.parse import quote, urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -86,6 +87,25 @@ class AudioPosition(Input):
 
 class AudioPrepare(Input):
     chapter: int = Field(ge=0, le=100)
+
+
+def _resolve_oidc_member(identity: dict) -> dict | None:
+    username = str(identity.get("preferred_username") or "").strip()
+    if not username or len(username) > 128 or any(ch.isspace() for ch in username):
+        return None
+    base = os.getenv("TEACHER_WEB_MEMBERSHIP_BASE_URL", "http://127.0.0.1:8001").strip().rstrip("/")
+    parsed = urlparse(base)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}:
+        raise RuntimeError("membership_base_url_invalid")
+    response = requests.get(f"{base}/arci-members/resolve-account/{quote(username, safe='')}", timeout=5)
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("outcome") != "VERIFIED_ELIGIBLE":
+        return None
+    account_id = str(payload.get("account_id") or "").strip()
+    if not account_id or len(account_id) > 256:
+        raise RuntimeError("membership_account_invalid")
+    return payload
 
 
 def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", secure_cookie=False, fish_tts=None):
@@ -248,18 +268,26 @@ def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", sec
             subject = str(identity["sub"])
             token = state.login_oidc(subject)
             if token is None:
-                link_token = state.begin_oidc_link(subject)
-                response = RedirectResponse(public("/login?link=1"), status_code=303)
-                response.set_cookie(
-                    "teacher_oidc_link",
-                    link_token,
-                    max_age=600,
-                    httponly=True,
-                    secure=secure_cookie,
-                    samesite="strict",
-                    path=cookie_path,
-                )
-            else:
+                member = _resolve_oidc_member(identity)
+                if member is not None and member.get("is_minor") is False:
+                    token = state.provision_oidc(
+                        subject,
+                        member["account_id"],
+                        identity.get("name") or identity.get("preferred_username") or "Studente",
+                    )
+                else:
+                    link_token = state.begin_oidc_link(subject)
+                    response = RedirectResponse(public("/login?link=1"), status_code=303)
+                    response.set_cookie(
+                        "teacher_oidc_link",
+                        link_token,
+                        max_age=600,
+                        httponly=True,
+                        secure=secure_cookie,
+                        samesite="strict",
+                        path=cookie_path,
+                    )
+            if token is not None:
                 response = RedirectResponse(public("/home"), status_code=303)
                 response.set_cookie(
                     "teacher_session",
@@ -270,7 +298,7 @@ def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", sec
                     max_age=28800,
                     path=cookie_path,
                 )
-        except (RuntimeError, requests.RequestException, ValueError, KeyError):
+        except (RuntimeError, requests.RequestException, ValueError, KeyError, PermissionError):
             return JSONResponse({"error": "Accesso Portachiavi non riuscito."}, status_code=503)
         response.delete_cookie("teacher_oidc_state", path=cookie_path)
         return response

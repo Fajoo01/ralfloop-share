@@ -392,6 +392,55 @@ def test_portachiavi_oidc_requires_explicit_profile_link(setup):
     assert rows[0]["subject_hash"] != "member-subject-1"
 
 
+def test_portachiavi_oidc_auto_provisions_active_adult(setup):
+    state, _, _, _ = setup
+    token = state.provision_oidc(
+        "member-subject-auto",
+        "account-123",
+        "Adulto Test",
+        school_level="adult",
+        grade=1,
+    )
+    profile = state.authenticate(token)
+    assert profile["display_name"] == "Adulto Test"
+    assert profile["school_level"] == "adult"
+    assert profile["demo"] == 0
+    assert state.authenticate(state.login_oidc("member-subject-auto"))["id"] == profile["id"]
+    with state.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM oidc_identities WHERE student=?", (profile["id"],)).fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM credentials WHERE student=?", (profile["id"],)).fetchone()[0] == 0
+
+
+def test_portachiavi_oidc_http_auto_provisions_active_adult(setup, monkeypatch):
+    from urllib.parse import parse_qs, urlparse
+    from ralfloop_agent.teacher.web import api as teacher_api
+
+    state, app, _, _ = setup
+    monkeypatch.setenv("TEACHER_WEB_AUTH_MODE", "oidc")
+    monkeypatch.setattr(teacher_api.oidc_auth, "authorization_url", lambda *, state: f"https://idp.example/authorize?state={state}")
+    monkeypatch.setattr(
+        teacher_api.oidc_auth,
+        "exchange_code",
+        lambda code: {"sub": "member-subject-auto-http", "preferred_username": "tm-test", "name": "Adulto Test"},
+    )
+    monkeypatch.setattr(
+        teacher_api,
+        "_resolve_oidc_member",
+        lambda identity: {"outcome": "VERIFIED_ELIGIBLE", "account_id": "account-http", "is_minor": False},
+    )
+    with TestClient(create_app(state, app.teacher, origin="http://testserver"), raise_server_exceptions=False) as client:
+        start = client.get("/oidc/login", follow_redirects=False)
+        oidc_state = parse_qs(urlparse(start.headers["location"]).query)["state"][0]
+        callback = client.get(f"/oidc/callback?code=ok&state={oidc_state}", follow_redirects=False)
+        assert callback.status_code == 303
+        assert callback.headers["location"] == "/home"
+        assert "teacher_session=" in callback.headers["set-cookie"]
+        assert client.get("/api/home").status_code == 200
+        with state.connect() as conn:
+            row = conn.execute("SELECT display_name,demo FROM students WHERE display_name='Adulto Test'").fetchone()
+        assert row is not None and row["demo"] == 0
+
+
 def test_portachiavi_oidc_http_flow_links_once(setup, monkeypatch):
     from urllib.parse import parse_qs, urlparse
     from ralfloop_agent.teacher.web import api as teacher_api

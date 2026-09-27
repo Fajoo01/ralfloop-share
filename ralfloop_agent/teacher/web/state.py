@@ -211,6 +211,58 @@ class State:
             conn.execute("INSERT INTO web_sessions VALUES(?,?,?)", (digest(token), row["id"], now + 8 * 3600))
         return token
 
+    def provision_oidc(self, subject, account_id, display_name="", *, school_level="adult", grade=1, school_track=""):
+        limits = {"primary": 5, "middle": 3, "upper": 5, "adult": 20, "university": 20, "postgraduate": 20, "master": 20}
+        if school_level not in limits or grade not in range(1, limits[school_level] + 1):
+            raise ValueError("invalid_school_profile")
+        if school_level == "upper" and school_track not in ("liceo", "tecnico", "professionale"):
+            raise ValueError("invalid_school_track")
+        if school_level != "upper" and school_track:
+            raise ValueError("invalid_school_track")
+        account = str(account_id or "").strip()
+        if not account or len(account) > 256:
+            raise ValueError("invalid_oidc_account")
+        name = str(display_name or "Studente").strip()[:120] or "Studente"
+        now = self.clock()
+        subject_hash = digest("teacher-web-oidc:" + str(subject))
+        account_key = digest("teacher-web-oidc-account:" + account)
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            owner = conn.execute("SELECT student FROM oidc_identities WHERE subject_hash=?", (subject_hash,)).fetchone()
+            if owner is not None:
+                student_id = owner["student"]
+                enabled = conn.execute(
+                    "SELECT 1 FROM students WHERE id=? AND id NOT IN (SELECT student FROM disabled_students)",
+                    (student_id,),
+                ).fetchone()
+                if enabled is None:
+                    raise PermissionError("oidc_identity_disabled")
+            else:
+                existing = conn.execute(
+                    "SELECT id FROM students WHERE membership_card_id=? AND id NOT IN (SELECT student FROM disabled_students)",
+                    (account_key,),
+                ).fetchone()
+                if existing is not None:
+                    student_id = existing["id"]
+                else:
+                    student_id = secrets.token_hex(16)
+                    conn.execute(
+                        "INSERT INTO students VALUES(?,?,?,?,?,?,?,?,?,?)",
+                        (student_id, account_key, name, school_level, grade, school_track, "", now, None, 0),
+                    )
+                bound = conn.execute("SELECT subject_hash FROM oidc_identities WHERE student=?", (student_id,)).fetchone()
+                if bound is not None and bound["subject_hash"] != subject_hash:
+                    raise PermissionError("oidc_student_conflict")
+                conn.execute(
+                    "INSERT OR IGNORE INTO oidc_identities(subject_hash,student,created) VALUES(?,?,?)",
+                    (subject_hash, student_id, now),
+                )
+            conn.execute("DELETE FROM oidc_pending_links WHERE subject_hash=?", (subject_hash,))
+            conn.execute("DELETE FROM web_sessions WHERE expires<=?", (now,))
+            token = secrets.token_urlsafe(32)
+            conn.execute("INSERT INTO web_sessions VALUES(?,?,?)", (digest(token), student_id, now + 8 * 3600))
+        return token
+
     def begin_oidc_link(self, subject):
         now = self.clock()
         token = secrets.token_urlsafe(32)
