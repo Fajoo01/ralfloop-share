@@ -53,6 +53,11 @@ ATM_LOCAL_ROUTER_GRAPH = Path(
 
 ATM_LOCAL_ROUTER_RADIUS_M = 700
 ATM_LOCAL_ROUTER_STOP_LIMIT = 10
+ATM_WALK_M_PER_MIN = float(
+    os.environ.get("RALFLOOP_ATM_WALK_M_PER_MIN", "60")
+)
+if not math.isfinite(ATM_WALK_M_PER_MIN) or ATM_WALK_M_PER_MIN <= 0:
+    ATM_WALK_M_PER_MIN = 60.0
 
 ATM_DIRECT_TOPOLOGY_PATH = Path(
     os.environ.get(
@@ -81,6 +86,30 @@ ATM_DIRECT_MAX_STOPS = max(
     int(os.environ.get("RALFLOOP_ATM_DIRECT_MAX_STOPS", "8")),
 )
 # LOCAL_ATM_ROUTER_CONFIG_END
+
+
+def _walking_seconds(distance_m: float | int) -> int:
+    metres = max(0.0, float(distance_m or 0))
+    return int(math.ceil(metres / (ATM_WALK_M_PER_MIN / 60.0)))
+
+
+def _route_has_reboard_cycle(route: dict[str, Any]) -> bool:
+    """Return True for A -> B -> A style public-transport loops."""
+    sequence: list[str] = []
+
+    for leg in route.get("legs") or []:
+        if not isinstance(leg, dict) or leg.get("mode") != "transit":
+            continue
+
+        line = str(leg.get("route") or "").strip()
+        if not line:
+            continue
+
+        if not sequence or sequence[-1] != line:
+            sequence.append(line)
+
+    return len(sequence) != len(set(sequence))
+
 
 router = APIRouter(prefix="/atm-telegram", tags=["atm-telegram"])
 
@@ -832,13 +861,9 @@ def _atm_direct_fallback_options(origin_lat: float, origin_lon: float, dest_lat:
             else 0
         )
 
-        origin_walk_seconds = int(
-            math.ceil(max(0, origin_distance_m) / 80.0) * 60
-        )
+        origin_walk_seconds = _walking_seconds(origin_distance_m)
 
-        final_walk_seconds = int(
-            math.ceil(max(0, final_walk_m) / 80.0) * 60
-        )
+        final_walk_seconds = _walking_seconds(final_walk_m)
 
         board_ready_at = (
             current
@@ -2261,9 +2286,7 @@ def _atm_one_transfer_options(
 
                 first_wait_seconds = first_wait_min * 60
 
-                origin_walk_seconds = int(
-                    math.ceil(max(0, board_distance) / 80.0) * 60
-                )
+                origin_walk_seconds = _walking_seconds(board_distance)
                 board_ready_at = (
                     current
                     + timedelta(seconds=origin_walk_seconds)
@@ -2415,9 +2438,7 @@ def _atm_one_transfer_options(
                         except Exception:
                             transfer_walk_m = 0
 
-                        transfer_walk_seconds = int(
-                            math.ceil(transfer_walk_m / 80.0) * 60
-                        )
+                        transfer_walk_seconds = _walking_seconds(transfer_walk_m)
 
                         metro_ready_at = (
                             transfer_arrival_at
@@ -2476,9 +2497,7 @@ def _atm_one_transfer_options(
                         except Exception:
                             final_walk_m = 0
 
-                        final_walk_seconds = int(
-                            math.ceil(final_walk_m / 80.0) * 60
-                        )
+                        final_walk_seconds = _walking_seconds(final_walk_m)
 
                         destination_arrival_at = (
                             arrival_at
@@ -3613,7 +3632,10 @@ def _local_atm_realtime_route(
             if allowed_keys == before_keys:
                 break
 
-        if candidate_route is not None:
+        if (
+            candidate_route is not None
+            and not _route_has_reboard_cycle(candidate_route)
+        ):
             candidate_routes.append(candidate_route)
 
     # Le prime salite di superficie restano isolate una per
@@ -3738,7 +3760,10 @@ def _local_atm_realtime_route(
             if allowed_keys == before_keys:
                 break
 
-        if candidate_route is not None:
+        if (
+            candidate_route is not None
+            and not _route_has_reboard_cycle(candidate_route)
+        ):
             candidate_routes.append(candidate_route)
 
     if not candidate_routes:
@@ -4104,7 +4129,10 @@ def _build_plan_impl(lat: float, lon: float, destination_name: str) -> dict[str,
     nearby_origin_stops = [
         {
             "from_stop": s,
-            "walk_minutes_to_stop": max(1, round(int(s["distance_m"]) / 80)),
+            "walk_minutes_to_stop": max(
+                1,
+                int(math.ceil(_walking_seconds(int(s["distance_m"])) / 60)),
+            ),
             "lines": s.get("lines") or [],
             "live_arrivals": live.get("arrivals") if i == 0 else {},
             "atm_realtime_url": _atm_link(float(s["lat"]), float(s["lon"])),
@@ -4723,7 +4751,15 @@ def render_reply(plan: dict[str, Any]) -> str:
         lines.append("Non ho ancora calcolato il percorso completo; ti mostro le partenze vicine e la fermata più vicina alla destinazione.")
 
     if first:
-        walk_min = max(1, round(int(first.get("distance_m") or 0) / 80))
+        walk_min = max(
+            1,
+            int(
+                math.ceil(
+                    _walking_seconds(int(first.get("distance_m") or 0))
+                    / 60
+                )
+            ),
+        )
         line_labels = first_line_labels or _line_labels(first.get("lines") or [])
         lines_found = ", ".join(line_labels)
         arrivals = plan.get("live_arrivals") or {}

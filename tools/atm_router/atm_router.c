@@ -152,9 +152,40 @@ static double distance_m(
 }
 
 
+static double walk_metres_per_minute(void)
+{
+    static int initialized = 0;
+    static double value = 60.0;
+
+    if (!initialized) {
+        const char *raw = getenv("RALFLOOP_ATM_WALK_M_PER_MIN");
+
+        if (raw && *raw) {
+            char *end = NULL;
+            double parsed = strtod(raw, &end);
+
+            if (
+                end
+                && *end == '\0'
+                && isfinite(parsed)
+                && parsed > 0.0
+            ) {
+                value = parsed;
+            }
+        }
+
+        initialized = 1;
+    }
+
+    return value;
+}
+
+
 static uint32_t walk_seconds(double metres)
 {
-    double seconds = ceil(metres / (80.0 / 60.0));
+    double seconds = ceil(
+        metres / (walk_metres_per_minute() / 60.0)
+    );
 
     if (seconds < 0.0) {
         return 0U;
@@ -271,9 +302,13 @@ static const live_input_t *live_for_connection(
     for (size_t i = 0U; i < live_count; ++i) {
         const live_input_t *live = &live_inputs[i];
 
+        if (!live->resolved) {
+            continue;
+        }
+
+        /* Realtime disponibile esattamente alla fermata corrente. */
         if (
-            live->resolved
-            && live->stop == stop
+            live->stop == stop
             && connection_matches_live(
                 graph,
                 connection,
@@ -282,6 +317,29 @@ static const live_input_t *live_for_connection(
             )
         ) {
             return live;
+        }
+
+        /*
+         * Fallback deduttivo: un live osservato a monte rende
+         * utilizzabile una fermata successiva soltanto se si tratta
+         * della STESSA corsa GTFS (trip+route), non della sola linea.
+         */
+        if (
+            live->anchor_connection < graph->header->connection_count
+            && connection->trip == live->trip
+            && connection->route == live->route
+            && connection->departure_s >=
+               graph->connections[live->anchor_connection].departure_s
+        ) {
+            int64_t shifted_departure =
+                (int64_t)connection->departure_s + live->shift_s;
+
+            if (
+                shifted_departure >= 0
+                && shifted_departure <= UINT32_MAX
+            ) {
+                return live;
+            }
         }
     }
 
@@ -1644,54 +1702,136 @@ static int route(
                 }
             }
 
+            const live_input_t *connection_live = NULL;
+            uint32_t connection_live_index = UINT32_MAX;
+
             if (live_count > 0U) {
-                const live_input_t *live =
-                    live_for_connection(
-                        graph,
-                        live_inputs,
-                        live_count,
-                        stop,
-                        c
+                connection_live = live_for_connection(
+                    graph,
+                    live_inputs,
+                    live_count,
+                    stop,
+                    c
+                );
+
+                if (connection_live) {
+                    connection_live_index = (uint32_t)(
+                        connection_live - live_inputs
                     );
+                }
 
                 /*
                  * Per la prima salita di superficie, quando abbiamo
-                 * realtime ATM, accettiamo soltanto stop+line+direction
-                 * verificati dal live.
-                 *
-                 * La metropolitana (GTFS route_type == 1) non espone
-                 * necessariamente un WaitMessage compatibile con questo
-                 * canale realtime: deve quindi restare utilizzabile con
-                 * l'orario GTFS anche quando esistono live di superficie
-                 * nelle vicinanze.
+                 * realtime ATM, accettiamo soltanto una corsa verificata
+                 * direttamente o dedotta a monte sullo stesso trip.
+                 * La metropolitana resta utilizzabile con GTFS.
                  */
                 if (
                     state == STATE_PRE_TRANSIT
-                    && !live
+                    && !connection_live
                     && graph->routes[c->route].route_type != 1U
                 ) {
                     continue;
                 }
+            }
 
-                /*
-                 * Dopo un cambio, invece, l'assenza di un
-                 * live locale non deve eliminare il GTFS.
-                 *
-                 * Quando il live esiste, però, una vecchia
-                 * partenza programmata precedente o uguale
-                 * all'arrivo reale non può essere usata.
-                 */
+            /*
+             * Realtime diretto o dedotto da una fermata precedente:
+             * applichiamo lo stesso shift del trip sia alla partenza
+             * sia all'arrivo. Questo permette di aspettare la stessa
+             * corsa a una fermata successiva raggiungibile a piedi.
+             */
+            if (
+                connection_live
+                && (
+                    state == STATE_PRE_TRANSIT
+                    || state == STATE_AFTER_WALK
+                )
+            ) {
+                int64_t shifted_departure =
+                    (int64_t)c->departure_s
+                    + connection_live->shift_s;
+                int64_t shifted_arrival =
+                    (int64_t)c->arrival_s
+                    + connection_live->shift_s;
+
                 if (
-                    (
-                        state == STATE_PRE_TRANSIT
-                        || state == STATE_AFTER_WALK
-                    )
-                    && live
-                    && c->departure_s
-                       <= live->departure_s
+                    shifted_departure >= 0
+                    && shifted_departure <= UINT32_MAX
+                    && shifted_arrival >= 0
+                    && shifted_arrival <= UINT32_MAX
+                    && item.time <= (uint32_t)shifted_departure
                 ) {
-                    continue;
+                    uint32_t live_next_node = node_id(
+                        c->to_stop,
+                        STATE_TRANSIT,
+                        stop_count
+                    );
+                    uint32_t live_candidate_walk =
+                        walk_cost[item.node];
+
+                    if (
+                        live_candidate_walk != INF_TIME
+                        && boarding_cost[item.node] != INF_TIME
+                    ) {
+                        uint32_t live_candidate_boardings =
+                            boarding_cost[item.node] + 1U;
+
+                        if (
+                            route_cost_better(
+                                (uint32_t)shifted_arrival,
+                                live_candidate_walk,
+                                live_candidate_boardings,
+                                dist[live_next_node],
+                                walk_cost[live_next_node],
+                                boarding_cost[live_next_node]
+                            )
+                        ) {
+                            dist[live_next_node] =
+                                (uint32_t)shifted_arrival;
+                            walk_cost[live_next_node] =
+                                live_candidate_walk;
+                            boarding_cost[live_next_node] =
+                                live_candidate_boardings;
+
+                            prev[live_next_node].kind =
+                                PREV_LIVE_TRANSIT;
+                            prev[live_next_node].prev_stop = stop;
+                            prev[live_next_node].prev_state =
+                                (uint8_t)state;
+                            prev[live_next_node].ref =
+                                connection_index;
+                            prev[live_next_node].aux =
+                                connection_live_index;
+
+                            if (
+                                heap_push(
+                                    &heap,
+                                    live_next_node,
+                                    (uint32_t)shifted_arrival
+                                ) != 0
+                            ) {
+                                fprintf(
+                                    stderr,
+                                    "atm-router: memoria insufficiente\n"
+                                );
+                                heap_free(&heap);
+                                free(dist);
+                                free(walk_cost);
+                                free(boarding_cost);
+                                free(prev);
+                                free(conn_offsets);
+                                free(conn_indices);
+                                free(transfer_offsets);
+                                free(transfer_indices);
+                                return 1;
+                            }
+                        }
+                    }
                 }
+
+                /* Non usare in parallelo il vecchio orario GTFS. */
+                continue;
             }
 
             /*
@@ -1998,13 +2138,25 @@ static int route(
             leg->route = c->route;
             leg->trip = c->trip;
 
+            int64_t shifted_departure =
+                (int64_t)c->departure_s + live->shift_s;
+
+            if (
+                shifted_departure < 0
+                || shifted_departure > UINT32_MAX
+            ) {
+                shifted_departure = live->departure_s;
+            }
+
             leg->departure_s =
-                live->departure_s;
+                (uint32_t)shifted_departure;
             leg->arrival_s =
                 step->arrival_s;
 
             leg->live_wait_seconds =
-                live->wait_seconds;
+                leg->departure_s > departure_time
+                ? leg->departure_s - departure_time
+                : 0U;
 
             continue;
         }

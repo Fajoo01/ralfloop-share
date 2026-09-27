@@ -6,6 +6,7 @@ import argparse
 import csv
 import io
 import math
+import os
 import struct
 import sys
 import zipfile
@@ -182,6 +183,7 @@ def build_transfers(
     stops: list[dict],
     radius_m: int,
     max_neighbors: int,
+    walk_m_per_min: float,
 ) -> list[tuple[int, int, int]]:
     if not stops:
         return []
@@ -227,10 +229,10 @@ def build_transfers(
         nearby.sort(key=lambda x: (x[0], x[1]))
 
         for d, j in nearby[:max_neighbors]:
-            # 80 m/min, minimo 30 s per un cambio fisico.
+            # Velocità pedonale configurabile; minimo 30 s per un cambio fisico.
             walk_s = max(
                 30,
-                int(math.ceil(d / (80.0 / 60.0))),
+                int(math.ceil(d / (walk_m_per_min / 60.0))),
             )
 
             walk_s = min(walk_s, 65535)
@@ -259,7 +261,16 @@ def main() -> int:
         default=12,
     )
 
+    parser.add_argument(
+        "--walk-m-per-min",
+        type=float,
+        default=float(os.environ.get("RALFLOOP_ATM_WALK_M_PER_MIN", "60")),
+    )
+
     args = parser.parse_args()
+
+    if not math.isfinite(args.walk_m_per_min) or args.walk_m_per_min <= 0:
+        raise SystemExit("--walk-m-per-min deve essere > 0")
 
     service_date = date.fromisoformat(args.date)
 
@@ -725,6 +736,7 @@ def main() -> int:
         graph_stops,
         args.transfer_radius_m,
         args.max_transfer_neighbors,
+        args.walk_m_per_min,
     )
 
     print(

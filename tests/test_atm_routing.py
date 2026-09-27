@@ -788,10 +788,10 @@ def test_one_transfer_includes_transfer_and_final_walk(monkeypatch):
                     "source": "gtfs_scheduled",
                 }
 
-            # 160 m / 80 m/min = 2 minuti:
-            # siamo realmente pronti per la metro alle 07:52.
+            # 160 m / 60 m/min = 160 secondi:
+            # siamo realmente pronti per la metro alle 07:52:40.
             assert not_before == RealDateTime(
-                2026, 9, 10, 7, 52, 0
+                2026, 9, 10, 7, 52, 40
             )
 
             return {
@@ -831,13 +831,13 @@ def test_one_transfer_includes_transfer_and_final_walk(monkeypatch):
 
     assert m2_calls == [
         RealDateTime(2026, 9, 10, 7, 50, 0),
-        RealDateTime(2026, 9, 10, 7, 52, 0),
+        RealDateTime(2026, 9, 10, 7, 52, 40),
     ]
 
     assert best["transfer_walk_m"] == 160
-    assert best["transfer_walk_seconds"] == 2 * 60
+    assert best["transfer_walk_seconds"] == 160
     assert best["metro_ready_at"] == RealDateTime(
-        2026, 9, 10, 7, 52, 0
+        2026, 9, 10, 7, 52, 40
     )
 
     assert best["second_departure_at"] == RealDateTime(
@@ -848,15 +848,15 @@ def test_one_transfer_includes_transfer_and_final_walk(monkeypatch):
         2026, 9, 10, 7, 58, 0
     )
 
-    # 240 m / 80 m/min = 3 minuti finali.
+    # 240 m / 60 m/min = 4 minuti finali.
     assert best["final_walk_m"] == 240
-    assert best["final_walk_seconds"] == 3 * 60
+    assert best["final_walk_seconds"] == 4 * 60
 
     assert best["destination_arrival_at"] == RealDateTime(
-        2026, 9, 10, 8, 1, 0
+        2026, 9, 10, 8, 2, 0
     )
 
-    assert best["eta_seconds"] == 21 * 60
+    assert best["eta_seconds"] == 22 * 60
 
 
 # ROUTE_RANKING_TESTS_START
@@ -1494,16 +1494,16 @@ def test_direct_fallback_exposes_complete_eta(monkeypatch):
 
     assert best["travel_seconds"] == 8 * 60
 
-    # ~160 m / 80 m/min -> 2 minuti finali.
+    # ~160 m / 60 m/min -> circa 160 secondi finali.
     assert 140 <= best["dest_distance_m"] <= 180
-    assert best["final_walk_seconds"] == 2 * 60
+    assert best["final_walk_seconds"] == best["dest_distance_m"]
 
     assert best["destination_arrival_at"] == RealDateTime(
-        2026, 9, 10, 7, 52, 0
+        2026, 9, 10, 7, 52, 40
     )
 
-    # 2 attesa + 8 viaggio + 2 cammino finale.
-    assert best["eta_seconds"] == 12 * 60
+    # 2 attesa + 8 viaggio + 160 s di cammino finale.
+    assert best["eta_seconds"] == 12 * 60 + 40
 
     assert gtfs_calls == [
         (

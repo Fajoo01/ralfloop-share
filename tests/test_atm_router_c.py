@@ -1,4 +1,5 @@
 import json
+import os
 import struct
 import subprocess
 from pathlib import Path
@@ -1000,6 +1001,7 @@ def test_equal_arrival_and_walk_prefers_fewer_boardings(
         text=True,
         capture_output=True,
         check=True,
+        env={**os.environ, "RALFLOOP_ATM_WALK_M_PER_MIN": "80"},
     )
 
     result = json.loads(completed.stdout)
@@ -1048,6 +1050,7 @@ def test_one_second_faster_beats_fewer_boardings(
         text=True,
         capture_output=True,
         check=True,
+        env={**os.environ, "RALFLOOP_ATM_WALK_M_PER_MIN": "80"},
     )
 
     result = json.loads(completed.stdout)
@@ -1066,3 +1069,181 @@ def test_one_second_faster_beats_fewer_boardings(
     ]
 
     assert [leg["route"] for leg in transit] == ["R1", "R2"]
+
+
+def _write_upstream_live_graph(path, *, downstream_trip=100):
+    strings = bytearray()
+    offsets = {}
+
+    def add_string(value):
+        if value in offsets:
+            return offsets[value]
+        offset = len(strings)
+        offsets[value] = offset
+        strings.extend(value.encode("utf-8"))
+        strings.append(0)
+        return offset
+
+    stops = [
+        (
+            int(45.0000000 * 10_000_000),
+            int(9.0000000 * 10_000_000),
+            add_string("UPSTREAM A"),
+            add_string("A"),
+        ),
+        (
+            int(45.0018000 * 10_000_000),
+            int(9.0000000 * 10_000_000),
+            add_string("NEARBY B"),
+            add_string("B"),
+        ),
+        (
+            int(45.0100000 * 10_000_000),
+            int(9.0000000 * 10_000_000),
+            add_string("DESTINATION D"),
+            add_string("D"),
+        ),
+    ]
+
+    routes = [
+        (
+            add_string("51"),
+            add_string("route-51"),
+            3,
+            0,
+        ),
+    ]
+
+    connections = [
+        (
+            0,
+            1,
+            0,
+            100,
+            36120,
+            36300,
+            0,
+        ),
+        (
+            1,
+            2,
+            0,
+            downstream_trip,
+            36300,
+            36600,
+            0,
+        ),
+    ]
+
+    header_size = HEADER.size
+    stops_offset = header_size
+    routes_offset = stops_offset + len(stops) * STOP.size
+    connections_offset = routes_offset + len(routes) * ROUTE.size
+    transfers_offset = connections_offset + len(connections) * CONNECTION.size
+    strings_offset = transfers_offset
+
+    header = HEADER.pack(
+        MAGIC,
+        VERSION,
+        20260910,
+        0,
+        len(stops),
+        len(routes),
+        len(connections),
+        0,
+        stops_offset,
+        routes_offset,
+        connections_offset,
+        transfers_offset,
+        strings_offset,
+        len(strings),
+    )
+
+    with path.open("wb") as f:
+        f.write(header)
+        for row in stops:
+            f.write(STOP.pack(*row))
+        for row in routes:
+            f.write(ROUTE.pack(*row))
+        for row in connections:
+            f.write(CONNECTION.pack(*row))
+        f.write(strings)
+
+
+def test_upstream_live_is_inferred_at_reachable_downstream_stop(
+    router_bin,
+    tmp_path,
+):
+    graph = tmp_path / "upstream-live.bin"
+    _write_upstream_live_graph(graph)
+
+    completed = subprocess.run(
+        [
+            str(router_bin),
+            "--route",
+            str(graph),
+            "45.0018000",
+            "9.0000000",
+            "45.0100000",
+            "9.0000000",
+            "10:00:00",
+            "--live",
+            "A",
+            "51",
+            "0",
+            "120",
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    result = json.loads(completed.stdout)
+    assert result["status"] == "ok"
+    assert result["origin_stop_id"] == "B"
+
+    transit = [
+        leg for leg in result["legs"]
+        if leg["mode"] == "transit"
+    ]
+
+    assert len(transit) == 1
+    assert transit[0]["route"] == "51"
+    assert transit[0]["live"] is True
+    assert transit[0]["from_stop_id"] == "B"
+    assert transit[0]["to_stop_id"] == "D"
+    assert transit[0]["departure_s"] == 36300
+    assert transit[0]["live_wait_seconds"] == 300
+    assert transit[0]["arrival_s"] == 36600
+
+
+def test_upstream_live_does_not_match_different_trip_same_line(
+    router_bin,
+    tmp_path,
+):
+    graph = tmp_path / "upstream-live-different-trip.bin"
+    _write_upstream_live_graph(graph, downstream_trip=200)
+
+    completed = subprocess.run(
+        [
+            str(router_bin),
+            "--route",
+            str(graph),
+            "45.0018000",
+            "9.0000000",
+            "45.0100000",
+            "9.0000000",
+            "10:00:00",
+            "--live",
+            "A",
+            "51",
+            "0",
+            "120",
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    result = json.loads(completed.stdout)
+    assert result["status"] == "no_route"
