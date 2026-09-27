@@ -54,6 +54,10 @@
       "socket": "/run/ralf-whatsapp-mcp/mcp.sock"
     },
     {
+      "id": "fgas",
+      "socket": "/run/ralf-fgas-mcp/mcp.sock"
+    },
+    {
       "id": "browser_playwright",
       "socket": "/run/ralf-browser-playwright-mcp/mcp.sock"
     },
@@ -154,6 +158,27 @@
     "schermo": [
       "screenshot",
       "snapshot"
+    ],
+    "fgas": [
+      "fgas",
+      "installation",
+      "refrigerant"
+    ],
+    "condizionatore": [
+      "fgas",
+      "installation",
+      "refrigerant"
+    ],
+    "climatizzatore": [
+      "fgas",
+      "installation",
+      "refrigerant"
+    ],
+    "installazione": [
+      "fgas",
+      "installation",
+      "whatsapp",
+      "drive"
     ]
   }
 }

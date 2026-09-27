@@ -1,0 +1,34 @@
+[Unit]
+Description=Ralfloop F-Gas installation MCP broker
+After=network.target ralf-google-workspace-mcp-broker.service ralf-whatsapp-mcp-broker.service
+Wants=ralf-google-workspace-mcp-broker.service ralf-whatsapp-mcp-broker.service
+
+[Service]
+Type=simple
+User=sibilla-cumana
+Group=ralf-mcp
+UMask=0007
+RuntimeDirectory=ralf-fgas-mcp
+RuntimeDirectoryMode=2770
+StateDirectory=ralf-fgas
+StateDirectoryMode=0750
+WorkingDirectory=/opt/ralfloop-fgas-mcp/current
+EnvironmentFile=-/etc/ralfloop/fgas-mcp.env
+Environment=PYTHONPATH=/opt/ralfloop-fgas-mcp/current
+Environment=RALF_FGAS_STATE_DIR=/var/lib/ralf-fgas
+Environment=RALF_GOOGLE_WORKSPACE_MCP_SOCKET=/run/ralf-google-workspace-mcp/mcp.sock
+Environment=RALF_WHATSAPP_MCP_SOCKET=/run/ralf-whatsapp-mcp/mcp.sock
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /opt/ralfloop-fgas-mcp/current/scripts/ralf_arci_mcp_broker.py --socket /run/ralf-fgas-mcp/mcp.sock --allow-group ralf-mcp --command /opt/ralfloop-fgas-mcp/current/scripts/ralf_fgas_installation_mcp_server.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/ralf-fgas
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+
+[Install]
+WantedBy=multi-user.target
