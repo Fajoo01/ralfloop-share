@@ -36,7 +36,12 @@ public class MainActivity extends Activity {
                 error.setText(i.getStringExtra("error") == null ? "" : i.getStringExtra("error"));
             }
         };
-        registerReceiver(receiver, new IntentFilter(NavigationService.ACTION_UPDATE), RECEIVER_NOT_EXPORTED);
+        IntentFilter filter = new IntentFilter(NavigationService.ACTION_UPDATE);
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(receiver, filter, RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(receiver, filter);
+        }
     }
 
     private String format(String label, int seconds) {

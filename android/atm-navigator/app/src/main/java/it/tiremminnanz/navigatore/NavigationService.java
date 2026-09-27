@@ -23,6 +23,7 @@ public class NavigationService extends Service implements LocationListener {
     }
 
     @Override public int onStartCommand(Intent i, int flags, int startId) {
+        if (i == null) return START_NOT_STICKY;
         baseUrl = i.getStringExtra("base_url");
         destination = i.getStringExtra("destination");
         double lat = i.getDoubleExtra("lat", 0), lon = i.getDoubleExtra("lon", 0);
@@ -32,7 +33,7 @@ public class NavigationService extends Service implements LocationListener {
             lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 5000, 8f, this, Looper.getMainLooper());
             lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 10000, 20f, this, Looper.getMainLooper());
         }
-        return START_STICKY;
+        return START_NOT_STICKY;
     }
 
     private Notification notification(String text) {

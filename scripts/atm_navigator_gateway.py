@@ -7,9 +7,13 @@ import urllib.request
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 UPSTREAM = os.environ.get("ATM_NAV_UPSTREAM", "http://127.0.0.1:19090").rstrip("/")
+APK_PATH = os.environ.get(
+    "ATM_NAV_APK_PATH",
+    "/home/sibilla-cumana/ralfloop_data/atm_navigator/Tiremm-Navigatore.apk",
+)
 app = FastAPI(title="Tiremm ATM Navigator Gateway", docs_url=None, redoc_url=None, openapi_url=None)
 
 ROUTES = {
@@ -44,6 +48,16 @@ def _proxy(method: str, path: str, body: bytes | None = None) -> JSONResponse:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+@app.get("/apk")
+def apk() -> FileResponse:
+    if not os.path.isfile(APK_PATH):
+        raise HTTPException(status_code=404, detail="apk_not_available")
+    return FileResponse(
+        APK_PATH,
+        media_type="application/vnd.android.package-archive",
+        filename="Tiremm-Navigatore.apk",
+    )
 
 @app.get("/destinations")
 def destinations() -> JSONResponse:
