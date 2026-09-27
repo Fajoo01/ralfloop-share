@@ -11,6 +11,9 @@ import urllib.parse
 import contextvars
 import concurrent.futures
 import urllib.request
+import sqlite3
+import threading
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -21,6 +24,25 @@ from pydantic import BaseModel
 
 DATA_DIR = Path("/home/sibilla-cumana/ralfloop_data/atm_telegram")
 DESTINATIONS_PATH = DATA_DIR / "destinations.json"
+NAVIGATOR_DB_PATH = Path(
+    os.environ.get(
+        "RALFLOOP_ATM_NAVIGATOR_DB",
+        str(DATA_DIR / "navigator.sqlite3"),
+    )
+)
+NAVIGATOR_REPLAN_AFTER_S = max(
+    30,
+    int(os.environ.get("RALFLOOP_ATM_NAVIGATOR_REPLAN_AFTER_S", "90")),
+)
+NAVIGATOR_REPLAN_MOVE_M = max(
+    100,
+    int(os.environ.get("RALFLOOP_ATM_NAVIGATOR_REPLAN_MOVE_M", "450")),
+)
+NAVIGATOR_ARRIVED_RADIUS_M = max(
+    20,
+    int(os.environ.get("RALFLOOP_ATM_NAVIGATOR_ARRIVED_RADIUS_M", "80")),
+)
+_NAVIGATOR_DB_LOCK = threading.RLock()
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 OSM_COPYRIGHT = "Data © OpenStreetMap contributors"
 CDP_HOST = os.environ.get("RALFLOOP_ATM_CDP_HOST", "127.0.0.1")
@@ -137,6 +159,24 @@ class PlanIn(BaseModel):
 class PlanNamedIn(BaseModel):
     origin: str
     destination: str
+
+
+class NavigatorStartIn(BaseModel):
+    lat: float
+    lon: float
+    destination: str
+
+
+class NavigatorUpdateIn(BaseModel):
+    session_id: str
+    lat: float
+    lon: float
+    observed_at: float | None = None
+    force_replan: bool = False
+
+
+class NavigatorStopIn(BaseModel):
+    session_id: str
 
 
 class TelegramWebhookIn(BaseModel):
@@ -4795,6 +4835,318 @@ def _telegram_named_route(message: dict[str, Any]) -> tuple[str, str] | None:
     return m.group(1).strip(), m.group(2).strip()
 
 
+# ATM_REALTIME_NAVIGATOR_START
+
+def _navigator_connect() -> sqlite3.Connection:
+    NAVIGATOR_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(NAVIGATOR_DB_PATH), timeout=5.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS navigator_sessions (
+            session_id TEXT PRIMARY KEY,
+            destination TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            start_lat REAL NOT NULL,
+            start_lon REAL NOT NULL,
+            last_lat REAL NOT NULL,
+            last_lon REAL NOT NULL,
+            plan_generated_at REAL NOT NULL,
+            plan_json TEXT NOT NULL
+        )
+        """
+    )
+    return conn
+
+
+def _navigator_save(session: dict[str, Any]) -> None:
+    with _NAVIGATOR_DB_LOCK:
+        conn = _navigator_connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO navigator_sessions (
+                    session_id, destination, status, created_at, updated_at,
+                    start_lat, start_lon, last_lat, last_lon,
+                    plan_generated_at, plan_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    destination=excluded.destination,
+                    status=excluded.status,
+                    updated_at=excluded.updated_at,
+                    last_lat=excluded.last_lat,
+                    last_lon=excluded.last_lon,
+                    plan_generated_at=excluded.plan_generated_at,
+                    plan_json=excluded.plan_json
+                """,
+                (
+                    session["session_id"],
+                    session["destination"],
+                    session["status"],
+                    float(session["created_at"]),
+                    float(session["updated_at"]),
+                    float(session["start_lat"]),
+                    float(session["start_lon"]),
+                    float(session["last_lat"]),
+                    float(session["last_lon"]),
+                    float(session["plan_generated_at"]),
+                    json.dumps(session["plan"], ensure_ascii=False),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def _navigator_load(session_id: str) -> dict[str, Any] | None:
+    key = str(session_id or "").strip()
+    if not key:
+        return None
+    with _NAVIGATOR_DB_LOCK:
+        conn = _navigator_connect()
+        try:
+            row = conn.execute(
+                "SELECT * FROM navigator_sessions WHERE session_id = ?",
+                (key,),
+            ).fetchone()
+        finally:
+            conn.close()
+    if row is None:
+        return None
+    try:
+        plan = json.loads(str(row["plan_json"]))
+    except (TypeError, json.JSONDecodeError):
+        plan = {}
+    return {
+        "session_id": str(row["session_id"]),
+        "destination": str(row["destination"]),
+        "status": str(row["status"]),
+        "created_at": float(row["created_at"]),
+        "updated_at": float(row["updated_at"]),
+        "start_lat": float(row["start_lat"]),
+        "start_lon": float(row["start_lon"]),
+        "last_lat": float(row["last_lat"]),
+        "last_lon": float(row["last_lon"]),
+        "plan_generated_at": float(row["plan_generated_at"]),
+        "plan": plan if isinstance(plan, dict) else {},
+    }
+
+
+def _navigator_delete(session_id: str) -> bool:
+    with _NAVIGATOR_DB_LOCK:
+        conn = _navigator_connect()
+        try:
+            cur = conn.execute(
+                "DELETE FROM navigator_sessions WHERE session_id = ?",
+                (str(session_id or "").strip(),),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
+
+def _navigator_seconds_of_day(timestamp: float) -> int:
+    dt = datetime.fromtimestamp(timestamp)
+    return dt.hour * 3600 + dt.minute * 60 + dt.second
+
+
+def _navigator_transit_legs(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    route = plan.get("local_atm_route") or plan
+    legs = route.get("legs") if isinstance(route, dict) else []
+    return [
+        leg for leg in (legs or [])
+        if isinstance(leg, dict) and leg.get("mode") == "transit"
+    ]
+
+
+def _navigator_destination_distance(
+    plan: dict[str, Any],
+    lat: float,
+    lon: float,
+) -> int | None:
+    dest = plan.get("destination") or {}
+    try:
+        return int(round(_distance_m(
+            float(lat), float(lon), float(dest["lat"]), float(dest["lon"])
+        )))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _navigator_view(
+    session: dict[str, Any],
+    *,
+    now: float,
+    replanned: bool = False,
+    replan_reason: str | None = None,
+) -> dict[str, Any]:
+    plan = session["plan"]
+    lat = float(session["last_lat"])
+    lon = float(session["last_lon"])
+    destination_distance_m = _navigator_destination_distance(plan, lat, lon)
+    transit = _navigator_transit_legs(plan)
+    now_s = _navigator_seconds_of_day(now)
+
+    state = "walking_to_stop"
+    instruction = "Vai verso la fermata indicata."
+    seconds_to_vehicle: int | None = None
+    margin_seconds: int | None = None
+    active_leg_index: int | None = None
+
+    if (
+        destination_distance_m is not None
+        and destination_distance_m <= NAVIGATOR_ARRIVED_RADIUS_M
+    ):
+        state = "arrived"
+        instruction = "Sei arrivato a destinazione."
+    elif transit:
+        for idx, leg in enumerate(transit):
+            try:
+                departure_s = int(leg.get("departure_s"))
+                arrival_s = int(leg.get("arrival_s"))
+            except (TypeError, ValueError):
+                continue
+            if now_s <= arrival_s:
+                active_leg_index = idx
+                if now_s < departure_s:
+                    seconds_to_vehicle = departure_s - now_s
+                    if idx == 0:
+                        walk_seconds = int(
+                            (plan.get("local_atm_route") or plan).get(
+                                "origin_walk_seconds", 0
+                            ) or 0
+                        )
+                    else:
+                        walk_seconds = 0
+                    margin_seconds = seconds_to_vehicle - walk_seconds
+                    if margin_seconds < 0:
+                        state = "missed"
+                        instruction = "Questa corsa non è più raggiungibile: ricalcolo necessario."
+                    elif margin_seconds <= 60:
+                        state = "walking_to_stop"
+                        instruction = "Vai subito alla fermata: il margine è stretto."
+                    elif walk_seconds > 0:
+                        state = "walking_to_stop"
+                        instruction = "Raggiungi la fermata; il mezzo è ancora prendibile."
+                    else:
+                        state = "waiting"
+                        instruction = "Resta alla fermata e aspetta il mezzo."
+                else:
+                    state = "onboard"
+                    instruction = "Sei nella finestra temporale della corsa: segui le fermate verso la discesa."
+                break
+        else:
+            state = "final_walk"
+            instruction = "Scendi e completa l'ultimo tratto a piedi."
+    else:
+        state = "replanning"
+        instruction = "Percorso TPL non disponibile: ricalcolo necessario."
+
+    return {
+        "session_id": session["session_id"],
+        "destination": session["destination"],
+        "state": state,
+        "instruction": instruction,
+        "active_leg_index": active_leg_index,
+        "seconds_to_vehicle": seconds_to_vehicle,
+        "margin_seconds": margin_seconds,
+        "destination_distance_m": destination_distance_m,
+        "replanned": replanned,
+        "replan_reason": replan_reason,
+        "plan_age_seconds": max(0, int(now - float(session["plan_generated_at"]))),
+        "route_mode": plan.get("route_mode"),
+        "reply": render_reply(plan),
+        "plan": plan,
+    }
+
+
+def navigator_start(
+    lat: float,
+    lon: float,
+    destination: str,
+    realtime_provider: Any = None,
+) -> dict[str, Any]:
+    now = time.time()
+    plan = build_plan(lat, lon, destination, realtime_provider)
+    session = {
+        "session_id": uuid.uuid4().hex,
+        "destination": destination,
+        "status": "active",
+        "created_at": now,
+        "updated_at": now,
+        "start_lat": lat,
+        "start_lon": lon,
+        "last_lat": lat,
+        "last_lon": lon,
+        "plan_generated_at": now,
+        "plan": plan,
+    }
+    _navigator_save(session)
+    return _navigator_view(session, now=now)
+
+
+def navigator_update(
+    session_id: str,
+    lat: float,
+    lon: float,
+    *,
+    observed_at: float | None = None,
+    force_replan: bool = False,
+    realtime_provider: Any = None,
+) -> dict[str, Any]:
+    session = _navigator_load(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="navigator_session_not_found")
+
+    now = float(observed_at if observed_at is not None else time.time())
+    moved_m = _distance_m(
+        float(session["last_lat"]),
+        float(session["last_lon"]),
+        float(lat),
+        float(lon),
+    )
+    session["last_lat"] = float(lat)
+    session["last_lon"] = float(lon)
+    session["updated_at"] = now
+
+    before = _navigator_view(session, now=now)
+    plan_age = max(0, now - float(session["plan_generated_at"]))
+    reason: str | None = None
+
+    if force_replan:
+        reason = "forced"
+    elif before["state"] in {"missed", "replanning"}:
+        reason = before["state"]
+    elif moved_m >= NAVIGATOR_REPLAN_MOVE_M and plan_age >= NAVIGATOR_REPLAN_AFTER_S:
+        reason = "position_changed"
+
+    replanned = reason is not None
+    if replanned:
+        session["plan"] = build_plan(
+            float(lat),
+            float(lon),
+            session["destination"],
+            realtime_provider,
+        )
+        session["plan_generated_at"] = now
+
+    view = _navigator_view(
+        session,
+        now=now,
+        replanned=replanned,
+        replan_reason=reason,
+    )
+    session["status"] = "arrived" if view["state"] == "arrived" else "active"
+    _navigator_save(session)
+    return view
+
+
+# ATM_REALTIME_NAVIGATOR_END
+
+
 @router.get("", response_class=HTMLResponse)
 def atm_telegram_page() -> HTMLResponse:
     return HTMLResponse(_page_html())
@@ -4839,6 +5191,35 @@ def api_plan_named(req: PlanNamedIn) -> dict[str, Any]:
     plan = build_named_plan(req.origin, req.destination)
     plan["reply"] = render_reply(plan)
     return plan
+
+
+@router.post("/api/navigator/start")
+def api_navigator_start(req: NavigatorStartIn) -> dict[str, Any]:
+    return navigator_start(req.lat, req.lon, req.destination)
+
+
+@router.post("/api/navigator/update")
+def api_navigator_update(req: NavigatorUpdateIn) -> dict[str, Any]:
+    return navigator_update(
+        req.session_id,
+        req.lat,
+        req.lon,
+        observed_at=req.observed_at,
+        force_replan=req.force_replan,
+    )
+
+
+@router.get("/api/navigator/{session_id}")
+def api_navigator_status(session_id: str) -> dict[str, Any]:
+    session = _navigator_load(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="navigator_session_not_found")
+    return _navigator_view(session, now=time.time())
+
+
+@router.post("/api/navigator/stop")
+def api_navigator_stop(req: NavigatorStopIn) -> dict[str, Any]:
+    return {"ok": _navigator_delete(req.session_id)}
 
 
 @router.post("/telegram-webhook")
