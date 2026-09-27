@@ -141,6 +141,55 @@ def test_existing_pending_email_keeps_new_messages_queued(tmp_path):
         memory.close()
 
 
+def test_legacy_queued_category_update_is_skipped_before_model(tmp_path):
+    gateway = Gateway([], {})
+    calls = []
+    memory, trigger = build(tmp_path, gateway, lambda *args: calls.append(args))
+    try:
+        queued_message = message("m-news", labels="INBOX")
+        candidate = trigger._candidate(queued_message)
+        assert candidate is not None
+        assert memory.put_entity(candidate)
+        gateway.messages["m-news"] = message("m-news", labels="UNREAD, CATEGORY_UPDATES, INBOX")
+
+        assert trigger._drain_one() == 0
+        stored = memory.get_entity("email-reply-m-news")
+        assert stored is not None and stored.status == "SKIPPED"
+        assert stored.data["reason"] == "not_reply_candidate"
+        assert calls == []
+    finally:
+        memory.close()
+
+
+def test_generation_failure_backs_off_without_hot_retry(tmp_path):
+    gateway = Gateway([{"messageId": "m1"}], {"m1": message("m1")})
+    calls = []
+
+    def failing_runner(*args):
+        calls.append(args)
+        raise TimeoutError("model timeout")
+
+    memory, trigger = build(tmp_path, gateway, failing_runner)
+    try:
+        trigger.poll()
+        gateway.rows = [{"messageId": "m2"}, {"messageId": "m1"}]
+        gateway.messages["m2"] = message("m2", date=NOW + timedelta(minutes=1))
+        first = trigger.poll()
+        assert first.drafted == 0
+        candidate = memory.get_entity("email-reply-m2")
+        assert candidate is not None and candidate.status == "QUEUED"
+        assert candidate.data["reason"] == "draft_generation_backoff"
+        assert candidate.data["retry_count"] == 1
+        assert candidate.data["retry_after"] == (NOW + timedelta(minutes=15)).isoformat()
+        assert len(calls) == 1
+
+        second = trigger.poll()
+        assert second.drafted == 0
+        assert len(calls) == 1
+    finally:
+        memory.close()
+
+
 def test_self_promotional_and_noreply_are_skipped(tmp_path):
     gateway = Gateway([{"messageId": "m1"}], {"m1": message("m1")})
     memory, trigger = build(tmp_path, gateway, lambda *_: None)

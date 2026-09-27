@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from email.utils import parseaddr, parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -128,7 +128,10 @@ class GmailInboxTrigger:
             return None
         if any(token in address for token in ("no-reply", "noreply", "do-not-reply", "donotreply")):
             return None
-        if labels & {"SPAM", "TRASH", "CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL"}:
+        if labels & {
+            "SPAM", "TRASH", "CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL",
+            "CATEGORY_UPDATES", "CATEGORY_FORUMS",
+        }:
             return None
         observed = self.now()
         received = _parse_datetime(str(message.get("date") or "")) or observed
@@ -184,13 +187,40 @@ class GmailInboxTrigger:
         queued = list(self.memory.list_entities(domain="email_intake", status="QUEUED", limit=100))
         if not queued:
             return 0
-        queued.sort(key=lambda item: (item.updated_at, item.entity_id))
-        candidate = queued[0]
+        now = self.now()
+        eligible = []
+        for candidate in queued:
+            retry_after = _parse_datetime(str(candidate.data.get("retry_after") or ""))
+            if retry_after is not None and retry_after > now:
+                continue
+            eligible.append(candidate)
+        if not eligible:
+            return 0
+        eligible.sort(key=lambda item: (item.updated_at, item.entity_id))
+        candidate = eligible[0]
         data = dict(candidate.data)
         address = str(data.get("sender_address") or "")
         message_id = str(data.get("message_id") or "")
         if not address or not message_id:
             self._update_candidate(candidate, "FAILED", {"reason": "candidate_identity_missing"})
+            return 0
+        try:
+            detail = self._read(message_id)
+        except Exception as exc:
+            retry_count = int(data.get("retry_count") or 0) + 1
+            self._update_candidate(candidate, "QUEUED", {
+                "reason": "source_read_backoff",
+                "retry_count": retry_count,
+                "last_error": type(exc).__name__,
+                "retry_after": (now + timedelta(minutes=15 * min(retry_count, 4))).isoformat(),
+            })
+            return 0
+        source_message = detail.get("message") if isinstance(detail, Mapping) else None
+        if not isinstance(source_message, Mapping) or self._candidate(source_message) is None:
+            self._update_candidate(candidate, "SKIPPED", {
+                "reason": "not_reply_candidate",
+                "retry_after": "",
+            })
             return 0
         instruction = (
             "Rispondi alla mail. "
@@ -205,7 +235,26 @@ class GmailInboxTrigger:
             "telegram_message_id": 0,
             "telegram_chat_type": "private",
         }
-        result = dict(self.response_runner(instruction, context))
+        try:
+            result = dict(self.response_runner(instruction, context))
+        except Exception as exc:
+            retry_count = int(data.get("retry_count") or 0) + 1
+            if retry_count >= 3:
+                self._update_candidate(candidate, "FAILED", {
+                    "reason": "draft_generation_failed",
+                    "retry_count": retry_count,
+                    "last_error": type(exc).__name__,
+                    "retry_after": "",
+                })
+            else:
+                delay = timedelta(minutes=15 * retry_count)
+                self._update_candidate(candidate, "QUEUED", {
+                    "reason": "draft_generation_backoff",
+                    "retry_count": retry_count,
+                    "last_error": type(exc).__name__,
+                    "retry_after": (now + delay).isoformat(),
+                })
+            return 0
         metadata = result.get("metadata") if isinstance(result.get("metadata"), Mapping) else {}
         status = str(metadata.get("status") or result.get("stop_reason") or "")
         if status == "draft_pending_approval":
