@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "policy_id": "outbound_actions_require_fabio_approval",
+  "default": "deny",
+  "protected_actions": {
+    "print": ["cups", "ipp", "lp", "lpr", "printer_gateway", "all_mcp_print_submit_actions"],
+    "email": ["smtp_send", "gmail_send", "pec_send", "all_mcp_email_send_actions"],
+    "message": ["telegram_send", "whatsapp_send", "sms_send", "chat_send", "all_mcp_message_send_actions"]
+  },
+  "approval": {
+    "required": true,
+    "approver": "fabio",
+    "allowed_channels": ["telegram", "whatsapp"],
+    "must_reference_current_action": true,
+    "reusable": false,
+    "max_age_seconds": 3600,
+    "missing_or_unverifiable": "deny"
+  },
+  "binding": {
+    "print": ["document_id", "printer", "copies", "options"],
+    "email": ["recipients", "subject", "body", "attachments"],
+    "message": ["channel", "recipients", "body", "attachments"]
+  },
+  "before_approval": {
+    "allowed": ["prepare", "draft", "render", "preview", "validate"],
+    "forbidden": ["submit", "queue", "send", "send_to_printer", "deliver"]
+  },
+  "audit_required": [
+    "action_type",
+    "action_digest",
+    "target_or_recipients",
+    "approval_channel",
+    "approval_reference",
+    "approval_timestamp",
+    "send_result"
+  ],
+  "notes": "No MCP, agent or tool may print, send email, or send a message unless Fabio explicitly approves that exact outbound action via Telegram or WhatsApp. Approval is content- and target-bound; changes require a new approval. Approval from chat UI, shell, email, or any other channel does not unlock the action."
+}
