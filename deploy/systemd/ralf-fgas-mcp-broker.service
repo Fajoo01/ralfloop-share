@@ -16,6 +16,7 @@ WorkingDirectory=/opt/ralfloop-fgas-mcp/current
 EnvironmentFile=-/etc/ralfloop/fgas-mcp.env
 Environment=PYTHONPATH=/opt/ralfloop-fgas-mcp/current
 Environment=RALF_FGAS_STATE_DIR=/var/lib/ralf-fgas
+Environment=RALF_MCP_IDLE_TIMEOUT=180
 Environment=RALF_GOOGLE_WORKSPACE_MCP_SOCKET=/run/ralf-google-workspace-mcp/mcp.sock
 Environment=RALF_WHATSAPP_MCP_SOCKET=/run/ralf-whatsapp-mcp/mcp.sock
 ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python /opt/ralfloop-fgas-mcp/current/scripts/ralf_arci_mcp_broker.py --socket /run/ralf-fgas-mcp/mcp.sock --allow-group ralf-mcp --command /opt/ralfloop-fgas-mcp/current/scripts/ralf_fgas_installation_mcp_server.py
