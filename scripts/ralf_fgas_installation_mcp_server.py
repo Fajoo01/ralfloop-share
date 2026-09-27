@@ -161,6 +161,22 @@ class WhatsAppFGasSource:
                 else:
                     cluster_rows = selected_rows
             texts = [str(row.get("text") or "") for row in cluster_rows if row.get("text")]
+            # A short follow-up may complete the forwarded evidence cluster. Keep
+            # it inside the extraction stream and out of returned source metadata.
+            cluster_ids = {str(row.get("message_id") or "") for row in cluster_rows}
+            last_cluster_index = max(
+                (index for index, row in enumerate(messages) if str(row.get("message_id") or "") in cluster_ids),
+                default=-1,
+            )
+            supplements = [
+                str(row.get("text") or "").strip()
+                for row in messages[last_cluster_index + 1:]
+                if str(row.get("kind") or "text") == "text"
+                and row.get("text")
+                and len(str(row.get("text") or "").strip()) <= 80
+            ]
+            if supplements:
+                texts.append(supplements[-1])
             media_rows: list[dict[str, Any]] = []
             for message_id in chosen:
                 result = client.call_tool("whatsapp_get_media", {"chat_id": chat_id, "message_id": message_id})
