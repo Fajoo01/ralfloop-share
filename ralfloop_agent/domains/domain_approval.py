@@ -20,6 +20,7 @@ ALLOWED_ACTIONS = {
     "runts_practice_reply",
     "jellyfin_apply_identity",
     "baffoflix_password_recovery",
+    "ciav_vault_reprovision",
     "browser_interact",
     "pec_send",
     "document_sign",
@@ -298,6 +299,7 @@ def render_telegram_request(request: DomainApprovalRequest) -> str:
         "browser_interact": "Interazione browser Playwright",
         "document_sign": "Firma digitale documento",
         "baffoflix_password_recovery": "Recupero password BaffoFlix",
+        "ciav_vault_reprovision": "Ricreazione vault CIAV con perdita dati",
     }.get(request.action, request.action)
     lines = [
         "RALFLOOP — APPROVAZIONE RICHIESTA",
@@ -326,6 +328,16 @@ def render_telegram_request(request: DomainApprovalRequest) -> str:
             f"Account BaffoFlix: {username[:240]}",
             f"Richiedente Telegram ID: {requester[:40]}",
             "Il richiedente non può approvare questa operazione: l'approvazione è riservata all'amministratore configurato.",
+        ])
+    if request.action == "ciav_vault_reprovision":
+        requester = str(request.scope.get("requester_telegram_user_id") or "")
+        consent = request.scope.get("explicit_data_loss_consent") is True
+        lines.extend([
+            "",
+            f"Richiedente Telegram ID: {requester[:40]}",
+            f"Consenso esplicito perdita dati: {'SI' if consent else 'NO'}",
+            "La master password CIAV non è recuperabile lato server. Questa approvazione NON deve essere eseguita se l'identità Telegram non è legata in modo verificabile al vault del richiedente.",
+            "L'approvazione da sola non cancella dati: la ricreazione resta separata e fail-closed.",
         ])
 
     canary = request.scope.get("canary_plan") or {}

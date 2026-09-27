@@ -230,6 +230,8 @@ def is_unified_telegram_request(text: str, context: Mapping[str, Any]) -> bool:
             or _EMAIL_READ_SUPPORTED.search(text)
             or _atm_location_followup_destination(text, context)
             or _is_pec_runts_request(text)
+            or _ciav_password_recovery_intent(text)
+            or _ciav_vault_reprovision_intent(text)
             or explicit_runts
             or re.fullmatch(r"\s*(?:otp[\s:-]*)?[0-9]{6}\s*", text, re.I)
             or (
@@ -543,6 +545,10 @@ def run_unified_telegram(
     *,
     flags_override: AssistantFeatureFlags | None = None,
 ) -> dict[str, Any]:
+    ciav_recovery = _stage_ciav_password_recovery(text, context)
+    if ciav_recovery is not None:
+        return ciav_recovery
+
     baffoflix_recovery = _stage_baffoflix_password_recovery(text, context)
     if baffoflix_recovery is not None:
         return baffoflix_recovery
@@ -2201,6 +2207,180 @@ def _ensure_session(store: SessionStore, session_id: str) -> None:
         "context_enabled": True, "metadata": {},
     }
     store.save(record)
+
+
+_CIAV_RECOVERY_CAPABILITY = "ciav_password_recovery"
+_CIAV_REPROVISION_ACTION = "ciav_vault_reprovision"
+_CIAV_ACCOUNT_RECOVERY_URL = "https://remote.tiremminnanz.com/account/recover/"
+
+
+def _ciav_password_recovery_intent(text: str) -> bool:
+    folded = " ".join(str(text or "").split())
+    return bool(
+        re.search(r"\b(?:ciav|portachiavi(?:\s+tiremm)?)\b", folded, re.I)
+        and re.search(r"\b(?:password|master|credenzial[ei]|chiave|accesso)\b", folded, re.I)
+        and re.search(r"\b(?:dimenticat\w*|pers\w*|recuper\w*|reset\w*|reimpost\w*|non\s+(?:ricord|entr)\w*)\b", folded, re.I)
+    )
+
+
+def _ciav_vault_reprovision_intent(text: str) -> bool:
+    folded = " ".join(str(text or "").split())
+    destructive = re.search(r"\b(?:ricrea|reinizializz\w*|azzera|cancella|elimina)\w*\b", folded, re.I)
+    data_loss = re.search(
+        r"\b(?:perdo\s+(?:tutti\s+)?i\s+dati|accetto\s+(?:la\s+)?perdita\s+(?:dei\s+)?dati|"
+        r"cancella\s+(?:tutti\s+)?i\s+dati|elimina\s+(?:tutti\s+)?i\s+dati)\b",
+        folded,
+        re.I,
+    )
+    return bool(
+        re.search(r"\b(?:ciav|portachiavi(?:\s+tiremm)?)\b", folded, re.I)
+        and destructive
+        and data_loss
+    )
+
+
+def _ciav_recovery_response(
+    status: str,
+    message: str,
+    *,
+    approval_request_id: str | None = None,
+    duplicate: bool = False,
+) -> dict[str, Any]:
+    return {
+        "ok": status not in {"denied", "unavailable"},
+        "status": status,
+        "capability": _CIAV_RECOVERY_CAPABILITY,
+        "response": message,
+        "final_answer": message,
+        "approval_required": False,
+        "pending_confirmation_id": None,
+        "metadata": {
+            "approval_request_id": approval_request_id,
+            "approval_delivery": "administrator" if approval_request_id else None,
+            "account_recovery_url": os.getenv(
+                "TIREMM_CIAV_ACCOUNT_RECOVERY_URL", _CIAV_ACCOUNT_RECOVERY_URL
+            ),
+            "vault_master_password_recoverable": False,
+            "data_deleted": False,
+            "writes": 0,
+            "side_effects": 0,
+            "duplicate": bool(duplicate),
+        },
+        "artifacts": [],
+        "audit_summary": [
+            "CIAV_VAULT_REPROVISION_ADMIN_APPROVAL_REQUESTED"
+            if approval_request_id else "CIAV_RECOVERY_NO_WRITE"
+        ],
+    }
+
+
+def _stage_ciav_password_recovery(
+    text: str, context: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    recovery_intent = _ciav_password_recovery_intent(text)
+    reprovision_intent = _ciav_vault_reprovision_intent(text)
+    if not recovery_intent and not reprovision_intent:
+        return None
+
+    source = str(context.get("source") or "")
+    telegram_user_id = int(context.get("telegram_user_id") or 0)
+    telegram_chat_id = int(context.get("telegram_chat_id") or 0)
+    telegram_message_id = int(context.get("telegram_message_id") or 0)
+    private_chat = telegram_user_id > 0 and telegram_chat_id == telegram_user_id
+    if (
+        not source.startswith("telegram_")
+        or not private_chat
+        or telegram_message_id <= 0
+    ):
+        return _ciav_recovery_response(
+            "denied",
+            "Il recupero CIAV si gestisce solo nella chat privata autenticata con Bot-tazzi. Nessuna credenziale o dato del vault è stato modificato.",
+        )
+
+    recovery_url = os.getenv(
+        "TIREMM_CIAV_ACCOUNT_RECOVERY_URL", _CIAV_ACCOUNT_RECOVERY_URL
+    ).strip() or _CIAV_ACCOUNT_RECOVERY_URL
+
+    if not reprovision_intent:
+        return _ciav_recovery_response(
+            "recovery_guidance",
+            "CIAV ha due livelli distinti. Se hai perso la password dell'Account Tiremm, usa il recupero sicuro: "
+            + recovery_url
+            + " Se invece hai perso la master password del vault CIAV, Bot-tazzi e il server non possono leggerla o recuperarla: il vault è zero-knowledge. "
+            "Non ho cancellato nulla. Se vuoi ricreare il vault sapendo che i dati cifrati attuali andranno persi, scrivi esattamente: «ricrea CIAV e perdo i dati». La richiesta passerà comunque dall'approvazione amministrativa.",
+        )
+
+    policy = DomainApprovalPolicy.from_env()
+    if not policy.enabled or not policy.allowed_user_ids or not policy.allowed_chat_ids:
+        return _ciav_recovery_response(
+            "unavailable",
+            "La richiesta di ricreazione CIAV non può essere inoltrata all'amministratore in questo momento. Nessun dato è stato cancellato.",
+        )
+
+    scope = {
+        "action": _CIAV_REPROVISION_ACTION,
+        "version": 1,
+        "requester_telegram_user_id": telegram_user_id,
+        "requester_telegram_chat_id": telegram_chat_id,
+        "requester_telegram_message_id": telegram_message_id,
+        "request_source": source,
+        "explicit_data_loss_consent": True,
+        "identity_binding": "requester_telegram_identity_only",
+    }
+    expected_digest = scope_digest(scope)
+    store = DomainApprovalStore(policy=policy)
+    existing = next((
+        row for row in store.list_pending()
+        if str(row.get("action") or "") == _CIAV_REPROVISION_ACTION
+        and str(row.get("scope_digest") or "") == expected_digest
+    ), None)
+    if existing is not None:
+        request_id = str(existing.get("request_id") or "")
+        return _ciav_recovery_response(
+            "approval_requested",
+            "La richiesta di ricreazione CIAV è già in attesa dell'amministratore. Nessun dato è stato ancora cancellato.",
+            approval_request_id=request_id or None,
+            duplicate=True,
+        )
+
+    created = store.create_request(
+        action=_CIAV_REPROVISION_ACTION,
+        bando_id="ciav.recovery",
+        version="1",
+        scope=scope,
+        requested_by=f"telegram:{telegram_user_id}",
+    )
+    request = created.get("request") if isinstance(created, Mapping) else None
+    if not isinstance(request, Mapping):
+        return _ciav_recovery_response(
+            "unavailable",
+            "Non sono riuscito a creare la richiesta amministrativa CIAV. Nessun dato è stato cancellato.",
+        )
+
+    request_id = str(request.get("request_id") or "")
+    outbox = Path(os.getenv(
+        "RALFLOOP_TELEGRAM_APPROVAL_OUTBOX",
+        "logs/domain_approval_outbox.jsonl",
+    ))
+    try:
+        append_jsonl(outbox, {
+            "status": "queued",
+            "request_id": request_id,
+            "api_url": policy.api_url,
+            "message": str(request.get("telegram_message") or ""),
+        })
+    except OSError:
+        store.cancel(request_id)
+        return _ciav_recovery_response(
+            "unavailable",
+            "Non sono riuscito a consegnare la richiesta CIAV all'amministratore. Nessun dato è stato cancellato.",
+        )
+
+    return _ciav_recovery_response(
+        "approval_requested",
+        "Consenso alla perdita dati registrato. Ho inviato la richiesta di ricreazione CIAV all'amministratore; nessun dato è stato ancora cancellato.",
+        approval_request_id=request_id,
+    )
 
 
 _BAFFOFLIX_RECOVERY_ACTION = "baffoflix_password_recovery"
