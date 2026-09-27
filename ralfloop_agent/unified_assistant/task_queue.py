@@ -352,6 +352,124 @@ class JevPriorityClassifier:
         return category, min(1.0, confidence), probabilities
 
 
+class RizzoPriorityClassifier:
+    """Low-risk priority classifier backed by the local Spark-X2.5-4B Rizzo service.
+
+    The model only chooses among fixed task-domain labels. It has no tool or
+    side-effect authority, human category hints remain authoritative, and any
+    runtime/protocol failure falls back to the deterministic JED classifier.
+    """
+
+    _OPTIONS = JevPriorityClassifier._OPTIONS
+
+    def __init__(
+        self,
+        *,
+        endpoint: str | None = None,
+        timeout_sec: float | None = None,
+        session: requests.Session | None = None,
+        fallback: PriorityClassifier | None = None,
+    ) -> None:
+        self.endpoint = (
+            endpoint
+            or os.getenv("BOTTAZZI_SPARK_DECISIONS_URL", "").strip()
+            or os.getenv("RALFLOOP_BROWSER_RIZZO_ENDPOINT", "").strip()
+            or "http://127.0.0.1:18017/v1/decisions"
+        )
+        if not (
+            self.endpoint.startswith("http://127.0.0.1:")
+            or self.endpoint.startswith("http://localhost:")
+        ):
+            raise ValueError("spark_rizzo_url_must_be_loopback")
+        configured_timeout = timeout_sec
+        if configured_timeout is None:
+            try:
+                configured_timeout = float(os.getenv("BOTTAZZI_SPARK_TIMEOUT_SEC", "3.0"))
+            except ValueError:
+                configured_timeout = 3.0
+        if configured_timeout <= 0 or configured_timeout > 10:
+            raise ValueError("spark_rizzo_timeout_invalid")
+        self.timeout_sec = configured_timeout
+        self.session = session or requests.Session()
+        self.fallback = fallback or DeterministicJedPriorityClassifier()
+
+    def classify(
+        self,
+        text: str,
+        *,
+        category_hint: TaskCategory | str | None = None,
+    ) -> PriorityDecision:
+        if category_hint is not None:
+            hinted = self.fallback.classify(text, category_hint=category_hint)
+            return hinted.model_copy(update={"source": "human_category_hint"})
+        clean_text = text.strip()
+        if not clean_text:
+            raise ValueError("spark_rizzo_task_text_required")
+        baseline = self.fallback.classify(clean_text)
+        if baseline.category is not TaskCategory.GENERAL:
+            return baseline.model_copy(
+                update={
+                    "source": "spark_hybrid_deterministic_gate",
+                    "reasons": ("explicit_priority_cue",) + baseline.reasons,
+                }
+            )
+        try:
+            response = self.session.post(
+                self.endpoint,
+                json={
+                    "state": {
+                        "goal": "classify_task_priority_domain",
+                        "task": clean_text,
+                    },
+                    "questions": {
+                        "category": {
+                            "type": "choice",
+                            "instructions": (
+                                "Scegli il dominio principale del compito. "
+                                "Se non e chiaramente SOLDI, AMORE o FAMIGLIA, scegli GENERALE."
+                            ),
+                            "policy": {"allow_abstain": False},
+                            "options": [
+                                {"id": category.value, "description": description}
+                                for category, description in self._OPTIONS
+                            ],
+                        }
+                    },
+                },
+                timeout=self.timeout_sec,
+            )
+            response.raise_for_status()
+            answer = response.json()["answers"]["category"]
+            choice = str(answer.get("choice") or "")
+            category = TaskCategory(choice)
+            probabilities = answer.get("probabilities") or {}
+            confidence = float(probabilities.get(choice) or 0.0)
+            if confidence <= 0.0:
+                confidence = 0.5
+        except Exception:
+            fallback = self.fallback.classify(clean_text)
+            return fallback.model_copy(
+                update={
+                    "source": "spark_rizzo_unavailable_fallback",
+                    "reasons": ("spark_rizzo_unavailable",) + fallback.reasons,
+                }
+            )
+        return PriorityDecision(
+            category=category,
+            score=DeterministicJedPriorityClassifier._BASE_SCORE[category],
+            confidence=min(1.0, confidence),
+            source="spark_x25_4b_rizzo",
+            reasons=(f"spark_rizzo_domain:{category.value}",),
+        )
+
+
+def _default_priority_classifier() -> PriorityClassifier:
+    backend = os.getenv("BOTTAZZI_PRIORITY_CLASSIFIER", "jev").strip().casefold()
+    if backend in {"spark", "spark_rizzo", "rizzo"}:
+        return RizzoPriorityClassifier()
+    return JevPriorityClassifier()
+
+
 class BotTazziTaskQueue:
     """Persistent task queue with JEV auto-priority and human-pinned slots."""
 
@@ -364,7 +482,7 @@ class BotTazziTaskQueue:
     ) -> None:
         self.db_path = Path(db_path).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.classifier = classifier or JevPriorityClassifier()
+        self.classifier = classifier or _default_priority_classifier()
         self._clock = clock
         self._ensure_schema()
 
@@ -722,6 +840,7 @@ __all__ = [
     "BotTazziTaskQueue",
     "DeterministicJedPriorityClassifier",
     "JevPriorityClassifier",
+    "RizzoPriorityClassifier",
     "PriorityClassifier",
     "PriorityDecision",
     "QueueEntry",

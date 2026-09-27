@@ -4,6 +4,7 @@ from ralfloop_agent.unified_assistant.task_queue import (
     BotTazziTaskQueue,
     DeterministicJedPriorityClassifier,
     JevPriorityClassifier,
+    RizzoPriorityClassifier,
     TaskCategory,
     TaskState,
 )
@@ -214,3 +215,88 @@ def test_jev_classifier_fallback_is_explicit_when_runtime_unavailable() -> None:
     assert decision.score == 85
     assert decision.source == "jev_unavailable_fallback"
     assert decision.reasons[0] == "jev_unavailable"
+
+
+class _FakeRizzoResponse:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        return self.payload
+
+
+class _FakeRizzoSession:
+    def __init__(self, choice: str = "love") -> None:
+        self.choice = choice
+        self.calls: list[tuple[str, dict, float]] = []
+
+    def post(self, url: str, *, json: dict, timeout: float):
+        self.calls.append((url, json, timeout))
+        probs = {"money": 0.02, "love": 0.94, "family": 0.02, "general": 0.02}
+        return _FakeRizzoResponse({
+            "answers": {"category": {
+                "choice": self.choice,
+                "probabilities": probs,
+            }}
+        })
+
+
+def test_spark_rizzo_classifier_uses_fixed_local_options() -> None:
+    session = _FakeRizzoSession("love")
+    classifier = RizzoPriorityClassifier(
+        endpoint="http://127.0.0.1:18017/v1/decisions",
+        session=session,
+    )
+
+    decision = classifier.classify("Prepara una sorpresa per il nostro anniversario")
+
+    assert decision.category is TaskCategory.LOVE
+    assert decision.score == 85
+    assert decision.source == "spark_x25_4b_rizzo"
+    assert decision.confidence == 0.94
+    assert len(session.calls) == 1
+    url, payload, timeout = session.calls[0]
+    assert url == "http://127.0.0.1:18017/v1/decisions"
+    assert timeout == 3.0
+    options = payload["questions"]["category"]["options"]
+    assert [item["id"] for item in options] == [
+        "money", "love", "family", "general"
+    ]
+
+
+class _BrokenRizzoSession:
+    def post(self, *args, **kwargs):
+        raise OSError("offline")
+
+
+def test_spark_rizzo_classifier_falls_back_deterministically() -> None:
+    classifier = RizzoPriorityClassifier(
+        endpoint="http://127.0.0.1:18017/v1/decisions",
+        session=_BrokenRizzoSession(),
+    )
+
+    decision = classifier.classify("Rivedi la nota appena arrivata")
+
+    assert decision.category is TaskCategory.GENERAL
+    assert decision.source == "spark_rizzo_unavailable_fallback"
+    assert decision.reasons[0] == "spark_rizzo_unavailable"
+
+
+def test_spark_rizzo_keeps_explicit_priority_cues_deterministic() -> None:
+    session = _FakeRizzoSession("general")
+    classifier = RizzoPriorityClassifier(session=session)
+
+    decision = classifier.classify("Controlla il pagamento TARI")
+
+    assert decision.category is TaskCategory.MONEY
+    assert decision.source == "spark_hybrid_deterministic_gate"
+    assert session.calls == []
+
+
+def test_queue_can_select_spark_classifier_from_environment(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BOTTAZZI_PRIORITY_CLASSIFIER", "spark_rizzo")
+    q = BotTazziTaskQueue(tmp_path / "spark-queue.sqlite3")
+    assert isinstance(q.classifier, RizzoPriorityClassifier)
