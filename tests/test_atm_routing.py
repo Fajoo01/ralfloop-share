@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime as RealDateTime
 
 from openshell_backend import atm_telegram as atm
@@ -2658,6 +2659,36 @@ def test_route_ranking_official_uses_duration_when_eta_missing():
     assert ranked[1]["eta_seconds"] == 20768
 
 
+def test_default_destinations_only_hardcode_tiremm():
+    assert [row["name"] for row in atm.DEFAULT_DESTINATIONS] == ["tiremm innanz"]
+    assert atm.DEFAULT_DESTINATIONS[0]["label"] == "Tiremm Innanz"
+
+
+def test_load_destinations_merges_tiremm_with_user_favorites(monkeypatch, tmp_path):
+    path = tmp_path / "destinations.json"
+    path.write_text(
+        json.dumps([
+            {
+                "name": "preferito utente",
+                "label": "Preferito utente",
+                "lat": 45.5,
+                "lon": 9.2,
+            }
+        ]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(atm, "DESTINATIONS_PATH", path)
+    monkeypatch.setattr(atm, "DATA_DIR", tmp_path)
+
+    rows = atm._load_destinations()
+    names = {row["name"] for row in rows}
+
+    assert "tiremm innanz" in names
+    assert "preferito utente" in names
+    assert "arci bellezza" not in names
+    assert "piscina suzzani" not in names
+
+
 # ATM_REALTIME_NAVIGATOR_TESTS_START
 
 
@@ -2789,6 +2820,60 @@ def test_navigator_arrived_near_destination(monkeypatch, tmp_path):
     )
 
     assert updated["state"] == "arrived"
+
+
+def test_navigator_refreshes_realtime_after_stale_wait(monkeypatch, tmp_path):
+    db = tmp_path / "navigator.sqlite3"
+    monkeypatch.setattr(atm, "NAVIGATOR_DB_PATH", db)
+    monkeypatch.setattr(atm.time, "time", lambda: _nav_ts(9, 55))
+    plans = [
+        _navigator_plan(departure_s=36600, arrival_s=37200),
+        _navigator_plan(departure_s=36720, arrival_s=37320),
+    ]
+
+    def fake_plan(*_args, **_kwargs):
+        return plans.pop(0)
+
+    monkeypatch.setattr(atm, "build_plan", fake_plan)
+    monkeypatch.setattr(atm, "render_reply", lambda _plan: "NAV")
+
+    started = atm.navigator_start(45.000000, 9.000000, "casa")
+    updated = atm.navigator_update(
+        started["session_id"],
+        45.000050,
+        9.000000,
+        observed_at=_nav_ts(9, 57),
+    )
+
+    assert updated["replanned"] is True
+    assert updated["replan_reason"] == "realtime_refresh"
+    assert updated["seconds_to_vehicle"] == 900
+
+
+def test_navigator_marks_second_leg_as_transfer(monkeypatch, tmp_path):
+    db = tmp_path / "navigator.sqlite3"
+    monkeypatch.setattr(atm, "NAVIGATOR_DB_PATH", db)
+    monkeypatch.setattr(atm.time, "time", lambda: _nav_ts(10, 5))
+    plan = _navigator_plan(departure_s=36000, arrival_s=36200)
+    plan["local_atm_route"]["legs"].append({
+        "mode": "transit",
+        "route": "M2",
+        "live": False,
+        "from": "Cambio",
+        "from_stop_id": "X",
+        "to": "Arrivo",
+        "to_stop_id": "Y",
+        "departure_s": 36900,
+        "arrival_s": 37500,
+    })
+    monkeypatch.setattr(atm, "build_plan", lambda *_a, **_k: plan)
+    monkeypatch.setattr(atm, "render_reply", lambda _plan: "NAV")
+
+    view = atm.navigator_start(45.000000, 9.000000, "casa")
+
+    assert view["active_leg_index"] == 1
+    assert view["state"] == "transfer"
+    assert view["seconds_to_vehicle"] == 600
 
 
 # ATM_REALTIME_NAVIGATOR_TESTS_END

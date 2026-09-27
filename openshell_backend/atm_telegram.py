@@ -136,8 +136,14 @@ def _route_has_reboard_cycle(route: dict[str, Any]) -> bool:
 router = APIRouter(prefix="/atm-telegram", tags=["atm-telegram"])
 
 DEFAULT_DESTINATIONS = [
-    {"name": "arci bellezza", "label": "ARCI Bellezza", "lat": 45.4487392, "lon": 9.1950134, "note": "Via Giovanni Bellezza 16/A, Milano"},
-    {"name": "piscina suzzani", "label": "Piscina Suzzani", "lat": 45.5194893, "lon": 9.2061705, "note": "Via Luigi Beccali, Milano"},
+    {
+        "name": "tiremm innanz",
+        "label": "Tiremm Innanz",
+        "aliases": ["tiremm", "sede tiremm"],
+        "lat": 45.5066929,
+        "lon": 9.2355083,
+        "note": "Via Federico Jarach 8, Milano",
+    },
 ]
 
 
@@ -265,7 +271,9 @@ def _load_destinations() -> list[dict[str, Any]]:
     except Exception:
         rows = DEFAULT_DESTINATIONS
     by_name: dict[str, dict[str, Any]] = {}
-    source_rows = list(rows or []) if isinstance(rows, list) and rows else list(DEFAULT_DESTINATIONS)
+    source_rows = list(DEFAULT_DESTINATIONS)
+    if isinstance(rows, list):
+        source_rows.extend(rows)
     for row in source_rows:
         name = _slug(str(row.get("name") or row.get("label") or ""))
         if name:
@@ -5028,6 +5036,9 @@ def _navigator_view(
                     elif margin_seconds <= 60:
                         state = "walking_to_stop"
                         instruction = "Vai subito alla fermata: il margine è stretto."
+                    elif idx > 0:
+                        state = "transfer"
+                        instruction = "Completa il cambio e raggiungi la prossima fermata/binario."
                     elif walk_seconds > 0:
                         state = "walking_to_stop"
                         instruction = "Raggiungi la fermata; il mezzo è ancora prendibile."
@@ -5120,6 +5131,15 @@ def navigator_update(
         reason = "forced"
     elif before["state"] in {"missed", "replanning"}:
         reason = before["state"]
+    elif (
+        plan_age >= NAVIGATOR_REPLAN_AFTER_S
+        and before["state"] in {"walking_to_stop", "waiting", "transfer"}
+        and (
+            before.get("seconds_to_vehicle") is None
+            or int(before["seconds_to_vehicle"]) <= 15 * 60
+        )
+    ):
+        reason = "realtime_refresh"
     elif moved_m >= NAVIGATOR_REPLAN_MOVE_M and plan_age >= NAVIGATOR_REPLAN_AFTER_S:
         reason = "position_changed"
 
