@@ -1,0 +1,22 @@
+[Unit]
+Description=Tiremm ATM Navigator VPN Gateway
+After=network-online.target ralfloop-backend.service
+Wants=network-online.target
+Requires=ralfloop-backend.service
+
+[Service]
+Type=simple
+User=sibilla-cumana
+Group=sibilla-cumana
+WorkingDirectory=/home/sibilla-cumana/ralfloop-production/current
+EnvironmentFile=-/etc/ralfloop/atm-navigator-gateway.env
+ExecStart=/home/sibilla-cumana/ralfloop_agent_scaffold/.venv/bin/python -m uvicorn scripts.atm_navigator_gateway:app --host 10.252.14.7 --port 19126
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target
