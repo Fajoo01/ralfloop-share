@@ -101,6 +101,7 @@ export async function apiStream(path,data,onEvent){
 }
 
 function learnerAccess(){return home?.profile?.learner_profile?.accessibility_support||{};}
+function tutorProvider(){const allowed=new Set(home?.llm_providers||['local','chatgpt','kimi','deepseek']);const saved=localStorage.getItem('teacher-llm-provider')||home?.default_provider||'local';return allowed.has(saved)?saved:'local';}
 function applyLearnerAccess(){
   const a=learnerAccess(),root=document.documentElement,body=document.body;
   root.style.setProperty('--reader-font-scale',String(a.font_scale||1));
@@ -116,7 +117,7 @@ async function streamHelp(a,mode,question,feedback){
   tutorVoiceGeneration+=1;stopServerAudio();window.speechSynthesis?.cancel();avatar.reset();avatar.setState('thinking');
   const live=info('Sto preparando la spiegazione…');feedback.replaceChildren(live);let text='';let finalResult=null;
   const autoSpeak=!!learnerAccess().text_to_speech||home?.profile?.learner_profile?.education_level==='emergent_literacy';
-  await apiStream('/activities/'+a.activity_id+'/help/stream',{mode,question},async event=>{
+  await apiStream('/activities/'+a.activity_id+'/help/stream',{mode,question,provider:tutorProvider()},async event=>{
     if(event.type==='delta'){text+=event.text||'';live.textContent=text||'Sto preparando la spiegazione…';}
     else if(event.type==='voice'&&autoSpeak){speakStreamSentence(event.text||'');}
     else if(event.type==='done'){finalResult=event.result||null;}
@@ -221,6 +222,7 @@ async function activityPage(){
   if(a.activity_type!=='flashcards'){const send=button('Invia risposta',async()=>{const result=await api('/activities/'+a.activity_id+'/answer',{answer:getter(),request_key:attemptKey});attemptKey=crypto.randomUUID();feedback.replaceChildren(info(result.feedback),el('p',(result.correct?'Risposta corretta. ':'Proviamo insieme. ')+`+${result.xp_awarded} XP`));speakTutorFeedback(result);if(result.correct){send.hidden=true;feedback.append(button('Prossima attività',()=>start(result.next?.topic||a.topic,result.next?.activity_type)),button('Vedi progressi',()=>navigate('/progress'),true));}else{feedback.append(el('p','Puoi correggere la risposta e inviarla di nuovo.'));if(result.attempts>=5){send.hidden=true;feedback.append(button('Nuova attività guidata',()=>start(a.topic,'guided_exercise')));}}});section.append(send);}
   const tutorPanel=el('section',null,{class:'tutor-dialogue','aria-label':'Dialogo con Bot-tazzi'});
   const conversation=el('div',null,{class:'tutor-conversation'});
+  const providerRow=el('div',null,{class:'row tutor-provider'});const providerSelect=el('select',null,{'aria-label':'Modello del tutor'});const providerLabels={local:'Tutor locale',chatgpt:'ChatGPT',kimi:'Kimi',deepseek:'DeepSeek'};for(const provider of (home?.llm_providers||['local','chatgpt','kimi','deepseek']))providerSelect.append(el('option',providerLabels[provider]||provider,{value:provider}));providerSelect.value=tutorProvider();providerSelect.onchange=()=>{localStorage.setItem('teacher-llm-provider',providerSelect.value);};providerRow.append(el('label','Modello',{for:'teacher-provider-select'}));providerSelect.id='teacher-provider-select';providerRow.append(providerSelect);conversation.append(providerRow);
   conversation.append(el('p','PARLANE CON BOT-TAZZI',{class:'eyebrow'}),el('h2','Se qualcosa non torna, dimmelo.'));
   const help=el('div',null,{class:'row tutor-quick-actions'});for(const [mode,label] of [['hint','Suggerimento'],['different','Spiegamelo diversamente'],['explain','Fammi un esempio']])help.append(button(label,async()=>{await streamHelp(a,mode,'',feedback);},true));conversation.append(help,feedback);
   const chat=el('section',null,{class:'tutor-question'});const question=field(chat,'La tua domanda o obiezione','question','textarea');question.maxLength=2000;question.placeholder='Es.: un fazzoletto si adatta a un contenitore ma non è un liquido: perché?';chat.append(button('Chiedi a Bot-tazzi',async()=>{await streamHelp(a,'explain',question.value,feedback);}));conversation.append(chat);

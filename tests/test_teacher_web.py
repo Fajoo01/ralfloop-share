@@ -375,3 +375,39 @@ def test_audio_preparation_is_idempotent(setup):
     first=app.material_action(student,material["material_id"],"audio")
     second=app.material_action(student,material["material_id"],"audio")
     assert first["audio_id"] == second["audio_id"]
+
+
+def test_teacher_browser_provider_selector_is_bounded_and_identity_free(setup):
+    state, app, _, _ = setup
+    class BrowserProvider:
+        def __init__(self): self.calls=[]
+        def query(self, provider, prompt, timeout_seconds=90):
+            self.calls.append((provider,prompt,timeout_seconds))
+            return {"provider":provider,"response":"Spiegazione esterna sicura."}
+    provider=BrowserProvider()
+    with TestClient(create_app(state,app.teacher,origin="http://testserver",browser_provider=provider),raise_server_exceptions=False) as client:
+        client.headers.update({"origin":"http://testserver","x-teacher-request":"1"})
+        authenticate_http(client)
+        home=client.get("/api/home").json()
+        assert home["llm_providers"] == ["local","chatgpt","kimi","deepseek"]
+        a=client.post("/api/activities",json={"topic":"fractions","activity_type":"matching"}).json()
+        out=client.post(f"/api/activities/{a['activity_id']}/help",json={"mode":"explain","question":"Perché?","provider":"deepseek"})
+        assert out.status_code == 200
+        assert out.json()["feedback"] == "Spiegazione esterna sicura."
+        assert provider.calls and provider.calls[0][0] == "deepseek"
+        prompt=provider.calls[0][1]
+        assert "Perché?" in prompt and "shell" in prompt
+        assert state.authenticate(client.cookies.get("teacher_session"))["id"] not in prompt
+        assert "Credential!123" not in prompt
+    source=(Path(__file__).resolve().parents[1]/"ralfloop_agent/teacher/web/static/app.js").read_text()
+    assert "teacher-llm-provider" in source
+    assert "provider:tutorProvider()" in source
+
+
+def test_teacher_browser_provider_rejects_unknown_provider(tmp_path):
+    from ralfloop_agent.teacher.web.browser_provider import BrowserTeachingProvider
+    bridge=BrowserTeachingProvider(endpoint="http://127.0.0.1:19201/api/providers/teaching-query")
+    with pytest.raises(ValueError,match="provider_not_allowed"):
+        bridge.query("browser-admin","ciao")
+    with pytest.raises(ValueError,match="loopback"):
+        BrowserTeachingProvider(endpoint="https://example.org/query")
