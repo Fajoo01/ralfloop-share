@@ -11,6 +11,7 @@ from datetime import datetime
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -327,17 +328,30 @@ def convert_docx_to_pdf(docx_path: str | Path, pdf_path: str | Path) -> Path:
     pdf_path.parent.mkdir(parents=True, exist_ok=True)
     soffice = shutil.which("libreoffice") or shutil.which("soffice")
     if not soffice:
-        return _render_simple_pdf(docx_path, pdf_path)
-    completed = subprocess.run(
-        [soffice, "--headless", "--convert-to", "pdf", "--outdir", str(pdf_path.parent), str(docx_path)],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=90, check=False,
-    )
-    generated = pdf_path.parent / (docx_path.stem + ".pdf")
-    if completed.returncode == 0 and generated.exists():
-        if generated != pdf_path:
-            generated.replace(pdf_path)
-        return pdf_path
-    return _render_simple_pdf(docx_path, pdf_path)
+        raise RuntimeError("libreoffice_not_available")
+    if not docx_path.exists():
+        raise RuntimeError("rendered_docx_missing")
+
+    # The production service has a read-only home. LibreOffice must therefore
+    # use a private writable profile or conversion fails before opening DOCX.
+    state_root = pdf_path.parent.parent
+    state_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".lo-convert-", dir=str(state_root)) as work:
+        workdir = Path(work)
+        profile = workdir / "profile"
+        outdir = workdir / "out"
+        profile.mkdir()
+        outdir.mkdir()
+        completed = subprocess.run(
+            [soffice, f"-env:UserInstallation={profile.resolve().as_uri()}", "--headless", "--convert-to", "pdf", "--outdir", str(outdir), str(docx_path)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=90, check=False,
+        )
+        generated = outdir / (docx_path.stem + ".pdf")
+        if completed.returncode != 0 or not generated.exists():
+            detail = (completed.stderr or completed.stdout or "conversion_failed").strip()
+            raise RuntimeError(f"libreoffice_pdf_conversion_failed:{detail[:300]}")
+        shutil.copy2(generated, pdf_path)
+    return pdf_path
 
 
 def _render_simple_pdf(docx_path: Path, pdf_path: Path) -> Path:

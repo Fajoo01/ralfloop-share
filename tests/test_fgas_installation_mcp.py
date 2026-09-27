@@ -3,8 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from docx import Document
+import pytest
 
-from ralfloop_agent.fgas_installation import extract_record, render_docx, validate_record
+from ralfloop_agent.fgas_installation import convert_docx_to_pdf, extract_record, render_docx, validate_record
 from scripts.ralf_fgas_installation_mcp_server import (
     FGasMCPServer, TOOLS, _apply_configured_defaults, _parse_drive_files,
     _repair_truncated_years,
@@ -209,3 +210,44 @@ def test_live_catalog_config_registers_fgas_aliases():
     assert providers["fgas"] == "/run/ralf-fgas-mcp/mcp.sock"
     assert "fgas" in config["term_aliases"]["condizionatore"]
     assert "fgas" in config["term_aliases"]["climatizzatore"]
+
+
+def test_pdf_conversion_uses_isolated_libreoffice_profile(tmp_path, monkeypatch):
+    docx = tmp_path / "filled.docx"
+    pdf = tmp_path / "output" / "filled.pdf"
+    docx.write_bytes(b"docx")
+    calls = []
+
+    class Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(args, **_kwargs):
+        calls.append(args)
+        outdir = Path(args[args.index("--outdir") + 1])
+        (outdir / "filled.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+        return Result()
+
+    monkeypatch.setattr("ralfloop_agent.fgas_installation.shutil.which", lambda _name: "/usr/bin/libreoffice")
+    monkeypatch.setattr("ralfloop_agent.fgas_installation.subprocess.run", fake_run)
+    assert convert_docx_to_pdf(docx, pdf) == pdf
+    assert pdf.read_bytes().startswith(b"%PDF")
+    assert any(part.startswith("-env:UserInstallation=file://") for part in calls[0])
+
+
+def test_pdf_conversion_fails_closed_without_text_fallback(tmp_path, monkeypatch):
+    docx = tmp_path / "filled.docx"
+    pdf = tmp_path / "output" / "filled.pdf"
+    docx.write_bytes(b"docx")
+
+    class Result:
+        returncode = 1
+        stdout = ""
+        stderr = "profile failure"
+
+    monkeypatch.setattr("ralfloop_agent.fgas_installation.shutil.which", lambda _name: "/usr/bin/libreoffice")
+    monkeypatch.setattr("ralfloop_agent.fgas_installation.subprocess.run", lambda *_args, **_kwargs: Result())
+    with pytest.raises(RuntimeError, match="libreoffice_pdf_conversion_failed"):
+        convert_docx_to_pdf(docx, pdf)
+    assert not pdf.exists()
