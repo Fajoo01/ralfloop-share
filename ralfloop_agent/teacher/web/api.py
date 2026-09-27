@@ -240,7 +240,7 @@ def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", sec
         try:
             target = oidc_auth.authorization_url(state=oidc_state)
         except (RuntimeError, requests.RequestException, ValueError):
-            return JSONResponse({"error": "Portachiavi Tiremm non disponibile."}, status_code=503)
+            return JSONResponse({"error": "CIAV non disponibile."}, status_code=503)
         response = RedirectResponse(target, status_code=303)
         response.set_cookie(
             "teacher_oidc_state",
@@ -309,7 +309,7 @@ def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", sec
             raise HTTPException(404)
         link_token = request.cookies.get("teacher_oidc_link", "")
         if not link_token:
-            raise HTTPException(401, "Riapri Portachiavi Tiremm.")
+            raise HTTPException(401, "Riapri CIAV.")
         try:
             token = state.finish_oidc_link(
                 link_token,
@@ -335,7 +335,7 @@ def create_app(state=None, teacher=None, *, origin="http://127.0.0.1:19139", sec
     @app.post("/api/login")
     def login(data: Login, request: Request):
         if oidc_auth.enabled():
-            raise HTTPException(410, "Usa Portachiavi Tiremm.")
+            raise HTTPException(410, "Usa CIAV.")
         try:
             token = state.login(data.membership_card_id, data.credential, request.client.host if request.client else "local")
         except PermissionError:

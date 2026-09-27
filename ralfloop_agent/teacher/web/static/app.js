@@ -150,7 +150,7 @@ async function login(){
   const form=el('form',null,{class:'card login'});
   add(form,el('img',null,{src:appUrl('/assets/bot-tazzi.jpeg'),alt:'Bot-tazzi ti dà il benvenuto',class:'welcome-logo',width:160,height:160}),el('p','BENVENUTO',{class:'eyebrow'}),el('h1','Il tuo prossimo passo comincia qui.'));
   if(auth.mode==='oidc'&&!auth.pending_link){
-    form.append(el('p','Accedi con il Portachiavi Tiremm. Il Tutor non usa una password separata.'),button('Entra con Portachiavi Tiremm',async()=>{location.href=appUrl('/oidc/login');}));
+    form.append(el('p','Accedi con CIAV. Il Tutor non usa una password separata.'),button('Entra con CIAV',async()=>{location.href=appUrl('/oidc/login');}));
     main.append(form);return;
   }
   form.append(el('p',auth.pending_link?'Portachiavi verificato. Associa una sola volta il tuo profilo Tutor usando tessera e credenziale del doposcuola.':'Usa la tessera e la credenziale ricevuta dal doposcuola.'));
@@ -275,7 +275,7 @@ async function profilePage(){
   const mode=el('select',null,{'aria-label':'Modalità sessione'});for(const [v,l] of [['auto','Adattiva'],['micro','Micro'],['standard','Standard'],['doposcuola','Doposcuola'],['exam','Esame'],['scholar','Scholar'],['literacy_l2','Literacy / L2']])mode.append(el('option',l,{value:v}));mode.value=profile.session_preference||'auto';mode.onchange=()=>{profile.session_preference=mode.value;};form.append(el('label','Modalità di studio'),mode);
   profile.accessibility_support=access;form.append(button('Salva preferenze',async()=>{home.profile.learner_profile=await api('/learner-profile',profile);applyLearnerAccess();notice.textContent='Preferenze salvate.';}));main.append(form);
   if(['university','postgraduate','master'].includes(home.profile.school_level))main.append(el('section',null,{class:'card scholar-card'}),button('Apri i materiali Scholar',()=>navigate('/books')));
-  main.append(el('p','Il Portachiavi Tiremm protegge l’accesso al tuo profilo Tutor.'),button('Esci',async()=>{await api('/logout',{});window.speechSynthesis?.cancel();stopServerAudio();navigate('/login');},true));
+  main.append(el('p','CIAV protegge l’accesso al tuo profilo Tutor.'),button('Esci',async()=>{await api('/logout',{});window.speechSynthesis?.cancel();stopServerAudio();navigate('/login');},true));
 }
 
 async function render(){
