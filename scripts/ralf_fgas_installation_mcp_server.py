@@ -371,7 +371,16 @@ def _repair_truncated_years(text: str, cluster_timestamp: str) -> str:
 
 
 def _validation_payload(validation: Any, *, record: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    return {"ok": validation.ok, "status": "COMPLETE" if validation.ok else "INCOMPLETE", "record": dict(record or validation.normalized), "normalized": validation.normalized, "missing": list(validation.missing), "warnings": list(validation.warnings), "side_effects": 0}
+    return {
+        "ok": True,
+        "complete": validation.ok,
+        "status": "COMPLETE" if validation.ok else "INCOMPLETE",
+        "record": dict(record or validation.normalized),
+        "normalized": validation.normalized,
+        "missing": list(validation.missing),
+        "warnings": list(validation.warnings),
+        "side_effects": 0,
+    }
 
 
 def _validate_schema(arguments: Mapping[str, Any], schema: Mapping[str, Any]) -> str:
