@@ -411,3 +411,15 @@ def test_teacher_browser_provider_rejects_unknown_provider(tmp_path):
         bridge.query("browser-admin","ciao")
     with pytest.raises(ValueError,match="loopback"):
         BrowserTeachingProvider(endpoint="https://example.org/query")
+
+
+def test_client_accepts_only_known_optional_media_tools(monkeypatch):
+    import ralfloop_agent.teacher.web.client as module
+    from types import SimpleNamespace
+    class Session:
+        def __init__(self,*args,**kwargs): pass
+        def initialize(self): pass
+        def list_tools(self): return [SimpleNamespace(name=name) for name in [*ALL_TOOLS,*sorted(module.OPTIONAL_MEDIA_TOOLS)]]
+        def close(self): pass
+    monkeypatch.setattr(module,"MCPClientSession",Session)
+    assert TeacherClient(transport_factory=lambda:None).health() is True

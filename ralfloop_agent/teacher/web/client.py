@@ -5,6 +5,12 @@ import json
 from src.mcp_transport import MCPClientSession, UnixMCPTransport
 from src.teacher import ALL_TOOLS
 
+OPTIONAL_MEDIA_TOOLS = frozenset({
+    "teacher.documentary_generate", "teacher.mindmap_explain",
+    "teacher.mindmap_generate", "teacher.mindmap_update",
+    "teacher.study_audio_generate",
+})
+
 
 class TeacherClient:
     def __init__(self, socket_path="/run/ralf-teacher-mcp/mcp.sock", timeout=45, transport_factory=None):
@@ -17,7 +23,8 @@ class TeacherClient:
         try:
             session.initialize()
             surface = {tool.name for tool in session.list_tools()}
-            if surface != set(ALL_TOOLS):
+            required = set(ALL_TOOLS)
+            if not required.issubset(surface) or surface - required - OPTIONAL_MEDIA_TOOLS:
                 raise ValueError("teacher_surface_mismatch")
             yield session
         finally:
