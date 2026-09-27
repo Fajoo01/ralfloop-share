@@ -670,7 +670,7 @@ class GptWorkController:
 
     def provider_status(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
-        pages = [target for target in self.cdp.targets() if target.target_type == "page"]
+        pages = [target for target in self.cdp.raw.targets() if target.target_type == "page"]
         for name, spec in BROWSER_PROVIDERS.items():
             matches = [target for target in pages if self._provider_for_url(target.url) == name]
             if name == "kimi":
@@ -692,9 +692,10 @@ class GptWorkController:
         spec = BROWSER_PROVIDERS.get(name)
         if spec is None:
             raise ValueError("provider_not_supported")
+        cdp = self.cdp if name == "chatgpt" else self.cdp.raw
         pages = [
             target
-            for target in self.cdp.targets()
+            for target in cdp.targets()
             if target.target_type == "page" and self._provider_for_url(target.url) == name
         ]
         created = False
@@ -702,12 +703,12 @@ class GptWorkController:
             if name == "kimi":
                 pages.sort(key=lambda target: (0 if "kimi.ai" in target.url else 1, target.target_id))
             target_id = pages[0].target_id if name == "kimi" else pages[-1].target_id
-            self.cdp._browser_call("Target.activateTarget", {"targetId": target_id})
+            cdp._browser_call("Target.activateTarget", {"targetId": target_id})
         else:
-            target_id = self.cdp.create_target(spec["url"], background=False)
+            target_id = cdp.create_target(spec["url"], background=False)
             created = True
-        if hasattr(self.cdp, "raise_browser_window"):
-            self.cdp.raise_browser_window()
+        if hasattr(cdp, "raise_browser_window"):
+            cdp.raise_browser_window()
         return {
             "action": "provider_opened",
             "provider": name,
@@ -725,10 +726,11 @@ class GptWorkController:
         target_id = str(opened.get("target_id") or "")
         if not target_id:
             raise CdpError("provider_target_missing")
+        cdp = self.cdp.raw
         if name == "kimi":
-            result = self.cdp.query_kimi(target_id, text, wait_timeout_s=float(timeout_seconds))
+            result = cdp.query_kimi(target_id, text, wait_timeout_s=float(timeout_seconds))
         else:
-            result = self.cdp.query_deepseek(target_id, text, wait_timeout_s=float(timeout_seconds))
+            result = cdp.query_deepseek(target_id, text, wait_timeout_s=float(timeout_seconds))
         return {"action": "provider_response", **result}
 
     def query_provider_isolated(self, provider: str, text: str, *, timeout_seconds: int = 90) -> dict[str, Any]:
@@ -750,13 +752,13 @@ class GptWorkController:
                 stable_since = 0.0
                 while time.monotonic() < deadline:
                     time.sleep(0.35)
-                    state = self.cdp.chatgpt_ui_state(target_id)
+                    state = self.cdp.chatgpt_companion_state(target_id)
                     current = str(state.get("last_assistant_text") or "").strip()
                     if current and current != clean:
                         if current != stable:
                             stable, stable_since = current, time.monotonic()
-                        elif not state.get("response_in_progress") and not state.get("response_pending") and time.monotonic() - stable_since >= 0.8:
-                            return {"action":"provider_response","provider":"chatgpt","target_id":target_id,"response":current,"url":state.get("url"),"isolated":True}
+                        elif not state.get("busy") and time.monotonic() - stable_since >= 0.8:
+                            return {"action":"provider_response","provider":"chatgpt","target_id":target_id,"response":current,"url":self.cdp._wait_target(target_id).url,"isolated":True}
                 if stable:
                     return {"action":"provider_response","provider":"chatgpt","target_id":target_id,"response":stable,"url":self.cdp._wait_target(target_id).url,"isolated":True,"timed_out":True}
                 raise CdpError("chatgpt_query_failed:response_timeout")
@@ -1439,6 +1441,7 @@ class GptWorkController:
         base = self.queue.snapshot()
         base["power"] = self.queue.power_status()
         base["active_provider"] = self.queue.active_provider()
+        base["providers"] = self.provider_status()
         if not base["power"]["enabled"] or budget["rest_remaining_seconds"] or budget["rest_stop_pending"]:
             base["browser"] = {"ok": True, "open_chats": [], "power_off": True}
             return base
@@ -1776,6 +1779,28 @@ class GptFrontendHandler(BaseHTTPRequestHandler):
             assert isinstance(payload, OpenProvider)
             provider = queue.set_active_provider(payload.provider)
             self._send_json(200, {"ok": True, "active_provider": provider})
+            return
+        if path in {"/api/providers/open", "/api/providers/query"}:
+            if not self._mutation_allowed():
+                return
+            try:
+                if path == "/api/providers/open":
+                    payload = self._validated(OpenProvider)
+                    if payload is None:
+                        return
+                    assert isinstance(payload, OpenProvider)
+                    self._send_json(200, {"ok": True, **controller.open_provider(payload.provider)})
+                    return
+                payload = self._validated(ProviderQuery)
+                if payload is None:
+                    return
+                assert isinstance(payload, ProviderQuery)
+                result = controller.query_provider(payload.provider, payload.text, timeout_seconds=payload.timeout_seconds)
+                self._send_json(200, {"ok": True, **result})
+            except ValueError as exc:
+                self._error(422, str(exc))
+            except (CdpError, OSError, RuntimeError) as exc:
+                self._error(409, str(exc))
             return
         if not queue.power_enabled():
             self._error(409, "gpt_browser_power_off")
