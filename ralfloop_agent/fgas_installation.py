@@ -15,10 +15,22 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-MODEL_DEFAULTS: dict[str, dict[str, str]] = {
+MODEL_DEFAULTS: dict[str, dict[str, Any]] = {
     # Verified in the historical F-Gas workflow from the manufacturer's data.
     "2AMW42U4RGC": {"brand": "Hisense", "refrigerant": "R32", "charge_kg": "0,95"},
+    # Bosch Climate 5000 M official product data: code 7733701932, R32, 1.1 kg,
+    # fluorinated refrigerant circuit not hermetically sealed.
+    "CL5000M 41/2 E": {
+        "brand": "Bosch",
+        "refrigerant": "R32",
+        "charge_kg": "1,1",
+        "compressor_count": "1",
+        "hermetically_sealed": False,
+        "equipment_type": "POMPA DI CALORE FISSA",
+    },
 }
+
+MODEL_PRODUCT_CODES = {"CL5000M 41/2 E": "7733701932"}
 
 REQUIRED_FOR_RENDER = (
     "client_name", "client_cf", "client_type",
@@ -55,7 +67,12 @@ def normalize_record(record: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(out.get(key), str):
             out[key] = out[key].upper()
     if isinstance(out.get("charge_kg"), str):
-        out["charge_kg"] = out["charge_kg"].replace(".", ",")
+        charge = out["charge_kg"].replace(".", ",")
+        if "," in charge:
+            whole, fraction = charge.split(",", 1)
+            fraction = fraction.rstrip("0")
+            charge = whole if not fraction else f"{whole},{fraction}"
+        out["charge_kg"] = charge
     model = str(out.get("model") or "").upper().strip()
     if model:
         out["model"] = model
@@ -80,7 +97,7 @@ def extract_record(text: str, overrides: Mapping[str, Any] | None = None) -> dic
 
     record["client_name"] = label(r"(?:cliente|nome\s+cliente|nominativo)")
     record["client_email"] = label(r"(?:mail|e-?mail)(?:\s+cliente)?")
-    record["client_phone"] = label(r"(?:telefono|tel|cellulare|cell)")
+    record["client_phone"] = label(r"(?:telefono\s+cliente|tel\.?\s+cliente|cellulare\s+cliente|cell\.?\s+cliente)")
     record["install_address"] = label(r"(?:indirizzo|via|localizzazione)")
     record["civic"] = label(r"(?:civico|n\.?\s*civico)")
     record["city"] = label(r"(?:comune|citt[aà])")
@@ -91,10 +108,51 @@ def extract_record(text: str, overrides: Mapping[str, Any] | None = None) -> dic
     record["refrigerant"] = label(r"(?:gas|refrigerante|miscela)")
     record["charge_kg"] = label(r"(?:quantit[aà]|carico|precarica)(?:\s*\(?(?:in\s+)?kg\)?)?")
     record["purchase_reference"] = label(r"(?:fattura|scontrino|ordine|riferimento\s+acquisto|nr\.?\s*documento)")
-    record["purchase_date"] = label(r"(?:data\s+(?:fattura|scontrino|acquisto|ordine))")
-    record["intervention_date"] = label(r"(?:data\s+(?:intervento|installazione|dichiarazione\s+di\s+conformit[aà]))")
+    record["purchase_date"] = label(r"(?:data\s+(?:fattura|scontrino|acquisto|ordine|emissione))")
+    record["intervention_date"] = label(r"(?:data\s+(?:di\s+)?(?:intervento|i?stallazione|installazione|dichiarazione\s+di\s+conformit[aà]))")
     record["installer_name"] = label(r"(?:installatore|nome\s+installatore)")
     record["installer_cf"] = label(r"(?:codice\s+fiscale\s+installatore|cf\s+installatore)")
+
+    # Common Tecnomat/Bricoman order layout. Keep this narrow so store details
+    # are not mistaken for customer details.
+    if not record.get("client_name"):
+        m = re.search(r"(?is)\bSignore\s+([A-ZÀ-ÖØ-Ý][A-ZÀ-ÖØ-Ý' -]{2,80}?)(?=\s+TECNOMAT\b|\s+VIA\b)", text)
+        if m:
+            record["client_name"] = " ".join(m.group(1).split()).title()
+            record["client_type"] = "PRIVATO"
+    address_match = re.search(
+        r"(?im)\b((?:VIA|VIALE|CORSO|PIAZZA|PIAZZALE)\s+[A-ZÀ-ÖØ-Ý' .-]{2,80}?)\s+(\d+[A-Z]?)\s+(\d{5})\s+(MILANO)\b",
+        text.upper(),
+    )
+    if address_match:
+        record["install_address"] = " ".join(address_match.group(1).split()).title()
+        record["civic"] = address_match.group(2)
+        record["city"] = address_match.group(4).title()
+        record["province"] = "MI"
+    if not record.get("purchase_reference"):
+        candidates = re.findall(r"(?i)\bORDINE\s+N[°º]?\s*(\d{6,14})\b", text)
+        if candidates:
+            best = max(candidates, key=lambda value: (len(value), candidates.index(value)))
+            record["purchase_reference"] = f"ORDINE {best}"
+    if not record.get("purchase_date"):
+        m = re.search(r"(?i)\bData\s+emissione\s*:\s*(\d{1,2}/\d{1,2}/\d{4})\b", text)
+        if m:
+            record["purchase_date"] = m.group(1)
+    if not record.get("intervention_date"):
+        m = re.search(
+            r"(?i)\bData\s+(?:di\s+)?(?:i?stallazione|installazione)\s*[:\-]?\s*(\d{1,2}/\d{1,2}/\d{4})\b",
+            text,
+        )
+        if m:
+            record["intervention_date"] = m.group(1)
+    if not record.get("model"):
+        m = re.search(r"\b(CL5000M\s+41/2\s+E)\b", text, re.I)
+        if m or "4062321592103" in text or re.search(r"(?i)\bCOND\s+BOSCH\s+CL5000M\s+41\s+DUAL\b", text):
+            record["model"] = "CL5000M 41/2 E"
+    if record.get("model") and str(record["model"]).upper() == "CL5000M 41/2 E":
+        record.setdefault("brand", "Bosch")
+        if "TECNOMAT" in text.upper() and record.get("purchase_reference"):
+            record.setdefault("sold_by_installer", False)
 
     cfs = CF_RE.findall(text.upper())
     if not record.get("client_cf") and cfs:
@@ -105,33 +163,36 @@ def extract_record(text: str, overrides: Mapping[str, Any] | None = None) -> dic
         m = EMAIL_RE.search(text)
         if m:
             record["client_email"] = m.group(0)
-    if not record.get("client_phone"):
-        m = PHONE_RE.search(text)
-        if m:
-            record["client_phone"] = m.group(0)
+    # Never infer a customer phone from arbitrary numeric strings: orders,
+    # product codes and store phone numbers are common in purchase documents.
     if not _usable_refrigerant(record.get("refrigerant")):
         m = REFRIGERANT_RE.search(text)
         if m:
             record["refrigerant"] = m.group(1)
-    if not _usable_kg(record.get("charge_kg")):
-        m = KG_RE.search(text)
+    model_key = str(record.get("model") or "").upper().strip()
+    if not _usable_kg(record.get("charge_kg")) and model_key not in MODEL_DEFAULTS:
+        m = re.search(r"(?i)\bR-?32\b.{0,40}?\bKG\s*(\d{1,3}(?:[.,]\d{1,3})?)\b", text)
         if m:
             record["charge_kg"] = m.group(1)
-    if not record.get("intervention_date"):
-        dates = DATE_RE.findall(text)
-        if dates:
-            record["intervention_date"] = dates[-1]
     if not record.get("purchase_date"):
         dates = DATE_RE.findall(text)
-        if len(dates) > 1:
+        if dates:
             record["purchase_date"] = dates[0]
 
-    # Serial candidates: prefer the known Hisense 1K/23-char rule, otherwise a
-    # labelled alphanumeric value already captured above. Do not promote random
-    # barcodes into serials.
+    # Serial candidates: prefer known manufacturer structures. Do not promote
+    # arbitrary product/barcode strings into serials.
     hisense = re.findall(r"\b1K[A-Z0-9]{21}\b", text.upper())
     if hisense:
         record["serial"] = hisense[0]
+    if model_key == "CL5000M 41/2 E":
+        # Bosch labels use 86DM-XXX-NNNNNN-<product code>. OCR commonly reads
+        # the D as 0/O and the final 2 as '>'. Repair only when the product code
+        # is the model's verified Bosch code.
+        bosch = re.search(r"\b[8B]6[DO0]M[- ](\d{3})[- ](\d{6})[- ](773370193[2>])", text.upper())
+        if bosch:
+            suffix = bosch.group(3).replace(">", "2")
+            if suffix == MODEL_PRODUCT_CODES[model_key]:
+                record["serial"] = f"86DM-{bosch.group(1)}-{bosch.group(2)}-{suffix}"
     bad_barcode = re.fullmatch(r"CS\d{10,}[A-Z0-9]*", str(record.get("serial") or ""), re.I)
     if bad_barcode:
         record["serial"] = ""

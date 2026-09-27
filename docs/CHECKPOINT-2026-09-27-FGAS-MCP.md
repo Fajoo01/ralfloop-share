@@ -47,6 +47,27 @@ The Drive search also found prior filled examples. They were inspected only to v
 - Live rendering from Drive template: DOCX and PDF produced with no missing fields in the synthetic canary.
 - PDF text inspection confirmed client, serial, model, refrigerant, charge, location, intervention and installer fields.
 
+## Real WhatsApp canary
+
+Forwarded evidence cluster identified in chat `Fabio` at `04:27, 27/09/2026`:
+
+- 4 images + 1 PDF purchase order;
+- customer: Dimitri Filomena;
+- installation: Via Marcello Prestinari 2, Milano (MI);
+- purchase: Tecnomat order `3122417408`, 02/08/2026;
+- intervention date normalized from the forwarded typo `21/09/206` to `21/09/2026` only because the three-digit year equals the cluster year 2026 with one digit omitted;
+- outdoor unit: Bosch `CL5000M 41/2 E`;
+- serial recovered by bounded secondary OCR: `86DM-580-000864-7733701932`;
+- refrigerant R32, factory charge 1.1 kg, one compressor, non-hermetically-sealed, heat-pump equipment;
+- recurring installer profile confirmed from an earlier filled Drive form: Ishak Morgan / MRGSHK78C03Z336A;
+- private-use profile default: `E1 Casa`.
+
+Fields intentionally left unresolved because no evidence was found in the forwarded cluster or Drive search: customer tax code, fixed leak-detection system yes/no, gas recovered yes/no, gas added yes/no.
+
+Dependency fix discovered during canary: the WhatsApp Baileys Python client capped RPC responses at 128 KiB, while media are returned base64. Branch `fix/whatsapp-baileys-media-rpc-limit-20260927`, commit `6b47b260`, raises only the bounded transport ceiling to 12 MiB; media acceptance remains capped at 8 MiB. Regression suite: 16 passed. The fix is deployed in the versioned WhatsApp MCP runtime.
+
+F-Gas regression suite after the real-case parsing/OCR changes: 32 passed.
+
 ## Tracking
 
 GitHub issue: `Fajoo01/ralfloop-bottazzi#73`.

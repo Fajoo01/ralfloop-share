@@ -3,12 +3,16 @@ from __future__ import annotations
 
 """Semantic MCP for F-Gas air-conditioner installation documentation."""
 
+import base64
 import hashlib
+import io
 import json
 import os
 import re
 import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -16,7 +20,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from ralfloop_agent.fgas_installation import convert_docx_to_pdf, extract_record, render_docx, validate_record
+from ralfloop_agent.fgas_installation import convert_docx_to_pdf, extract_record, normalize_record, render_docx, validate_record
 from src.mcp_transport import MCPClientSession, MCP_PROTOCOL_VERSION, UnixMCPTransport
 
 
@@ -131,21 +135,46 @@ class WhatsAppFGasSource:
                 chat_id = str(rows[0].get("chat_id") or "")
             history = _structured(client.call_tool("whatsapp_read_messages", {"chat_id": chat_id, "limit": 40}))
             messages = history.get("messages") if isinstance(history, Mapping) else None
-            messages = messages if isinstance(messages, list) else []
+            messages = [dict(row) for row in messages if isinstance(row, Mapping)] if isinstance(messages, list) else []
             chosen = list(message_ids or [])
+            cluster_timestamp = ""
+            cluster_rows = messages[-20:]
             if not chosen:
-                chosen = [str(row.get("message_id") or "") for row in messages[-20:] if isinstance(row, Mapping) and str(row.get("kind") or "text") != "text" and row.get("message_id")][-8:]
-            texts = [str(row.get("text") or "") for row in messages[-20:] if isinstance(row, Mapping) and row.get("text")]
+                non_text = [row for row in messages if str(row.get("kind") or "text") != "text" and row.get("message_id")]
+                if non_text:
+                    cluster_timestamp = str(non_text[-1].get("timestamp") or "")
+                    if cluster_timestamp:
+                        cluster_rows = [row for row in messages if str(row.get("timestamp") or "") == cluster_timestamp]
+                    else:
+                        cluster_rows = non_text[-8:]
+                    chosen = [
+                        str(row.get("message_id") or "") for row in cluster_rows
+                        if str(row.get("kind") or "text") != "text" and row.get("message_id")
+                    ][:12]
+            else:
+                chosen_set = set(chosen)
+                selected_rows = [row for row in messages if str(row.get("message_id") or "") in chosen_set]
+                timestamps = [str(row.get("timestamp") or "") for row in selected_rows if row.get("timestamp")]
+                cluster_timestamp = timestamps[-1] if timestamps else ""
+                if cluster_timestamp:
+                    cluster_rows = [row for row in messages if str(row.get("timestamp") or "") == cluster_timestamp]
+                else:
+                    cluster_rows = selected_rows
+            texts = [str(row.get("text") or "") for row in cluster_rows if row.get("text")]
             media_rows: list[dict[str, Any]] = []
             for message_id in chosen:
-                payload = _structured(client.call_tool("whatsapp_get_media", {"chat_id": chat_id, "message_id": message_id}))
+                result = client.call_tool("whatsapp_get_media", {"chat_id": chat_id, "message_id": message_id})
+                payload = _structured(result)
                 rows = payload.get("results") if isinstance(payload, Mapping) else None
                 for row in rows if isinstance(rows, list) else []:
                     if isinstance(row, Mapping):
                         media_rows.append(dict(row))
                         if row.get("extracted_text"):
                             texts.append(str(row["extracted_text"]))
-            return {"ok": True, "status": "READY", "chat_id": chat_id, "message_ids": chosen, "text": "\n".join(texts), "media": media_rows, "side_effects": 0}
+                enhanced = _enhanced_image_text(result)
+                if enhanced:
+                    texts.append(enhanced)
+            return {"ok": True, "status": "READY", "chat_id": chat_id, "message_ids": chosen, "cluster_timestamp": cluster_timestamp, "text": "\n".join(texts), "media": media_rows, "side_effects": 0}
 
 
 class FGasMCPServer:
@@ -170,7 +199,9 @@ class FGasMCPServer:
             if name == "fgas_drive_status":
                 return _mcp_result(self.drive.status())
             if name == "fgas_extract_from_text":
-                record = extract_record(str(arguments["text"]), arguments.get("overrides") or {})
+                record = _apply_configured_defaults(
+                    extract_record(str(arguments["text"]), arguments.get("overrides") or {})
+                )
                 return _mcp_result(_validation_payload(validate_record(record), record=record))
             if name == "fgas_validate_installation":
                 return _mcp_result(_validation_payload(validate_record(arguments["record"])))
@@ -180,9 +211,14 @@ class FGasMCPServer:
                 source = self.whatsapp.collect(chat_id=str(arguments.get("chat_id") or ""), chat_title=str(arguments.get("chat_title") or ""), message_ids=list(arguments.get("message_ids") or ()))
                 if not source.get("ok"):
                     return _mcp_result(source, error=True)
-                record = extract_record(str(source.get("text") or ""), arguments.get("overrides") or {})
+                source_text = _repair_truncated_years(
+                    str(source.get("text") or ""), str(source.get("cluster_timestamp") or ""),
+                )
+                record = _apply_configured_defaults(
+                    extract_record(source_text, arguments.get("overrides") or {})
+                )
                 validation = validate_record(record)
-                payload = {**_validation_payload(validation, record=record), "source": {"chat_id": source.get("chat_id"), "message_ids": source.get("message_ids"), "media_count": len(source.get("media") or ())}}
+                payload = {**_validation_payload(validation, record=record), "source": {"chat_id": source.get("chat_id"), "message_ids": source.get("message_ids"), "cluster_timestamp": source.get("cluster_timestamp"), "media_count": len(source.get("media") or ())}}
                 if validation.ok or bool(arguments.get("allow_incomplete", False)):
                     payload["render"] = self._render(validation.normalized, basename=str(arguments.get("output_basename") or "MODULO_INSTALLAZIONE_COMPILATO"), allow_incomplete=bool(arguments.get("allow_incomplete", False)))
                 return _mcp_result(payload)
@@ -224,6 +260,56 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _enhanced_image_text(result: Mapping[str, Any]) -> str:
+    structured = _structured(result)
+    rows = structured.get("results") if isinstance(structured, Mapping) else None
+    hint = " ".join(
+        str(row.get("extracted_text") or "") for row in rows
+        if isinstance(rows, list) and isinstance(row, Mapping)
+    ).casefold()
+    if not any(term in hint for term in ("bosch", "climate", "thermotech")):
+        return ""
+    content = result.get("content")
+    if not isinstance(content, list):
+        return ""
+    encoded = next((
+        str(item.get("data") or "") for item in content
+        if isinstance(item, Mapping) and item.get("type") == "image" and item.get("data")
+    ), "")
+    if not encoded:
+        return ""
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except (ValueError, TypeError):
+        return ""
+    if not raw or len(raw) > 8 * 1024 * 1024:
+        return ""
+    tesseract = shutil.which("tesseract")
+    if not tesseract:
+        return ""
+    path = ""
+    try:
+        from PIL import Image, ImageEnhance, ImageFilter
+        image = Image.open(io.BytesIO(raw)).convert("L")
+        image = ImageEnhance.Contrast(image).enhance(2.2)
+        image = image.resize((image.width * 3, image.height * 3))
+        image = image.filter(ImageFilter.SHARPEN)
+        with tempfile.NamedTemporaryFile(prefix="ralf-fgas-ocr-", suffix=".png", delete=False) as handle:
+            path = handle.name
+            image.save(handle, format="PNG")
+        completed = subprocess.run(
+            [tesseract, path, "stdout", "-l", "ita+eng", "--psm", "6"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, timeout=30, check=False,
+        )
+        return " ".join(completed.stdout.split())[:12000] if completed.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return ""
+    finally:
+        if path:
+            Path(path).unlink(missing_ok=True)
+
+
 def _raw_text(result: Mapping[str, Any]) -> str:
     content = result.get("content")
     if not isinstance(content, list):
@@ -251,6 +337,37 @@ def _parse_drive_files(text: str) -> list[dict[str, str]]:
 def _parse_download_path(text: str) -> Path | None:
     match = re.search(r"(?m)^\*\*Path:\*\*\s+(.+)$", text)
     return Path(match.group(1).strip()) if match else None
+
+
+def _apply_configured_defaults(record: Mapping[str, Any]) -> dict[str, Any]:
+    out = dict(record)
+    installer_name = os.getenv("RALF_FGAS_DEFAULT_INSTALLER_NAME", "").strip()
+    installer_cf = os.getenv("RALF_FGAS_DEFAULT_INSTALLER_CF", "").strip()
+    private_destination = os.getenv("RALF_FGAS_PRIVATE_USE_DESTINATION", "").strip()
+    if installer_name:
+        out.setdefault("installer_name", installer_name)
+    if installer_cf:
+        out.setdefault("installer_cf", installer_cf)
+    if str(out.get("client_type") or "").upper() == "PRIVATO" and private_destination:
+        out.setdefault("use_destination", private_destination)
+    return normalize_record(out)
+
+
+def _repair_truncated_years(text: str, cluster_timestamp: str) -> str:
+    """Repair a 3-digit year only when it equals the cluster year with one digit omitted."""
+    match = re.search(r"\b(20\d{2})\b", cluster_timestamp)
+    if not match:
+        return text
+    year = match.group(1)
+    shortened = {year[:index] + year[index + 1:] for index in range(4)}
+
+    def replace(item: re.Match[str]) -> str:
+        token = item.group(3)
+        if token not in shortened:
+            return item.group(0)
+        return f"{item.group(1)}/{item.group(2)}/{year}"
+
+    return re.sub(r"\b([0-3]?\d)/([01]?\d)/(\d{3})\b", replace, text)
 
 
 def _validation_payload(validation: Any, *, record: Mapping[str, Any] | None = None) -> dict[str, Any]:

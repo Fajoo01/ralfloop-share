@@ -5,7 +5,10 @@ from pathlib import Path
 from docx import Document
 
 from ralfloop_agent.fgas_installation import extract_record, render_docx, validate_record
-from scripts.ralf_fgas_installation_mcp_server import FGasMCPServer, TOOLS, _parse_drive_files
+from scripts.ralf_fgas_installation_mcp_server import (
+    FGasMCPServer, TOOLS, _apply_configured_defaults, _parse_drive_files,
+    _repair_truncated_years,
+)
 
 
 COMPLETE = {
@@ -72,6 +75,57 @@ def test_extract_applies_known_model_defaults_and_serial_rule():
 def test_extract_rejects_known_false_barcode_as_serial():
     record = extract_record("Matricola: CS661476958030M2\nMarca: Hisense")
     assert not record.get("serial")
+
+
+def test_extract_tecnomat_bosch_order_and_repairs_serial_ocr():
+    text = """
+    Data di istallazione 21/09/2026
+    ORDINE N° 3122417408 Data emissione: 02/08/2026
+    Signore DIMITRI FILOMENA TECNOMAT PERO Via Vincenzo Monti 20016 PERO
+    VIA MARCELLO PRESTINARI 2 20158 MILANO
+    Email: dimixs0029@hotmail.it
+    COND BOSCH CL5000M 41 DUAL 9+12 STD D FGAS: R-32 = 675 GWP KG 1.100
+    Climate 5000 M CL5000M 41/2 E
+    31.6kg/35.1kg
+    Made in China 860M-580-000864-773370193>
+    """
+    record = extract_record(text)
+    assert record["client_name"] == "Dimitri Filomena"
+    assert record["client_type"] == "PRIVATO"
+    assert record["install_address"] == "Via Marcello Prestinari"
+    assert record["civic"] == "2"
+    assert record["city"] == "Milano"
+    assert record["province"] == "MI"
+    assert record["purchase_reference"] == "ORDINE 3122417408"
+    assert record["purchase_date"] == "02/08/2026"
+    assert record["intervention_date"] == "21/09/2026"
+    assert record["brand"] == "Bosch"
+    assert record["model"] == "CL5000M 41/2 E"
+    assert record["serial"] == "86DM-580-000864-7733701932"
+    assert record["refrigerant"] == "R32"
+    assert record["charge_kg"] == "1,1"
+    assert record["compressor_count"] == "1"
+    assert record["hermetically_sealed"] is False
+    assert record["equipment_type"] == "POMPA DI CALORE FISSA"
+    assert record["sold_by_installer"] is False
+    assert "client_phone" not in record
+
+
+def test_cluster_date_repair_only_matches_cluster_year():
+    text = "Data di istallazione 21/09/206 e riferimento 01/01/199"
+    repaired = _repair_truncated_years(text, "04:27, 27/09/2026")
+    assert "21/09/2026" in repaired
+    assert "01/01/199" in repaired
+
+
+def test_configured_defaults_fill_installer_and_private_destination(monkeypatch):
+    monkeypatch.setenv("RALF_FGAS_DEFAULT_INSTALLER_NAME", "Ishak Morgan")
+    monkeypatch.setenv("RALF_FGAS_DEFAULT_INSTALLER_CF", "MRGSHK78C03Z336A")
+    monkeypatch.setenv("RALF_FGAS_PRIVATE_USE_DESTINATION", "E1 Casa")
+    record = _apply_configured_defaults({"client_type": "PRIVATO"})
+    assert record["installer_name"] == "Ishak Morgan"
+    assert record["installer_cf"] == "MRGSHK78C03Z336A"
+    assert record["use_destination"] == "E1 Casa"
 
 
 def test_validation_never_invents_missing_required_fields():
