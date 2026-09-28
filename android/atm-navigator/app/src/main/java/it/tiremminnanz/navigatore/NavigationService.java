@@ -11,8 +11,10 @@ public class NavigationService extends Service implements LocationListener {
     public static final String ACTION_UPDATE = "it.tiremminnanz.navigatore.UPDATE";
     private static final int NOTIFICATION_ID = 51;
     private LocationManager lm;
-    private String baseUrl, destination, sessionId;
+    private String destination, destinationLabel, sessionId;
+    private double destinationLat = Double.NaN, destinationLon = Double.NaN;
     private volatile boolean busy = false;
+    private volatile double lastLat = Double.NaN, lastLon = Double.NaN;
 
     @Override public void onCreate() {
         super.onCreate();
@@ -24,9 +26,12 @@ public class NavigationService extends Service implements LocationListener {
 
     @Override public int onStartCommand(Intent i, int flags, int startId) {
         if (i == null) return START_NOT_STICKY;
-        baseUrl = i.getStringExtra("base_url");
         destination = i.getStringExtra("destination");
+        destinationLabel = i.getStringExtra("destination_label");
+        destinationLat = i.hasExtra("destination_lat") ? i.getDoubleExtra("destination_lat", Double.NaN) : Double.NaN;
+        destinationLon = i.hasExtra("destination_lon") ? i.getDoubleExtra("destination_lon", Double.NaN) : Double.NaN;
         double lat = i.getDoubleExtra("lat", 0), lon = i.getDoubleExtra("lon", 0);
+        lastLat = lat; lastLon = lon;
         new Thread(() -> startSession(lat, lon)).start();
         lm = (LocationManager)getSystemService(LOCATION_SERVICE);
         if (checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
@@ -53,13 +58,19 @@ public class NavigationService extends Service implements LocationListener {
         try {
             JSONObject body = new JSONObject()
                 .put("lat", lat).put("lon", lon).put("destination", destination);
-            JSONObject j = ApiClient.post(baseUrl, "/navigator/start", body);
+            if (!Double.isNaN(destinationLat) && !Double.isNaN(destinationLon)) {
+                body.put("destination_lat", destinationLat)
+                    .put("destination_lon", destinationLon)
+                    .put("destination_label", destinationLabel == null ? destination : destinationLabel);
+            }
+            JSONObject j = ApiClient.post(this, "/navigator/start", body);
             sessionId = j.getString("session_id");
             publish(j);
         } catch (Exception e) { publishError(e); }
     }
 
     @Override public void onLocationChanged(Location l) {
+        lastLat = l.getLatitude(); lastLon = l.getLongitude();
         if (sessionId == null || busy) return;
         busy = true;
         new Thread(() -> {
@@ -68,7 +79,7 @@ public class NavigationService extends Service implements LocationListener {
                     .put("session_id", sessionId)
                     .put("lat", l.getLatitude())
                     .put("lon", l.getLongitude());
-                JSONObject j = ApiClient.post(baseUrl, "/navigator/update", body);
+                JSONObject j = ApiClient.post(this, "/navigator/update", body);
                 publish(j);
                 if ("arrived".equals(j.optString("state"))) stopSelf();
             } catch (Exception e) { publishError(e); }
@@ -87,6 +98,11 @@ public class NavigationService extends Service implements LocationListener {
         u.putExtra("instruction", instruction);
         u.putExtra("seconds_to_vehicle", seconds);
         u.putExtra("margin_seconds", margin);
+        if (!Double.isNaN(lastLat) && !Double.isNaN(lastLon)) {
+            u.putExtra("lat", lastLat);
+            u.putExtra("lon", lastLon);
+        }
+        u.putExtra("navigation_json", j.toString());
         sendBroadcast(u);
         getSystemService(NotificationManager.class).notify(NOTIFICATION_ID,
             notification(instruction.isEmpty() ? s : instruction));
@@ -102,7 +118,7 @@ public class NavigationService extends Service implements LocationListener {
     @Override public void onDestroy() {
         if (lm != null) lm.removeUpdates(this);
         if (sessionId != null) new Thread(() -> {
-            try { ApiClient.post(baseUrl, "/navigator/stop", new JSONObject().put("session_id", sessionId)); }
+            try { ApiClient.post(this, "/navigator/stop", new JSONObject().put("session_id", sessionId)); }
             catch (Exception ignored) {}
         }).start();
         super.onDestroy();

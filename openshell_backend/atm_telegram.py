@@ -171,6 +171,9 @@ class NavigatorStartIn(BaseModel):
     lat: float
     lon: float
     destination: str
+    destination_lat: float | None = None
+    destination_lon: float | None = None
+    destination_label: str | None = None
 
 
 class NavigatorUpdateIn(BaseModel):
@@ -3879,8 +3882,13 @@ def _local_atm_realtime_route(
 
 # ATM_ROUTE_RANKING_HELPER_END
 
-def _build_plan_impl(lat: float, lon: float, destination_name: str) -> dict[str, Any]:
-    dest = _resolve_destination(destination_name)
+def _build_plan_impl(
+    lat: float,
+    lon: float,
+    destination_name: str,
+    destination_override: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    dest = destination_override or _resolve_destination(destination_name)
     if not dest:
         raise HTTPException(status_code=404, detail="destination_not_found")
     dlat, dlon = float(dest["lat"]), float(dest["lon"])
@@ -4214,6 +4222,31 @@ def build_plan(lat: float, lon: float, destination_name: str, realtime_provider:
     helper_opened = _atm_browser_helper("open", timeout_s=10.0)
     try:
         return _build_plan_impl(lat, lon, destination_name)
+    finally:
+        _ATM_REALTIME_PROVIDER.reset(token)
+        if helper_opened and ATM_BROWSER_CLOSE_AFTER:
+            _atm_browser_helper("close", timeout_s=8.0)
+
+
+def build_plan_to_coordinates(
+    lat: float,
+    lon: float,
+    destination_lat: float,
+    destination_lon: float,
+    destination_label: str,
+    realtime_provider: Any = None,
+) -> dict[str, Any]:
+    token = _ATM_REALTIME_PROVIDER.set(realtime_provider)
+    helper_opened = _atm_browser_helper("open", timeout_s=10.0)
+    dest = {
+        "name": "__temporary__",
+        "label": destination_label or "Destinazione",
+        "lat": float(destination_lat),
+        "lon": float(destination_lon),
+        "temporary": True,
+    }
+    try:
+        return _build_plan_impl(lat, lon, str(dest["label"]), dest)
     finally:
         _ATM_REALTIME_PROVIDER.reset(token)
         if helper_opened and ATM_BROWSER_CLOSE_AFTER:
@@ -5177,9 +5210,22 @@ def navigator_start(
     lon: float,
     destination: str,
     realtime_provider: Any = None,
+    destination_lat: float | None = None,
+    destination_lon: float | None = None,
+    destination_label: str | None = None,
 ) -> dict[str, Any]:
     now = time.time()
-    plan = build_plan(lat, lon, destination, realtime_provider)
+    if destination_lat is not None and destination_lon is not None:
+        plan = build_plan_to_coordinates(
+            lat,
+            lon,
+            destination_lat,
+            destination_lon,
+            destination_label or destination,
+            realtime_provider,
+        )
+    else:
+        plan = build_plan(lat, lon, destination, realtime_provider)
     session = {
         "session_id": uuid.uuid4().hex,
         "destination": destination,
@@ -5190,6 +5236,9 @@ def navigator_start(
         "start_lon": lon,
         "last_lat": lat,
         "last_lon": lon,
+        "destination_lat": destination_lat,
+        "destination_lon": destination_lon,
+        "destination_label": destination_label,
         "plan_generated_at": now,
         "plan": plan,
     }
@@ -5273,12 +5322,24 @@ def navigator_update(
 
     replanned = reason is not None
     if replanned:
-        session["plan"] = build_plan(
-            float(lat),
-            float(lon),
-            session["destination"],
-            realtime_provider,
-        )
+        destination_lat = session.get("destination_lat")
+        destination_lon = session.get("destination_lon")
+        if destination_lat is not None and destination_lon is not None:
+            session["plan"] = build_plan_to_coordinates(
+                float(lat),
+                float(lon),
+                float(destination_lat),
+                float(destination_lon),
+                str(session.get("destination_label") or session["destination"]),
+                realtime_provider,
+            )
+        else:
+            session["plan"] = build_plan(
+                float(lat),
+                float(lon),
+                session["destination"],
+                realtime_provider,
+            )
         session["plan_generated_at"] = now
 
     view = _navigator_view(
@@ -5343,7 +5404,14 @@ def api_plan_named(req: PlanNamedIn) -> dict[str, Any]:
 
 @router.post("/api/navigator/start")
 def api_navigator_start(req: NavigatorStartIn) -> dict[str, Any]:
-    return navigator_start(req.lat, req.lon, req.destination)
+    return navigator_start(
+        req.lat,
+        req.lon,
+        req.destination,
+        destination_lat=req.destination_lat,
+        destination_lon=req.destination_lon,
+        destination_label=req.destination_label,
+    )
 
 
 @router.post("/api/navigator/update")
