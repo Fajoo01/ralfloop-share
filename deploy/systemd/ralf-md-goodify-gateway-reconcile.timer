@@ -1,0 +1,12 @@
+[Unit]
+Description=Keep Tiremm MD Goodify HTTPS gateway route present
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=5min
+AccuracySec=20s
+Persistent=true
+Unit=ralf-md-goodify-gateway-reconcile.service
+
+[Install]
+WantedBy=timers.target
