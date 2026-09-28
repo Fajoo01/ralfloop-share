@@ -8,6 +8,8 @@ import android.content.pm.PackageManager;
 import android.location.*;
 import android.net.Uri;
 import android.speech.RecognizerIntent;
+import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.view.*;
 import android.widget.*;
 import java.util.*;
@@ -25,7 +27,10 @@ public class MainActivity extends Activity {
     private String searchedDestination;
     private double searchedLat = Double.NaN, searchedLon = Double.NaN;
     private TextView state, instruction, countdown, margin, error;
-    private Button login, mic, searchAddress, start, stop;
+    private Button login, mic, searchAddress, start, stop, recenter;
+    private View planningPanel;
+    private LinearLayout navigationPanel;
+    private boolean navigationMode = false;
     private BroadcastReceiver receiver;
     private MapController mapController;
 
@@ -42,12 +47,17 @@ public class MainActivity extends Activity {
         receiver = new BroadcastReceiver() {
             @Override public void onReceive(Context c, Intent i) {
                 if (!NavigationService.ACTION_UPDATE.equals(i.getAction())) return;
-                state.setText(i.getStringExtra("state"));
-                instruction.setText(i.getStringExtra("instruction"));
+                String navState = i.getStringExtra("state");
+                String navInstruction = i.getStringExtra("instruction");
+                if (navState != null && !navState.isEmpty()) enterNavigationMode();
+                state.setText(navState == null ? "" : stateLabel(navState));
+                instruction.setText(navInstruction == null ? "" : navInstruction);
                 countdown.setText(format("Mezzo", i.getIntExtra("seconds_to_vehicle", -1)));
                 margin.setText(format("Margine", i.getIntExtra("margin_seconds", -1)));
                 if (mapController != null && i.hasExtra("lat") && i.hasExtra("lon")) {
-                    mapController.updateLocation(i.getDoubleExtra("lat", 0), i.getDoubleExtra("lon", 0), true);
+                    mapController.updateLocation(
+                        i.getDoubleExtra("lat", 0), i.getDoubleExtra("lon", 0), navigationMode,
+                        i.getFloatExtra("bearing", -1f));
                 }
                 String payload = i.getStringExtra("navigation_json");
                 if (mapController != null && payload != null && !payload.isEmpty()) {
@@ -73,69 +83,158 @@ public class MainActivity extends Activity {
         TextView v = new TextView(this);
         v.setText(text);
         v.setTextSize(sp);
-        v.setPadding(0, 12, 0, 12);
+        v.setTextColor(Color.rgb(24, 24, 24));
+        v.setPadding(0, dp(6), 0, dp(6));
         return v;
     }
 
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private GradientDrawable card(int alpha) {
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.argb(alpha, 255, 255, 255));
+        bg.setCornerRadius(dp(18));
+        bg.setStroke(dp(1), Color.argb(40, 0, 0, 0));
+        return bg;
+    }
+
+    private String stateLabel(String value) {
+        if ("walking_to_stop".equals(value)) return "🚶 A PIEDI";
+        if ("waiting".equals(value)) return "⏳ IN ATTESA";
+        if ("onboard".equals(value)) return "🚌 A BORDO";
+        if ("transfer".equals(value)) return "🔁 CAMBIO";
+        if ("final_walk".equals(value)) return "🚶 ULTIMO TRATTO";
+        if ("arrived".equals(value)) return "🏁 ARRIVATO";
+        if ("missed".equals(value)) return "⏭ RICALCOLO";
+        if ("replanning".equals(value)) return "↻ RICALCOLO";
+        return value == null ? "" : value.toUpperCase(Locale.ITALY);
+    }
+
+    private void enterNavigationMode() {
+        navigationMode = true;
+        if (planningPanel != null) planningPanel.setVisibility(View.GONE);
+        if (navigationPanel != null) navigationPanel.setVisibility(View.VISIBLE);
+        if (recenter != null) recenter.setVisibility(View.VISIBLE);
+        if (mapController != null) mapController.setFollowMode(true);
+    }
+
+    private void exitNavigationMode() {
+        navigationMode = false;
+        if (planningPanel != null) planningPanel.setVisibility(View.VISIBLE);
+        if (navigationPanel != null) navigationPanel.setVisibility(View.GONE);
+        if (recenter != null) recenter.setVisibility(View.GONE);
+        if (mapController != null) mapController.setFollowMode(false);
+    }
+
     private void buildUi() {
-        ScrollView scroll = new ScrollView(this);
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(32, 36, 32, 36);
-        scroll.addView(box);
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(Color.rgb(235, 238, 240));
 
-        box.addView(title("Tiremm Navigatore", 28));
-        TextView sub = title("Navigazione ATM in tempo reale", 16);
-        box.addView(sub);
+        if (mapController != null) {
+            root.addView(mapController.view(), new FrameLayout.LayoutParams(-1, -1));
+        }
 
+        LinearLayout planner = new LinearLayout(this);
+        planner.setOrientation(LinearLayout.VERTICAL);
+        planner.setPadding(dp(16), dp(14), dp(16), dp(14));
+        planner.setBackground(card(242));
+        planningPanel = planner;
+        FrameLayout.LayoutParams plannerLp = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
+        plannerLp.setMargins(dp(12), dp(18), dp(12), 0);
+        root.addView(planner, plannerLp);
+
+        TextView appTitle = title("Tiremm Navigatore", 22);
+        appTitle.setTypeface(null, android.graphics.Typeface.BOLD);
+        planner.addView(appTitle);
         login = new Button(this);
         login.setOnClickListener(v -> loginOrLogout());
-        box.addView(login);
+        planner.addView(login, new LinearLayout.LayoutParams(-1, dp(48)));
 
         addressInput = new EditText(this);
-        addressInput.setHint("Dove vuoi andare? Es. Duomo Milano");
-        box.addView(addressInput, new LinearLayout.LayoutParams(-1, 120));
+        addressInput.setSingleLine(true);
+        addressInput.setHint("Dove vuoi andare?");
+        planner.addView(addressInput, new LinearLayout.LayoutParams(-1, dp(54)));
+
         LinearLayout searchBar = new LinearLayout(this);
         searchBar.setOrientation(LinearLayout.HORIZONTAL);
         mic = new Button(this); mic.setText("🎤");
+        mic.setContentDescription("Detta destinazione");
         mic.setOnClickListener(v -> startVoiceInput());
         searchAddress = new Button(this); searchAddress.setText("CERCA");
         searchAddress.setOnClickListener(v -> searchAddress());
-        searchBar.addView(mic, new LinearLayout.LayoutParams(0, 120, 1));
-        searchBar.addView(searchAddress, new LinearLayout.LayoutParams(0, 120, 3));
-        box.addView(searchBar);
+        searchBar.addView(mic, new LinearLayout.LayoutParams(0, dp(50), 1));
+        searchBar.addView(searchAddress, new LinearLayout.LayoutParams(0, dp(50), 3));
+        planner.addView(searchBar);
+
         searchResults = new LinearLayout(this);
         searchResults.setOrientation(LinearLayout.VERTICAL);
-        box.addView(searchResults);
+        planner.addView(searchResults);
 
-        if (mapController != null) {
-            box.addView(mapController.view(), new LinearLayout.LayoutParams(-1, 720));
-        } else {
-            box.addView(title("Mappa non disponibile: ricerca e navigazione restano utilizzabili.", 14));
-        }
-
-        box.addView(title("Oppure scegli un preferito", 14));
         destinations = new Spinner(this);
-        box.addView(destinations, new LinearLayout.LayoutParams(-1, 120));
-
-        start = new Button(this); start.setText("AVVIA NAVIGAZIONE");
-        stop = new Button(this); stop.setText("FERMA");
-        box.addView(start); box.addView(stop);
-
-        state = title("Pronto", 20);
-        instruction = title("Scegli una destinazione e avvia.", 24);
-        countdown = title("", 20);
-        margin = title("", 20);
-        error = title("", 14);
-        box.addView(state); box.addView(instruction); box.addView(countdown); box.addView(margin); box.addView(error);
-
+        planner.addView(destinations, new LinearLayout.LayoutParams(-1, dp(48)));
+        start = new Button(this); start.setText("AVVIA");
+        planner.addView(start, new LinearLayout.LayoutParams(-1, dp(54)));
         start.setOnClickListener(v -> startNavigation());
+
+        navigationPanel = new LinearLayout(this);
+        navigationPanel.setOrientation(LinearLayout.VERTICAL);
+        navigationPanel.setPadding(dp(18), dp(14), dp(18), dp(14));
+        navigationPanel.setBackground(card(248));
+        navigationPanel.setVisibility(View.GONE);
+        FrameLayout.LayoutParams navLp = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
+        navLp.setMargins(dp(12), dp(18), dp(12), 0);
+        root.addView(navigationPanel, navLp);
+
+        state = title("PRONTO", 15);
+        state.setTypeface(null, android.graphics.Typeface.BOLD);
+        instruction = title("Scegli una destinazione e avvia.", 26);
+        instruction.setTypeface(null, android.graphics.Typeface.BOLD);
+        navigationPanel.addView(state);
+        navigationPanel.addView(instruction);
+
+        LinearLayout stats = new LinearLayout(this);
+        stats.setOrientation(LinearLayout.HORIZONTAL);
+        countdown = title("", 18);
+        margin = title("", 18);
+        stats.addView(countdown, new LinearLayout.LayoutParams(0, -2, 1));
+        stats.addView(margin, new LinearLayout.LayoutParams(0, -2, 1));
+        navigationPanel.addView(stats);
+
+        stop = new Button(this); stop.setText("TERMINA NAVIGAZIONE");
+        navigationPanel.addView(stop, new LinearLayout.LayoutParams(-1, dp(48)));
         stop.setOnClickListener(v -> {
             stopService(new Intent(this, NavigationService.class));
-            state.setText("Fermato");
+            state.setText("FERMATO");
             instruction.setText("Navigazione terminata.");
+            exitNavigationMode();
         });
-        setContentView(scroll);
+
+        recenter = new Button(this);
+        recenter.setText("◎");
+        recenter.setTextSize(26);
+        recenter.setContentDescription("Ricentra sulla posizione");
+        recenter.setVisibility(View.GONE);
+        recenter.setOnClickListener(v -> { if (mapController != null) mapController.recenter(); });
+        FrameLayout.LayoutParams recenterLp = new FrameLayout.LayoutParams(dp(64), dp(64), Gravity.END | Gravity.BOTTOM);
+        recenterLp.setMargins(0, 0, dp(18), dp(82));
+        root.addView(recenter, recenterLp);
+
+        error = title("", 14);
+        error.setPadding(dp(12), dp(8), dp(12), dp(8));
+        error.setBackground(card(230));
+        FrameLayout.LayoutParams errorLp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
+        errorLp.setMargins(dp(12), 0, dp(92), dp(18));
+        root.addView(error, errorLp);
+
+        if (mapController == null) {
+            TextView fallback = title("Mappa non disponibile. Il motore di navigazione resta attivo.", 18);
+            FrameLayout.LayoutParams fallbackLp = new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER);
+            fallbackLp.setMargins(dp(24), 0, dp(24), 0);
+            root.addView(fallback, fallbackLp);
+        }
+        setContentView(root);
     }
 
     private void refreshAuthUi() {
@@ -283,6 +382,7 @@ public class MainActivity extends Activity {
     }
 
     private void beginService(Location loc) {
+        enterNavigationMode();
         if (mapController != null) mapController.updateLocation(loc.getLatitude(), loc.getLongitude(), true);
         String destination;
         Intent i = new Intent(this, NavigationService.class);

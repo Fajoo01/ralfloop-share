@@ -5,6 +5,8 @@ import android.content.*;
 import android.content.pm.PackageManager;
 import android.location.*;
 import android.os.*;
+import android.speech.tts.TextToSpeech;
+import java.util.Locale;
 import org.json.*;
 
 public class NavigationService extends Service implements LocationListener {
@@ -15,6 +17,10 @@ public class NavigationService extends Service implements LocationListener {
     private double destinationLat = Double.NaN, destinationLon = Double.NaN;
     private volatile boolean busy = false;
     private volatile double lastLat = Double.NaN, lastLon = Double.NaN;
+    private volatile float lastBearing = -1f;
+    private TextToSpeech tts;
+    private volatile boolean ttsReady = false;
+    private String lastSpokenInstruction = "";
 
     @Override public void onCreate() {
         super.onCreate();
@@ -22,6 +28,12 @@ public class NavigationService extends Service implements LocationListener {
             NotificationManager.IMPORTANCE_LOW);
         getSystemService(NotificationManager.class).createNotificationChannel(ch);
         startForeground(NOTIFICATION_ID, notification("Navigazione in avvio"));
+        tts = new TextToSpeech(this, status -> {
+            if (status == TextToSpeech.SUCCESS) {
+                int result = tts.setLanguage(Locale.ITALIAN);
+                ttsReady = result != TextToSpeech.LANG_MISSING_DATA && result != TextToSpeech.LANG_NOT_SUPPORTED;
+            }
+        });
     }
 
     @Override public int onStartCommand(Intent i, int flags, int startId) {
@@ -35,8 +47,8 @@ public class NavigationService extends Service implements LocationListener {
         new Thread(() -> startSession(lat, lon)).start();
         lm = (LocationManager)getSystemService(LOCATION_SERVICE);
         if (checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-            lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 5000, 8f, this, Looper.getMainLooper());
-            lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 10000, 20f, this, Looper.getMainLooper());
+            lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 2500, 4f, this, Looper.getMainLooper());
+            lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 8000, 15f, this, Looper.getMainLooper());
         }
         return START_NOT_STICKY;
     }
@@ -71,6 +83,7 @@ public class NavigationService extends Service implements LocationListener {
 
     @Override public void onLocationChanged(Location l) {
         lastLat = l.getLatitude(); lastLon = l.getLongitude();
+        if (l.hasBearing()) lastBearing = l.getBearing();
         if (sessionId == null || busy) return;
         busy = true;
         new Thread(() -> {
@@ -102,10 +115,15 @@ public class NavigationService extends Service implements LocationListener {
             u.putExtra("lat", lastLat);
             u.putExtra("lon", lastLon);
         }
+        if (lastBearing >= 0f) u.putExtra("bearing", lastBearing);
         u.putExtra("navigation_json", j.toString());
         sendBroadcast(u);
         getSystemService(NotificationManager.class).notify(NOTIFICATION_ID,
             notification(instruction.isEmpty() ? s : instruction));
+        if (ttsReady && tts != null && !instruction.isEmpty() && !instruction.equals(lastSpokenInstruction)) {
+            lastSpokenInstruction = instruction;
+            tts.speak(instruction, TextToSpeech.QUEUE_FLUSH, null, "tiremm-nav-instruction");
+        }
     }
 
     private void publishError(Exception e) {
@@ -117,6 +135,11 @@ public class NavigationService extends Service implements LocationListener {
 
     @Override public void onDestroy() {
         if (lm != null) lm.removeUpdates(this);
+        if (tts != null) {
+            tts.stop();
+            tts.shutdown();
+            tts = null;
+        }
         if (sessionId != null) new Thread(() -> {
             try { ApiClient.post(this, "/device/navigator/stop", new JSONObject().put("session_id", sessionId)); }
             catch (Exception ignored) {}
