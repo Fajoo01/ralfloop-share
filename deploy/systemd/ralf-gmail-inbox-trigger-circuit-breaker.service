@@ -1,0 +1,7 @@
+[Unit]
+Description=Open Gmail polling circuit after inbox trigger failure
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl stop ralf-gmail-inbox-trigger.timer
+ExecStart=/usr/bin/logger -t sibilla-control Gmail inbox trigger failed - polling circuit opened
