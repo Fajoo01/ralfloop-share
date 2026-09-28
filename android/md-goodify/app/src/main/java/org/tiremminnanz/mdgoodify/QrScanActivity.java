@@ -1,6 +1,8 @@
 package org.tiremminnanz.mdgoodify;
 
 import android.app.Activity;
+import android.media.AudioManager;
+import android.media.ToneGenerator;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -31,6 +33,7 @@ public final class QrScanActivity extends Activity {
     private static final DateTimeFormatter CLOCK = DateTimeFormatter.ofPattern("HH:mm:ss");
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final ToneGenerator beep = new ToneGenerator(AudioManager.STREAM_MUSIC, 100);
     private final ArrayDeque<String> recent = new ArrayDeque<>();
     private final Set<String> sessionSeenQr = new HashSet<>();
 
@@ -90,6 +93,7 @@ public final class QrScanActivity extends Activity {
             String qr = result.getText().trim();
             if (qr.isEmpty()) return;
             if (!sessionSeenQr.add(qr)) return;
+            beep.startTone(ToneGenerator.TONE_PROP_BEEP, 120);
             busy = true;
             scanner.pause();
             statusView.setText("QR LETTO — REGISTRAZIONE…");
@@ -187,6 +191,7 @@ public final class QrScanActivity extends Activity {
     protected void onDestroy() {
         handler.removeCallbacksAndMessages(null);
         executor.shutdownNow();
+        beep.release();
         super.onDestroy();
     }
 }
