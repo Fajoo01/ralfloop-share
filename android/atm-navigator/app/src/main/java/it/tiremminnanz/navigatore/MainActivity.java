@@ -31,7 +31,11 @@ public class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle b) {
         super.onCreate(b);
-        mapController = new MapController(this, b);
+        try {
+            mapController = new MapController(this, b);
+        } catch (Throwable ignored) {
+            mapController = null;
+        }
         buildUi();
         refreshAuthUi();
         if (ApiClient.isPaired(this)) loadDestinations();
@@ -42,11 +46,11 @@ public class MainActivity extends Activity {
                 instruction.setText(i.getStringExtra("instruction"));
                 countdown.setText(format("Mezzo", i.getIntExtra("seconds_to_vehicle", -1)));
                 margin.setText(format("Margine", i.getIntExtra("margin_seconds", -1)));
-                if (i.hasExtra("lat") && i.hasExtra("lon")) {
+                if (mapController != null && i.hasExtra("lat") && i.hasExtra("lon")) {
                     mapController.updateLocation(i.getDoubleExtra("lat", 0), i.getDoubleExtra("lon", 0), true);
                 }
                 String payload = i.getStringExtra("navigation_json");
-                if (payload != null && !payload.isEmpty()) {
+                if (mapController != null && payload != null && !payload.isEmpty()) {
                     try { mapController.updatePlan(new JSONObject(payload)); } catch (JSONException ignored) {}
                 }
                 error.setText(i.getStringExtra("error") == null ? "" : i.getStringExtra("error"));
@@ -83,7 +87,6 @@ public class MainActivity extends Activity {
         box.addView(title("Tiremm Navigatore", 28));
         TextView sub = title("Navigazione ATM in tempo reale", 16);
         box.addView(sub);
-        box.addView(mapController.view(), new LinearLayout.LayoutParams(-1, 720));
 
         login = new Button(this);
         login.setOnClickListener(v -> loginOrLogout());
@@ -104,6 +107,12 @@ public class MainActivity extends Activity {
         searchResults = new LinearLayout(this);
         searchResults.setOrientation(LinearLayout.VERTICAL);
         box.addView(searchResults);
+
+        if (mapController != null) {
+            box.addView(mapController.view(), new LinearLayout.LayoutParams(-1, 720));
+        } else {
+            box.addView(title("Mappa non disponibile: ricerca e navigazione restano utilizzabili.", 14));
+        }
 
         box.addView(title("Oppure scegli un preferito", 14));
         destinations = new Spinner(this);
@@ -207,7 +216,7 @@ public class MainActivity extends Activity {
             b.setOnClickListener(v -> {
                 searchedDestination = label; searchedLat = lat; searchedLon = lon;
                 addressInput.setText(label); searchResults.removeAllViews();
-                mapController.updateDestination(lat, lon);
+                if (mapController != null) mapController.updateDestination(lat, lon);
                 error.setText("Destinazione selezionata.");
             });
             searchResults.addView(b);
@@ -217,7 +226,7 @@ public class MainActivity extends Activity {
     private void loadDestinations() {
         new Thread(() -> {
             try {
-                JSONObject j = ApiClient.get(this, "/navigator/destinations");
+                JSONObject j = ApiClient.get(this, "/device/navigator/destinations");
                 JSONArray a = j.optJSONArray("destinations");
                 ArrayList<String> labels = new ArrayList<>();
                 destinationNames.clear(); destinationLats.clear(); destinationLons.clear();
@@ -231,10 +240,10 @@ public class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     destinations.setAdapter(new ArrayAdapter<>(this,
                         android.R.layout.simple_spinner_dropdown_item, labels));
-                    if (!destinationLats.isEmpty()) mapController.updateDestination(destinationLats.get(0), destinationLons.get(0));
+                    if (mapController != null && !destinationLats.isEmpty()) mapController.updateDestination(destinationLats.get(0), destinationLons.get(0));
                     destinations.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
                         public void onItemSelected(android.widget.AdapterView<?> p, View v, int pos, long id) {
-                            if (pos >= 0 && pos < destinationLats.size()) mapController.updateDestination(destinationLats.get(pos), destinationLons.get(pos));
+                            if (mapController != null && pos >= 0 && pos < destinationLats.size()) mapController.updateDestination(destinationLats.get(pos), destinationLons.get(pos));
                         }
                         public void onNothingSelected(android.widget.AdapterView<?> p) {}
                     });
@@ -274,7 +283,7 @@ public class MainActivity extends Activity {
     }
 
     private void beginService(Location loc) {
-        mapController.updateLocation(loc.getLatitude(), loc.getLongitude(), true);
+        if (mapController != null) mapController.updateLocation(loc.getLatitude(), loc.getLongitude(), true);
         String destination;
         Intent i = new Intent(this, NavigationService.class);
         if (searchedDestination != null && !Double.isNaN(searchedLat) && !Double.isNaN(searchedLon)) {
@@ -310,15 +319,15 @@ public class MainActivity extends Activity {
         if (r == REQ_LOCATION && g.length > 0 && g[0] == PackageManager.PERMISSION_GRANTED) startNavigation();
     }
 
-    @Override protected void onStart() { super.onStart(); mapController.onStart(); }
-    @Override protected void onResume() { super.onResume(); mapController.onResume(); }
-    @Override protected void onPause() { mapController.onPause(); super.onPause(); }
-    @Override protected void onStop() { mapController.onStop(); super.onStop(); }
-    @Override public void onLowMemory() { super.onLowMemory(); mapController.onLowMemory(); }
+    @Override protected void onStart() { super.onStart(); if (mapController != null) mapController.onStart(); }
+    @Override protected void onResume() { super.onResume(); if (mapController != null) mapController.onResume(); }
+    @Override protected void onPause() { if (mapController != null) mapController.onPause(); super.onPause(); }
+    @Override protected void onStop() { if (mapController != null) mapController.onStop(); super.onStop(); }
+    @Override public void onLowMemory() { super.onLowMemory(); if (mapController != null) mapController.onLowMemory(); }
 
     @Override protected void onDestroy() {
         if (receiver != null) unregisterReceiver(receiver);
-        mapController.onDestroy();
+        if (mapController != null) mapController.onDestroy();
         super.onDestroy();
     }
 }

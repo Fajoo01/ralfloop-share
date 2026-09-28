@@ -63,7 +63,7 @@ public class NavigationService extends Service implements LocationListener {
                     .put("destination_lon", destinationLon)
                     .put("destination_label", destinationLabel == null ? destination : destinationLabel);
             }
-            JSONObject j = ApiClient.post(this, "/navigator/start", body);
+            JSONObject j = ApiClient.post(this, "/device/navigator/start", body);
             sessionId = j.getString("session_id");
             publish(j);
         } catch (Exception e) { publishError(e); }
@@ -79,7 +79,7 @@ public class NavigationService extends Service implements LocationListener {
                     .put("session_id", sessionId)
                     .put("lat", l.getLatitude())
                     .put("lon", l.getLongitude());
-                JSONObject j = ApiClient.post(this, "/navigator/update", body);
+                JSONObject j = ApiClient.post(this, "/device/navigator/update", body);
                 publish(j);
                 if ("arrived".equals(j.optString("state"))) stopSelf();
             } catch (Exception e) { publishError(e); }
@@ -118,7 +118,7 @@ public class NavigationService extends Service implements LocationListener {
     @Override public void onDestroy() {
         if (lm != null) lm.removeUpdates(this);
         if (sessionId != null) new Thread(() -> {
-            try { ApiClient.post(this, "/navigator/stop", new JSONObject().put("session_id", sessionId)); }
+            try { ApiClient.post(this, "/device/navigator/stop", new JSONObject().put("session_id", sessionId)); }
             catch (Exception ignored) {}
         }).start();
         super.onDestroy();

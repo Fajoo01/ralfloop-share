@@ -1,0 +1,12 @@
+[Unit]
+Description=Retry Tiremm Android package confirmation when Android loses it
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=5s
+Persistent=true
+Unit=tiremm-android-package-watchdog.service
+
+[Install]
+WantedBy=timers.target

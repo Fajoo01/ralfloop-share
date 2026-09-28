@@ -75,12 +75,31 @@ public final class ApiClient {
     }
 
     public static JSONObject get(Context context, String path) throws Exception {
+        if (path.startsWith("/device/navigator/")) {
+            return deviceNavigator(context, path.substring("/device/navigator/".length()), new JSONObject());
+        }
         return readJson(openAuthenticated(context, path, "GET", null));
     }
 
     public static JSONObject post(Context context, String path, JSONObject body) throws Exception {
+        if (path.startsWith("/device/navigator/")) {
+            return deviceNavigator(context, path.substring("/device/navigator/".length()), body);
+        }
         byte[] data = body.toString().getBytes(StandardCharsets.UTF_8);
         return readJson(openAuthenticated(context, path, "POST", data));
+    }
+
+    private static JSONObject deviceNavigator(Context context, String action, JSONObject payload) throws Exception {
+        SharedPreferences p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        String deviceId = p.getString("device_id", "");
+        String token = p.getString("token", "");
+        if (deviceId.isEmpty() || token.isEmpty()) throw new IOException("Login Account Tiremm richiesto");
+        JSONObject envelope = new JSONObject()
+            .put("navigator_action", action)
+            .put("device_id", deviceId)
+            .put("access_token", token)
+            .put("payload", payload == null ? new JSONObject() : payload);
+        return postPublic("/device/poll", envelope);
     }
 
     public static JSONArray searchPlaces(String query) throws Exception {

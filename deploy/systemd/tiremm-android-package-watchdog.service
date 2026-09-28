@@ -1,0 +1,10 @@
+[Unit]
+Description=Tiremm Android verified-package prompt watchdog
+After=network-online.target ralfloop-tiremm-remote-broker.service
+
+[Service]
+Type=oneshot
+User=bandi
+EnvironmentFile=/home/bandi/.config/ralfloop/tiremm-mcp.env
+Environment=TIREMM_ANDROID_WATCHDOG_DEVICE=9120ca9c-0972-424b-81a9-14baf5483a7b
+ExecStart=/home/bandi/.local/share/ralfloop-remote-broker-android-aware/bin/python /usr/local/libexec/tiremm-android-package-watchdog
