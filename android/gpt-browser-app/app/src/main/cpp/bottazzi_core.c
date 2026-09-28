@@ -43,7 +43,13 @@ static int reason_requires_human(const char *reason) {
         "otp",
         "firma",
         "sign",
-        "pin"
+        "pin",
+        "login",
+        "auth",
+        "verif",
+        "captcha",
+        "permission",
+        "permesso"
     };
     size_t i;
 
@@ -74,13 +80,12 @@ int bt_notification_decision(
         }
         return BT_NOTIFY_NONE;
     }
-    if (state == NULL || strcmp(state, "queued") != 0 || !runnable || position != 1) {
-        return BT_NOTIFY_NONE;
-    }
-    if (priority >= 85) {
-        return BT_NOTIFY_HIGH_PRIORITY;
-    }
-    return BT_NOTIFY_NEXT_TASK;
+    /* Routine queue movement is intentionally silent. Notifications are reserved
+       for states where a human decision is actually required. */
+    (void)position;
+    (void)priority;
+    (void)runnable;
+    return BT_NOTIFY_NONE;
 }
 
 static uint64_t fnv1a_bytes(uint64_t hash, const unsigned char *data, size_t size) {

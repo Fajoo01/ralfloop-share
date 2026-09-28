@@ -342,7 +342,7 @@ def test_gpt_browser_mobile_surface_is_distinct_from_bottazzi_chat_app() -> None
     assert "applicationId 'org.tiremminnanz.gptbrowser'" in gpt_gradle
     assert 'android:label="GPT Browser"' in gpt_manifest
 
-def test_gpt_browser_whatsapp_surface_has_apk_voice_attachments_and_completion_notifications() -> None:
+def test_gpt_browser_whatsapp_surface_has_apk_voice_attachments_and_human_only_notifications() -> None:
     root = Path(__file__).resolve().parents[1]
     html = (root / "openshell_backend" / "bottazzi_gpt_mobile_ui.html").read_text(encoding="utf-8")
     service = (root / "android" / "gpt-browser-app" / "app" / "src" / "main" / "java" / "org" / "tiremminnanz" / "bottazzi" / "BotTazziNotifyService.java").read_text(encoding="utf-8")
@@ -352,8 +352,14 @@ def test_gpt_browser_whatsapp_surface_has_apk_voice_attachments_and_completion_n
     assert "/gpt-browser.apk" in html
     assert "navigator.mediaDevices.getUserMedia({audio:true})" in html
     assert "jobs/${j.job_id}/attachment" in html
-    assert '"review".equals(current)' in service
-    assert '"Lavoro finito"' in service
+    assert "Riepilogo pronto" in html
+    assert "Riepilogo del lavoro" in html
+    assert '"Lavoro finito"' not in service
+    assert "requiresHumanAction(current, error)" in service
+    assert 'kind != NativeCore.NOTIFY_APPROVAL_REQUIRED' in service
+    assert '"goal_blocked".equals(normalized)' in service
+    assert 'normalized.contains("approval")' in service
+    assert 'normalized.contains("auth")' in service
     assert '"bottazzi_gpt_notifications_v2"' in service
 
 

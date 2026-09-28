@@ -72,13 +72,16 @@ public final class BotTazziNotifyService extends Service {
             "Connessione GPT Browser",
             NotificationManager.IMPORTANCE_LOW
         );
-        link.setDescription("Mantiene attive le notifiche dei lavori GPT GPT Browser.");
+        link.setDescription("Stato silenzioso del servizio GPT Browser.");
+        link.setSound(null, null);
+        link.enableVibration(false);
+        link.setShowBadge(false);
         NotificationChannel tasks = new NotificationChannel(
             TASK_CHANNEL,
-            "Lavori GPT Browser",
+            "Interventi richiesti da GPT Browser",
             NotificationManager.IMPORTANCE_DEFAULT
         );
-        tasks.setDescription("Fine lavoro, blocchi e richieste di attenzione della coda GPT.");
+        tasks.setDescription("Avvisa solo quando GPT Browser non può proseguire senza un tuo intervento.");
         notifications.createNotificationChannel(link);
         notifications.createNotificationChannel(tasks);
     }
@@ -184,25 +187,20 @@ public final class BotTazziNotifyService extends Service {
             String previousHash = prefs.getString("gpt.answer." + jobId, "");
             String error = job.optString("last_error", "").trim();
             String previousError = prefs.getString("gpt.error." + jobId, "");
-            if (initialized) {
-                boolean newReview = "review".equals(current)
-                    && (!"review".equals(previous) || !textHash.equals(previousHash));
-                if (newReview && error.isEmpty() && !text.isEmpty()) {
-                    notifyUser(
-                        (jobId + ":review:" + textHash).hashCode(),
-                        "Lavoro finito",
-                        job.optString("title", "GPT Browser ha finito il lavoro")
-                    );
-                } else if (
-                    ("failed".equals(current) || "blocked".equals(current) || ("review".equals(current) && !error.isEmpty()))
-                    && (!current.equals(previous) || !error.equals(previousError))
-                ) {
-                    notifyUser(
-                        (jobId + ":attention:" + current + ":" + error).hashCode(),
-                        "GPT Browser richiede attenzione",
-                        job.optString("title", "Controlla il lavoro")
-                    );
+            if (
+                initialized
+                && requiresHumanAction(current, error)
+                && (!current.equals(previous) || !error.equals(previousError))
+            ) {
+                String title = job.optString("title", "Lavoro GPT Browser").trim();
+                if (title.isEmpty()) {
+                    title = "Lavoro GPT Browser";
                 }
+                notifyUser(
+                    (jobId + ":human_action:" + current + ":" + error).hashCode(),
+                    "Serve una tua azione · " + title,
+                    humanActionBody(error)
+                );
             }
             editor.putString("gpt.state." + jobId, current);
             editor.putString("gpt.answer." + jobId, textHash);
@@ -212,6 +210,63 @@ public final class BotTazziNotifyService extends Service {
             editor.putBoolean("gpt.initialized", true);
         }
         editor.apply();
+    }
+
+    private boolean requiresHumanAction(String state, String error) {
+        String normalized = error == null ? "" : error.trim().toLowerCase(java.util.Locale.ROOT);
+        if (
+            "goal_blocked".equals(normalized)
+            || "goal_status_missing".equals(normalized)
+            || "prompt_required".equals(normalized)
+        ) {
+            return true;
+        }
+        if (normalized.isEmpty()) {
+            return false;
+        }
+        String[] markers = new String[] {
+            "approval", "approv", "conferm", "confirm", "otp", "firma", "sign",
+            "pin", "login", "auth", "verif", "captcha", "cloudflare",
+            "permission", "permesso", "interaction_required", "human_action"
+        };
+        for (String marker : markers) {
+            if (normalized.contains(marker)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String humanActionBody(String error) {
+        String normalized = error == null ? "" : error.trim().toLowerCase(java.util.Locale.ROOT);
+        if ("goal_blocked".equals(normalized)) {
+            return "Mi manca un dato, un permesso o una decisione. Apri il lavoro e dimmi come procedere.";
+        }
+        if ("goal_status_missing".equals(normalized)) {
+            return "Il ciclo si è fermato senza un esito chiaro. Apri il lavoro e scegli se continuare o chiuderlo.";
+        }
+        if ("prompt_required".equals(normalized)) {
+            return "Manca la richiesta da eseguire. Apri il lavoro e scrivi cosa devo fare.";
+        }
+        if (
+            normalized.contains("login") || normalized.contains("auth")
+            || normalized.contains("verif") || normalized.contains("captcha")
+            || normalized.contains("cloudflare") || normalized.contains("otp")
+        ) {
+            return "Serve il tuo accesso o una verifica sul sito prima che io possa continuare.";
+        }
+        if (
+            normalized.contains("approval") || normalized.contains("approv")
+            || normalized.contains("conferm") || normalized.contains("confirm")
+            || normalized.contains("firma") || normalized.contains("sign")
+            || normalized.contains("pin")
+        ) {
+            return "Aspetto una tua conferma prima di proseguire.";
+        }
+        if (normalized.contains("permission") || normalized.contains("permesso")) {
+            return "Mi serve un tuo permesso per continuare questo lavoro.";
+        }
+        return "Non posso proseguire senza un tuo intervento. Apri il lavoro per vedere cosa serve.";
     }
 
     private int decision(JSONObject entry, JSONObject task) {
@@ -257,13 +312,16 @@ public final class BotTazziNotifyService extends Service {
         if (kind == NativeCore.NOTIFY_PRIORITY_CONFLICT && markFirst(key)) {
             notifyUser(
                 key.hashCode(),
-                "Conflitto di priorità",
-                "JEV propone una priorità diversa da un ordine fissato da te."
+                "Serve una tua scelta · priorità",
+                "C'è un conflitto tra l'ordine che hai fissato e la priorità proposta. Apri GPT Browser e scegli quale mantenere."
             );
         }
     }
 
     private void notifyTaskOnce(int kind, JSONObject entry, JSONObject task) {
+        if (kind != NativeCore.NOTIFY_APPROVAL_REQUIRED) {
+            return;
+        }
         String taskId = task.optString("task_id", "");
         String state = task.optString("state", "");
         String blockedReason = task.optString("blocked_reason", "");
@@ -280,16 +338,15 @@ public final class BotTazziNotifyService extends Service {
             return;
         }
 
-        String title;
-        if (kind == NativeCore.NOTIFY_APPROVAL_REQUIRED) {
-            title = "GPT Browser richiede conferma";
-        } else if (kind == NativeCore.NOTIFY_HIGH_PRIORITY) {
-            title = "Priorità JEV";
-        } else {
-            title = "Prossimo compito GPT Browser";
+        String workTitle = task.optString("title", "Lavoro GPT Browser").trim();
+        if (workTitle.isEmpty()) {
+            workTitle = "Lavoro GPT Browser";
         }
-        String body = task.optString("title", "Compito in coda");
-        notifyUser(key.hashCode(), title, body);
+        notifyUser(
+            key.hashCode(),
+            "Serve una tua conferma · " + workTitle,
+            "Aspetto una tua conferma prima di proseguire."
+        );
     }
 
     private boolean markFirst(String key) {
@@ -320,6 +377,7 @@ public final class BotTazziNotifyService extends Service {
             .setContentIntent(openAppIntent())
             .setOngoing(true)
             .setOnlyAlertOnce(true)
+            .setDefaults(0)
             .build();
     }
 
