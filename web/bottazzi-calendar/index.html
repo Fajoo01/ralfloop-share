@@ -8,39 +8,70 @@
 </head>
 <body>
 <header class="topbar">
+  <button id="menuBtn" class="icon-btn menu-btn" title="Menu">☰</button>
   <div class="brand"><div class="brand-mark">31</div><span>Bot-tazzi Calendar</span></div>
   <button id="todayBtn" class="btn">Oggi</button>
-  <div class="nav-arrows"><button id="prevBtn" class="icon-btn">‹</button><button id="nextBtn" class="icon-btn">›</button></div>
-  <h1 id="periodTitle"></h1><div class="top-spacer"></div>
-  <input id="searchBox" class="search" type="search" placeholder="Cerca nel calendario">
+  <div class="nav-arrows"><button id="prevBtn" class="icon-btn" title="Precedente">‹</button><button id="nextBtn" class="icon-btn" title="Successivo">›</button></div>
+  <h1 id="periodTitle"></h1>
+  <div class="top-spacer"></div>
+  <input id="searchBox" class="search" type="search" placeholder="Cerca" aria-label="Cerca nel calendario">
   <button id="refreshBtn" class="icon-btn" title="Aggiorna">↻</button>
-  <div class="view-switch"><button data-view="day">Giorno</button><button data-view="week">Settimana</button><button data-view="month" class="active">Mese</button></div>
+  <button id="helpBtn" class="icon-btn help-btn" title="Scorciatoie">?</button>
+  <div class="view-switch">
+    <button data-view="day">Giorno</button>
+    <button data-view="week">Settimana</button>
+    <button data-view="month" class="active">Mese</button>
+    <button data-view="agenda">Programmazione</button>
+  </div>
 </header>
-<div class="shell">
-  <aside class="sidebar">
+<div class="shell" id="shell">  <aside class="sidebar" id="sidebar">
     <button class="create-btn" id="createBtn"><span>＋</span> Crea</button>
     <div class="mini-head"><strong id="miniTitle"></strong><div><button id="miniPrev">‹</button><button id="miniNext">›</button></div></div>
     <div class="mini-week"><span>L</span><span>M</span><span>M</span><span>G</span><span>V</span><span>S</span><span>D</span></div>
     <div id="miniCalendar" class="mini-grid"></div>
-    <div class="calendar-list"><h3>I miei calendari</h3><label><input type="checkbox" checked disabled><span class="dot"></span> Bot-tazzi Agenda</label><p class="source-note">Telefonate, email e WhatsApp</p></div>
+    <div class="calendar-list">
+      <h3>I miei calendari</h3>
+      <label><input type="checkbox" checked disabled><span class="dot"></span> Bot-tazzi Agenda</label>
+      <p class="source-note">Telefonate, email, WhatsApp e inserimenti manuali</p>
+    </div>
   </aside>
-  <main class="main"><div id="loading" class="loading">Caricamento calendario…</div><div id="calendar"></div></main>
+  <main class="main">
+    <div id="loading" class="loading">Caricamento calendario…</div>
+    <div id="calendar"></div>
+  </main>
 </div>
 <dialog id="eventDialog" class="event-dialog">
   <button class="close-dialog" id="closeDialog">×</button>
   <div class="event-color"></div>
-  <div class="event-body"><h2 id="eventTitle"></h2><p id="eventWhen"></p><p id="eventDescription" class="description"></p><p id="eventSource" class="event-source">Bot-tazzi Agenda</p><div class="event-actions"><button id="deleteEventBtn" class="btn danger">Elimina</button><button id="editEventBtn" class="btn primary">Modifica</button></div></div>
-</dialog>
-<dialog id="editorDialog" class="editor-dialog">
+  <div class="event-body">
+    <h2 id="eventTitle"></h2>
+    <p id="eventWhen"></p>
+    <p id="eventDescription" class="description"></p>
+    <p id="eventSource" class="event-source">Bot-tazzi Agenda</p>
+    <div class="event-actions"><button id="deleteEventBtn" class="btn danger">Elimina</button><button id="editEventBtn" class="btn primary">Modifica</button></div>
+  </div>
+</dialog><dialog id="editorDialog" class="editor-dialog">
   <form id="eventForm" method="dialog">
     <input type="hidden" id="eventId">
     <div class="editor-head"><h2 id="editorTitle">Nuovo evento</h2><button type="button" id="closeEditor" class="close-dialog">×</button></div>
-    <label>Titolo<input id="eventName" maxlength="500" required></label>
+    <label>Titolo<input id="eventName" maxlength="500" required autocomplete="off"></label>
+    <label class="all-day-row"><input id="eventAllDay" type="checkbox"> Tutto il giorno</label>
     <div class="form-row"><label>Inizio<input id="eventStart" type="datetime-local" required></label><label>Fine<input id="eventEnd" type="datetime-local" required></label></div>
     <label>Descrizione<textarea id="eventNotes" rows="5" maxlength="10000"></textarea></label>
     <p id="editorError" class="editor-error"></p>
     <div class="editor-actions"><button type="button" id="cancelEditor" class="btn">Annulla</button><button type="submit" class="btn primary">Salva</button></div>
   </form>
+</dialog>
+<dialog id="helpDialog" class="help-dialog">
+  <button class="close-dialog" id="closeHelp">×</button>
+  <h2>Scorciatoie da tastiera</h2>
+  <div class="shortcut-grid">
+    <kbd>C</kbd><span>Crea evento</span><kbd>T</kbd><span>Oggi</span>
+    <kbd>D / 1</kbd><span>Giorno</span><kbd>W / 2</kbd><span>Settimana</span>
+    <kbd>M / 3</kbd><span>Mese</span><kbd>A / 5</kbd><span>Programmazione</span>
+    <kbd>J / N</kbd><span>Periodo successivo</span><kbd>K / P</kbd><span>Periodo precedente</span>
+    <kbd>/</kbd><span>Cerca</span><kbd>R</kbd><span>Aggiorna</span>
+  </div>
 </dialog>
 <script src="/app.js"></script>
 </body>

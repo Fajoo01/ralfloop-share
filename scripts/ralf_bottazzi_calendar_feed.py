@@ -5,7 +5,7 @@ import json
 import os
 import re
 import subprocess
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from uuid import uuid4
@@ -22,7 +22,6 @@ UID_RE = re.compile(r"^[A-Za-z0-9._@+-]{1,240}$")
 def _occ(*args: str, input_data: bytes | None = None) -> subprocess.CompletedProcess[bytes]:
     cmd = ["docker", "compose", "-f", COMPOSE, "exec", "-T", "-u", "www-data", "nextcloud", "php", "occ", *args]
     return subprocess.run(cmd, input=input_data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
-
 
 def export_calendar() -> bytes:
     completed = _occ("calendar:export", UID, URI, "--format=ical", "--no-interaction", "--no-warnings")
@@ -44,17 +43,27 @@ def _parse_iso(value: str) -> datetime:
     return dt
 
 
-def _ics(event_id: str, title: str, start: datetime, end: datetime, description: str) -> bytes:
+def _parse_date(value: str) -> date:
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("invalid_date") from exc
+
+def _ics(event_id: str, title: str, start: datetime | date, end: datetime | date, description: str, all_day: bool) -> bytes:
     if end <= start:
         raise ValueError("end_before_start")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    start_s = start.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    end_s = end.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    if all_day:
+        start_line = f"DTSTART;VALUE=DATE:{start.strftime('%Y%m%d')}"
+        end_line = f"DTEND;VALUE=DATE:{end.strftime('%Y%m%d')}"
+    else:
+        start_line = f"DTSTART:{start.astimezone(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+        end_line = f"DTEND:{end.astimezone(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
     text = "\r\n".join((
         "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Tiremm Innanz//Bot-tazzi Calendar UI//IT",
         "CALSCALE:GREGORIAN", "BEGIN:VEVENT", f"UID:{event_id}", f"DTSTAMP:{stamp}",
-        f"DTSTART:{start_s}", f"DTEND:{end_s}", f"SUMMARY:{_escape(title)}",
-        f"DESCRIPTION:{_escape(description)}", "END:VEVENT", "END:VCALENDAR", "",
+        start_line, end_line, f"SUMMARY:{_escape(title)}", f"DESCRIPTION:{_escape(description)}",
+        "END:VEVENT", "END:VCALENDAR", "",
     ))
     return text.encode("utf-8")
 
@@ -64,20 +73,21 @@ def upsert_event(payload: dict) -> dict:
     if not title or len(title) > 500:
         raise ValueError("invalid_title")
     description = str(payload.get("description") or "")[:10000]
-    start = _parse_iso(str(payload.get("start") or ""))
-    end = _parse_iso(str(payload.get("end") or ""))
+    all_day = bool(payload.get("allDay"))
+    start = _parse_date(str(payload.get("start") or "")) if all_day else _parse_iso(str(payload.get("start") or ""))
+    end = _parse_date(str(payload.get("end") or "")) if all_day else _parse_iso(str(payload.get("end") or ""))
     event_id = str(payload.get("id") or "").strip() or f"ui-{uuid4().hex}@bottazzi.local"
     if not UID_RE.fullmatch(event_id):
         raise ValueError("invalid_uid")
     completed = _occ(
         "calendar:import", UID, URI, "--format=ical", "--errors=1", "--validation=2",
         "--supersede", "--show-created", "--show-updated", "--no-interaction", "--no-warnings",
-        input_data=_ics(event_id, title, start, end, description),
+        input_data=_ics(event_id, title, start, end, description, all_day),
     )
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout).decode("utf-8", "replace")[-1000:]
         raise RuntimeError("calendar_import_failed:" + detail)
-    return {"ok": True, "id": event_id}
+    return {"ok": True, "id": event_id, "allDay": all_day}
 
 
 def delete_event(event_id: str) -> dict:
@@ -95,7 +105,7 @@ def delete_event(event_id: str) -> dict:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "BotTazziCalendarFeed/2"
+    server_version = "BotTazziCalendarFeed/3"
 
     def _send(self, status: int, content_type: str, payload: bytes) -> None:
         self.send_response(status)
