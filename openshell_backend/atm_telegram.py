@@ -1417,6 +1417,92 @@ _GTFS_SUBWAY_INDEX_CACHE: dict[
     list[dict[str, Any]],
 ] = {}
 
+_GTFS_STOP_COORDS_CACHE: dict[
+    tuple[str, int, int],
+    dict[str, tuple[float, float]],
+] = {}
+
+
+def _gtfs_stop_coordinates(
+    stop_ids: set[str] | list[str] | tuple[str, ...],
+    *,
+    gtfs_path: str | Path | None = None,
+) -> dict[str, tuple[float, float]]:
+    import csv
+    import io
+    import zipfile
+
+    wanted = {str(value or "").strip() for value in stop_ids or [] if str(value or "").strip()}
+    if not wanted:
+        return {}
+    path = Path(
+        gtfs_path
+        or os.environ.get(
+            "RALFLOOP_ATM_GTFS_PATH",
+            "/home/sibilla-cumana/ralfloop_data/atm_telegram/gtfs.zip",
+        )
+    )
+    if not path.is_file():
+        return {}
+    try:
+        stat = path.stat()
+    except OSError:
+        return {}
+    key = (str(path.resolve()), int(stat.st_mtime_ns), int(stat.st_size))
+    coords = _GTFS_STOP_COORDS_CACHE.get(key)
+    if coords is None:
+        coords = {}
+        try:
+            with zipfile.ZipFile(path) as zf:
+                raw = zf.open("stops.txt")
+                text = io.TextIOWrapper(raw, encoding="utf-8-sig", newline="")
+                for row in csv.DictReader(text):
+                    stop_id = str(row.get("stop_id") or "").strip()
+                    if not stop_id:
+                        continue
+                    try:
+                        coords[stop_id] = (float(row.get("stop_lat")), float(row.get("stop_lon")))
+                    except (TypeError, ValueError):
+                        continue
+        except Exception:
+            return {}
+        _GTFS_STOP_COORDS_CACHE.clear()
+        _GTFS_STOP_COORDS_CACHE[key] = coords
+    return {stop_id: coords[stop_id] for stop_id in wanted if stop_id in coords}
+
+
+def _enrich_local_route_stop_coordinates(route: dict[str, Any]) -> dict[str, Any]:
+    stop_ids: set[str] = set()
+    for key in ("origin_stop_id", "destination_stop_id"):
+        value = str(route.get(key) or "").strip()
+        if value:
+            stop_ids.add(value)
+    legs = route.get("legs") or []
+    for leg in legs:
+        if not isinstance(leg, dict):
+            continue
+        for key in ("from_stop_id", "to_stop_id"):
+            value = str(leg.get(key) or "").strip()
+            if value:
+                stop_ids.add(value)
+    coords = _gtfs_stop_coordinates(stop_ids)
+    origin = coords.get(str(route.get("origin_stop_id") or "").strip())
+    if origin:
+        route["origin_stop_lat"], route["origin_stop_lon"] = origin
+    destination = coords.get(str(route.get("destination_stop_id") or "").strip())
+    if destination:
+        route["destination_stop_lat"], route["destination_stop_lon"] = destination
+    for leg in legs:
+        if not isinstance(leg, dict):
+            continue
+        start = coords.get(str(leg.get("from_stop_id") or "").strip())
+        end = coords.get(str(leg.get("to_stop_id") or "").strip())
+        if start:
+            leg["from_lat"], leg["from_lon"] = start
+        if end:
+            leg["to_lat"], leg["to_lon"] = end
+    return route
+
 
 def _gtfs_subway_index(
     *,
@@ -3902,6 +3988,7 @@ def _build_plan_impl(
     )
 
     if local_atm_route:
+        local_atm_route = _enrich_local_route_stop_coordinates(local_atm_route)
         return {
             "route_mode": "local_atm_realtime",
             "route_confidence": "high",

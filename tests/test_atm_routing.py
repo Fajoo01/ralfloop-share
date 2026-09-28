@@ -2689,6 +2689,46 @@ def test_load_destinations_merges_tiremm_with_user_favorites(monkeypatch, tmp_pa
     assert "piscina suzzani" not in names
 
 
+def test_build_plan_enriches_local_route_stop_coordinates(monkeypatch):
+    route = {
+        "origin_stop_id": "A",
+        "destination_stop_id": "B",
+        "legs": [
+            {
+                "mode": "transit",
+                "route": "M1",
+                "from_stop_id": "A",
+                "to_stop_id": "B",
+                "departure_s": 36000,
+                "arrival_s": 36600,
+            }
+        ],
+    }
+    monkeypatch.setattr(atm, "_local_atm_realtime_route", lambda *_args: route)
+    monkeypatch.setattr(
+        atm,
+        "_gtfs_stop_coordinates",
+        lambda _ids: {"A": (45.501, 9.201), "B": (45.461, 9.181)},
+    )
+
+    plan = atm._build_plan_impl(
+        45.510,
+        9.210,
+        "duomo",
+        destination_override={"name": "duomo", "label": "Duomo", "lat": 45.460, "lon": 9.180},
+    )
+
+    enriched = plan["local_atm_route"]
+    assert enriched["origin_stop_lat"] == 45.501
+    assert enriched["origin_stop_lon"] == 9.201
+    assert enriched["destination_stop_lat"] == 45.461
+    assert enriched["destination_stop_lon"] == 9.181
+    assert enriched["legs"][0]["from_lat"] == 45.501
+    assert enriched["legs"][0]["from_lon"] == 9.201
+    assert enriched["legs"][0]["to_lat"] == 45.461
+    assert enriched["legs"][0]["to_lon"] == 9.181
+
+
 # ATM_REALTIME_NAVIGATOR_TESTS_START
 
 
