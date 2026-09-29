@@ -42,6 +42,18 @@ NAVIGATOR_ARRIVED_RADIUS_M = max(
     20,
     int(os.environ.get("RALFLOOP_ATM_NAVIGATOR_ARRIVED_RADIUS_M", "80")),
 )
+NAVIGATOR_CATCH_GRACE_S = max(
+    0,
+    int(os.environ.get("RALFLOOP_ATM_NAVIGATOR_CATCH_GRACE_S", "30")),
+)
+NAVIGATOR_ONBOARD_SPEED_MPS = max(
+    1.5,
+    float(os.environ.get("RALFLOOP_ATM_NAVIGATOR_ONBOARD_SPEED_MPS", "2.5")),
+)
+NAVIGATOR_SPEED_SAMPLE_MAX_S = max(
+    15,
+    int(os.environ.get("RALFLOOP_ATM_NAVIGATOR_SPEED_SAMPLE_MAX_S", "120")),
+)
 _NAVIGATOR_DB_LOCK = threading.RLock()
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 OSM_COPYRIGHT = "Data © OpenStreetMap contributors"
@@ -959,7 +971,8 @@ def _atm_direct_fallback_options(origin_lat: float, origin_lon: float, dest_lat:
 
         live_catchable = (
             isinstance(live_departure_at, datetime)
-            and live_departure_at >= board_ready_at
+            and live_departure_at + timedelta(seconds=NAVIGATOR_CATCH_GRACE_S)
+            >= board_ready_at
         )
 
         if live_catchable:
@@ -978,7 +991,10 @@ def _atm_direct_fallback_options(origin_lat: float, origin_lon: float, dest_lat:
             if not isinstance(departure_at, datetime):
                 continue
 
-            if departure_at < board_ready_at:
+            if (
+                departure_at + timedelta(seconds=NAVIGATOR_CATCH_GRACE_S)
+                < board_ready_at
+            ):
                 continue
 
             if isinstance(scheduled_arrival_at, datetime):
@@ -4987,11 +5003,27 @@ def _navigator_connect() -> sqlite3.Connection:
             start_lon REAL NOT NULL,
             last_lat REAL NOT NULL,
             last_lon REAL NOT NULL,
+            journey_state TEXT,
+            active_leg_index INTEGER,
+            last_speed_mps REAL,
             plan_generated_at REAL NOT NULL,
             plan_json TEXT NOT NULL
         )
         """
     )
+    existing_columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(navigator_sessions)")
+    }
+    for column, sql_type in (
+        ("journey_state", "TEXT"),
+        ("active_leg_index", "INTEGER"),
+        ("last_speed_mps", "REAL"),
+    ):
+        if column not in existing_columns:
+            conn.execute(
+                f"ALTER TABLE navigator_sessions ADD COLUMN {column} {sql_type}"
+            )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS navigator_clients (
@@ -5013,14 +5045,18 @@ def _navigator_save(session: dict[str, Any]) -> None:
                 INSERT INTO navigator_sessions (
                     session_id, destination, status, created_at, updated_at,
                     start_lat, start_lon, last_lat, last_lon,
+                    journey_state, active_leg_index, last_speed_mps,
                     plan_generated_at, plan_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_id) DO UPDATE SET
                     destination=excluded.destination,
                     status=excluded.status,
                     updated_at=excluded.updated_at,
                     last_lat=excluded.last_lat,
                     last_lon=excluded.last_lon,
+                    journey_state=excluded.journey_state,
+                    active_leg_index=excluded.active_leg_index,
+                    last_speed_mps=excluded.last_speed_mps,
                     plan_generated_at=excluded.plan_generated_at,
                     plan_json=excluded.plan_json
                 """,
@@ -5034,6 +5070,21 @@ def _navigator_save(session: dict[str, Any]) -> None:
                     float(session["start_lon"]),
                     float(session["last_lat"]),
                     float(session["last_lon"]),
+                    (
+                        str(session["journey_state"])
+                        if session.get("journey_state") is not None
+                        else None
+                    ),
+                    (
+                        int(session["active_leg_index"])
+                        if session.get("active_leg_index") is not None
+                        else None
+                    ),
+                    (
+                        float(session["last_speed_mps"])
+                        if session.get("last_speed_mps") is not None
+                        else None
+                    ),
                     float(session["plan_generated_at"]),
                     json.dumps(session["plan"], ensure_ascii=False),
                 ),
@@ -5072,6 +5123,15 @@ def _navigator_load(session_id: str) -> dict[str, Any] | None:
         "start_lon": float(row["start_lon"]),
         "last_lat": float(row["last_lat"]),
         "last_lon": float(row["last_lon"]),
+        "journey_state": (
+            str(row["journey_state"]) if row["journey_state"] is not None else None
+        ),
+        "active_leg_index": (
+            int(row["active_leg_index"]) if row["active_leg_index"] is not None else None
+        ),
+        "last_speed_mps": (
+            float(row["last_speed_mps"]) if row["last_speed_mps"] is not None else 0.0
+        ),
         "plan_generated_at": float(row["plan_generated_at"]),
         "plan": plan if isinstance(plan, dict) else {},
     }
@@ -5179,6 +5239,30 @@ def _navigator_seconds_of_day(timestamp: float) -> int:
     return dt.hour * 3600 + dt.minute * 60 + dt.second
 
 
+def _navigator_service_seconds(
+    session: dict[str, Any],
+    transit: list[dict[str, Any]],
+    now: float,
+) -> int:
+    """Map wall-clock time onto the GTFS service-day axis used by departure_s."""
+    if not transit:
+        return _navigator_seconds_of_day(now)
+    try:
+        first_departure_s = int(transit[0]["departure_s"])
+        generated_at = float(session["plan_generated_at"])
+    except (KeyError, TypeError, ValueError):
+        return _navigator_seconds_of_day(now)
+
+    generated_dt = datetime.fromtimestamp(generated_at)
+    midnight = generated_dt.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    candidate_bases = [midnight + (day * 86400) for day in (-2, -1, 0, 1)]
+    service_base = min(
+        candidate_bases,
+        key=lambda base: abs((base + first_departure_s) - generated_at),
+    )
+    return int(now - service_base)
+
+
 def _navigator_transit_legs(plan: dict[str, Any]) -> list[dict[str, Any]]:
     route = plan.get("local_atm_route") or plan
     legs = route.get("legs") if isinstance(route, dict) else []
@@ -5214,7 +5298,10 @@ def _navigator_view(
     lon = float(session["last_lon"])
     destination_distance_m = _navigator_destination_distance(plan, lat, lon)
     transit = _navigator_transit_legs(plan)
-    now_s = _navigator_seconds_of_day(now)
+    now_s = _navigator_service_seconds(session, transit, now)
+    last_speed_mps = float(session.get("last_speed_mps") or 0.0)
+    persisted_state = str(session.get("journey_state") or "")
+    persisted_leg_index = session.get("active_leg_index")
 
     state = "walking_to_stop"
     instruction = "Vai verso la fermata indicata."
@@ -5235,34 +5322,49 @@ def _navigator_view(
                 arrival_s = int(leg.get("arrival_s"))
             except (TypeError, ValueError):
                 continue
-            if now_s <= arrival_s:
+            if now_s <= arrival_s + NAVIGATOR_CATCH_GRACE_S:
                 active_leg_index = idx
+                persisted_onboard = (
+                    persisted_state == "onboard"
+                    and persisted_leg_index is not None
+                    and int(persisted_leg_index) == idx
+                )
+                vehicle_like_motion = last_speed_mps >= NAVIGATOR_ONBOARD_SPEED_MPS
                 if now_s < departure_s:
                     seconds_to_vehicle = departure_s - now_s
-                    if idx == 0:
-                        walk_seconds = int(
-                            (plan.get("local_atm_route") or plan).get(
-                                "origin_walk_seconds", 0
-                            ) or 0
-                        )
+                    if persisted_onboard or vehicle_like_motion:
+                        state = "onboard"
+                        seconds_to_vehicle = 0
+                        margin_seconds = None
+                        instruction = "Sei già sul mezzo: segui le fermate verso la discesa."
                     else:
-                        walk_seconds = 0
-                    margin_seconds = seconds_to_vehicle - walk_seconds
-                    if margin_seconds < 0:
-                        state = "missed"
-                        instruction = "Questa corsa non è più raggiungibile: ricalcolo necessario."
-                    elif margin_seconds <= 60:
-                        state = "walking_to_stop"
-                        instruction = "Vai subito alla fermata: il margine è stretto."
-                    elif idx > 0:
-                        state = "transfer"
-                        instruction = "Completa il cambio e raggiungi la prossima fermata/binario."
-                    elif walk_seconds > 0:
-                        state = "walking_to_stop"
-                        instruction = "Raggiungi la fermata; il mezzo è ancora prendibile."
-                    else:
-                        state = "waiting"
-                        instruction = "Resta alla fermata e aspetta il mezzo."
+                        if idx == 0:
+                            walk_seconds = int(
+                                (plan.get("local_atm_route") or plan).get(
+                                    "origin_walk_seconds", 0
+                                ) or 0
+                            )
+                        else:
+                            walk_seconds = 0
+                        margin_seconds = seconds_to_vehicle - walk_seconds
+                        if margin_seconds < -NAVIGATOR_CATCH_GRACE_S:
+                            state = "missed"
+                            instruction = "Questa corsa non è più raggiungibile: ricalcolo necessario."
+                        elif margin_seconds < 0:
+                            state = "walking_to_stop" if idx == 0 else "transfer"
+                            instruction = "Sei al limite: considero 30 secondi di tolleranza per incroci e aggancio del mezzo."
+                        elif margin_seconds <= 60:
+                            state = "walking_to_stop" if idx == 0 else "transfer"
+                            instruction = "Vai subito alla fermata: il margine è stretto."
+                        elif idx > 0:
+                            state = "transfer"
+                            instruction = "Completa il cambio e raggiungi la prossima fermata/binario."
+                        elif walk_seconds > 0:
+                            state = "walking_to_stop"
+                            instruction = "Raggiungi la fermata; il mezzo è ancora prendibile."
+                        else:
+                            state = "waiting"
+                            instruction = "Resta alla fermata e aspetta il mezzo."
                 else:
                     state = "onboard"
                     instruction = "Sei nella finestra temporale della corsa: segui le fermate verso la discesa."
@@ -5282,6 +5384,8 @@ def _navigator_view(
         "active_leg_index": active_leg_index,
         "seconds_to_vehicle": seconds_to_vehicle,
         "margin_seconds": margin_seconds,
+        "catch_grace_seconds": NAVIGATOR_CATCH_GRACE_S,
+        "last_speed_mps": round(last_speed_mps, 2),
         "destination_distance_m": destination_distance_m,
         "replanned": replanned,
         "replan_reason": replan_reason,
@@ -5326,11 +5430,17 @@ def navigator_start(
         "destination_lat": destination_lat,
         "destination_lon": destination_lon,
         "destination_label": destination_label,
+        "journey_state": None,
+        "active_leg_index": None,
+        "last_speed_mps": 0.0,
         "plan_generated_at": now,
         "plan": plan,
     }
+    view = _navigator_view(session, now=now)
+    session["journey_state"] = str(view.get("state") or "") or None
+    session["active_leg_index"] = view.get("active_leg_index")
     _navigator_save(session)
-    return _navigator_view(session, now=now)
+    return view
 
 
 def _navigator_compact_reply(view: dict[str, Any]) -> str:
@@ -5355,6 +5465,8 @@ def _navigator_compact_reply(view: dict[str, Any]) -> str:
         margin = int(margin)
         if margin >= 0:
             parts.append(f"Margine {margin // 60}:{margin % 60:02d}")
+        elif margin >= -NAVIGATOR_CATCH_GRACE_S:
+            parts.append(f"Tolleranza residua {NAVIGATOR_CATCH_GRACE_S + margin}s")
     distance = view.get("destination_distance_m")
     if distance is not None:
         parts.append(f"Destinazione ~{int(distance)} m")
@@ -5377,12 +5489,18 @@ def navigator_update(
         raise HTTPException(status_code=404, detail="navigator_session_not_found")
 
     now = float(observed_at if observed_at is not None else time.time())
+    previous_updated_at = float(session["updated_at"])
     moved_m = _distance_m(
         float(session["last_lat"]),
         float(session["last_lon"]),
         float(lat),
         float(lon),
     )
+    sample_seconds = max(0.0, now - previous_updated_at)
+    if 0.0 < sample_seconds <= NAVIGATOR_SPEED_SAMPLE_MAX_S:
+        session["last_speed_mps"] = float(moved_m) / sample_seconds
+    else:
+        session["last_speed_mps"] = 0.0
     session["last_lat"] = float(lat)
     session["last_lon"] = float(lon)
     session["updated_at"] = now
@@ -5404,7 +5522,11 @@ def navigator_update(
         )
     ):
         reason = "realtime_refresh"
-    elif moved_m >= NAVIGATOR_REPLAN_MOVE_M and plan_age >= NAVIGATOR_REPLAN_AFTER_S:
+    elif (
+        before["state"] != "onboard"
+        and moved_m >= NAVIGATOR_REPLAN_MOVE_M
+        and plan_age >= NAVIGATOR_REPLAN_AFTER_S
+    ):
         reason = "position_changed"
 
     replanned = reason is not None
@@ -5435,6 +5557,8 @@ def navigator_update(
         replanned=replanned,
         replan_reason=reason,
     )
+    session["journey_state"] = str(view.get("state") or "") or None
+    session["active_leg_index"] = view.get("active_leg_index")
     session["status"] = "arrived" if view["state"] == "arrived" else "active"
     _navigator_save(session)
     return view

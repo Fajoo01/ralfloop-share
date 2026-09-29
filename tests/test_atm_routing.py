@@ -2782,7 +2782,28 @@ def test_navigator_start_persists_session(monkeypatch, tmp_path):
     assert view["seconds_to_vehicle"] == 300
     assert view["margin_seconds"] == 180
     assert view["reply"] == "NAV"
-    assert atm._navigator_load(view["session_id"]) is not None
+    loaded = atm._navigator_load(view["session_id"])
+    assert loaded is not None
+    assert loaded["journey_state"] == "walking_to_stop"
+    assert loaded["active_leg_index"] == 0
+
+
+def test_navigator_allows_thirty_second_catch_grace(monkeypatch, tmp_path):
+    monkeypatch.setattr(atm, "NAVIGATOR_DB_PATH", tmp_path / "navigator.sqlite3")
+    monkeypatch.setattr(atm.time, "time", lambda: _nav_ts(9, 55))
+    monkeypatch.setattr(
+        atm,
+        "build_plan",
+        lambda *_args, **_kwargs: _navigator_plan(departure_s=35800, arrival_s=36200),
+    )
+    monkeypatch.setattr(atm, "render_reply", lambda _plan: "NAV")
+
+    view = atm.navigator_start(45.000000, 9.000000, "casa")
+
+    assert view["state"] == "walking_to_stop"
+    assert view["margin_seconds"] == -20
+    assert view["catch_grace_seconds"] == 30
+    assert "30 secondi" in view["instruction"]
 
 
 def test_navigator_update_does_not_replan_for_small_fresh_move(monkeypatch, tmp_path):
@@ -2816,7 +2837,7 @@ def test_navigator_missed_vehicle_replans_from_current_position(monkeypatch, tmp
     monkeypatch.setattr(atm, "NAVIGATOR_DB_PATH", db)
     monkeypatch.setattr(atm.time, "time", lambda: _nav_ts(9, 55))
     plans = [
-        _navigator_plan(departure_s=35800, arrival_s=36200),
+        _navigator_plan(departure_s=35799, arrival_s=36200),
         _navigator_plan(departure_s=36500, arrival_s=37000),
     ]
 
@@ -2838,6 +2859,36 @@ def test_navigator_missed_vehicle_replans_from_current_position(monkeypatch, tmp
     assert updated["replan_reason"] == "missed"
     assert updated["seconds_to_vehicle"] == 790
     assert updated["state"] == "walking_to_stop"
+
+
+def test_navigator_vehicle_motion_marks_onboard_without_replan(monkeypatch, tmp_path):
+    db = tmp_path / "navigator.sqlite3"
+    monkeypatch.setattr(atm, "NAVIGATOR_DB_PATH", db)
+    monkeypatch.setattr(atm.time, "time", lambda: _nav_ts(9, 55))
+    calls = []
+
+    def fake_plan(*_args, **_kwargs):
+        calls.append(1)
+        return _navigator_plan()
+
+    monkeypatch.setattr(atm, "build_plan", fake_plan)
+    monkeypatch.setattr(atm, "render_reply", lambda _plan: "NAV")
+
+    started = atm.navigator_start(45.000000, 9.000000, "casa")
+    updated = atm.navigator_update(
+        started["session_id"],
+        45.000800,
+        9.000000,
+        observed_at=_nav_ts(9, 55, 10),
+    )
+
+    assert len(calls) == 1
+    assert updated["state"] == "onboard"
+    assert updated["replanned"] is False
+    assert updated["last_speed_mps"] >= atm.NAVIGATOR_ONBOARD_SPEED_MPS
+    loaded = atm._navigator_load(started["session_id"])
+    assert loaded["journey_state"] == "onboard"
+    assert loaded["active_leg_index"] == 0
 
 
 def test_navigator_arrived_near_destination(monkeypatch, tmp_path):
@@ -2914,6 +2965,33 @@ def test_navigator_marks_second_leg_as_transfer(monkeypatch, tmp_path):
     assert view["active_leg_index"] == 1
     assert view["state"] == "transfer"
     assert view["seconds_to_vehicle"] == 600
+
+
+def test_navigator_normalizes_gtfs_after_midnight(monkeypatch):
+    monkeypatch.setattr(atm, "render_reply", lambda _plan: "NAV")
+    generated_at = RealDateTime(2026, 9, 28, 23, 55).timestamp()
+    now = RealDateTime(2026, 9, 29, 11, 0).timestamp()
+    session = {
+        "session_id": "after-midnight",
+        "destination": "casa",
+        "status": "active",
+        "created_at": generated_at,
+        "updated_at": generated_at,
+        "start_lat": 45.0,
+        "start_lon": 9.0,
+        "last_lat": 45.0,
+        "last_lon": 9.0,
+        "journey_state": None,
+        "active_leg_index": None,
+        "last_speed_mps": 0.0,
+        "plan_generated_at": generated_at,
+        "plan": _navigator_plan(departure_s=87000, arrival_s=87600),
+    }
+
+    view = atm._navigator_view(session, now=now)
+
+    assert view["state"] == "final_walk"
+    assert view["seconds_to_vehicle"] is None
 
 
 def test_telegram_location_starts_and_binds_navigator(monkeypatch, tmp_path):
