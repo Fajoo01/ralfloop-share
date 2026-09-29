@@ -489,9 +489,12 @@ class AgendaPipeline:
         elif candidate.kind is AgendaKind.APPOINTMENT:
             if candidate.start_at is None or candidate.end_at is None or candidate.uncertain:
                 raise RuntimeError("unsafe_appointment_candidate")
+            calendar_key = dedup_key
+            if source.channel == "phone_call":
+                calendar_key = hashlib.sha256(f"phone_call\0{source.native_id}\0{candidate.start_at.isoformat()}".encode()).hexdigest()
             receipt = self.calendar.create_event(CalendarEventRequest(
                 title=candidate.title, start_at=candidate.start_at, end_at=candidate.end_at,
-                description=self._provenance_description(source), idempotency_key=dedup_key,
+                description=self._provenance_description(source), idempotency_key=calendar_key,
             ))
             outcome_id = receipt.event_id
         else:

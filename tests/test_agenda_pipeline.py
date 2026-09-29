@@ -384,3 +384,16 @@ def test_long_email_information_uses_bounded_semantic_key(tmp_path: Path) -> Non
     assert result.kind is AgendaKind.INFORMATION
     assert result.candidate.semantic_key.startswith("information|sha256:")
     assert len(result.candidate.semantic_key) < 1000
+
+
+def test_same_phone_call_keeps_one_calendar_file_if_transcript_grows(tmp_path: Path) -> None:
+    pipeline, _, _, calendar_dir = _pipeline(tmp_path)
+    first = pipeline.process(_source(
+        "phone_call", "call-stable-1", "Ci vediamo domani alle 10", sender="unknown",
+    ))
+    second = pipeline.process(_source(
+        "phone_call", "call-stable-1", "Ci vediamo domani alle 10 per parlare del progetto", sender="unknown",
+    ))
+    assert first.kind is AgendaKind.APPOINTMENT
+    assert second.kind is AgendaKind.APPOINTMENT
+    assert len(list(calendar_dir.glob("*.ics"))) == 1
