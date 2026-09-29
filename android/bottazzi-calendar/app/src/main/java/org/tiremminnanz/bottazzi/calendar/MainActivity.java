@@ -11,6 +11,7 @@ import android.webkit.WebViewClient;
 
 public final class MainActivity extends Activity {
     private WebView webView;
+    private boolean hasResumed;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -25,8 +26,8 @@ public final class MainActivity extends Activity {
         settings.setDatabaseEnabled(true);
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(false);
-        settings.setCacheMode(WebSettings.LOAD_DEFAULT);
-        settings.setUserAgentString(settings.getUserAgentString() + " BotTazziCalendar/0.4");
+        settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
+        settings.setUserAgentString(settings.getUserAgentString() + " BotTazziCalendar/0.4.1");
 
         CookieManager cookies = CookieManager.getInstance();
         cookies.setAcceptCookie(true);
@@ -35,6 +36,13 @@ public final class MainActivity extends Activity {
         webView.setWebViewClient(new WebViewClient());
         webView.setWebChromeClient(new WebChromeClient());
         webView.loadUrl(BuildConfig.CALENDAR_URL);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (hasResumed && webView != null) webView.reload();
+        hasResumed = true;
     }
 
     @Override

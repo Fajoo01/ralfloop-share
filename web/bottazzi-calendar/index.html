@@ -26,6 +26,12 @@
 </header>
 <div class="shell" id="shell">  <aside class="sidebar" id="sidebar">
     <button class="create-btn" id="createBtn"><span>＋</span> Crea</button>
+    <nav class="mobile-view-list" aria-label="Vista calendario">
+      <button data-view="agenda">Programmazione</button>
+      <button data-view="day">Giorno</button>
+      <button data-view="week">3 giorni</button>
+      <button data-view="month">Mese</button>
+    </nav>
     <div class="mini-head"><strong id="miniTitle"></strong><div><button id="miniPrev">‹</button><button id="miniNext">›</button></div></div>
     <div class="mini-week"><span>L</span><span>M</span><span>M</span><span>G</span><span>V</span><span>S</span><span>D</span></div>
     <div id="miniCalendar" class="mini-grid"></div>
@@ -40,6 +46,7 @@
     <div id="calendar"></div>
   </main>
 </div>
+<button id="mobileCreateBtn" class="mobile-fab" aria-label="Crea evento">＋</button>
 <dialog id="eventDialog" class="event-dialog">
   <button class="close-dialog" id="closeDialog">×</button>
   <div class="event-color"></div>

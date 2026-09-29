@@ -1,5 +1,6 @@
 const state={view:'month',cursor:new Date(),events:[],mini:new Date(),query:'',selected:null,drag:null};
 const $=id=>document.getElementById(id),pad=n=>String(n).padStart(2,'0'),DAY=86400000,HOUR_PX=52;
+const isMobile=()=>window.matchMedia('(max-width:850px)').matches;
 const isoLocal=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`,dateOnly=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 function localDate(v){const [y,m,d]=v.split('-').map(Number);return new Date(y,m-1,d)} function startOfWeek(d){const x=new Date(d),day=(x.getDay()+6)%7;x.setDate(x.getDate()-day);x.setHours(0,0,0,0);return x} function sameDay(a,b){return a.getFullYear()===b.getFullYear()&&a.getMonth()===b.getMonth()&&a.getDate()===b.getDate()} function fmtMonth(d){return d.toLocaleDateString('it-IT',{month:'long',year:'numeric'})}
 function dayStart(d){return new Date(d.getFullYear(),d.getMonth(),d.getDate())} function dayEnd(d){const x=dayStart(d);x.setDate(x.getDate()+1);return x} function allDaySpanDays(a,b){const ua=Date.UTC(a.getFullYear(),a.getMonth(),a.getDate()),ub=Date.UTC(b.getFullYear(),b.getMonth(),b.getDate());return Math.max(1,Math.round((ub-ua)/DAY))} function unfoldIcs(text){return text.replace(/\r?\n[ \t]/g,'')} function unescapeIcs(s=''){return s.replace(/\\n/gi,'\n').replace(/\\,/g,',').replace(/\\;/g,';').replace(/\\\\/g,'\\')}
@@ -7,8 +8,8 @@ function parseDate(raw){if(!raw)return null;const v=raw.trim();if(/^\d{8}$/.test
 function sourceOf(e){const m=e.description.match(/source=([a-z0-9_.-]+)/i);return m?m[1]:(e.id.startsWith('ui-')?'manual':'calendar')}
 function parseIcs(text){return unfoldIcs(text).split('BEGIN:VEVENT').slice(1).map((chunk,i)=>{const body=chunk.split('END:VEVENT')[0],lines=body.split(/\r?\n/),o={id:'e'+i,title:'(senza titolo)',description:'',allDay:false,status:''};for(const line of lines){const p=line.indexOf(':');if(p<0)continue;const left=line.slice(0,p),value=line.slice(p+1),key=left.split(';')[0].toUpperCase();if(key==='UID')o.id=value.trim();if(key==='SUMMARY')o.title=unescapeIcs(value.trim());if(key==='DESCRIPTION')o.description=unescapeIcs(value.trim());if(key==='STATUS')o.status=value.trim();if(key==='DTSTART'){o.allDay=/VALUE=DATE/i.test(left)||/^\d{8}$/.test(value.trim());o.start=parseDate(value)}if(key==='DTEND')o.end=parseDate(value)}if(o.start&&!o.end)o.end=new Date(o.start.getTime()+(o.allDay?DAY:3600000));o.source=sourceOf(o);return o}).filter(e=>e.start&&e.status!=='CANCELLED')}
 async function loadEvents(){const r=await fetch('/calendar.ics?ts='+Date.now(),{cache:'no-store'});if(!r.ok)throw new Error('feed');state.events=parseIcs(await r.text())} function visibleEvents(){const q=state.query.trim().toLocaleLowerCase('it');return q?state.events.filter(e=>(e.title+' '+e.description+' '+e.source).toLocaleLowerCase('it').includes(q)):state.events} function eventsOnDay(d){const s=dayStart(d),e=dayEnd(d);return visibleEvents().filter(x=>x.end>s&&x.start<e).sort((a,b)=>(b.allDay-a.allDay)||(a.start-b.start))}
-function titleFor(){if(state.view==='month')return fmtMonth(state.cursor);if(state.view==='week'){const s=startOfWeek(state.cursor),e=new Date(s);e.setDate(e.getDate()+6);return `${s.getDate()} ${s.toLocaleDateString('it-IT',{month:'short'})} – ${e.getDate()} ${e.toLocaleDateString('it-IT',{month:'short',year:'numeric'})}`}if(state.view==='agenda')return 'Programmazione';return state.cursor.toLocaleDateString('it-IT',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}
-function render(){ $('periodTitle').textContent=titleFor();document.querySelectorAll('.view-switch button').forEach(b=>b.classList.toggle('active',b.dataset.view===state.view));renderMini();if(state.view==='month')renderMonth();else if(state.view==='agenda')renderAgenda();else renderTimeView(state.view==='week'?7:1)}
+function titleFor(){if(state.view==='month')return fmtMonth(state.cursor);if(state.view==='week'){const s=isMobile()?dayStart(state.cursor):startOfWeek(state.cursor),e=new Date(s);e.setDate(e.getDate()+(isMobile()?2:6));return `${s.getDate()} ${s.toLocaleDateString('it-IT',{month:'short'})} – ${e.getDate()} ${e.toLocaleDateString('it-IT',{month:'short',year:'numeric'})}`}if(state.view==='agenda')return 'Programmazione';return state.cursor.toLocaleDateString('it-IT',{weekday:'long',day:'numeric',month:'long'})}
+function render(){ $('periodTitle').textContent=titleFor();document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===state.view));renderMini();if(state.view==='month')renderMonth();else if(state.view==='agenda')renderAgenda();else renderTimeView(state.view==='week'?(isMobile()?3:7):1)}
 function renderMini(){const d=new Date(state.mini.getFullYear(),state.mini.getMonth(),1);$('miniTitle').textContent=fmtMonth(d);const grid=$('miniCalendar');grid.innerHTML='';const start=startOfWeek(d);for(let i=0;i<42;i++){const x=new Date(start);x.setDate(start.getDate()+i);const b=document.createElement('button');b.textContent=x.getDate();if(x.getMonth()!==d.getMonth())b.classList.add('other');if(sameDay(x,new Date()))b.classList.add('today');if(sameDay(x,state.cursor))b.classList.add('selected');b.onclick=()=>{state.cursor=new Date(x);state.mini=new Date(x);render()};grid.appendChild(b)}}
 function eventButton(e){const b=document.createElement('button');b.className=`event-pill source-${e.source}`+(e.allDay?' all-day':'');b.textContent=(e.allDay?'':e.start.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'})+' ')+e.title;b.draggable=true;b.ondragstart=ev=>{ev.stopPropagation();state.drag=e};b.onclick=ev=>{ev.stopPropagation();showEvent(e)};return b}
 function shiftEventToDay(e,d){const dur=e.end-e.start;if(e.allDay){const s=dayStart(d),end=new Date(s);end.setDate(end.getDate()+allDaySpanDays(e.start,e.end));return {...e,start:s,end,allDay:true}}const s=new Date(d.getFullYear(),d.getMonth(),d.getDate(),e.start.getHours(),e.start.getMinutes());return {...e,start:s,end:new Date(s.getTime()+dur)}}
@@ -100,10 +101,10 @@ async function deleteSelected(){
   $('eventDialog').close();state.selected=null;await loadEvents();render();
 }
 function move(dir){
-  if(state.view==='month')state.cursor.setMonth(state.cursor.getMonth()+dir);else if(state.view==='week')state.cursor.setDate(state.cursor.getDate()+7*dir);else if(state.view==='agenda')state.cursor.setDate(state.cursor.getDate()+30*dir);else state.cursor.setDate(state.cursor.getDate()+dir);
+  if(state.view==='month')state.cursor.setMonth(state.cursor.getMonth()+dir);else if(state.view==='week')state.cursor.setDate(state.cursor.getDate()+(isMobile()?3:7)*dir);else if(state.view==='agenda')state.cursor.setDate(state.cursor.getDate()+30*dir);else state.cursor.setDate(state.cursor.getDate()+dir);
   state.mini=new Date(state.cursor);render();
 }
-function selectView(view){state.view=view;try{localStorage.setItem('bottazzi-calendar-view',view)}catch{}render()}
+function selectView(view){state.view=view;try{localStorage.setItem('bottazzi-calendar-view',view)}catch{}if(isMobile())$('shell').classList.add('sidebar-hidden');render()}
 function toggleAllDay(){
   const makeAllDay=$('eventAllDay').checked;
   if(makeAllDay){const raw=$('eventStart').value||isoLocal(new Date()),s=new Date(raw);setEditorMode(true,dayStart(s),dayEnd(s));}
@@ -114,10 +115,11 @@ $('prevBtn').onclick=()=>move(-1);$('nextBtn').onclick=()=>move(1);
 $('miniPrev').onclick=()=>{state.mini.setMonth(state.mini.getMonth()-1);renderMini()};$('miniNext').onclick=()=>{state.mini.setMonth(state.mini.getMonth()+1);renderMini()};
 $('refreshBtn').onclick=()=>boot();$('menuBtn').onclick=()=>$('shell').classList.toggle('sidebar-hidden');
 $('helpBtn').onclick=()=>$('helpDialog').showModal();$('closeHelp').onclick=()=>$('helpDialog').close();
-$('closeDialog').onclick=()=>$('eventDialog').close();$('createBtn').onclick=()=>openEditor();
+$('closeDialog').onclick=()=>$('eventDialog').close();$('createBtn').onclick=()=>openEditor();$('mobileCreateBtn').onclick=()=>openEditor();
 $('editEventBtn').onclick=()=>{if(state.selected){$('eventDialog').close();openEditor(state.selected)}};$('deleteEventBtn').onclick=deleteSelected;
 $('closeEditor').onclick=()=>$('editorDialog').close();$('cancelEditor').onclick=()=>$('editorDialog').close();$('eventForm').onsubmit=submitEditor;$('eventAllDay').onchange=toggleAllDay;
-$('searchBox').oninput=e=>{state.query=e.target.value;render()};document.querySelectorAll('.view-switch button').forEach(b=>b.onclick=()=>selectView(b.dataset.view));
+$('searchBox').oninput=e=>{state.query=e.target.value;render()};document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>selectView(b.dataset.view));
+let touchX=null;document.querySelector('.main').addEventListener('touchstart',e=>{if(e.touches.length===1)touchX=e.touches[0].clientX},{passive:true});document.querySelector('.main').addEventListener('touchend',e=>{if(touchX===null||!e.changedTouches.length)return;const dx=e.changedTouches[0].clientX-touchX;touchX=null;if(Math.abs(dx)>70&&!document.querySelector('dialog[open]'))move(dx<0?1:-1)},{passive:true});
 document.addEventListener('keydown',ev=>{
   if(ev.ctrlKey||ev.metaKey||ev.altKey)return;const tag=document.activeElement?.tagName;if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'||document.querySelector('dialog[open]'))return;
   const k=ev.key.toLowerCase();if(k==='/'){ev.preventDefault();$('searchBox').focus();return}if(k==='c'){openEditor();return}if(k==='t'){$('todayBtn').click();return}if(k==='r'){boot();return}
@@ -128,4 +130,5 @@ async function boot(){
   try{$('loading').style.display='block';$('loading').textContent='Aggiornamento calendario…';await loadEvents();render()}catch(e){$('loading').style.display='block';$('loading').textContent='Calendario temporaneamente non disponibile.'}
 }
 try{const saved=localStorage.getItem('bottazzi-calendar-view');if(['day','week','month','agenda'].includes(saved))state.view=saved}catch{}
+if(isMobile())$('shell').classList.add('sidebar-hidden');
 boot();

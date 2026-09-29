@@ -36,4 +36,18 @@ def test_android_app_is_only_a_shell_for_the_web_calendar():
     assert "new WebView(this)" in main
     assert "webView.loadUrl(BuildConfig.CALENDAR_URL)" in main
     assert "TextView header" not in main
-    assert "versionName '0.4.0'" in gradle
+    assert "WebSettings.LOAD_NO_CACHE" in main
+    assert "webView.reload()" in main
+    assert "versionName '0.4.1'" in gradle
+
+
+def test_mobile_calendar_has_native_like_layout_controls():
+    html = (ROOT / "web/bottazzi-calendar/index.html").read_text()
+    css = (ROOT / "web/bottazzi-calendar/style.css").read_text()
+    js = (ROOT / "web/bottazzi-calendar/app.js").read_text()
+    assert 'class="mobile-view-list"' in html
+    assert 'id="mobileCreateBtn"' in html
+    assert "@media(max-width:850px)" in css
+    assert ".mobile-fab" in css
+    assert "isMobile()?3:7" in js
+    assert "touchstart" in js and "touchend" in js
