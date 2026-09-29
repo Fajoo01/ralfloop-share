@@ -375,3 +375,12 @@ def test_calendar_side_effect_is_idempotent_even_if_store_is_lost(tmp_path: Path
     b = second.process(source)
     assert a.outcome_id == b.outcome_id
     assert len(list(calendar_dir.glob("*.ics"))) == 1
+
+
+def test_long_email_information_uses_bounded_semantic_key(tmp_path: Path) -> None:
+    pipeline, _, _, _ = _pipeline(tmp_path)
+    text = "Newsletter informativa " + ("contenuto senza appuntamenti " * 300)
+    result = pipeline.process(_source("email", "mail-long", text, sender="Newsletter"))
+    assert result.kind is AgendaKind.INFORMATION
+    assert result.candidate.semantic_key.startswith("information|sha256:")
+    assert len(result.candidate.semantic_key) < 1000

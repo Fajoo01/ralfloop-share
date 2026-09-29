@@ -233,6 +233,13 @@ def _semantic_core(text: str) -> str:
     return " ".join(value.split())
 
 
+def _semantic_key(kind: str, *parts: str) -> str:
+    raw = "|".join((kind, *parts))
+    if len(raw) <= 900:
+        return raw
+    return f"{kind}|sha256:{hashlib.sha256(raw.encode()).hexdigest()}"
+
+
 class AgendaExtractor:
     """Deterministic fast lane. Uncertain commitments never authorize a side effect."""
 
@@ -265,7 +272,7 @@ class AgendaExtractor:
                 kind=AgendaKind.TASK, title=action, deadline_at=deadline,
                 confidence=0.99 if not uncertain else 0.65, uncertain=uncertain,
                 needs_motor=uncertain,
-                semantic_key=f"task|{_normal(action)}|{deadline.isoformat() if deadline else ''}",
+                semantic_key=_semantic_key("task", _normal(action), deadline.isoformat() if deadline else ""),
             )
         if re.search(r"\b(avvisami|notificami)\b", text, re.I):
             when = _when(text, source.timestamp, end_of_day=True)
@@ -273,7 +280,7 @@ class AgendaExtractor:
                 kind=AgendaKind.NOTIFICATION, title=text, deadline_at=when,
                 confidence=0.95 if not uncertain else 0.6, uncertain=uncertain,
                 needs_motor=uncertain,
-                semantic_key=f"notification|{_semantic_core(text)}|{when.isoformat() if when else ''}",
+                semantic_key=_semantic_key("notification", _semantic_core(text), when.isoformat() if when else ""),
             )
         meeting_signal = bool(_MEETING_RE.search(text))
         start = _when(text, source.timestamp)
@@ -285,18 +292,18 @@ class AgendaExtractor:
                 return AgendaCandidate(
                     kind=AgendaKind.INFORMATION, title=text, confidence=0.55,
                     uncertain=True, needs_motor=True,
-                    semantic_key=f"information|{identity}|{start.isoformat()}",
+                    semantic_key=_semantic_key("information", identity, start.isoformat()),
                 )
             return AgendaCandidate(
                 kind=AgendaKind.APPOINTMENT,
                 title=f"Incontro con {party}" if party else "Appuntamento",
                 start_at=start, end_at=_meeting_end(text, start), confidence=0.99,
-                semantic_key=f"appointment|{identity}|{start.isoformat()}",
+                semantic_key=_semantic_key("appointment", identity, start.isoformat()),
             )
         return AgendaCandidate(
             kind=AgendaKind.INFORMATION, title=text[:500], confidence=0.98,
             uncertain=uncertain, needs_motor=uncertain,
-            semantic_key=f"information|{_normal(text)}",
+            semantic_key=_semantic_key("information", _normal(text)),
         )
 
 
