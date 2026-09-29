@@ -131,6 +131,7 @@ class Handler(BaseHTTPRequestHandler):
             "/index.html": ("index.html", "text/html; charset=utf-8"),
             "/app.js": ("app.js", "application/javascript; charset=utf-8"),
             "/style.css": ("style.css", "text/css; charset=utf-8"),
+            "/bottazzi-calendar.apk": ("bottazzi-calendar.apk", "application/vnd.android.package-archive"),
         }.get(path)
         if static is None:
             self.send_error(404)
