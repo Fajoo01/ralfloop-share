@@ -8,22 +8,22 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from zoneinfo import ZoneInfo
 
-from ralfloop_agent.unified_assistant.agenda import AgendaPipeline, AgendaSource, AgendaStore, calendar_provider_from_env
+from ralfloop_agent.unified_assistant.agenda import AgendaPipeline, AgendaSource, AgendaStore, LocalIcsCalendarProvider
 from ralfloop_agent.unified_assistant.memory_service import MemoryService
-from ralfloop_agent.unified_assistant.task_queue import BotTazziTaskQueue
+from ralfloop_agent.unified_assistant.task_queue import BotTazziTaskQueue, JevPriorityClassifier
 
 
 def main() -> int:
     now = datetime.now(ZoneInfo("Europe/Rome"))
     token = now.strftime("%Y%m%dT%H%M%S")
-    calendar_dir = Path(os.environ["BOTTAZZI_AGENDA_CALENDAR_DIR"])
-    before = {p.name for p in calendar_dir.glob("*.ics")}
     with TemporaryDirectory(prefix="bottazzi-agenda-accept-") as raw:
         root = Path(raw)
+        calendar_dir = root / "calendar"
+        before = set()
         memory = MemoryService(root / "memory.sqlite3")
         store = AgendaStore(root / "agenda.sqlite3")
-        queue = BotTazziTaskQueue.from_env()
-        pipeline = AgendaPipeline(store=store, queue=queue, memory=memory, calendar=calendar_provider_from_env())
+        queue = BotTazziTaskQueue(root / "tasks.sqlite3", classifier=JevPriorityClassifier(base_url="http://127.0.0.1:9", timeout_sec=0.02))
+        pipeline = AgendaPipeline(store=store, queue=queue, memory=memory, calendar=LocalIcsCalendarProvider(calendar_dir))
 
         task = pipeline.process(AgendaSource(channel="email", sender="acceptance", native_id=f"task-{token}", timestamp=now, original_text="Ricordami di controllare l'agenda domani"))
         first = pipeline.process(AgendaSource(channel="email", sender="acceptance", native_id=f"event-mail-{token}", timestamp=now, original_text="Ci vediamo domani alle 19 per verifica agenda runtime"))

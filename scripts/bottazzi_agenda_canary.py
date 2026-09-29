@@ -11,19 +11,19 @@ from ralfloop_agent.unified_assistant.agenda import (
     AgendaPipeline,
     AgendaSource,
     AgendaStore,
-    calendar_provider_from_env,
+    LocalIcsCalendarProvider,
 )
 from ralfloop_agent.unified_assistant.memory_service import MemoryService
-from ralfloop_agent.unified_assistant.task_queue import BotTazziTaskQueue
+from ralfloop_agent.unified_assistant.task_queue import BotTazziTaskQueue, JevPriorityClassifier
 
 
 def main() -> int:
-    state_root = Path(os.getenv("BOTTAZZI_AGENDA_CANARY_ROOT", "/home/bandi/.local/share/bottazzi/runtime-production"))
+    state_root = Path(os.getenv("BOTTAZZI_AGENDA_CANARY_ROOT", "/home/bandi/.local/share/bottazzi/runtime-canary"))
     state_root.mkdir(parents=True, exist_ok=True)
     memory = MemoryService(state_root / "operational-memory.sqlite3")
     store = AgendaStore(state_root / "agenda.sqlite3")
-    queue = BotTazziTaskQueue.from_env()
-    calendar = calendar_provider_from_env()
+    queue = BotTazziTaskQueue(state_root / "tasks.sqlite3", classifier=JevPriorityClassifier(base_url="http://127.0.0.1:9", timeout_sec=0.02))
+    calendar = LocalIcsCalendarProvider(state_root / "calendar")
     pipeline = AgendaPipeline(store=store, queue=queue, memory=memory, calendar=calendar)
     now = datetime.now(ZoneInfo("Europe/Rome"))
     stamp = now.date().isoformat()
