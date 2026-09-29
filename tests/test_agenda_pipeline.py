@@ -318,3 +318,60 @@ def test_plain_information_is_searchable_in_rag(tmp_path: Path) -> None:
     docs = pipeline.memory.search_documents("pratica TARI")
     assert len(docs) == 1
     assert docs[0].body == "La pratica TARI è stata protocollata oggi"
+
+
+def test_explicit_date_rich_clock_and_unknown_sender_title(tmp_path: Path) -> None:
+    pipeline, _, _, _ = _pipeline(tmp_path)
+    result = pipeline.process(_source(
+        "phone_call", "call-date-1",
+        "Riunione con Marco il 29 settembre verso le 18.30",
+        sender="unknown",
+    ))
+    assert result.kind is AgendaKind.APPOINTMENT
+    assert result.candidate.title == "Incontro con Marco"
+    assert result.candidate.start_at == datetime(2026, 9, 29, 18, 30, tzinfo=ROME)
+
+
+def test_word_clock_and_evening_period_are_understood(tmp_path: Path) -> None:
+    pipeline, _, _, _ = _pipeline(tmp_path)
+    result = pipeline.process(_source(
+        "whatsapp", "wa-word-time",
+        "Ci sentiamo domani alle sei e mezza di sera",
+        sender="Luca",
+    ))
+    assert result.kind is AgendaKind.APPOINTMENT
+    assert result.candidate.start_at == datetime(2026, 9, 24, 18, 30, tzinfo=ROME)
+
+
+def test_meeting_range_sets_real_end_time(tmp_path: Path) -> None:
+    pipeline, _, _, _ = _pipeline(tmp_path)
+    result = pipeline.process(_source("email", "mail-range", "Riunione domani dalle 18 alle 19:30", sender="Luca"))
+    assert result.candidate.start_at == datetime(2026, 9, 24, 18, 0, tzinfo=ROME)
+    assert result.candidate.end_at == datetime(2026, 9, 24, 19, 30, tzinfo=ROME)
+
+
+def test_cross_channel_wording_variants_merge_by_person_and_time(tmp_path: Path) -> None:
+    pipeline, _, store, calendar_dir = _pipeline(tmp_path)
+    first = pipeline.process(_source(
+        "email", "mail-irene", "Appuntamento giovedì alle 18", sender="Irene Conca",
+    ))
+    second = pipeline.process(_source(
+        "whatsapp", "wa-irene", "Ci sentiamo giovedì ore 18", sender="Irene Conca",
+    ))
+    assert first.outcome_id == second.outcome_id
+    assert second.duplicate is True
+    assert len(list(calendar_dir.glob("*.ics"))) == 1
+    assert {row["channel"] for row in store.sources(first.dedup_key)} == {"email", "whatsapp"}
+
+
+def test_calendar_side_effect_is_idempotent_even_if_store_is_lost(tmp_path: Path) -> None:
+    calendar_dir = tmp_path / "calendar"
+    source = _source("phone_call", "same-call", "Ci vediamo domani alle 10", sender="Luca")
+    first, _, _, _ = _pipeline(tmp_path / "one")
+    first.calendar = LocalIcsCalendarProvider(calendar_dir)
+    a = first.process(source)
+    second, _, _, _ = _pipeline(tmp_path / "two")
+    second.calendar = LocalIcsCalendarProvider(calendar_dir)
+    b = second.process(source)
+    assert a.outcome_id == b.outcome_id
+    assert len(list(calendar_dir.glob("*.ics"))) == 1

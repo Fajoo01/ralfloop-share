@@ -28,3 +28,12 @@ def test_frontend_contains_google_calendar_core_views():
     assert all(f'data-view="{view}"' in html for view in ("day", "week", "month", "agenda"))
     assert 'id="eventAllDay"' in html
     assert "layoutTimedSegments" in js and "makeAllDayRow" in js
+
+
+def test_android_app_is_only_a_shell_for_the_web_calendar():
+    main = (ROOT / "android/bottazzi-calendar/app/src/main/java/org/tiremminnanz/bottazzi/calendar/MainActivity.java").read_text()
+    gradle = (ROOT / "android/bottazzi-calendar/app/build.gradle").read_text()
+    assert "new WebView(this)" in main
+    assert "webView.loadUrl(BuildConfig.CALENDAR_URL)" in main
+    assert "TextView header" not in main
+    assert "versionName '0.4.0'" in gradle

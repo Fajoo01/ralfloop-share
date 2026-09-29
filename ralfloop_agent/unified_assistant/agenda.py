@@ -10,7 +10,6 @@ from pathlib import Path
 import re
 import sqlite3
 from typing import Protocol
-from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import requests
@@ -54,6 +53,7 @@ class CalendarEventRequest(StrictModel):
     start_at: datetime
     end_at: datetime
     description: str = Field(default="", max_length=10_000)
+    idempotency_key: str = Field(default="", max_length=1000)
 
 
 class CalendarReceipt(StrictModel):
@@ -88,8 +88,22 @@ _WEEKDAYS = {
     "mercoledi": 2, "mercoledì": 2, "giovedi": 3, "giovedì": 3,
     "venerdi": 4, "venerdì": 4, "sabato": 5, "domenica": 6,
 }
-_UNCERTAIN_RE = re.compile(r"\b(forse|magari|probabilmente|eventualmente|potremmo|potrei|se riesco|da confermare)\b", re.I)
-_TIME_RE = re.compile(r"\b(?:alle|ore)\s*(\d{1,2})(?::([0-5]\d))?\b", re.I)
+_MONTHS = {
+    "gennaio": 1, "febbraio": 2, "marzo": 3, "aprile": 4, "maggio": 5, "giugno": 6,
+    "luglio": 7, "agosto": 8, "settembre": 9, "ottobre": 10, "novembre": 11, "dicembre": 12,
+}
+_HOUR_WORDS = {
+    "una": 1, "due": 2, "tre": 3, "quattro": 4, "cinque": 5, "sei": 6, "sette": 7, "otto": 8,
+    "nove": 9, "dieci": 10, "undici": 11, "dodici": 12, "tredici": 13, "quattordici": 14,
+    "quindici": 15, "sedici": 16, "diciassette": 17, "diciotto": 18, "diciannove": 19, "venti": 20,
+    "ventuno": 21, "ventidue": 22, "ventitre": 23, "ventitré": 23,
+}
+_UNKNOWN_SENDERS = {"unknown", "sconosciuto", "anonimo", "numero privato", "private", "n/d"}
+_UNCERTAIN_RE = re.compile(r"\b(forse|magari|probabilmente|eventualmente|potremmo|potrei|potremmo sentirci|se riesco|da confermare|dovremmo|vediamo se)\b", re.I)
+_TIME_RE = re.compile(r"\b(?:alle|ore|verso\s+le|per\s+le|dalle)\s*(\d{1,2})(?:[:.]([0-5]\d))?\b", re.I)
+_BARE_TIME_RE = re.compile(r"(?<!\d)([01]?\d|2[0-3])[:.]([0-5]\d)(?!\d)")
+_WORD_TIME_RE = re.compile(r"\b(?:alle|ore|verso\s+le|per\s+le)\s+(" + "|".join(map(re.escape, _HOUR_WORDS)) + r")(?:\s+e\s+(mezza|un\s+quarto|quarto))?(?:\s+di\s+(mattina|pomeriggio|sera))?\b", re.I)
+_MEETING_RE = re.compile(r"\b(ci\s+vediamo|vediamoci|appuntamento|incontro|riunione|call|videochiamata|telefonata|ci\s+sentiamo|colloquio|prenotazione)\b", re.I)
 _CLAUSE_SPLIT_RE = re.compile(r"(?:[.!?;]+(?:\s+|$)|\n+)")
 
 
@@ -112,38 +126,110 @@ def _day(text: str, reference: datetime) -> datetime | None:
     tz = _agenda_timezone()
     ref = reference.replace(tzinfo=tz) if reference.tzinfo is None else reference.astimezone(tz)
     low = _normal(text)
-    if re.search(r"\boggi\b", low):
+    target = None
+    if re.search(r"\b(oggi|stasera|questa sera)\b", low):
         target = ref.date()
+    elif re.search(r"\bdopodomani\b", low):
+        target = (ref + timedelta(days=2)).date()
     elif re.search(r"\bdomani\b", low):
         target = (ref + timedelta(days=1)).date()
     else:
-        target = None
+        after = re.search(r"\btra\s+(\d{1,3})\s+giorni?\b", low)
+        if after:
+            target = (ref + timedelta(days=int(after.group(1)))).date()
+    if target is None:
+        numeric = re.search(r"\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b", low)
+        named = re.search(r"\b(?:il\s+)?(\d{1,2})\s+(" + "|".join(_MONTHS) + r")(?:\s+(\d{4}))?\b", low)
+        try:
+            if numeric:
+                day, month = int(numeric.group(1)), int(numeric.group(2))
+                raw_year = numeric.group(3)
+                year = int(raw_year) if raw_year else ref.year
+                if raw_year and year < 100:
+                    year += 2000
+                target = datetime(year, month, day, tzinfo=tz).date()
+                if not raw_year and target < ref.date():
+                    target = datetime(year + 1, month, day, tzinfo=tz).date()
+            elif named:
+                day, month = int(named.group(1)), _MONTHS[named.group(2)]
+                raw_year = named.group(3)
+                year = int(raw_year) if raw_year else ref.year
+                target = datetime(year, month, day, tzinfo=tz).date()
+                if not raw_year and target < ref.date():
+                    target = datetime(year + 1, month, day, tzinfo=tz).date()
+        except ValueError:
+            target = None
+    if target is None:
         for name, weekday in _WEEKDAYS.items():
             if re.search(rf"\b{re.escape(name)}\b", low):
                 delta = (weekday - ref.weekday()) % 7
                 target = (ref + timedelta(days=delta)).date()
                 break
-        if target is None:
+    return datetime.combine(target, time(0, 0), tzinfo=tz) if target is not None else None
+
+
+def _clock(text: str) -> tuple[int, int] | None:
+    match = _TIME_RE.search(text)
+    if match:
+        hour, minute = int(match.group(1)), int(match.group(2) or 0)
+        if hour > 23:
             return None
-    return datetime.combine(target, time(0, 0), tzinfo=tz)
+        tail = text[match.end(): match.end() + 24].casefold()
+        if hour < 12 and re.search(r"\b(?:di\s+)?(?:pomeriggio|sera)\b", tail):
+            hour += 12
+        return hour, minute
+    words = _WORD_TIME_RE.search(text)
+    if words:
+        hour = _HOUR_WORDS[words.group(1).casefold()]
+        minute = 30 if words.group(2) and "mezza" in words.group(2).casefold() else 15 if words.group(2) else 0
+        period = (words.group(3) or "").casefold()
+        if hour < 12 and period in {"pomeriggio", "sera"}:
+            hour += 12
+        return hour, minute
+    bare = _BARE_TIME_RE.search(text)
+    return (int(bare.group(1)), int(bare.group(2))) if bare else None
 
 
 def _when(text: str, reference: datetime, *, end_of_day: bool = False) -> datetime | None:
     day = _day(text, reference)
     if day is None:
         return None
-    match = _TIME_RE.search(text)
+    clock = _clock(text)
+    if clock:
+        return day.replace(hour=clock[0], minute=clock[1])
+    return day.replace(hour=23, minute=59) if end_of_day else None
+
+
+def _meeting_end(text: str, start: datetime) -> datetime:
+    range_match = re.search(r"\bdalle\s+\d{1,2}(?:[:.]\d{2})?\s+(?:fino\s+)?alle\s+(\d{1,2})(?:[:.]([0-5]\d))?\b", text, re.I)
+    until_match = re.search(r"\bfino\s+alle\s+(\d{1,2})(?:[:.]([0-5]\d))?\b", text, re.I)
+    match = range_match or until_match
     if match:
-        return day.replace(hour=int(match.group(1)), minute=int(match.group(2) or 0))
-    if end_of_day:
-        return day.replace(hour=23, minute=59)
-    return None
+        end = start.replace(hour=int(match.group(1)), minute=int(match.group(2) or 0))
+        return end if end > start else end + timedelta(days=1)
+    duration = re.search(r"\bper\s+(\d+(?:[.,]\d+)?)\s*(ore?|minuti?)\b", text, re.I)
+    if duration:
+        amount = float(duration.group(1).replace(",", "."))
+        return start + (timedelta(hours=amount) if duration.group(2).casefold().startswith("or") else timedelta(minutes=amount))
+    return start + timedelta(hours=1)
+
+
+def _party(source: AgendaSource, text: str) -> str | None:
+    match = re.search(r"\bcon\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’-]{1,40}(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]{1,40})?)", text)
+    if match:
+        explicit = match.group(1).strip()
+        if _normal(explicit) not in {"te", "voi", "lui", "lei", "noi", "un", "una"}:
+            return explicit
+    sender = _compact(source.sender).strip(" <>,-")
+    return sender if _normal(sender) not in _UNKNOWN_SENDERS else None
 
 
 def _semantic_core(text: str) -> str:
     value = _normal(text)
-    value = re.sub(r"\b(oggi|domani|lunedi|lunedì|martedi|martedì|mercoledi|mercoledì|giovedi|giovedì|venerdi|venerdì|sabato|domenica)\b", " ", value)
-    value = re.sub(r"\b(alle|ore)\s*\d{1,2}(?::\d{2})?\b", " ", value)
+    value = re.sub(r"\b(oggi|domani|dopodomani|stasera|questa sera|lunedi|lunedì|martedi|martedì|mercoledi|mercoledì|giovedi|giovedì|venerdi|venerdì|sabato|domenica)\b", " ", value)
+    value = re.sub(r"\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b", " ", value)
+    value = re.sub(r"\b(?:il\s+)?\d{1,2}\s+(?:" + "|".join(_MONTHS) + r")(?:\s+\d{4})?\b", " ", value)
+    value = re.sub(r"\b(?:alle|ore|verso le|per le|dalle)\s*\d{1,2}(?:[:.]\d{2})?\b", " ", value)
     return " ".join(value.split())
 
 
@@ -189,20 +275,23 @@ class AgendaExtractor:
                 needs_motor=uncertain,
                 semantic_key=f"notification|{_semantic_core(text)}|{when.isoformat() if when else ''}",
             )
-        meeting_signal = bool(re.search(r"\b(ci vediamo|appuntamento|incontro)\b", text, re.I))
+        meeting_signal = bool(_MEETING_RE.search(text))
         start = _when(text, source.timestamp)
         if meeting_signal and start is not None:
             core = _semantic_core(text)
+            party = _party(source, text)
+            identity = _normal(party) if party else (core or "unknown")
             if uncertain:
                 return AgendaCandidate(
                     kind=AgendaKind.INFORMATION, title=text, confidence=0.55,
                     uncertain=True, needs_motor=True,
-                    semantic_key=f"information|{core}|{start.isoformat()}",
+                    semantic_key=f"information|{identity}|{start.isoformat()}",
                 )
             return AgendaCandidate(
-                kind=AgendaKind.APPOINTMENT, title=f"Incontro con {source.sender}",
-                start_at=start, end_at=start + timedelta(hours=1), confidence=0.99,
-                semantic_key=f"appointment|{core}|{start.isoformat()}",
+                kind=AgendaKind.APPOINTMENT,
+                title=f"Incontro con {party}" if party else "Appuntamento",
+                start_at=start, end_at=_meeting_end(text, start), confidence=0.99,
+                semantic_key=f"appointment|{identity}|{start.isoformat()}",
             )
         return AgendaCandidate(
             kind=AgendaKind.INFORMATION, title=text[:500], confidence=0.98,
@@ -262,6 +351,14 @@ class AgendaStore:
         return tuple(dict(row) for row in rows)
 
 
+def _calendar_event_id(event: CalendarEventRequest) -> str:
+    material = event.idempotency_key.strip() or "\0".join((
+        _normal(event.title), event.start_at.astimezone(timezone.utc).isoformat(),
+        event.end_at.astimezone(timezone.utc).isoformat(),
+    ))
+    return "agenda-" + hashlib.sha256(material.encode()).hexdigest()[:32]
+
+
 class LocalIcsCalendarProvider:
     """Persistent self-hosted fallback and deterministic test provider."""
 
@@ -270,7 +367,7 @@ class LocalIcsCalendarProvider:
         self.root.mkdir(parents=True, exist_ok=True)
 
     def create_event(self, event: CalendarEventRequest) -> CalendarReceipt:
-        event_id = f"agenda-{uuid4().hex}"
+        event_id = _calendar_event_id(event)
         path = self.root / f"{event_id}.ics"
         path.write_text(_ics(event_id, event), encoding="utf-8")
         return CalendarReceipt(provider="local-ics", event_id=event_id, locator=str(path))
@@ -298,7 +395,7 @@ class CalDavCalendarProvider:
         return cls(url, username, password, verify_tls=verify)
 
     def create_event(self, event: CalendarEventRequest) -> CalendarReceipt:
-        event_id = f"agenda-{uuid4().hex}"
+        event_id = _calendar_event_id(event)
         locator = f"{self.collection_url}{event_id}.ics"
         response = self.session.put(
             locator, data=_ics(event_id, event).encode("utf-8"),
@@ -306,7 +403,7 @@ class CalDavCalendarProvider:
             auth=(self.username, self.password), timeout=self.timeout, verify=self.verify_tls,
         )
         try:
-            if response.status_code not in {201, 204}:
+            if response.status_code not in {201, 204, 412}:
                 raise RuntimeError(f"caldav_create_failed:{response.status_code}")
         finally:
             response.close()
@@ -387,7 +484,7 @@ class AgendaPipeline:
                 raise RuntimeError("unsafe_appointment_candidate")
             receipt = self.calendar.create_event(CalendarEventRequest(
                 title=candidate.title, start_at=candidate.start_at, end_at=candidate.end_at,
-                description=self._provenance_description(source),
+                description=self._provenance_description(source), idempotency_key=dedup_key,
             ))
             outcome_id = receipt.event_id
         else:
