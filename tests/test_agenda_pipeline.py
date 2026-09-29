@@ -397,3 +397,18 @@ def test_same_phone_call_keeps_one_calendar_file_if_transcript_grows(tmp_path: P
     assert first.kind is AgendaKind.APPOINTMENT
     assert second.kind is AgendaKind.APPOINTMENT
     assert len(list(calendar_dir.glob("*.ics"))) == 1
+
+
+def test_email_rivediamo_binds_date_and_time_to_same_clause(tmp_path: Path) -> None:
+    pipeline, _, _, _ = _pipeline(tmp_path)
+    text = (
+        "Grazie per l'incontro di stasera!\n"
+        "Compilare il file entro mercoledì 30.\n"
+        "QUI la cartella con tutto.\n"
+        "Ci rivediamo giovedì 8/10 alle 18.30 sempre on-line, resto a disposizione."
+    )
+    results = pipeline.process_all(_source("email", "mail-irene", text, sender="Irene Conca"))
+    appointments = [r for r in results if r.kind is AgendaKind.APPOINTMENT]
+    assert len(appointments) == 1
+    assert appointments[0].candidate.title == "Incontro con Irene Conca"
+    assert appointments[0].candidate.start_at == datetime(2026, 10, 8, 18, 30, tzinfo=ROME)

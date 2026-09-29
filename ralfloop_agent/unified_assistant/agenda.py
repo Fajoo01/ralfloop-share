@@ -103,7 +103,7 @@ _UNCERTAIN_RE = re.compile(r"\b(forse|magari|probabilmente|eventualmente|potremm
 _TIME_RE = re.compile(r"\b(?:alle|ore|verso\s+le|per\s+le|dalle)\s*(\d{1,2})(?:[:.]([0-5]\d))?\b", re.I)
 _BARE_TIME_RE = re.compile(r"(?<!\d)([01]?\d|2[0-3])[:.]([0-5]\d)(?!\d)")
 _WORD_TIME_RE = re.compile(r"\b(?:alle|ore|verso\s+le|per\s+le)\s+(" + "|".join(map(re.escape, _HOUR_WORDS)) + r")(?:\s+e\s+(mezza|un\s+quarto|quarto))?(?:\s+di\s+(mattina|pomeriggio|sera))?\b", re.I)
-_MEETING_RE = re.compile(r"\b(ci\s+vediamo|vediamoci|appuntamento|incontro|riunione|call|videochiamata|telefonata|ci\s+sentiamo|colloquio|prenotazione)\b", re.I)
+_MEETING_RE = re.compile(r"\b(ci\s+vediamo|ci\s+rivediamo|vediamoci|rivediamoci|appuntamento|incontro|riunione|call|videochiamata|telefonata|ci\s+sentiamo|colloquio|prenotazione)\b", re.I)
 _CLAUSE_SPLIT_RE = re.compile(r"(?:[.!?;]+(?:\s+|$)|\n+)")
 
 
@@ -126,6 +126,7 @@ def _day(text: str, reference: datetime) -> datetime | None:
     tz = _agenda_timezone()
     ref = reference.replace(tzinfo=tz) if reference.tzinfo is None else reference.astimezone(tz)
     low = _normal(text)
+    raw = text.casefold().replace("’", "'")
     target = None
     if re.search(r"\b(oggi|stasera|questa sera)\b", low):
         target = ref.date()
@@ -138,7 +139,7 @@ def _day(text: str, reference: datetime) -> datetime | None:
         if after:
             target = (ref + timedelta(days=int(after.group(1)))).date()
     if target is None:
-        numeric = re.search(r"\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b", low)
+        numeric = re.search(r"\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b", raw)
         named = re.search(r"\b(?:il\s+)?(\d{1,2})\s+(" + "|".join(_MONTHS) + r")(?:\s+(\d{4}))?\b", low)
         try:
             if numeric:
@@ -218,7 +219,7 @@ def _party(source: AgendaSource, text: str) -> str | None:
     match = re.search(r"\bcon\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’-]{1,40}(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]{1,40})?)", text)
     if match:
         explicit = match.group(1).strip()
-        if _normal(explicit) not in {"te", "voi", "lui", "lei", "noi", "un", "una"}:
+        if _normal(explicit) not in {"te", "voi", "lui", "lei", "noi", "un", "una", "tutto", "tutta", "tutti", "tutte", "calma"}:
             return explicit
     sender = _compact(source.sender).strip(" <>,-")
     return sender if _normal(sender) not in _UNKNOWN_SENDERS else None
