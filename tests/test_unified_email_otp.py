@@ -40,6 +40,10 @@ def test_otp_binding_is_persistent_idempotent_and_consumed_once(tmp_path):
 
     first = gate.request_for_approval(approval)
     second = gate.request_for_approval(approval)
+    binding = gate.binding_for_otp_request("mailotp_test")
+    assert binding is not None
+    assert binding["approval_request_id"] == "apr_MAGNOLIA"
+    assert gate.binding_matches_approval(binding, approval) is True
     authorized = gate.authorize(approval)
     replay = gate.authorize(approval)
 

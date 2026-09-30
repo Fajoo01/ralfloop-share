@@ -10,7 +10,10 @@ from typing import Any
 
 from starlette.requests import Request as StarletteRequest
 
-from .domain_approval import DomainApprovalDecision, DomainApprovalPolicy, approval_status_response, hash_bytes, now_ts
+from .domain_approval import (
+    DomainApprovalDecision, DomainApprovalPolicy, approval_status_response,
+    effective_approval_status, hash_bytes, now_ts,
+)
 from .domain_approval_store import DomainApprovalStore
 
 
@@ -176,6 +179,84 @@ def handle_decision_request(
     return result
 
 
+def handle_email_otp_submit_request(
+    *,
+    body: bytes,
+    headers: dict[str, str],
+    method: str = "POST",
+    path: str = "/domain-approvals/email-otp/submit",
+    policy: DomainApprovalPolicy | None = None,
+    store: DomainApprovalStore | None = None,
+    email_otp_gate: Any | None = None,
+    email_executor: Any | None = None,
+) -> dict[str, Any]:
+    """Verify one replied email OTP and execute only its immutable approved scope."""
+    policy = policy or DomainApprovalPolicy.from_env()
+    store = store or DomainApprovalStore(policy=policy)
+    auth = verify_hmac_headers(
+        method=method, path=path, body=body, headers=headers, policy=policy, store=store,
+    )
+    if not auth.get("ok"):
+        return auth
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {"status": "email_otp_request_invalid", "sent": False}
+    otp_request_id = str(payload.get("otp_request_id") or "").strip()
+    otp = str(payload.get("otp") or "").strip()
+    user_id = int(payload.get("telegram_user_id") or 0)
+    chat_id = int(payload.get("telegram_chat_id") or 0)
+    message_id = int(payload.get("telegram_message_id") or 0)
+    chat_type = str(payload.get("chat_type") or "private")
+    if (
+        not otp_request_id.startswith("mailotp_")
+        or len(otp) != 6 or not otp.isdigit()
+        or user_id <= 0 or chat_id <= 0 or message_id <= 0
+    ):
+        return {"status": "email_otp_request_invalid", "sent": False}
+    if (
+        not policy.allowed_user_ids or user_id not in policy.allowed_user_ids
+        or not policy.allowed_chat_ids or chat_id not in policy.allowed_chat_ids
+        or (policy.require_private_chat and (chat_type != "private" or chat_id != user_id))
+    ):
+        return {"status": "email_otp_source_denied", "sent": False}
+    if email_otp_gate is None:
+        from ralfloop_agent.unified_assistant.email_otp import EmailOtpGate
+        email_otp_gate = EmailOtpGate.from_environment()
+    binding = email_otp_gate.binding_for_otp_request(otp_request_id)
+    if not binding:
+        return {"status": "email_otp_binding_not_found", "sent": False}
+    approval_request_id = str(binding.get("approval_request_id") or "")
+    row = store.get_request(approval_request_id)
+    if not row or str(row.get("action") or "") not in {"send_email", "reply_email"}:
+        return {"status": "email_otp_approval_not_found", "sent": False}
+    if str(binding.get("status") or "") == "consumed" and str(row.get("status") or "") == "consumed":
+        return {"status": "already_executed", "sent": True, "retry_allowed": False}
+    if str(binding.get("status") or "") != "pending":
+        return {"status": "email_otp_required", "sent": False}
+    if effective_approval_status(row) != "approved":
+        return {"status": "approval_not_executable", "sent": False}
+    if not email_otp_gate.binding_matches_approval(binding, row):
+        return {"status": "email_otp_scope_mismatch", "sent": False}
+    verified = email_otp_gate.submit_telegram_reply(
+        row,
+        otp=otp,
+        telegram_chat_id=chat_id,
+        telegram_message_id=message_id,
+    )
+    if not verified.get("approved"):
+        return {"status": "email_otp_invalid", "sent": False}
+    if email_executor is None:
+        from ralfloop_agent.unified_assistant.email_send import UnifiedGmailApprovalExecutor
+        email_executor = UnifiedGmailApprovalExecutor.from_environment(store=store)
+    result = dict(email_executor.execute_approved_request(approval_request_id))
+    return {
+        **result,
+        "approval_request_id": approval_request_id,
+        "otp_request_id": otp_request_id,
+    }
+
+
 def decision_headers(method: str, path: str, payload: dict[str, Any], *, key_file: str | Path, nonce: str, timestamp: int | None = None) -> dict[str, str]:
     body = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ts = timestamp or now_ts()
@@ -219,6 +300,17 @@ def register_domain_approval_routes(app: Any, *, policy: DomainApprovalPolicy | 
             "allowed_chat_count": len(policy.allowed_chat_ids),
             "require_private_chat": policy.require_private_chat,
         }
+
+    @app.post("/domain-approvals/email-otp/submit")
+    async def submit_email_otp(request: StarletteRequest) -> dict[str, Any]:
+        body = await request.body()
+        return handle_email_otp_submit_request(
+            body=body,
+            headers={key: value for key, value in request.headers.items()},
+            path="/domain-approvals/email-otp/submit",
+            policy=policy,
+            store=store,
+        )
 
     @app.get("/domain-approvals/requests")
     async def list_domain_approval_requests() -> dict[str, Any]:

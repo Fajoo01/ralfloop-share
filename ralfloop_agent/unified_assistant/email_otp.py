@@ -113,6 +113,39 @@ class EmailOtpGate:
             ).fetchone()
         return self._public_binding(row, requested=True)
 
+    def binding_for_otp_request(self, otp_request_id: str) -> dict[str, Any] | None:
+        """Resolve one exact persistent OTP binding; ambiguity fails closed."""
+        otp_request_id = str(otp_request_id or "").strip()
+        if not otp_request_id.startswith("mailotp_"):
+            return None
+        with self._connect() as conn:
+            rows = conn.execute(
+                "select * from email_otp_bindings where otp_request_id = ?",
+                (otp_request_id,),
+            ).fetchall()
+        if len(rows) != 1:
+            return None
+        row = rows[0]
+        return {
+            "approval_request_id": str(row["approval_request_id"]),
+            "otp_request_id": str(row["otp_request_id"]),
+            "status": str(row["status"]),
+            "otp_scope": json.loads(str(row["otp_scope_json"])),
+        }
+
+    def binding_matches_approval(
+        self, binding: Mapping[str, Any], approval: Mapping[str, Any]
+    ) -> bool:
+        try:
+            return (
+                str(binding.get("approval_request_id") or "")
+                == str(approval.get("request_id") or "")
+                and dict(binding.get("otp_scope") or {})
+                == self._otp_scope(approval.get("scope") or {})
+            )
+        except (EmailOtpGateError, TypeError, ValueError):
+            return False
+
     def authorize(self, approval: Mapping[str, Any]) -> dict[str, Any]:
         request_id = str(approval.get("request_id") or "")
         scope = self._otp_scope(approval.get("scope") or {})

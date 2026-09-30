@@ -278,6 +278,19 @@ def test_exact_hash_bound_approved_send_is_claimed_and_provider_verified(tmp_pat
     }]
 
 
+def test_execute_approved_request_uses_immutable_store_scope_without_session_pending(tmp_path):
+    store, _, pending = _approval(tmp_path)
+    session = FakeSession()
+
+    result = _executor(store, session).execute_approved_request(str(pending.approval_ref))
+
+    assert result["status"] == "executed"
+    assert result["provider_message_id"] == "0123456789abcdef"
+    writes = [args for _, args in session.calls if args["operation"] == "send"]
+    assert len(writes) == 1
+    assert writes[0]["to"] == "marco@example.invalid"
+
+
 def test_reply_preserves_observed_source_message_and_thread(tmp_path):
     store, _, pending = _approval(tmp_path, reply=True)
     session = FakeSession()

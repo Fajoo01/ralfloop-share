@@ -216,8 +216,36 @@ class UnifiedGmailApprovalExecutor:
             return {"status": "approval_required", "sent": False}
         if pending.action not in {"send_email", "reply_email"}:
             return {"status": "denied", "sent": False}
-        row = self.store.get_request(str(pending.approval_ref))
-        stored_status = str((row or {}).get("status") or "")
+        request_id = str(pending.approval_ref or "")
+        row = self.store.get_request(request_id)
+        if row is None:
+            return {"status": "approval_not_executable", "sent": False, "retry_allowed": False}
+        scope = build_email_approval_scope(pending, account=self.account)
+        return self._execute_approved_row(row, scope, request_id=request_id)
+
+    def execute_approved_request(self, request_id: str) -> dict[str, Any]:
+        """Execute the immutable approval-store email scope without session state."""
+        request_id = str(request_id or "").strip()
+        row = self.store.get_request(request_id)
+        if row is None:
+            return {"status": "approval_not_executable", "sent": False, "retry_allowed": False}
+        if str(row.get("action") or "") not in {"send_email", "reply_email"}:
+            return {"status": "denied", "sent": False, "retry_allowed": False}
+        scope = row.get("scope")
+        if not isinstance(scope, Mapping):
+            return {"status": "scope_invalid", "sent": False, "retry_allowed": False}
+        scope = dict(scope)
+        if str(scope.get("account") or "").casefold() != self.account.casefold():
+            return {"status": "scope_account_mismatch", "sent": False, "retry_allowed": False}
+        if str(row.get("scope_digest") or "") != scope_digest(scope):
+            self.store.mark_stale(request_id, ["email_artifact_changed"])
+            return {"status": "scope_digest_mismatch", "sent": False, "retry_allowed": False}
+        return self._execute_approved_row(row, scope, request_id=request_id)
+
+    def _execute_approved_row(
+        self, row: Mapping[str, Any], scope: Mapping[str, Any], *, request_id: str
+    ) -> dict[str, Any]:
+        stored_status = str(row.get("status") or "")
         if stored_status == "consumed":
             return {"status": "already_executed", "sent": True, "retry_allowed": False}
         if stored_status == "executing":
@@ -227,13 +255,12 @@ class UnifiedGmailApprovalExecutor:
                 "status": "approved_but_send_failed", "sent": False,
                 "retry_allowed": False, "reason": "previous_send_outcome_uncertain",
             }
-        if row is None or effective_approval_status(row) != "approved":
+        if effective_approval_status(dict(row)) != "approved":
             return {
-                "status": "approval_expired" if row and int(row.get("expires_at") or 0) <= int(time.time())
+                "status": "approval_expired" if int(row.get("expires_at") or 0) <= int(time.time())
                 else "approval_not_executable",
                 "sent": False, "retry_allowed": False,
             }
-        scope = build_email_approval_scope(pending, account=self.account)
         context = self.gateway_factory()
         try:
             gateway = context.__enter__()
@@ -244,7 +271,7 @@ class UnifiedGmailApprovalExecutor:
             }
         try:
             try:
-                gateway.preflight_approved_email(scope)
+                gateway.preflight_approved_email(dict(scope))
             except Exception:
                 return {
                     "status": "provider_preflight_failed", "sent": False,
@@ -252,10 +279,7 @@ class UnifiedGmailApprovalExecutor:
                 }
             if EmailOtpGate.required():
                 if self.otp_gate is None:
-                    return {
-                        "status": "email_otp_unavailable", "sent": False,
-                        "retry_allowed": False,
-                    }
+                    return {"status": "email_otp_unavailable", "sent": False, "retry_allowed": False}
                 otp = self.otp_gate.authorize(row)
                 if not otp.get("authorized"):
                     return {
@@ -263,27 +287,25 @@ class UnifiedGmailApprovalExecutor:
                         "sent": False, "retry_allowed": False,
                     }
             try:
-                return dict(gateway.execute_approved_email(
-                    self.store, str(pending.approval_ref), scope
-                ))
+                return dict(gateway.execute_approved_email(self.store, request_id, dict(scope)))
             except Exception:
                 failure = {
                     "status": "execution_precondition_failed", "sent": False,
                     "retry_allowed": False, "provider_call_attempted": False,
                 }
-                row = self.store.get_request(str(pending.approval_ref))
-                if row and row.get("status") == "executing":
-                    uncertain = {**failure, "status": "approved_but_send_failed",
-                                 "reason": "provider_outcome_uncertain"}
+                current = self.store.get_request(request_id)
+                if current and current.get("status") == "executing":
+                    uncertain = {
+                        **failure, "status": "approved_but_send_failed",
+                        "reason": "provider_outcome_uncertain",
+                    }
                     self.store.finish_claimed_execution(
-                        str(pending.approval_ref), action=pending.action,
+                        request_id, action=str(row.get("action") or "send_email"),
                         success=False, result=uncertain,
                     )
                     return uncertain
-                if row and row.get("status") == "approved":
-                    self.store.mark_stale(
-                        str(pending.approval_ref), ["execution_precondition_failed_before_claim"]
-                    )
+                if current and current.get("status") == "approved":
+                    self.store.mark_stale(request_id, ["execution_precondition_failed_before_claim"])
                 return failure
         finally:
             try:
