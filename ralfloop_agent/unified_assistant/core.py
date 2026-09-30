@@ -1044,7 +1044,7 @@ class UnifiedAssistantCore:
         reply_requested = _is_reply_request(text)
         explicit_cc = _explicit_copy_recipients(text, hidden=False)
         explicit_bcc = _explicit_copy_recipients(text, hidden=True)
-        exact_address = _verified_recipient_address(text) if reply_requested else None
+        exact_address = _verified_recipient_address(text)
         exact_message_id = _explicit_source_message_id(text) if reply_requested else None
 
         label = _recipient_label(text) or exact_address

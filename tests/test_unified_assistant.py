@@ -139,6 +139,28 @@ def test_email_compose_stages_exact_draft_without_send():
     assert result.data["send_calls"] == 0
 
 
+def test_email_compose_accepts_verified_literal_address_without_send():
+    core, manager, pipeline, approvals = build_core()
+
+    class ExactResolver:
+        def resolve(self, label):
+            assert label == "fajoo01@gmail.com"
+            return {"status": "resolved", "name": "Fabio", "address": label, "subject": "Canary"}
+
+    core.recipient_resolver = ExactResolver()
+    result = core.handle(
+        "Prepara una email. Destinatario verificato: fajoo01@gmail.com Testo: canary"
+    )
+
+    assert result.status == "draft_pending_approval"
+    pending = manager.state.pending.email
+    assert pending is not None
+    assert pending.payload["recipient"] == "fajoo01@gmail.com"
+    assert pipeline.compose_calls == 1
+    assert approvals.calls == []
+    assert result.data["send_calls"] == 0
+
+
 def test_email_compose_binds_explicit_bcc_into_pending_and_preview():
     core, manager, _, approvals = build_core()
 
