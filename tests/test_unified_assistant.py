@@ -177,7 +177,7 @@ def test_email_compose_binds_explicit_bcc_into_pending_and_preview():
     assert approvals.calls == []
 
 
-def test_bound_ok_executes_exact_displayed_version_once():
+def test_bound_ok_never_sends_email_from_telegram():
     core, manager, _, approvals = build_core()
     core.handle("Scrivi a Marco che abbiamo ricevuto i documenti")
     pending = manager.state.pending.email
@@ -191,11 +191,9 @@ def test_bound_ok_executes_exact_displayed_version_once():
 
     result = core.handle("ok")
 
-    assert result.status == "executed"
-    assert len(approvals.calls) == 1
-    assert approvals.calls[0].payload["body"] == "Grazie, abbiamo ricevuto i documenti."
-    assert approvals.calls[0].approved_digest == approvals.calls[0].payload_digest
-    assert manager.state.pending.email is None
+    assert result.status == "manual_send_only"
+    assert approvals.calls == []
+    assert manager.state.pending.email is not None
 
 
 def test_ok_without_bound_approval_never_sends():
@@ -204,7 +202,7 @@ def test_ok_without_bound_approval_never_sends():
 
     result = core.handle("ok")
 
-    assert result.status == "approval_required"
+    assert result.status == "manual_send_only"
     assert approvals.calls == []
 
 
@@ -226,7 +224,7 @@ def test_draft_revision_invalidates_previous_approval():
     assert pending.approval_ref is None
     assert pending.approved_digest is None
     assert pipeline.repair_calls == 1
-    assert core.handle("ok").status == "approval_required"
+    assert core.handle("ok").status == "manual_send_only"
     assert approvals.calls == []
 
 
@@ -508,36 +506,24 @@ def test_expired_email_pending_cannot_execute():
     assert approvals.calls == []
 
 
-def test_uncertain_send_failure_clears_pending_and_blocks_blind_retry():
+def test_email_sender_executor_is_never_called_from_telegram():
     core, manager, _, _ = build_core()
 
     class FailingExecutor:
         def __init__(self):
             self.calls = 0
-
         def execute(self, pending):
             self.calls += 1
-            return {
-                "status": "approved_but_send_failed", "sent": False,
-                "retry_allowed": False,
-            }
+            raise AssertionError("telegram must never execute email send")
 
     executor = FailingExecutor()
     core.approval_executor = executor
     core.handle("Scrivi a Marco che abbiamo ricevuto i documenti")
-    pending = manager.state.pending.email
-    assert pending is not None
-    manager.bind_approval(
-        domain="email", pending_id=pending.pending_id,
-        payload_digest=pending.payload_digest, approval_ref="apr_test",
-    )
+    result = core.handle("ok")
 
-    failed = core.handle("ok")
-    replay = core.handle("ok")
-
-    assert failed.status == "approved_but_send_failed"
-    assert replay.status == "no_pending_action"
-    assert executor.calls == 1
+    assert result.status == "manual_send_only"
+    assert executor.calls == 0
+    assert manager.state.pending.email is not None
 
 
 def test_home_followup_uses_only_last_home_entity():

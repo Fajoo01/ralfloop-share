@@ -369,7 +369,7 @@ def test_fastweb_runtime_returns_structured_read_artifact_without_pending(monkey
     assert result["artifacts"][0]["side_effects"] == 0
 
 
-def test_runtime_unique_telegram_ok_approves_and_sends_exact_fake_draft(monkeypatch, tmp_path):
+def test_runtime_telegram_email_draft_never_approves_or_sends(monkeypatch, tmp_path):
     class Pipeline:
         def compose(self, working):
             return EmailPipelineResult(
@@ -429,8 +429,7 @@ def test_runtime_unique_telegram_ok_approves_and_sends_exact_fake_draft(monkeypa
     )
 
     assert preview["metadata"]["status"] == "draft_pending_approval"
-    assert preview["approval_required"] is True
-    assert executor.calls == [executor.calls[0]]
-    assert executor.calls[0].payload["body"] == "Grazie, abbiamo ricevuto i documenti."
-    assert approved["metadata"]["status"] == "executed"
-    assert approved["metadata"]["result"]["provider_message_id"] == "0123456789abcdef"
+    assert preview["approval_required"] is False
+    assert executor.calls == []
+    assert approved["metadata"]["status"] == "manual_send_only"
+    assert executor.calls == []

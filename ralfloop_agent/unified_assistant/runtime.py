@@ -460,7 +460,7 @@ def run_unified_telegram(
             item for name in PENDING_DOMAINS
             if (item := getattr(conversation.state.pending, name)) is not None
         ]
-        if len(active) == 1 and active[0].domain in {"email", "whatsapp", "mailchimp", "jellyfin", "browser"}:
+        if len(active) == 1 and active[0].domain in {"whatsapp", "mailchimp", "jellyfin", "browser"}:
             pending = active[0]
             coordinator = ({
                 "email": approval_coordinator,
@@ -792,34 +792,13 @@ def run_unified_telegram(
     current_mailchimp = conversation.state.pending.mailchimp
     current_jellyfin = conversation.state.pending.jellyfin
     current_browser = conversation.state.pending.browser
+    # Email drafts are editable working state. Telegram may revise them, but it never
+    # approves or sends them. Delivery is deliberately manual from Gmail.
     if (
-        approval_coordinator is not None
-        and result.status == "draft_pending_approval"
-        and current_email is not None
-        and not current_email.approval_ref
-    ):
-        if previous_email and previous_email.approval_ref:
-            approval_coordinator.cancel(previous_email)
-        approval_transition = approval_coordinator.request(
-            current_email, requested_by=f"unified:{session_id}"
-        )
-        if approval_transition.get("status") == "pending":
-            current_email = conversation.attach_approval_request(
-                domain="email",
-                pending_id=current_email.pending_id,
-                payload_digest=current_email.payload_digest,
-                approval_ref=str(approval_transition["request_id"]),
-                created_at=int(approval_transition["created_at"]),
-                expires_at=int(approval_transition["expires_at"]),
-            )
-            result.data.update({
-                "approval_request_id": current_email.approval_ref,
-                "approval_expires_at": current_email.expires_at,
-            })
-    elif (
         approval_coordinator is not None
         and result.status == "cancelled"
         and previous_email is not None
+        and previous_email.approval_ref
     ):
         approval_transition = approval_coordinator.cancel(previous_email)
     if (
@@ -1045,11 +1024,17 @@ def run_unified_telegram(
         "tools_executed": bool(result.data.get("tools_executed", False)),
         "response": result.message,
         "final_answer": result.message,
-        "approval_required": result.status in {
-            "draft_pending_approval", "confirmation_required", "protected_approval_required",
-            "approval_required",
-        },
-        "pending_confirmation_id": result.data.get("pending_id"),
+        "approval_required": (
+            result.status in {
+                "draft_pending_approval", "confirmation_required", "protected_approval_required",
+                "approval_required",
+            }
+            and not (result.status == "draft_pending_approval" and current_email is not None)
+        ),
+        "pending_confirmation_id": (
+            None if result.status == "draft_pending_approval" and current_email is not None
+            else result.data.get("pending_id")
+        ),
         "metadata": {"status": result.status, **result.data},
         "artifacts": artifacts,
         "audit_summary": [f"unified_assistant::{result.status}"],

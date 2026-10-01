@@ -1284,36 +1284,12 @@ class UnifiedAssistantCore:
         if not payload_matches(pending):
             return self._result("blocked", "Pending payload hash mismatch.")
         if pending.domain == "email":
-            if not self.flags.email_assistant_live:
-                return self._result("disabled", "Email assistant live disabled.", send_calls=0)
-            if not approval_matches(pending):
-                return self._result("approval_required", "Approvazione hash-bound mancante.", send_calls=0)
-            if self.approval_executor is None:
-                return self._result("unavailable", "Approval executor unavailable.", send_calls=0)
-            result = self.approval_executor.execute(pending)
-            self._audit(
-                domain="email", intent="email.send", skill="email.compose",
-                policy=pending.policy, target=str(pending.payload.get("recipient") or ""),
-                verification=str(result.get("status") or "failed"), pending=pending,
-                tool_result=str(result.get("status") or "failed"),
-            )
-            if result.get("status") == "executed":
-                self.conversation.clear("email")
-                return self._result("executed", "Email inviata e confermata dal provider.", result=result)
-            if result.get("status") == "already_executed":
-                self.conversation.clear("email")
-                return self._result(
-                    "already_executed", "Email già inviata; nessun secondo invio.", result=result
-                )
-            if result.get("status") == "approved_but_send_failed":
-                self.conversation.clear("email")
-                return self._result(
-                    "approved_but_send_failed",
-                    "Invio non confermato; retry automatico bloccato per evitare duplicati.",
-                    result=result,
-                )
             return self._result(
-                str(result.get("status") or "failed"), "Email non inviata.", result=result
+                "manual_send_only",
+                "Bozza pronta. Puoi continuare a modificarla qui; l'invio resta manuale da Gmail.",
+                send_calls=0,
+                draft_version=pending.version,
+                draft_digest=pending.payload_digest,
             )
         if pending.domain == "whatsapp":
             if not self.flags.whatsapp_assistant_live:
@@ -1543,7 +1519,7 @@ def _email_display(
 ) -> str:
     subject_line = f"\nOggetto: {subject}\n" if subject else ""
     copies = (f"CC: {cc}\n" if cc else "") + (f"CCN: {bcc}\n" if bcc else "")
-    return f"Bozza per {recipient}:{subject_line}{copies}\n{body}\n\nInvio?"
+    return f"Bozza per {recipient}:{subject_line}{copies}\n{body}\n\nDimmi su Telegram cosa vuoi cambiare. L’invio resta manuale da Gmail."
 
 
 def _is_reply_request(text: str) -> bool:
@@ -1551,7 +1527,7 @@ def _is_reply_request(text: str) -> bool:
 
 
 def _is_email_revision(text: str) -> bool:
-    return bool(re.search(r"\b(?:rendila|cambiala|cambia|aggiungi|togli|modifica)\b", text, re.I))
+    return bool(re.search(r"\b(?:rendila|rendilo|cambiala|cambialo|cambia|aggiungi|togli|modifica|accorcia|allunga|riscrivi|sostituisci|correggi|metti|leva|rendi|più formale|meno formale|più breve|meno lungo)\b", text, re.I))
 
 
 def _home_message(result: Any, prepared: HomePreparedAction) -> str:
