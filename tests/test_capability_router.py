@@ -47,11 +47,14 @@ def test_email_send_routes_to_mcp_with_human_confirmation():
     assert "send_without_human_confirmation" in route.blocked_actions
 
 
-def test_reading_posta_routes_to_protected_gmail_not_substring() -> None:
+def test_reading_posta_routes_to_read_only_gmail_not_substring() -> None:
     posta = route_task("Leggi la posta")
     sposta = route_task("Non spostare nulla")
-    assert posta.task_mode == "external_action"
-    assert posta.needs_human_confirmation is True
+    assert posta.task_mode == "check_only"
+    assert posta.write_policy == "no_write"
+    assert posta.needs_human_confirmation is False
+    assert "execute_read_only_mcp" in posta.workflow
+    assert "write_external_state" in posta.blocked_actions
     assert "google_workspace.gmail" in posta.mcp_connectors
     assert "google_workspace.gmail" not in sposta.mcp_connectors
 

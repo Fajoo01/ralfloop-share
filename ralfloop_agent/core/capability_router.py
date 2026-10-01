@@ -95,6 +95,7 @@ DOMAIN_SKILLS = (
 )
 
 READ_ONLY_MCP_CONNECTORS = frozenset({
+    "google_workspace.gmail",
     "mailchimp.marketing",
 })
 
@@ -118,6 +119,16 @@ EXTERNAL_MUTATION_MARKERS = (
     "disiscrivi contatto",
     "subscribe",
     "unsubscribe",
+    "crea bozza",
+    "salva bozza",
+    "modifica bozza",
+    "elimina bozza",
+    "reply email",
+    "forward email",
+    "rispondi alla email",
+    "rispondi all'email",
+    "rispondi email",
+    "inoltra email",
 )
 
 MCP_CONNECTORS = (
@@ -201,6 +212,7 @@ def route_task(
         and (
             not read_only_mcp
             or wants_external_mutation
+            or has_patch
         )
     )
 

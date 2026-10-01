@@ -22,9 +22,34 @@ def test_mailchimp_mutation_stays_confirmation_gated():
     assert "request_human_confirmation" in route.workflow
 
 
-def test_existing_gmail_connector_remains_confirmation_gated():
+def test_gmail_read_is_not_confirmation_gated():
     route = route_task("controlla Gmail")
 
     assert "google_workspace.gmail" in route.mcp_connectors
+    assert route.task_mode == "check_only"
+    assert route.write_policy == "no_write"
+    assert route.needs_human_confirmation is False
+    assert "execute_read_only_mcp" in route.workflow
+
+
+def test_gmail_write_stays_confirmation_gated():
+    route = route_task("crea bozza Gmail per Irene")
+
+    assert "google_workspace.gmail" in route.mcp_connectors
     assert route.task_mode == "external_action"
+    assert route.write_policy == "external_side_effect_requires_confirmation"
     assert route.needs_human_confirmation is True
+
+
+def test_formarci_explicit_read_only_gmail_lookup_needs_no_approval():
+    route = route_task(
+        "FORMARCI INSIEME — SOLO LETTURA. Risolvi dai dati locali e da Gmail/Google Workspace "
+        "in sola lettura i contatti verificati. NON creare bozze email, NON inviare nulla."
+    )
+
+    assert "google_workspace.gmail" in route.mcp_connectors
+    assert route.task_mode == "check_only"
+    assert route.write_policy == "no_write"
+    assert route.needs_human_confirmation is False
+    assert "execute_read_only_mcp" in route.workflow
+    assert "request_human_confirmation" not in route.workflow
