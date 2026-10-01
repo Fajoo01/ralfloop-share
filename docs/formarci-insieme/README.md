@@ -7,8 +7,9 @@ Il partenariato progettuale è già composto da: ARCI Bellezza APS (capofila), A
 Questi documenti sono quindi **lettere di sostegno**, non Allegato A1 di adesione al partenariato.
 
 Lettere predisposte per:
-- Municipio 2 di Milano;
 - I.C. Francesco Cappelli / Parco Trotter;
+- Comitato Genitori Trotter;
+- La Città del Sole – Amici del Parco Trotter ODV;
 - I.C. Via Cisalpino 38;
 - I.C. Perasso — plesso Adele Del Ponte;
 - AMEDI APS;
