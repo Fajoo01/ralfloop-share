@@ -20,6 +20,7 @@ import subprocess
 import time
 
 from ralf_mcp_peer_auth import assign_socket_group, peer_allowed, peer_uid
+from ralf_google_workspace_draft_tool import handle_tool_call as handle_draft_tool_call, tool_definition as draft_tool_definition
 
 
 MAX_LINE = 8 * 1024 * 1024
@@ -80,6 +81,7 @@ def _relay(conn: socket.socket, command: str, idle_timeout: float, *, write_uid:
     buffers = {"client": bytearray(), "server": bytearray()}
     caller_uid = peer_uid(conn)
     last_activity = time.monotonic()
+    tool_list_ids: set[object] = set()
     try:
         while process.poll() is None:
             events = selector.select(1.0)
@@ -102,6 +104,18 @@ def _relay(conn: socket.socket, command: str, idle_timeout: float, *, write_uid:
                         continue
                     payload = line + b"\n"
                     if source == "client":
+                        try:
+                            request = json.loads(line)
+                        except (ValueError, UnicodeDecodeError):
+                            request = {}
+                        if isinstance(request, dict) and request.get("method") == "tools/list":
+                            tool_list_ids.add(request.get("id"))
+                        draft_response = handle_draft_tool_call(
+                            line, caller_uid=caller_uid, write_uid=write_uid
+                        )
+                        if draft_response is not None:
+                            conn.sendall(draft_response)
+                            continue
                         blocked = _guard_client_line(
                             line, caller_uid=caller_uid, write_uid=write_uid
                         )
@@ -111,6 +125,16 @@ def _relay(conn: socket.socket, command: str, idle_timeout: float, *, write_uid:
                         process.stdin.write(payload)
                         process.stdin.flush()
                     else:
+                        try:
+                            response = json.loads(line)
+                        except (ValueError, UnicodeDecodeError):
+                            response = {}
+                        if isinstance(response, dict) and response.get("id") in tool_list_ids:
+                            tool_list_ids.discard(response.get("id"))
+                            result = response.get("result")
+                            if isinstance(result, dict) and isinstance(result.get("tools"), list):
+                                result["tools"].append(draft_tool_definition())
+                                payload = json.dumps(response).encode() + b"\n"
                         conn.sendall(payload)
     finally:
         selector.close()

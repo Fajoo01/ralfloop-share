@@ -58,6 +58,16 @@ class FakeEmailPipeline:
         )
 
 
+class FakeDraftSync:
+    def __init__(self):
+        self.calls = []
+
+    def upsert(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        draft_id = str(kwargs.get("draft_id") or "draft_canary_1")
+        return {"status": "draft_updated" if kwargs.get("draft_id") else "draft_created", "draftId": draft_id, "sent": False}
+
+
 class FakeApprovalExecutor:
     def __init__(self):
         self.calls = []
@@ -91,7 +101,7 @@ class FakeHomeBackend:
         return {"ok": True}
 
 
-def build_core(*, email_live=True, home=False, conversation=None, home_workflow=None):
+def build_core(*, email_live=True, home=False, conversation=None, home_workflow=None, draft_sync=None):
     registry = UnifiedRegistryFacade()
     memory = MemoryItem(
         id="tiremm.fact",
@@ -118,6 +128,7 @@ def build_core(*, email_live=True, home=False, conversation=None, home_workflow=
         ),
         email_memory=EmailWorkingMemoryBuilder(MemoryRouter((memory,)), registry.domain("email")),
         email_pipeline=pipeline,
+        email_draft_sync=draft_sync,
         recipient_resolver=FakeRecipientResolver(),
         approval_executor=approvals,
         home_workflow=home_workflow,
@@ -696,3 +707,25 @@ def test_research_deep_adapter_requires_cited_read_only_evidence():
         "lavoro.gov.it", "normattiva.it", "gazzettaufficiale.it", "def.finanze.it"
     ]
     assert manager.calls[0][1]["seed_urls"]
+
+
+def test_gmail_draft_sync_reuses_same_provider_draft_id_on_revision():
+    sync = FakeDraftSync()
+    core, manager, _, approvals = build_core(draft_sync=sync)
+
+    first = core.handle("Scrivi a Marco che abbiamo ricevuto i documenti")
+    assert first.status == "draft_pending_approval"
+    assert first.data["gmail_draft_id"] == "draft_canary_1"
+    pending = manager.state.pending.email
+    assert pending is not None
+    assert pending.payload["gmail_draft_id"] == "draft_canary_1"
+
+    second = core.handle("accorciala e rendila più formale")
+    assert second.status == "draft_pending_approval"
+    assert second.data["gmail_draft_id"] == "draft_canary_1"
+    assert len(sync.calls) == 2
+    assert sync.calls[0].get("draft_id", "") == ""
+    assert sync.calls[1]["draft_id"] == "draft_canary_1"
+    assert approvals.calls == []
+    assert first.data["send_calls"] == 0
+    assert second.data["send_calls"] == 0

@@ -58,6 +58,13 @@ class RecipientResolver(Protocol):
     def resolve(self, label: str) -> dict[str, str] | None: ...
 
 
+class EmailDraftSync(Protocol):
+    def upsert(
+        self, *, to: str, subject: str, body: str, draft_id: str = "",
+        cc: str = "", bcc: str = "", thread_id: str = "",
+    ) -> dict[str, Any]: ...
+
+
 class EmailSearchService(Protocol):
     def search(self, request: str) -> EmailSearchResult: ...
 
@@ -100,6 +107,7 @@ class UnifiedAssistantCore:
         flags: AssistantFeatureFlags,
         email_memory: EmailWorkingMemoryBuilder | None = None,
         email_pipeline: EmailPipeline | None = None,
+        email_draft_sync: EmailDraftSync | None = None,
         email_search: EmailSearchService | None = None,
         fastweb_portal: FastwebPortalService | None = None,
         whatsapp_read: WhatsAppReadService | None = None,
@@ -126,6 +134,7 @@ class UnifiedAssistantCore:
         self.flags = flags
         self.email_memory = email_memory
         self.email_pipeline = email_pipeline
+        self.email_draft_sync = email_draft_sync
         self.email_search = email_search
         self.fastweb_portal = fastweb_portal
         self.whatsapp_read = whatsapp_read
@@ -1158,6 +1167,24 @@ class UnifiedAssistantCore:
             cc=explicit_cc,
             bcc=explicit_bcc,
         )
+        gmail_draft_id = ""
+        if self.email_draft_sync is not None:
+            try:
+                synced = self.email_draft_sync.upsert(
+                    to=recipient["address"], subject=resolved_subject, body=outcome.body,
+                    cc=explicit_cc, bcc=explicit_bcc,
+                    thread_id=str(payload.get("thread_id") or ""),
+                )
+                gmail_draft_id = str(synced.get("draftId") or "")
+            except Exception as exc:
+                return self._result(
+                    "draft_sync_failed", "Bozza Gmail non sincronizzata; nessuna email inviata.",
+                    error_type=type(exc).__name__, send_calls=0,
+                )
+            if not gmail_draft_id:
+                return self._result("draft_sync_failed", "Bozza Gmail senza ID; nessuna email inviata.", send_calls=0)
+            payload["gmail_draft_id"] = gmail_draft_id
+            payload["gmail_draft_synced"] = True
         display = _email_display(
             recipient.get("name") or label, outcome.body, resolved_subject,
             cc=explicit_cc, bcc=explicit_bcc,
@@ -1183,6 +1210,7 @@ class UnifiedAssistantCore:
             draft_digest=pending.payload_digest,
             risk=outcome.risk,
             ds4_invoked=outcome.ds4_invoked,
+            gmail_draft_id=gmail_draft_id,
             send_calls=0,
         )
 
@@ -1207,6 +1235,26 @@ class UnifiedAssistantCore:
         outcome = self.email_pipeline.revise(working, str(pending.payload.get("body") or ""), instruction)
         if outcome.hard_guard != "passed" or outcome.final_validator != "passed":
             return self._result("blocked", "Modifica bloccata dai validator.")
+        synced_gmail_draft_id: str | None = None
+        if self.email_draft_sync is not None:
+            try:
+                synced = self.email_draft_sync.upsert(
+                    to=str(pending.payload.get("recipient") or ""),
+                    subject=str(pending.payload.get("subject") or ""),
+                    body=outcome.body,
+                    draft_id=str(pending.payload.get("gmail_draft_id") or ""),
+                    cc=str(pending.payload.get("cc") or ""),
+                    bcc=str(pending.payload.get("bcc") or ""),
+                    thread_id=str(pending.payload.get("thread_id") or ""),
+                )
+                synced_gmail_draft_id = str(synced.get("draftId") or "")
+            except Exception as exc:
+                return self._result(
+                    "draft_sync_failed", "Modifica non sincronizzata su Gmail; nessuna email inviata.",
+                    error_type=type(exc).__name__, send_calls=0,
+                )
+            if not synced_gmail_draft_id:
+                return self._result("draft_sync_failed", "Gmail non ha confermato la bozza; nessuna email inviata.", send_calls=0)
         display = _email_display(
             str(pending.payload.get("recipient") or "destinatario"),
             outcome.body,
@@ -1217,6 +1265,7 @@ class UnifiedAssistantCore:
             displayed_text=display,
             risk=outcome.risk,
             validation_state=outcome.final_validator,
+            gmail_draft_id=synced_gmail_draft_id,
         )
         self._email_working.pop(pending.pending_id, None)
         self._email_working[revised.pending_id] = working
@@ -1226,6 +1275,7 @@ class UnifiedAssistantCore:
             draft_version=revised.version,
             draft_digest=revised.payload_digest,
             previous_approval_invalidated=True,
+            gmail_draft_id=str(revised.payload.get("gmail_draft_id") or ""),
             send_calls=0,
         )
 

@@ -19,6 +19,7 @@ from .email import EmailWorkingMemoryBuilder
 from .email_pipeline import GenericEmailPipeline
 from .email_search import GoogleWorkspaceEmailSearch
 from .email_send import UnifiedEmailApprovalCoordinator, UnifiedGmailApprovalExecutor
+from .gmail_draft_sync import GoogleWorkspaceGmailDraftSync
 from .mailchimp_campaign import (
     UnifiedMailchimpApprovalCoordinator, UnifiedMailchimpApprovalExecutor,
 )
@@ -499,6 +500,7 @@ def run_unified_telegram(
         flags=flags,
         email_memory=email_memory_builder,
         email_pipeline=email_pipeline,
+        email_draft_sync=GoogleWorkspaceGmailDraftSync.from_environment(),
         email_search=GoogleWorkspaceEmailSearch.from_environment(),
         fastweb_portal=fastweb_portal,
         whatsapp_read=whatsapp_read,

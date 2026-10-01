@@ -133,6 +133,7 @@ class ConversationManager:
         displayed_text: str,
         risk: str | None = None,
         validation_state: str | None = None,
+        gmail_draft_id: str | None = None,
     ) -> PendingAction:
         current = self.state.pending.email
         if current is None:
@@ -143,6 +144,9 @@ class ConversationManager:
             payload["risk"] = risk
         if validation_state is not None:
             payload["validation_state"] = validation_state
+        if gmail_draft_id is not None:
+            payload["gmail_draft_id"] = gmail_draft_id
+            payload["gmail_draft_synced"] = True
         pending = PendingAction(
             pending_id="pending_" + uuid4().hex[:16],
             domain="email",

@@ -384,6 +384,10 @@ def test_runtime_telegram_email_draft_never_approves_or_sends(monkeypatch, tmp_p
         def resolve(self, label):
             return {"status": "resolved", "name": "Marco", "address": "marco@example.invalid"}
 
+    class DraftSync:
+        def upsert(self, **kwargs):
+            return {"status": "draft_created", "draftId": "draft_runtime_test", "sent": False}
+
     class Executor:
         def __init__(self):
             self.calls = []
@@ -410,6 +414,11 @@ def test_runtime_telegram_email_draft_never_approves_or_sends(monkeypatch, tmp_p
         runtime.GoogleWorkspaceRecipientResolver,
         "from_environment",
         classmethod(lambda cls: Resolver()),
+    )
+    monkeypatch.setattr(
+        runtime.GoogleWorkspaceGmailDraftSync,
+        "from_environment",
+        classmethod(lambda cls: DraftSync()),
     )
     monkeypatch.setattr(
         runtime.UnifiedGmailApprovalExecutor,
