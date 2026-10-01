@@ -32,8 +32,17 @@ def test_gmail_read_is_not_confirmation_gated():
     assert "execute_read_only_mcp" in route.workflow
 
 
-def test_gmail_write_stays_confirmation_gated():
+def test_gmail_draft_is_local_editable_working_state():
     route = route_task("crea bozza Gmail per Irene")
+
+    assert "google_workspace.gmail" in route.mcp_connectors
+    assert route.task_mode == "check_only"
+    assert route.write_policy == "no_write"
+    assert route.needs_human_confirmation is False
+
+
+def test_gmail_send_stays_confirmation_gated():
+    route = route_task("invia email a Irene")
 
     assert "google_workspace.gmail" in route.mcp_connectors
     assert route.task_mode == "external_action"

@@ -63,6 +63,11 @@ SEND_MARKERS = (
     "send telegram",
 )
 
+EMAIL_DRAFT_MARKERS = (
+    "scrivi a", "prepara email", "prepara una email", "prepara mail",
+    "prepara una mail", "bozza email", "bozza mail", "bozza gmail",
+)
+
 DESTRUCTIVE_MARKERS = (
     "cancella",
     "cancellare",
@@ -192,6 +197,7 @@ def route_task(
     text = f"{user_goal or ''}\n{skill_context or ''}".lower()
 
     wants_send = _has_unnegated(text, SEND_MARKERS)
+    wants_email_draft = _has_any(text, EMAIL_DRAFT_MARKERS) and not wants_send
     wants_destructive = _has_unnegated(text, DESTRUCTIVE_MARKERS)
     has_read_only = _has_any(text, READ_ONLY_MARKERS)
     has_inspection = _has_any(text, SYSTEM_INSPECTION_MARKERS)
@@ -207,6 +213,10 @@ def route_task(
         text,
         EXTERNAL_MUTATION_MARKERS,
     )
+    if wants_email_draft:
+        mcp_connectors = [c for c in mcp_connectors if c == "google_workspace.gmail"]
+        wants_external_connector = False
+        wants_external_mutation = False
     wants_external_side_effect = (
         wants_external_connector
         and (

@@ -16,6 +16,13 @@ from src.routing_config import (
 from src.skills import SkillsRegistry, is_local_maintenance_intent
 
 
+EMAIL_DRAFT_MARKERS = (
+    "scrivi a", "prepara email", "prepara una email", "prepara mail",
+    "prepara una mail", "bozza email", "bozza mail", "bozza gmail",
+)
+EMAIL_SEND_MARKERS = ("invia email", "manda email", "manda la email", "send email", "gmail send")
+
+
 ROUTING_CONFIG = load_routing_config()
 MCP_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = mcp_keywords(ROUTING_CONFIG)
 READ_MCP_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = read_mcp_keywords(ROUTING_CONFIG)
@@ -93,6 +100,12 @@ class CapabilityRouter:
             self.mode_keywords.get("external_action_verbs", []),
             goal,
         )
+        email_draft_hit = (
+            any_trigger_matches(EMAIL_DRAFT_MARKERS, goal)
+            and not any_unnegated_trigger_matches(EMAIL_SEND_MARKERS, goal)
+        )
+        if email_draft_hit:
+            return "check_only", "matched local editable email draft intent"
         if side_effect_hit:
             return "external_action", "matched unnegated side-effect keyword"
         if inspection_hit and (check_hit or not patch_hit):

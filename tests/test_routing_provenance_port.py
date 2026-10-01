@@ -444,3 +444,28 @@ def test_ralf_ask_declares_zero_tools(tmp_path: Path, monkeypatch: pytest.Monkey
     )
     assert rc == 0
     assert "tools_executed=false" in err.getvalue()
+
+
+def test_email_draft_routes_as_editable_without_approval():
+    route = route_task("Scrivi a Irene una bozza email, non inviarla")
+    decision = classify_interaction("Scrivi a Irene una bozza email, non inviarla")
+
+    assert route.mode == "check_only"
+    assert route.requires_confirmation is False
+    assert decision.interaction_mode == "agent"
+    assert decision.capability == "email.draft.editable"
+    assert decision.approval_required is False
+
+
+def test_email_draft_followup_routes_back_to_agent():
+    decision = classify_interaction("accorciala e rendila più formale")
+    assert decision.interaction_mode == "agent"
+    assert decision.capability == "email.draft.editable"
+    assert decision.approval_required is False
+
+
+def test_email_send_still_routes_protected():
+    decision = classify_interaction("invia email a Irene")
+    assert decision.interaction_mode == "agent"
+    assert decision.capability == "protected_external_action"
+    assert decision.approval_required is True
