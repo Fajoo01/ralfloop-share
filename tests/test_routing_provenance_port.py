@@ -354,10 +354,26 @@ def test_natural_interaction_routes_chat_agent_and_protected() -> None:
 def test_posta_and_sposta_are_separate_natural_routes() -> None:
     posta = route_task("Leggi la posta")
     sposta = route_task("Sposta il file")
-    assert posta.mode == "external_action"
+    assert posta.mode == "check_only"
+    assert posta.requires_confirmation is False
     assert "google_workspace.gmail" in posta.mcp_used
     assert sposta.mode == "external_action"
+    assert sposta.requires_confirmation is True
     assert "google_workspace.gmail" not in sposta.mcp_used
+
+
+def test_formarci_gmail_read_only_does_not_require_approval() -> None:
+    route = route_task("FORMARCI INSIEME — SOLO LETTURA. Cerca su Gmail i contatti utili. Non inviare nulla e non creare bozze.")
+    assert route.mode == "check_only"
+    assert route.requires_confirmation is False
+    assert "google_workspace.gmail" in route.mcp_used
+
+
+def test_gmail_draft_mutation_stays_protected_even_with_check_keyword() -> None:
+    route = route_task("Controlla Gmail e crea bozza per Irene")
+    assert route.mode == "external_action"
+    assert route.requires_confirmation is True
+    assert "google_workspace.gmail" in route.mcp_used
 
 
 def test_protected_components_are_not_modified() -> None:

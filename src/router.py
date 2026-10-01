@@ -97,12 +97,12 @@ class CapabilityRouter:
             return "external_action", "matched unnegated side-effect keyword"
         if inspection_hit and (check_hit or not patch_hit):
             return "read_only_system_inspection", "matched read-only system inspection keywords"
+        if check_hit and not patch_hit:
+            return "check_only", "matched explicit read/audit/check keywords before connector nouns"
         if external_hit:
             return "external_action", "matched unnegated external connector/action keyword"
         if patch_hit:
             return "patch_allowed", "matched patch/fix keywords"
-        if check_hit:
-            return "check_only", "matched read/audit/check keywords"
         return "check_only", "defaulted to check_only for safety"
 
     def _classify_local_maintenance_mode(self, user_goal: str) -> tuple[str, str]:

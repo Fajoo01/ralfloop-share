@@ -54,7 +54,7 @@
     "read_only_system_inspection": ["spazio", "spazio disco", "occupa spazio", "occupando spazio", "directory grandi", "file oltre", "file temporanei", "cache", "df", "du", "find", "processi", "memoria ram", "uso ram", "uptime", "nvidia-smi", "uso gpu"],
     "patch_allowed": ["correggi", "fix", "patch", "risolvi bug", "bugfix", "ripara"],
     "external_action": ["invia", "manda", "scrivi su drive", "posta", "telegram", "browser", "portale", "compila candidatura", "carica allegato", "carica allegati", "email", "gmail", "drive", "cancella", "cancellare", "elimina", "eliminare", "sposta", "spostare", "rimuovi", "rimuovere"],
-    "external_action_verbs": ["invia", "manda", "scrivi su drive", "pubblica", "apri", "attiva", "compila candidatura", "carica allegato", "carica allegati", "cancella", "cancellare", "elimina", "eliminare", "sposta", "spostare", "rimuovi", "rimuovere", "riavvia", "arresta", "termina processo", "kill", "chmod", "chown", "prune", "vacuum"]
+    "external_action_verbs": ["invia", "manda", "scrivi su drive", "pubblica", "apri", "attiva", "compila candidatura", "carica allegato", "carica allegati", "cancella", "cancellare", "elimina", "eliminare", "sposta", "spostare", "rimuovi", "rimuovere", "riavvia", "arresta", "termina processo", "kill", "chmod", "chown", "prune", "vacuum", "crea bozza", "salva bozza", "modifica bozza", "elimina bozza", "scrivi email", "rispondi email", "rispondi alla mail", "inoltra email", "inoltra mail"]
   },
   "mcp_keywords": [
     {"name": "google_workspace.gmail", "triggers": ["email", "gmail", "mail", "posta", "invia", "manda"]},
@@ -63,6 +63,10 @@
     {"name": "browser", "triggers": ["browser", "portale", "pagina", "url", "compila candidatura", "carica allegato", "carica allegati"]}
   ],
   "read_mcp_keywords": [
+    {
+      "name": "google_workspace.gmail",
+      "triggers": ["email", "gmail", "mail", "posta"]
+    },
     {
       "name": "abc_relation",
       "triggers": [
