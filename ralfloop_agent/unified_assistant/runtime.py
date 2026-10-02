@@ -462,7 +462,10 @@ def run_unified_telegram(
             item for name in PENDING_DOMAINS
             if (item := getattr(conversation.state.pending, name)) is not None
         ]
-        if len(active) == 1 and active[0].domain in {"whatsapp", "mailchimp", "jellyfin", "browser"}:
+        if len(active) == 1 and (
+            active[0].domain in {"whatsapp", "mailchimp", "jellyfin", "browser"}
+            or (active[0].domain == "email" and bool(active[0].payload.get("gmail_bound_send")))
+        ):
             pending = active[0]
             coordinator = ({
                 "email": approval_coordinator,
@@ -488,6 +491,7 @@ def run_unified_telegram(
                 )
     email_memory_builder = EmailWorkingMemoryBuilder(memory, registry.domain("email"))
     email_pipeline = GenericEmailPipeline()
+    gmail_draft_sync = GoogleWorkspaceGmailDraftSync.from_environment()
     whatsapp_compose = UnifiedWhatsAppComposeService(
         whatsapp_gateway_factory,
         draft_pipeline=EmailBackedWhatsAppDraftPipeline(
@@ -500,7 +504,7 @@ def run_unified_telegram(
         flags=flags,
         email_memory=email_memory_builder,
         email_pipeline=email_pipeline,
-        email_draft_sync=GoogleWorkspaceGmailDraftSync.from_environment(),
+        email_draft_sync=gmail_draft_sync,
         email_search=GoogleWorkspaceEmailSearch.from_environment(),
         fastweb_portal=fastweb_portal,
         whatsapp_read=whatsapp_read,
@@ -791,12 +795,107 @@ def run_unified_telegram(
     else:
         result = core.handle(text)
     current_email = conversation.state.pending.email
+    email_exact_body = context.get("email_exact_body")
+    if (
+        result.status == "draft_pending_approval"
+        and current_email is not None
+        and isinstance(email_exact_body, str)
+        and email_exact_body.strip()
+        and str(current_email.payload.get("body") or "") != email_exact_body
+    ):
+        exact_working = email_memory_builder.build(
+            objective=email_exact_body,
+            recipient=str(current_email.payload.get("recipient") or ""),
+            subject=str(current_email.payload.get("subject") or ""),
+        )
+        exact_outcome = email_pipeline.validate_exact(exact_working, email_exact_body)
+        if exact_outcome.hard_guard != "passed" or exact_outcome.final_validator != "passed":
+            return core._result("blocked", "Testo email esatto bloccato dai validator.", send_calls=0)
+        current_email = conversation.revise_email(
+            body=email_exact_body, displayed_text=email_exact_body,
+            risk=exact_outcome.risk, validation_state=exact_outcome.final_validator,
+            gmail_draft_id=str(current_email.payload.get("gmail_draft_id") or ""),
+        )
+        result.data.update({
+            "pending_id": current_email.pending_id,
+            "draft_version": current_email.version,
+            "draft_digest": current_email.payload_digest,
+        })
+    email_exact_subject = context.get("email_exact_subject")
+    email_attachments = context.get("email_attachments")
+    if (
+        result.status == "draft_pending_approval"
+        and current_email is not None
+        and isinstance(email_attachments, (list, tuple))
+        and email_attachments
+        and not current_email.payload.get("gmail_bound_send")
+    ):
+        normalized_attachments = []
+        attachment_paths = []
+        for item in email_attachments:
+            if not isinstance(item, Mapping):
+                raise ValueError("email_attachment_invalid")
+            path = str(item.get("path") or "").strip()
+            name = str(item.get("name") or "").strip()
+            sha256 = str(item.get("sha256") or "").strip().lower()
+            if not path or not name or len(sha256) != 64:
+                raise ValueError("email_attachment_invalid")
+            normalized_attachments.append({"path": path, "name": name, "sha256": sha256})
+            attachment_paths.append(path)
+        synced = gmail_draft_sync.upsert(
+            to=str(current_email.payload.get("recipient") or ""),
+            subject=(str(email_exact_subject) if isinstance(email_exact_subject, str) and email_exact_subject.strip() else str(current_email.payload.get("subject") or "")),
+            body=str(current_email.payload.get("body") or ""),
+            draft_id=str(current_email.payload.get("gmail_draft_id") or ""),
+            cc=str(current_email.payload.get("cc") or ""),
+            bcc=str(current_email.payload.get("bcc") or ""),
+            thread_id=str(current_email.payload.get("thread_id") or ""),
+            attachments=tuple(normalized_attachments),
+        )
+        current_email = conversation.bind_email_draft_artifact(
+            gmail_draft_id=str(synced.get("draftId") or ""),
+            gmail_raw_sha256=str(synced.get("rawSha256") or ""),
+            attachments=normalized_attachments, attachment_paths=attachment_paths,
+            subject=(str(email_exact_subject) if isinstance(email_exact_subject, str) and email_exact_subject.strip() else None),
+        )
+        result.data.update({
+            "pending_id": current_email.pending_id,
+            "draft_version": current_email.version,
+            "draft_digest": current_email.payload_digest,
+            "gmail_draft_id": str(current_email.payload.get("gmail_draft_id") or ""),
+            "gmail_raw_sha256": str(current_email.payload.get("gmail_raw_sha256") or ""),
+            "attachment_names": [item["name"] for item in normalized_attachments],
+        })
     current_whatsapp = conversation.state.pending.whatsapp
     current_mailchimp = conversation.state.pending.mailchimp
     current_jellyfin = conversation.state.pending.jellyfin
     current_browser = conversation.state.pending.browser
-    # Email drafts are editable working state. Telegram may revise them, but it never
-    # approves or sends them. Delivery is deliberately manual from Gmail.
+    # Normal email drafts stay manual-send. Only Gmail drafts explicitly bound to
+    # immutable attachment/raw-MIME hashes may enter the Telegram approval gate.
+    if (
+        approval_coordinator is not None
+        and result.status == "draft_pending_approval"
+        and current_email is not None
+        and bool(current_email.payload.get("gmail_bound_send"))
+        and not current_email.approval_ref
+    ):
+        if previous_email and previous_email.approval_ref:
+            approval_coordinator.cancel(previous_email)
+        approval_transition = approval_coordinator.request(
+            current_email, requested_by=f"unified:{session_id}"
+        )
+        if approval_transition.get("status") == "pending":
+            current_email = conversation.attach_approval_request(
+                domain="email", pending_id=current_email.pending_id,
+                payload_digest=current_email.payload_digest,
+                approval_ref=str(approval_transition["request_id"]),
+                created_at=int(approval_transition["created_at"]),
+                expires_at=int(approval_transition["expires_at"]),
+            )
+            result.data.update({
+                "approval_request_id": current_email.approval_ref,
+                "approval_expires_at": current_email.expires_at,
+            })
     if (
         approval_coordinator is not None
         and result.status == "cancelled"
