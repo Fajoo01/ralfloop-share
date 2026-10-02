@@ -1,0 +1,23 @@
+name: storage-hygiene
+
+on:
+  push:
+    paths:
+      - "tools/storage_hygiene_audit.c"
+      - "tests/test_storage_hygiene_audit.py"
+      - "scripts/run_storage_hygiene_audit.sh"
+      - ".github/workflows/storage-hygiene.yml"
+  pull_request:
+    paths:
+      - "tools/storage_hygiene_audit.c"
+      - "tests/test_storage_hygiene_audit.py"
+      - "scripts/run_storage_hygiene_audit.sh"
+      - ".github/workflows/storage-hygiene.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and test C storage hygiene audit
+        run: python3 -m unittest -v tests.test_storage_hygiene_audit
