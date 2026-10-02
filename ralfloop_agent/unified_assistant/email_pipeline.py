@@ -40,6 +40,17 @@ class GenericEmailPipeline:
         body, trace = _unpack(generated)
         return self._validate_cycle(working, body, trace=trace, repair_allowed=True)
 
+    def validate_exact(
+        self, working: EmailWorkingContext, body: str
+    ) -> EmailPipelineResult:
+        hard = _validate(body, working)
+        risk = self.risk_assessor(working.packet, body)
+        return EmailPipelineResult(
+            body=body, hard_guard=hard, risk=risk.level, ds4_invoked=False,
+            repair_count=0, final_validator="passed" if hard == "passed" else "blocked",
+            trace={"explicit_body": True, "ds4_skipped_reason": "user_exact_body"},
+        )
+
     def revise(
         self, working: EmailWorkingContext, current_body: str, instruction: str
     ) -> EmailPipelineResult:
