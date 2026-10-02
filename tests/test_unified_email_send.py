@@ -524,3 +524,95 @@ def test_reply_provider_wrong_thread_confirmation_is_fail_closed(tmp_path):
     assert result["status"] == "approved_but_send_failed"
     assert result["reason"] == "provider_thread_confirmation_mismatch"
     assert store.get_request(str(pending.approval_ref))["status"] == "execution_failed"
+
+
+class FakeBoundDraftSender:
+    def __init__(self):
+        self.calls = []
+    def send_bound(self, *, draft_id, approved_raw_sha256, execution_id):
+        self.calls.append((draft_id, approved_raw_sha256, execution_id))
+        return {"status": "sent", "sent": True, "draftId": draft_id, "messageId": "msg-bound-1"}
+
+
+def _bound_approval(tmp_path):
+    policy = DomainApprovalPolicy(
+        enabled=True, ttl_sec=300, max_pending=10,
+        allowed_user_ids={11}, allowed_chat_ids={22},
+        require_private_chat=True, db_path=str(tmp_path / "bound-approvals.sqlite"),
+    )
+    store = DomainApprovalStore(policy=policy)
+    manager = ConversationManager()
+    payload = {
+        "recipient": "marco@example.invalid", "subject": "PerRifArci",
+        "body": "Testo esatto", "cc": "", "bcc": "",
+        "source_message_id": "", "thread_id": "",
+        "approval_action": "send_email", "risk": "high",
+        "validation_state": "passed", "gmail_draft_id": "draft-123",
+        "gmail_draft_synced": True, "gmail_raw_sha256": "a" * 64,
+        "gmail_bound_send": True,
+        "attachments": [{"path": "/safe/a.docx", "name": "a.docx", "sha256": "b" * 64}],
+        "attachment_paths": ["/safe/a.docx"],
+    }
+    pending = manager.stage(
+        domain="email", action="send_email", policy=PolicyClass.CONFIRM_WRITE,
+        payload=payload, displayed_text="Bound draft",
+    )
+    coordinator = UnifiedEmailApprovalCoordinator(store, policy=policy, account=ACCOUNT)
+    requested = coordinator.request(pending, requested_by="test")
+    pending = manager.attach_approval_request(
+        domain="email", pending_id=pending.pending_id, payload_digest=pending.payload_digest,
+        approval_ref=requested["request_id"], created_at=requested["created_at"],
+        expires_at=requested["expires_at"],
+    )
+    approved = coordinator.approve(
+        pending, telegram_user_id=11, telegram_chat_id=22, telegram_message_id=33,
+        chat_type="private",
+    )
+    assert approved["status"] == "approved"
+    pending = manager.bind_approval(
+        domain="email", pending_id=pending.pending_id,
+        payload_digest=pending.payload_digest, approval_ref=str(pending.approval_ref),
+    )
+    return store, manager, pending
+
+
+def test_bound_scope_binds_gmail_raw_hash_and_attachments(tmp_path):
+    _, _, pending = _bound_approval(tmp_path)
+    scope = build_email_approval_scope(pending, account=ACCOUNT)
+    assert scope["gmail_bound_send"] is True
+    assert scope["gmail_draft_id"] == "draft-123"
+    assert scope["gmail_raw_sha256"] == "a" * 64
+    assert scope["attachments"][0]["sha256"] == "b" * 64
+
+
+def test_bound_draft_executes_once_and_replay_is_blocked(tmp_path):
+    store, _, pending = _bound_approval(tmp_path)
+    sender = FakeBoundDraftSender()
+    executor = UnifiedGmailApprovalExecutor(
+        lambda: (_ for _ in ()).throw(AssertionError("legacy gateway must not run")),
+        store=store, account=ACCOUNT, draft_sender=sender,
+    )
+    first = executor.execute(pending)
+    second = executor.execute(pending)
+    assert first["status"] == "executed" and first["sent"] is True
+    assert second["status"] == "already_executed"
+    assert len(sender.calls) == 1
+    assert sender.calls[0][0] == "draft-123"
+    assert sender.calls[0][1] == "a" * 64
+
+
+def test_bound_draft_payload_change_marks_scope_stale(tmp_path):
+    store, manager, pending = _bound_approval(tmp_path)
+    sender = FakeBoundDraftSender()
+    changed = pending.model_copy(update={
+        "payload": {**pending.payload, "gmail_raw_sha256": "c" * 64},
+    })
+    from ralfloop_agent.unified_assistant.conversation import _digest
+    changed = changed.model_copy(update={"payload_digest": _digest(changed.payload), "approved_digest": _digest(changed.payload)})
+    executor = UnifiedGmailApprovalExecutor(
+        lambda: (_ for _ in ()).throw(AssertionError("legacy gateway must not run")),
+        store=store, account=ACCOUNT, draft_sender=sender,
+    )
+    result = executor.execute(changed)
+    assert result["status"] == "scope_digest_mismatch"
+    assert sender.calls == []
