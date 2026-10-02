@@ -62,6 +62,7 @@ class EmailDraftSync(Protocol):
     def upsert(
         self, *, to: str, subject: str, body: str, draft_id: str = "",
         cc: str = "", bcc: str = "", thread_id: str = "",
+        attachments: tuple[Mapping[str, Any], ...] = (),
     ) -> dict[str, Any]: ...
 
 
@@ -1334,13 +1335,19 @@ class UnifiedAssistantCore:
         if not payload_matches(pending):
             return self._result("blocked", "Pending payload hash mismatch.")
         if pending.domain == "email":
-            return self._result(
-                "manual_send_only",
-                "Bozza pronta. Puoi continuare a modificarla qui; l'invio resta manuale da Gmail.",
-                send_calls=0,
-                draft_version=pending.version,
-                draft_digest=pending.payload_digest,
-            )
+            if not bool(pending.payload.get("gmail_bound_send")):
+                return self._result(
+                    "manual_send_only",
+                    "Bozza pronta. Puoi continuare a modificarla qui; l'invio resta manuale da Gmail.",
+                    send_calls=0, draft_version=pending.version, draft_digest=pending.payload_digest,
+                )
+            if not approval_matches(pending) or self.approval_executor is None:
+                return self._result("approval_required", "Approvazione email hash-bound richiesta.", send_calls=0)
+            result = self.approval_executor.execute(pending)
+            status = str(result.get("status") or "failed")
+            if status in {"executed", "already_executed", "approved_but_send_failed"}:
+                self.conversation.clear("email")
+            return self._result(status, "Email inviata e verificata." if status == "executed" else "Email non inviata o esito non verificato.", result=result)
         if pending.domain == "whatsapp":
             if not self.flags.whatsapp_assistant_live:
                 return self._result("disabled", "WhatsApp assistant live disabled.", send_calls=0)
