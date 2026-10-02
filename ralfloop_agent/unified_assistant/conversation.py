@@ -164,6 +164,39 @@ class ConversationManager:
         self._set_pending("email", pending)
         return pending
 
+    def bind_email_draft_artifact(
+        self, *, gmail_draft_id: str, gmail_raw_sha256: str,
+        attachments: list[dict[str, Any]], attachment_paths: list[str],
+        subject: str | None = None,
+    ) -> PendingAction:
+        current = self.state.pending.email
+        if current is None:
+            raise ValueError("email_draft_not_pending")
+        if not gmail_draft_id or len(gmail_raw_sha256) != 64:
+            raise ValueError("email_bound_draft_invalid")
+        payload = dict(current.payload)
+        if subject is not None:
+            payload["subject"] = str(subject)
+        payload.update({
+            "gmail_draft_id": gmail_draft_id,
+            "gmail_draft_synced": True,
+            "gmail_raw_sha256": gmail_raw_sha256,
+            "gmail_bound_send": True,
+            "attachments": [dict(item) for item in attachments],
+            "attachment_paths": list(attachment_paths),
+        })
+        now = int(time.time())
+        pending = PendingAction(
+            pending_id="pending_" + uuid4().hex[:16],
+            domain="email", action=current.action, policy=current.policy,
+            payload=payload, payload_digest=_digest(payload),
+            displayed_digest=current.displayed_digest, version=current.version + 1,
+            created_at=now, expires_at=now + max(60, current.expires_at - current.created_at),
+            approval_ref=None, approved_digest=None,
+        )
+        self._set_pending("email", pending)
+        return pending
+
     def revise_whatsapp(
         self,
         *,
