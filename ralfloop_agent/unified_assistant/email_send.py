@@ -21,6 +21,7 @@ from src.mcp_transport import MCPClientSession, UnixMCPTransport
 
 from .conversation import PendingAction, approval_matches, payload_matches
 from .email_otp import EmailOtpGate
+from .gmail_draft_sync import GoogleWorkspaceGmailDraftSync
 
 
 def build_email_approval_scope(pending: PendingAction, *, account: str) -> dict[str, Any]:
@@ -43,6 +44,9 @@ def build_email_approval_scope(pending: PendingAction, *, account: str) -> dict[
         "bcc": str(payload.get("bcc") or ""),
         "attachments": list(payload.get("attachments") or ()),
         "attachment_paths": list(payload.get("attachment_paths") or ()),
+        "gmail_draft_id": str(payload.get("gmail_draft_id") or ""),
+        "gmail_raw_sha256": str(payload.get("gmail_raw_sha256") or ""),
+        "gmail_bound_send": bool(payload.get("gmail_bound_send")),
     }
     raw = json.dumps(artifact, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     artifact_sha256 = hashlib.sha256(raw).hexdigest()
@@ -114,14 +118,21 @@ class UnifiedEmailApprovalCoordinator:
     @staticmethod
     def _notification_preview(pending: PendingAction, approval_message: str) -> str:
         payload = pending.payload
-        return "\n".join((
-            approval_message.strip(),
-            "",
+        lines = [
+            approval_message.strip(), "",
             f"Bozza per: {str(payload.get('recipient') or '')[:320]}",
             f"Oggetto: {str(payload.get('subject') or '')[:500]}",
-            "",
-            str(payload.get("body") or "")[:2400],
-        )).strip()
+            "", str(payload.get("body") or "")[:2400],
+        ]
+        attachments = payload.get("attachments") or ()
+        if attachments:
+            lines.extend(["", "Allegati:"])
+            for item in attachments[:8]:
+                if isinstance(item, Mapping):
+                    lines.append(
+                        f"- {str(item.get('name') or '')[:255]} — SHA256 {str(item.get('sha256') or '')[:64]}"
+                    )
+        return "\n".join(lines).strip()
 
     def approve(
         self,
@@ -191,11 +202,13 @@ class UnifiedGmailApprovalExecutor:
         store: DomainApprovalStore,
         account: str,
         otp_gate: EmailOtpGate | None = None,
+        draft_sender: GoogleWorkspaceGmailDraftSync | None = None,
     ) -> None:
         self.gateway_factory = gateway_factory
         self.store = store
         self.account = account
         self.otp_gate = otp_gate
+        self.draft_sender = draft_sender
 
     @classmethod
     def from_environment(cls, *, store: DomainApprovalStore) -> "UnifiedGmailApprovalExecutor":
@@ -209,6 +222,7 @@ class UnifiedGmailApprovalExecutor:
             store=store,
             account=account,
             otp_gate=EmailOtpGate.from_environment() if EmailOtpGate.required() else None,
+            draft_sender=GoogleWorkspaceGmailDraftSync.from_environment(),
         )
 
     def execute(self, pending: PendingAction) -> dict[str, Any]:
@@ -221,6 +235,9 @@ class UnifiedGmailApprovalExecutor:
         if row is None:
             return {"status": "approval_not_executable", "sent": False, "retry_allowed": False}
         scope = build_email_approval_scope(pending, account=self.account)
+        if bool(scope.get("gmail_bound_send")) and str(row.get("scope_digest") or "") != scope_digest(scope):
+            self.store.mark_stale(request_id, ["email_artifact_changed"])
+            return {"status": "scope_digest_mismatch", "sent": False, "retry_allowed": False}
         return self._execute_approved_row(row, scope, request_id=request_id)
 
     def execute_approved_request(self, request_id: str) -> dict[str, Any]:
@@ -261,6 +278,8 @@ class UnifiedGmailApprovalExecutor:
                 else "approval_not_executable",
                 "sent": False, "retry_allowed": False,
             }
+        if bool(scope.get("gmail_bound_send")):
+            return self._execute_bound_draft(row, scope, request_id=request_id)
         context = self.gateway_factory()
         try:
             gateway = context.__enter__()
@@ -312,6 +331,41 @@ class UnifiedGmailApprovalExecutor:
                 context.__exit__(None, None, None)
             except Exception:
                 pass
+    def _execute_bound_draft(
+        self, row: Mapping[str, Any], scope: Mapping[str, Any], *, request_id: str
+    ) -> dict[str, Any]:
+        if str(scope.get("action") or "") != "send_email":
+            return {"status": "bound_draft_reply_unsupported", "sent": False, "retry_allowed": False}
+        draft_id = str(scope.get("gmail_draft_id") or "")
+        raw_sha = str(scope.get("gmail_raw_sha256") or "")
+        if not draft_id or len(raw_sha) != 64 or self.draft_sender is None:
+            return {"status": "bound_draft_invalid", "sent": False, "retry_allowed": False}
+        if EmailOtpGate.required():
+            if self.otp_gate is None:
+                return {"status": "email_otp_unavailable", "sent": False, "retry_allowed": False}
+            otp = self.otp_gate.authorize(row)
+            if not otp.get("authorized"):
+                return {"status": str(otp.get("status") or "email_otp_required"), "sent": False, "retry_allowed": False}
+        claim = self.store.claim_execution(request_id, action="send_email")
+        if not claim.get("claimed"):
+            return {"status": str(claim.get("status") or "execution_not_claimed"), "sent": False, "retry_allowed": False}
+        execution_id = str(scope.get("idempotency_key") or "email-draft:" + request_id)
+        try:
+            provider = dict(self.draft_sender.send_bound(
+                draft_id=draft_id, approved_raw_sha256=raw_sha, execution_id=execution_id,
+            ))
+        except Exception:
+            failure = {"status": "approved_but_send_failed", "sent": False, "retry_allowed": False, "reason": "provider_outcome_uncertain"}
+            self.store.finish_claimed_execution(request_id, action="send_email", success=False, result=failure)
+            return failure
+        if not provider.get("sent") or not str(provider.get("messageId") or ""):
+            failure = {"status": "approved_but_send_failed", "sent": False, "retry_allowed": False, "reason": "provider_confirmation_missing"}
+            self.store.finish_claimed_execution(request_id, action="send_email", success=False, result=failure)
+            return failure
+        success = {"status": "executed", "sent": True, "request_id": request_id, "provider_message_id": str(provider.get("messageId")), "draft_id": draft_id, "approved_raw_sha256": raw_sha}
+        completed = self.store.finish_claimed_execution(request_id, action="send_email", success=True, result=success)
+        return success if completed.get("status") == "consumed" else {"status": "approved_but_send_failed", "sent": False, "retry_allowed": False, "reason": "execution_finalization_failed"}
+
 __all__ = [
     "GoogleWorkspaceEmailContext",
     "UnifiedEmailApprovalCoordinator",
