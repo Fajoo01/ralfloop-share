@@ -1,38 +1,57 @@
 # PerRifArci — stato live bozze email 2026-10-03
 
-Questo file registra lo stato operativo verificato. Non autorizza alcun invio.
+Questo file registra lo stato operativo verificato. **Non autorizza alcun invio.**
 
-## Stato
+## Stato definitivo
 
 - Account Gmail: `fabio@tiremminnanz.com`
 - Oggetto comune: `PerRifArci – richiesta lettera di sostegno`
-- Corpo canonico verificato nelle 6 bozze.
-- Ogni bozza contiene 2 allegati: lettera specifica + `PerRifArci_Abstract.pdf`.
-- Ricerca Gmail `in:sent subject:PerRifArci newer_than:7d`: 0 risultati.
-- Approval gate: enabled, auto_execute=false.
-- Sei approval canoniche: pending.
-- Decisioni: 0.
-- Execution: 0.
-- Sei notifiche control-plane Telegram consegnate.
-- Una approval canary duplicata `apr_E9K8YSEM` è stata cancellata; execution=0.
+- Modalità: **manual send only**
+- Stato Gmail: **6 bozze DRAFT**
+- Email PerRifArci in Sent negli ultimi 30 giorni: **0**
+- Approval attive: **0**
+- Execution: **0**
+- Il vecchio helper PerRifArci per creare approval è stato messo in fail-closed: termina con `manual-send-only` e non crea request.
 - Manifest live: `/home/bandi/perrifarci-staging-20261002/email-send-manifest.json`
-- SHA256 manifest: `095dba889562d9362bd612a2e1f86f90933510f278e9b7189ac463685a4e03e0`
+- SHA256 manifest: `af44b8ec342a583758697a1353b9c34253e5155da4585d32355d552e775f3abb`
 
-| Destinatario | Gmail draft | Raw MIME SHA256 | Approval | Digest |
+Le sei bozze sono state rifatte **in-place**, riutilizzando gli stessi Gmail draft ID; quindi non sono stati creati duplicati.
+
+| Destinatario | Gmail draft ID | Gmail message ID attuale | Raw MIME SHA256 | Vecchia approval |
 |---|---|---|---|---|
-| miic8dd005@istruzione.it | r-3075609958872328161 | bcefa0ec3bb397eb9006488eca80f7c96f8e8e0dfd98e68bba853b36362bba3a | apr_G5FMKKD8 | 7153-3210 |
-| ED.UE10@comune.milano.it | r127658816653256721 | 6060ada6c1b829ca883e9d44cd7ab8fdcd2e7d57494f916cae3b46d3192fc349 | apr_ZS9N4KCN | 7DA7-6306 |
-| miic8gh008@istruzione.it | r2520456484722217206 | 94ce915b2c6028c5b3bc2d07647ceb7c8a20dc8146bf33894c71b400cc3eeea3 | apr_R7543TMY | B63A-8EDA |
-| info@amedi.it | r2403744326878782768 | 490aa430efade20ecfc264880fa010959a1a315e506c57cbd58d10c9a64b9070 | apr_3EKQG4FD | 38ED-888C |
-| pigreco@luogoideale.org | r-8570369634459486686 | 3402fdb6d2a1c170eedb4a0500292d2284199fa34138913d44e3ff95930b32d5 | apr_TDRJXEFT | 843F-8934 |
-| amicitrotter@gmail.com | r1973480878599356126 | 6fbe1c79faf498690b006c8a8543d333242352865f0f6fe510d8302acab4f928 | apr_RZYY2E9E | AEA0-B6D4 |
+| miic8dd005@istruzione.it | r-3075609958872328161 | 1a1007c915dc87bd | 14e110948080d913b7a99a0797b342d7ade10e1258eb9b1aa5a8cbfcbd9cc5a3 | apr_G5FMKKD8 — expired |
+| ED.UE10@comune.milano.it | r127658816653256721 | 1a1007c9d152bcd4 | b19260cdc4cb1d4bdc633a8dc93a91e886b4ece1e7b2fd64b0e5ef9cbeea28bb | apr_ZS9N4KCN — expired |
+| miic8gh008@istruzione.it | r2520456484722217206 | 1a1007caa016a12c | 31a04ce4464f7c6580fb341ea5b0d08da4e139530a6ead23bcd1e2b41f61e763 | apr_R7543TMY — cancelled |
+| info@amedi.it | r2403744326878782768 | 1a1007cbfa6a4d3a | ada5ecd9497abf5e736ba6194d2b529f7bdc1e441c52fb66c1d0c00e99576eaa | apr_3EKQG4FD — expired |
+| pigreco@luogoideale.org | r-8570369634459486686 | 1a1007ccc209fd6f | 627033e8709d23c6507d690962361f21a015b2d271a137de452e69a7655597d3 | apr_TDRJXEFT — cancelled |
+| amicitrotter@gmail.com | r1973480878599356126 | 1a1007cda7911245 | 3788b4699901fcac6e2993a03d0177d3f8af88113dd6b90a9b21a7d660531a30 | apr_RZYY2E9E — cancelled |
 
-## Allegati verificati
+## Verifica Gmail
+
+Read-back eseguito su tutte le 6 bozze:
+
+- label `DRAFT`: 6/6
+- destinatario corretto: 6/6
+- oggetto corretto: 6/6
+- corpo canonico corretto: 6/6
+- 2 allegati: 6/6
+- `PerRifArci_Abstract.pdf` presente: 6/6
+- ricerca `in:drafts subject:PerRifArci`: 6 risultati
+- ricerca `in:sent subject:PerRifArci newer_than:30d`: 0 risultati
+
+## Allegati
 
 Abstract originale: SHA256 `7ae315080bae587fa4c468baf45dadce777406455355bb5c9b282334a30b5955`.
 
-Le sei lettere sono state ricontrollate sul filesystem contro il manifest; hash e dimensione coincidono per 6/6.
+Le sei lettere e l'abstract erano già stati verificati sul filesystem contro hash e dimensioni del manifest: 7/7 PASS.
 
-## Vincolo
+## Vincolo operativo
 
-Nessuna email può essere inviata finché la specifica approval hash-bound non viene approvata. La pipeline `send_email_draft` rifà il controllo del raw MIME SHA256 prima dell'invio e fallisce closed se la bozza è cambiata.
+Per questo dossier PerRifArci **Bot-tazzi prepara solo le bozze Gmail**. L'invio si fa manualmente dall'account Gmail dell'utente.
+
+Le vecchie approval non sono eseguibili:
+- 3 expired
+- 3 cancelled
+- 0 execution
+
+Non rigenerare approval Telegram per queste email salvo nuova istruzione esplicita dell'utente.
