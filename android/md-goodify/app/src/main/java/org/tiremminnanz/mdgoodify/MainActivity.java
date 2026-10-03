@@ -12,6 +12,8 @@ import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
@@ -42,7 +44,9 @@ public final class MainActivity extends Activity {
     private static final int CAMERA_REQUEST = 41;
     private static final int NOTIFICATION_REQUEST = 42;
     private static final String CHANNEL_ID = "md_goodify_wins";
+    private static final long BACKEND_RETRY_MS = 4000L;
 
+    private final Handler retryHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private TextView stateView;
     private TextView statsView;
@@ -53,6 +57,8 @@ public final class MainActivity extends Activity {
     private EditText emailView;
     private EditText passwordView;
     private boolean enrolled;
+    private volatile boolean backendCheckInFlight;
+    private boolean resumed;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -74,7 +80,16 @@ public final class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        resumed = true;
         if (enrolled) loadStats();
+        else checkBackend();
+    }
+
+    @Override
+    protected void onPause() {
+        resumed = false;
+        retryHandler.removeCallbacksAndMessages(null);
+        super.onPause();
     }
 
     private void buildUi() {
@@ -133,6 +148,7 @@ public final class MainActivity extends Activity {
         connectButton.setText("Collega account MD");
         connectButton.setOnClickListener(v -> enrollMd());
         loginBox.addView(connectButton, new LinearLayout.LayoutParams(-1, -2));
+        loginBox.setVisibility(View.GONE);
         root.addView(loginBox, new LinearLayout.LayoutParams(-1, -2));
 
         scanButton = new Button(this);
@@ -161,6 +177,9 @@ public final class MainActivity extends Activity {
     }
 
     private void checkBackend() {
+        if (backendCheckInFlight) return;
+        backendCheckInFlight = true;
+        retryHandler.removeCallbacksAndMessages(null);
         setBusy(true, "Verifica collegamento…");
         executor.execute(() -> {
             HttpURLConnection connection = null;
@@ -175,12 +194,23 @@ public final class MainActivity extends Activity {
                 int code = connection.getResponseCode();
                 InputStream stream = code >= 400 ? connection.getErrorStream() : connection.getInputStream();
                 JSONObject response = readJson(stream);
-                if (code == 401) { runOnUiThread(() -> setBusy(false, "App non autorizzata — aggiorna l’app")); return; }
+                if (code == 401) {
+                    runOnUiThread(() -> {
+                        loginBox.setVisibility(View.GONE);
+                        setBusy(false, "App non autorizzata — aggiorna l’app");
+                    });
+                    return;
+                }
                 boolean linked = response.optBoolean("enrolled", false);
                 runOnUiThread(() -> setEnrollmentState(linked));
             } catch (Exception ignored) {
-                runOnUiThread(() -> setBusy(false, "Errore rete: servizio Tiremm non raggiungibile"));
+                runOnUiThread(() -> {
+                    loginBox.setVisibility(View.GONE);
+                    setBusy(false, "Rete momentaneamente non disponibile — riprovo…");
+                    if (resumed) retryHandler.postDelayed(this::checkBackend, BACKEND_RETRY_MS);
+                });
             } finally {
+                backendCheckInFlight = false;
                 if (connection != null) connection.disconnect();
             }
         });
@@ -430,6 +460,7 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        retryHandler.removeCallbacksAndMessages(null);
         executor.shutdownNow();
         super.onDestroy();
     }
