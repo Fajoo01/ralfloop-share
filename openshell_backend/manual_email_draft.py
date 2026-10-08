@@ -120,3 +120,53 @@ def create_manual_draft(
         "attachment_names": [x["name"] for x in normalized],
         "send_calls": 0, "writes": 1, "sent": False,
     }
+
+
+def create_text_only_draft(
+    message: str, context: Mapping[str, Any], *,
+    sync_factory: Callable[[], Any] = GoogleWorkspaceGmailDraftSync.from_environment,
+) -> dict[str, Any]:
+    """Save an exact, explicitly requested Gmail draft without attachments or sending."""
+    if context.get("email_manual_draft_only") is not True:
+        raise DraftPreparationError("manual_draft_only_required")
+    if str(context.get("source") or "") != "ralf_terminal":
+        raise DraftPreparationError("terminal_source_required")
+    match = ADDRESS.search(message)
+    if match is None or message.count("Destinatario verificato:") != 1:
+        raise DraftPreparationError("verified_recipient_required")
+    recipient = match.group(1).lower()
+    if context.get("email_attachments") not in (None, (), []):
+        raise DraftPreparationError("text_only_attachments_denied")
+    if str(context.get("email_reply_thread_id") or "").strip():
+        raise DraftPreparationError("text_only_reply_denied")
+    subject = str(context.get("email_exact_subject") or "").strip()
+    body = str(context.get("email_exact_body") or "").strip()
+    if not (0 < len(subject) <= 200 and 0 < len(body) <= 4000):
+        raise DraftPreparationError("draft_shape_invalid")
+    cc = str(context.get("email_exact_cc") or "").strip().lower()
+    if cc:
+        addresses = cc.split(",")
+        if not (1 <= len(addresses) <= 4) or any(
+            re.fullmatch(r"[a-zA-Z0-9.!#$%&'*+/=?^`{|}~-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", address) is None
+            for address in addresses
+        ):
+            raise DraftPreparationError("text_only_cc_invalid")
+        if message.casefold().count("cc verificata: " + cc) != 1:
+            raise DraftPreparationError("text_only_cc_unverified")
+    working = EmailWorkingMemoryBuilder(
+        MemoryRouter(), UnifiedRegistryFacade().domain("email")
+    ).build(objective=message, recipient=recipient, subject=subject)
+    validation = GenericEmailPipeline().validate_exact(working, body)
+    if validation.final_validator != "passed" or validation.hard_guard != "passed":
+        raise DraftPreparationError("body_validation_failed:" + validation.hard_guard)
+    synced = sync_factory().upsert(
+        to=recipient, cc=cc, subject=subject, body=body, attachments=(),
+    )
+    if not synced.get("draftId") or synced.get("sent") is not False:
+        raise DraftPreparationError("draft_not_confirmed")
+    return {
+        "status": "draft_only", "gmail_draft_id": str(synced["draftId"]),
+        "gmail_raw_sha256": str(synced.get("rawSha256") or ""),
+        "recipient": recipient, "cc": cc, "subject": subject,
+        "attachment_names": [], "send_calls": 0, "writes": 1, "sent": False,
+    }

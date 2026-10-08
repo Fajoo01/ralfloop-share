@@ -273,12 +273,11 @@ def assistant_v1_chat(
             str(route.get("intent") or "") == "email.compose"
             and context.get("email_manual_draft_only") is True
             and isinstance(context.get("email_exact_body"), str)
-            and context.get("email_attachments")
         ):
-            from .manual_email_draft import create_manual_draft, DraftPreparationError
+            from .manual_email_draft import create_manual_draft, create_text_only_draft, DraftPreparationError
 
             try:
-                draft = create_manual_draft(request.message, context)
+                draft = (create_manual_draft if context.get("email_attachments") else create_text_only_draft)(request.message, context)
             except DraftPreparationError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
             except Exception as exc:
