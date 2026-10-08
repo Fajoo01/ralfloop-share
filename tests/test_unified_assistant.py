@@ -46,6 +46,17 @@ class FakeEmailPipeline:
             final_validator="passed",
         )
 
+    def validate_exact(self, working, body):
+        self.exact_calls = getattr(self, "exact_calls", 0) + 1
+        return EmailPipelineResult(
+            body=body,
+            hard_guard="passed" if body != "FORBIDDEN" else "draft_domain_forbidden_claim",
+            risk="low",
+            ds4_invoked=False,
+            repair_count=0,
+            final_validator="passed" if body != "FORBIDDEN" else "blocked",
+        )
+
     def revise(self, working, current_body, instruction):
         self.repair_calls += 1
         return EmailPipelineResult(
@@ -729,3 +740,36 @@ def test_gmail_draft_sync_reuses_same_provider_draft_id_on_revision():
     assert approvals.calls == []
     assert first.data["send_calls"] == 0
     assert second.data["send_calls"] == 0
+
+
+def test_exact_email_body_skips_model_and_never_sends():
+    drafts = FakeDraftSync()
+    core, manager, pipeline, approvals = build_core(draft_sync=drafts)
+    body = "Ciao Marco, scusa per i modelli sbagliati. Il cofinanziamento è € 0,00. Fabio"
+    result = core.handle("Scrivi a Marco che abbiamo ricevuto i documenti", email_exact_body=body)
+    assert result.status == "draft_pending_approval"
+    assert pipeline.compose_calls == 0
+    assert pipeline.exact_calls == 1
+    assert manager.state.pending.email.payload["body"] == body
+    assert drafts.calls[0]["body"] == body
+    assert approvals.calls == []
+    assert result.data["send_calls"] == 0
+
+
+def test_exact_email_body_invalid_is_blocked_before_draft_sync():
+    drafts = FakeDraftSync()
+    core, manager, pipeline, approvals = build_core(draft_sync=drafts)
+    result = core.handle("Scrivi a Marco che abbiamo ricevuto i documenti", email_exact_body="FORBIDDEN")
+    assert result.status == "blocked"
+    assert pipeline.compose_calls == 0
+    assert drafts.calls == []
+    assert manager.state.pending.email is None
+    assert approvals.calls == []
+
+
+def test_default_email_compose_keeps_model_generation_path():
+    core, _, pipeline, _ = build_core(draft_sync=FakeDraftSync())
+    result = core.handle("Scrivi a Marco che abbiamo ricevuto i documenti")
+    assert result.status == "draft_pending_approval"
+    assert pipeline.compose_calls == 1
+    assert getattr(pipeline, "exact_calls", 0) == 0

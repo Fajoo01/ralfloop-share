@@ -161,7 +161,8 @@ class UnifiedAssistantCore:
         self._email_working: dict[str, EmailWorkingContext] = {}
         self._home_prepared: dict[str, HomePreparedAction] = {}
 
-    def handle(self, text: str, *, domain_hint: str | None = None) -> UnifiedAssistantResult:
+    def handle(self, text: str, *, domain_hint: str | None = None,
+               email_exact_body: str | None = None) -> UnifiedAssistantResult:
         if not self.flags.unified_assistant:
             return self._result("disabled", "Unified assistant disabled.")
         confirmation = self.conversation.resolve_confirmation(text, domain_hint=domain_hint)
@@ -252,7 +253,9 @@ class UnifiedAssistantCore:
                 reply=assignment.skill == "whatsapp.reply",
             )
         if assignment.domain == "email":
-            return self._compose_email(text, plan.model_dump(mode="json"))
+            return self._compose_email(
+                text, plan.model_dump(mode="json"), exact_body=email_exact_body,
+            )
         if assignment.domain == "home":
             return self._handle_home(text, plan.model_dump(mode="json"))
         if self.dag_executor is not None and assignment.skill in self.dag_executor.adapters:
@@ -1048,6 +1051,7 @@ class UnifiedAssistantCore:
         plan: dict[str, Any],
         *,
         structured_artifacts: tuple[Mapping[str, Any], ...] = (),
+        exact_body: str | None = None,
     ) -> UnifiedAssistantResult:
         if not all((self.email_memory, self.email_pipeline, self.recipient_resolver)):
             return self._result("unavailable", "Email assistant adapter unavailable.", plan=plan)
@@ -1151,7 +1155,13 @@ class UnifiedAssistantCore:
             thread_context=resolved_thread,
             structured_artifacts=structured_artifacts,
         )
-        outcome = self.email_pipeline.compose(working)
+        if isinstance(exact_body, str) and exact_body.strip():
+            validator = getattr(self.email_pipeline, "validate_exact", None)
+            if validator is None:
+                return self._result("blocked", "Validatore testo esatto non disponibile.", send_calls=0)
+            outcome = validator(working, exact_body)
+        else:
+            outcome = self.email_pipeline.compose(working)
         if outcome.hard_guard != "passed" or outcome.final_validator != "passed":
             return self._result(
                 "blocked", "Bozza bloccata dai validator.",

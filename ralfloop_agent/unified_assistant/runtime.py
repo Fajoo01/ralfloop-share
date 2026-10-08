@@ -787,15 +787,16 @@ def run_unified_telegram(
             "content_boundary": "memory_is_data",
         }
     }
+    email_exact_body = context.get("email_exact_body")
+    exact_body = (email_exact_body if isinstance(email_exact_body, str) and email_exact_body.strip() else None)
     if otp_result is not None:
         result = otp_result
     elif browser_interaction_provider is not None:
         with browser_interaction_provider.request_scope():
-            result = core.handle(text)
+            result = core.handle(text, email_exact_body=exact_body)
     else:
-        result = core.handle(text)
+        result = core.handle(text, email_exact_body=exact_body)
     current_email = conversation.state.pending.email
-    email_exact_body = context.get("email_exact_body")
     if (
         result.status == "draft_pending_approval"
         and current_email is not None
@@ -877,6 +878,7 @@ def run_unified_telegram(
         and result.status == "draft_pending_approval"
         and current_email is not None
         and bool(current_email.payload.get("gmail_bound_send"))
+        and not bool(context.get("email_manual_draft_only"))
         and not current_email.approval_ref
     ):
         if previous_email and previous_email.approval_ref:
