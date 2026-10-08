@@ -29,10 +29,12 @@ class GenericEmailPipeline:
         *,
         semantic_config: SemanticJudgeConfig | None = None,
         semantic_judge: SemanticDraftJudge | None = None,
+        risk_assessor: Callable[[Mapping[str, Any], str], Any] | None = None,
     ) -> None:
         self.generator = generator
         self.semantic_config = semantic_config or SemanticJudgeConfig.from_env()
         self.semantic_judge = semantic_judge
+        self.risk_assessor = risk_assessor or assess_email_risk
 
     def compose(self, working: EmailWorkingContext) -> EmailPipelineResult:
         generator = self._generator()

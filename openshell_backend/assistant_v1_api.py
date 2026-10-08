@@ -267,6 +267,30 @@ def assistant_v1_chat(
         flags=flags,
     )
     if route is not None:
+        # Explicitly authored, user-manually-sent Gmail draft: no LLM or send.
+        # The Gmail broker continues to enforce its backend-UID draft gate.
+        if (
+            str(route.get("intent") or "") == "email.compose"
+            and context.get("email_manual_draft_only") is True
+            and isinstance(context.get("email_exact_body"), str)
+            and context.get("email_attachments")
+        ):
+            from .manual_email_draft import create_manual_draft, DraftPreparationError
+
+            try:
+                draft = create_manual_draft(request.message, context)
+            except DraftPreparationError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=503, detail=f"gmail_draft_sync_failed:{type(exc).__name__}"
+                ) from exc
+            return AssistantV1Response(
+                response="Bozza Gmail salvata; invio manuale soltanto.",
+                route="unified", provider="gmail_draft_sync", model="deterministic",
+                session_id=session_id, duration_ms=int((time.monotonic()-started)*1000),
+                approval_required=False, metadata=draft,
+            )
         try:
             result = unified_runner(
                 request.message,

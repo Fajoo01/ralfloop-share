@@ -1,0 +1,41 @@
+{
+  "PiGreco": {
+    "recipient": "pigreco@luogoideale.org",
+    "subject": "PerRifArci – scuse e Allegato A2 corretto",
+    "route": "unified",
+    "status": "draft_only",
+    "draft_id": "r6362563097795089071",
+    "attachments": [
+      "A2_ARCI_07ott2026_PiGreco_DA_FIRMARE.docx",
+      "A2_ARCI_07ott2026_PiGreco_DA_FIRMARE.pdf"
+    ],
+    "raw_sha256": "e53f1475fe54c05894e2b2d5c3404f195f674aec794ba1ea188b0fd2085066cd",
+    "sent": false
+  },
+  "Amici_Parco_Trotter": {
+    "recipient": "amicitrotter@gmail.com",
+    "subject": "PerRifArci – scuse e Allegato A2 corretto per Amici del Trotter",
+    "route": "unified",
+    "status": "draft_only",
+    "draft_id": "r-4102696029579119646",
+    "attachments": [
+      "A2_ARCI_07ott2026_Amici_Parco_Trotter_DA_FIRMARE.docx",
+      "A2_ARCI_07ott2026_Amici_Parco_Trotter_DA_FIRMARE.pdf"
+    ],
+    "raw_sha256": "d39add2e86c1cb635269b5625c62eb0ccb9ae5491c06ce8f185f66f8fcaf60f3",
+    "sent": false
+  },
+  "AMEDI": {
+    "recipient": "info@amedi.it",
+    "subject": "PerRifArci – scuse e Allegato A2 corretto per AMEDI",
+    "route": "unified",
+    "status": "draft_only",
+    "draft_id": "r-1919708680565138031",
+    "attachments": [
+      "A2_ARCI_07ott2026_AMEDI_DA_FIRMARE.docx",
+      "A2_ARCI_07ott2026_AMEDI_DA_FIRMARE.pdf"
+    ],
+    "raw_sha256": "bbe92862f09f021485e556ad377f9f1106c2c4a7ad7ef70021dbabe529ef5aea",
+    "sent": false
+  }
+}
