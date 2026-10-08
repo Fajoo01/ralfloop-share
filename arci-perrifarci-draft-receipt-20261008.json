@@ -1,0 +1,16 @@
+{
+  "recipient": "irene.conca@arcimilano.it",
+  "cc": "franchini.giulio@gmail.com",
+  "subject": "PerRifArci – lettere A2 ricevute e aggiornamento scuole",
+  "gmail_draft_id": "r8521176575199592156",
+  "status": "draft_only",
+  "sent": false,
+  "attachment_names": [
+    "A2_ARCI_07ott2026_PiGreco_signed.pdf",
+    "A2_ARCI_07ott2026_AMEDI_FIRMATA.docx",
+    "CI Irene Pani fronte.jpg",
+    "CI Irene Pani retro.jpg"
+  ],
+  "raw_sha256": "1d7c0dc31c3f7d6576efa923ad230381ea83d25de0c1075612225a0671d117b0",
+  "body_sha256": "02067abe5df1786d4d89c92184e177ad6da00d3eab2727473bc1479f41f9db3c"
+}

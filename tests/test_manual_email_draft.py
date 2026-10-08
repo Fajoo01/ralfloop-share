@@ -66,3 +66,76 @@ def test_unverified_address_fails_closed():
     msg=msg.replace("Destinatario verificato: info@amedi.it","Destinatario verificato: sconosciuto")
     with pytest.raises(DraftPreparationError,match="verified_recipient_required"):
         create_manual_draft(msg,ctx,sync_factory=FakeSync)
+
+def arci_bundle():
+    names=[
+        "A2_ARCI_07ott2026_PiGreco_signed.pdf",
+        "A2_ARCI_07ott2026_AMEDI_FIRMATA.docx",
+        "CI Irene Pani fronte.jpg",
+        "CI Irene Pani retro.jpg",
+    ]
+    attachments=[]
+    for name in names:
+        p=WORKSPACE/name
+        attachments.append({"path":str(p),"name":name,"sha256":hashlib.sha256(p.read_bytes()).hexdigest()})
+    return (
+        "Prepara una email a Irene e Giulio per PerRifArci. "
+        "Destinatario verificato: irene.conca@arcimilano.it. "
+        "Cc verificata: franchini.giulio@gmail.com. "
+        "PiGreco ha A2 firmato ma manca documento d'identità. "
+        "AMEDI ha A2 firmato e carta identità fronte retro. "
+        "Trotter ha inviato lettera generica non A2, scuole lente. "
+        "Solo BOZZA GMAIL, non inviare.",
+        {"source":"ralf_terminal","email_manual_draft_only":True,
+         "email_support_bundle":True,
+         "email_exact_cc":"franchini.giulio@gmail.com",
+         "email_exact_subject":"PerRifArci – lettere A2 ricevute e aggiornamento scuole",
+         "email_exact_body":(BASE/"ARCI_Irene_Giulio.txt").read_text(),
+         "email_attachments":attachments},
+    )
+
+
+def test_arci_bundle_draft_only_verified_cc_and_four_files():
+    msg,ctx=arci_bundle()
+    fake=FakeSync()
+    r=create_manual_draft(msg,ctx,sync_factory=lambda:fake)
+    assert r["status"]=="draft_only" and r["sent"] is False
+    assert fake.calls[0]["to"]=="irene.conca@arcimilano.it"
+    assert fake.calls[0]["cc"]=="franchini.giulio@gmail.com"
+    assert len(fake.calls[0]["attachments"])==4
+
+
+def test_arci_bulk_requires_exact_recipients():
+    msg,ctx=arci_bundle()
+    ctx["email_exact_cc"]="wrong@example.org"
+    with pytest.raises(DraftPreparationError,match="arci_recipients_unverified"):
+        create_manual_draft(msg,ctx,sync_factory=FakeSync)
+
+
+def test_arci_bulk_must_not_attach_wrong_letter():
+    msg,ctx=arci_bundle()
+    path=WORKSPACE/"Arci.pdf"
+    ctx["email_attachments"][0]={"path":str(path),"name":path.name,"sha256":hashlib.sha256(path.read_bytes()).hexdigest()}
+    with pytest.raises(DraftPreparationError,match="arci_bundle_files_invalid"):
+        create_manual_draft(msg,ctx,sync_factory=FakeSync)
+
+
+def test_giorgio_trotter_reply_stays_in_verified_thread_and_draft_only():
+    msg,ctx=data("Amici_Parco_Trotter","amicitrotter@gmail.com")
+    msg += " Thread verificato: 1a11b26d538e3ca8."
+    ctx["email_reply_thread_id"]="1a11b26d538e3ca8"
+    ctx["email_exact_subject"]="Re: PerRifArci – scuse e Allegato A2 corretto per Amici del Trotter"
+    ctx["email_exact_body"]=(BASE/"Giorgio_Trotter_solleticito_A2_regione_20261008.txt").read_text()
+    fake=FakeSync()
+    result=create_manual_draft(msg,ctx,sync_factory=lambda:fake)
+    assert result["gmail_thread_id"]=="1a11b26d538e3ca8"
+    assert fake.calls[0]["thread_id"]=="1a11b26d538e3ca8"
+    assert len(fake.calls[0]["attachments"])==2
+    assert result["sent"] is False
+
+
+def test_giorgio_wrong_thread_must_fail_closed():
+    msg,ctx=data("Amici_Parco_Trotter","amicitrotter@gmail.com")
+    ctx["email_reply_thread_id"]="1a11b26d538e3ca9"
+    with pytest.raises(DraftPreparationError,match="reply_thread_unverified"):
+        create_manual_draft(msg,ctx,sync_factory=FakeSync)

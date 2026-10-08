@@ -42,10 +42,27 @@ def create_manual_draft(
     subject = str(context.get("email_exact_subject") or "").strip()
     body = str(context.get("email_exact_body") or "").strip()
     attachments = context.get("email_attachments")
+    support_bundle = context.get("email_support_bundle") is True
+    cc = str(context.get("email_exact_cc") or "").strip().lower()
+    thread_id = str(context.get("email_reply_thread_id") or "").strip()
+    if thread_id:
+        if recipient != "amicitrotter@gmail.com" or thread_id != "1a11b26d538e3ca8":
+            raise DraftPreparationError("reply_thread_unverified")
+        if message.count("Thread verificato: " + thread_id) != 1:
+            raise DraftPreparationError("reply_thread_not_in_objective")
+        if subject != "Re: PerRifArci – scuse e Allegato A2 corretto per Amici del Trotter":
+            raise DraftPreparationError("reply_subject_mismatch")
+    if support_bundle:
+        if recipient != "irene.conca@arcimilano.it" or cc != "franchini.giulio@gmail.com":
+            raise DraftPreparationError("arci_recipients_unverified")
+        if message.count("Cc verificata: " + cc) != 1:
+            raise DraftPreparationError("arci_cc_unverified")
+    elif cc:
+        raise DraftPreparationError("cc_requires_explicit_bundle")
     if not (0 < len(subject) <= 200 and 0 < len(body) <= 4000):
         raise DraftPreparationError("draft_shape_invalid")
-    if not isinstance(attachments, (list, tuple)) or len(attachments) != 2:
-        raise DraftPreparationError("two_attachments_required")
+    if not isinstance(attachments, (list, tuple)) or (len(attachments) != 4 if support_bundle else len(attachments) != 2):
+        raise DraftPreparationError("attachment_count_invalid")
     normalized = []
     for item in attachments:
         if not isinstance(item, Mapping):
@@ -53,17 +70,28 @@ def create_manual_draft(
         path = Path(str(item.get("path") or ""))
         name = str(item.get("name") or "")
         sha = str(item.get("sha256") or "").lower()
-        if path.parent != WORKSPACE or path.name != name or path.suffix not in (".docx", ".pdf"):
+        allowed_suffixes = (".docx", ".pdf", ".jpg") if support_bundle else (".docx", ".pdf")
+        if path.parent != WORKSPACE or path.name != name or path.suffix.lower() not in allowed_suffixes:
             raise DraftPreparationError("attachment_outside_workspace")
         if not re.fullmatch(r"[0-9a-f]{64}", sha) or not path.is_file():
             raise DraftPreparationError("attachment_missing_or_hash_invalid")
         if path.stat().st_size > 9_000_000 or hashlib.sha256(path.read_bytes()).hexdigest() != sha:
             raise DraftPreparationError("attachment_hash_mismatch")
         normalized.append({"path": str(path), "name": name, "sha256": sha})
-    if {Path(x["name"]).suffix for x in normalized} != {".docx", ".pdf"}:
-        raise DraftPreparationError("word_and_pdf_required")
-    if len({Path(x["name"]).stem for x in normalized}) != 1:
-        raise DraftPreparationError("attachments_not_matching")
+    if support_bundle:
+        expected = {
+            "A2_ARCI_07ott2026_PiGreco_signed.pdf",
+            "A2_ARCI_07ott2026_AMEDI_FIRMATA.docx",
+            "CI Irene Pani fronte.jpg",
+            "CI Irene Pani retro.jpg",
+        }
+        if {x["name"] for x in normalized} != expected:
+            raise DraftPreparationError("arci_bundle_files_invalid")
+    else:
+        if {Path(x["name"]).suffix for x in normalized} != {".docx", ".pdf"}:
+            raise DraftPreparationError("word_and_pdf_required")
+        if len({Path(x["name"]).stem for x in normalized}) != 1:
+            raise DraftPreparationError("attachments_not_matching")
 
     builder = EmailWorkingMemoryBuilder(MemoryRouter(), UnifiedRegistryFacade().domain("email"))
     working = builder.build(objective=message, recipient=recipient, subject=subject)
@@ -72,15 +100,16 @@ def create_manual_draft(
         raise DraftPreparationError("body_validation_failed:" + validation.hard_guard)
 
     synced = sync_factory().upsert(
-        to=recipient, subject=subject, body=body,
-        attachments=tuple(normalized),
+        to=recipient, cc=cc, subject=subject, body=body,
+        thread_id=thread_id, attachments=tuple(normalized),
     )
     if not synced.get("draftId") or synced.get("sent") is not False:
         raise DraftPreparationError("draft_not_confirmed")
     return {
         "status": "draft_only", "gmail_draft_id": str(synced["draftId"]),
         "gmail_raw_sha256": str(synced.get("rawSha256") or ""),
-        "recipient": recipient, "subject": subject,
+        "recipient": recipient, "cc": cc, "subject": subject,
+        "gmail_thread_id": thread_id,
         "attachment_names": [x["name"] for x in normalized],
         "send_calls": 0, "writes": 1, "sent": False,
     }

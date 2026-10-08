@@ -1,0 +1,14 @@
+{
+  "recipient": "amicitrotter@gmail.com",
+  "subject": "Re: PerRifArci – scuse e Allegato A2 corretto per Amici del Trotter",
+  "thread_id": "1a11b26d538e3ca8",
+  "gmail_draft_id": "r-7340047602358268583",
+  "attachment_names": [
+    "A2_ARCI_07ott2026_Amici_Parco_Trotter_DA_FIRMARE.docx",
+    "A2_ARCI_07ott2026_Amici_Parco_Trotter_DA_FIRMARE.pdf"
+  ],
+  "body_sha256": "301f77da719f1133f08f2627a028a494ca61c91d0e9d7d46318adb4bddcb46d1",
+  "raw_sha256": "10db52fe62630b04c33e62295d10c94f65c7e56f634da37f7e5eb10258870446",
+  "sent": false,
+  "status": "draft_only"
+}
