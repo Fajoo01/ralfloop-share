@@ -1,0 +1,14 @@
+{
+  "recipient": "pigreco@luogoideale.org",
+  "subject": "Re: PerRifArci – scuse e Allegato A2 corretto",
+  "thread_id": "1a11b26a4893e6ea",
+  "gmail_draft_id": "r8415529406854926643",
+  "attachment_names": [
+    "A2_ARCI_07ott2026_PiGreco_DA_FIRMARE.docx",
+    "A2_ARCI_07ott2026_PiGreco_DA_FIRMARE.pdf"
+  ],
+  "body_sha256": "645a85b15fdb72ca5a6acb75da1a192bd77c68a36de88766dbad7989d0bc573d",
+  "raw_sha256": "812e3ff449e7ca61ebc9e58660d6ff3bf9256f6f26056bc7a1cee2880665cd99",
+  "sent": false,
+  "status": "draft_only"
+}

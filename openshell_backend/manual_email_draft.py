@@ -46,11 +46,18 @@ def create_manual_draft(
     cc = str(context.get("email_exact_cc") or "").strip().lower()
     thread_id = str(context.get("email_reply_thread_id") or "").strip()
     if thread_id:
-        if recipient != "amicitrotter@gmail.com" or thread_id != "1a11b26d538e3ca8":
+        verified_threads = {
+            ("amicitrotter@gmail.com", "1a11b26d538e3ca8"):
+                "Re: PerRifArci – scuse e Allegato A2 corretto per Amici del Trotter",
+            ("pigreco@luogoideale.org", "1a11b26a4893e6ea"):
+                "Re: PerRifArci – scuse e Allegato A2 corretto",
+        }
+        expected_subject = verified_threads.get((recipient, thread_id))
+        if expected_subject is None:
             raise DraftPreparationError("reply_thread_unverified")
         if message.count("Thread verificato: " + thread_id) != 1:
             raise DraftPreparationError("reply_thread_not_in_objective")
-        if subject != "Re: PerRifArci – scuse e Allegato A2 corretto per Amici del Trotter":
+        if subject != expected_subject:
             raise DraftPreparationError("reply_subject_mismatch")
     if support_bundle:
         if recipient != "irene.conca@arcimilano.it" or cc != "franchini.giulio@gmail.com":

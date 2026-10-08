@@ -139,3 +139,25 @@ def test_giorgio_wrong_thread_must_fail_closed():
     ctx["email_reply_thread_id"]="1a11b26d538e3ca9"
     with pytest.raises(DraftPreparationError,match="reply_thread_unverified"):
         create_manual_draft(msg,ctx,sync_factory=FakeSync)
+
+
+def test_pigreco_arci_requires_resign_draft_in_original_thread():
+    msg,ctx=data("PiGreco","pigreco@luogoideale.org")
+    msg+=" Thread verificato: 1a11b26a4893e6ea."
+    ctx["email_reply_thread_id"]="1a11b26a4893e6ea"
+    ctx["email_exact_subject"]="Re: PerRifArci – scuse e Allegato A2 corretto"
+    ctx["email_exact_body"]=(BASE/"PiGreco_reintegrazione_firma_Giulio_20261008.txt").read_text()
+    fake=FakeSync()
+    result=create_manual_draft(msg,ctx,sync_factory=lambda:fake)
+    assert result["sent"] is False
+    assert result["gmail_thread_id"]=="1a11b26a4893e6ea"
+    assert fake.calls[0]["thread_id"]=="1a11b26a4893e6ea"
+    assert fake.calls[0]["to"]=="pigreco@luogoideale.org"
+    assert len(fake.calls[0]["attachments"])==2
+
+
+def test_pigreco_wrong_reply_thread_rejected():
+    msg,ctx=data("PiGreco","pigreco@luogoideale.org")
+    ctx["email_reply_thread_id"]="1a11b26a4893e6eb"
+    with pytest.raises(DraftPreparationError,match="reply_thread_unverified"):
+        create_manual_draft(msg,ctx,sync_factory=FakeSync)
