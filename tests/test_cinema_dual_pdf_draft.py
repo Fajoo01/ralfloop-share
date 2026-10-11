@@ -48,3 +48,24 @@ def test_tampered_hash_denied():
     with pytest.raises(DraftPreparationError,match="attachment_hash_mismatch"):
         create_manual_draft(m,c,sync_factory=lambda:fake)
     assert not fake.writes
+
+def test_verified_cinema_thread_reply_keeps_both_pdf_and_draft_only():
+    m,c=request()
+    c["email_exact_subject"]="Re: Corso di cinema al Trotter – IBAN e quota di iscrizione"
+    c["email_reply_thread_id"]="1a127677cbfd26d7"
+    m += " Thread verificato: 1a127677cbfd26d7."
+    fake=DraftRecorder()
+    result=create_manual_draft(m,c,sync_factory=lambda:fake)
+    assert result["sent"] is False and result["send_calls"] == 0
+    assert fake.writes[0]["thread_id"]=="1a127677cbfd26d7"
+    assert len(fake.writes[0]["attachments"])==2
+
+def test_unverified_cinema_thread_denied():
+    m,c=request()
+    c["email_exact_subject"]="Re: Corso di cinema al Trotter – IBAN e quota di iscrizione"
+    c["email_reply_thread_id"]="1234567890abcdef"
+    m += " Thread verificato: 1234567890abcdef."
+    fake=DraftRecorder()
+    with pytest.raises(DraftPreparationError,match="reply_thread_unverified"):
+        create_manual_draft(m,c,sync_factory=lambda:fake)
+    assert fake.writes==[]

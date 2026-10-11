@@ -60,6 +60,8 @@ def create_manual_draft(
                 "Re: PerRifArci – scuse e Allegato A2 corretto",
             ("franchini.giulio@gmail.com", "1a11c4a0973b970b"):
                 "Re: PerRifArci – lettere A2 ricevute e aggiornamento scuole",
+            ("acagnoprod@gmail.com", "1a127677cbfd26d7"):
+                "Re: Corso di cinema al Trotter – IBAN e quota di iscrizione",
         }
         expected_subject = verified_threads.get((recipient, thread_id))
         if expected_subject is None:
@@ -120,7 +122,10 @@ def create_manual_draft(
         # Keep the legacy Word+PDF rule for every other request.
         cinema_pdf_pair = (
             recipient == "acagnoprod@gmail.com"
-            and subject == "Corso di cinema al Trotter – moduli di iscrizione e tesseramento Tiremm"
+            and subject in {
+                "Corso di cinema al Trotter – moduli di iscrizione e tesseramento Tiremm",
+                "Re: Corso di cinema al Trotter – IBAN e quota di iscrizione",
+            }
             and not accogliersi_docs
             and {x["name"] for x in normalized} == {
                 "01_Iscrizione_corso_cinema_Trotter.pdf",
