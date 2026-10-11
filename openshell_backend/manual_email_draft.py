@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 import re
+import subprocess
 from typing import Any, Callable, Mapping
 
 from ralfloop_agent.unified_assistant.email import EmailWorkingMemoryBuilder
@@ -43,6 +44,12 @@ def create_manual_draft(
     body = str(context.get("email_exact_body") or "").strip()
     attachments = context.get("email_attachments")
     support_bundle = context.get("email_support_bundle") is True
+    p7m_update = context.get("email_pigreco_p7m_update") is True
+    accogliersi_docs = context.get("email_accogliersi_docs") is True
+    if accogliersi_docs and (support_bundle or p7m_update):
+        raise DraftPreparationError("accogliersi_bundle_conflict")
+    if p7m_update and not support_bundle:
+        raise DraftPreparationError("p7m_bundle_required")
     cc = str(context.get("email_exact_cc") or "").strip().lower()
     thread_id = str(context.get("email_reply_thread_id") or "").strip()
     if thread_id:
@@ -51,6 +58,8 @@ def create_manual_draft(
                 "Re: PerRifArci – scuse e Allegato A2 corretto per Amici del Trotter",
             ("pigreco@luogoideale.org", "1a11b26a4893e6ea"):
                 "Re: PerRifArci – scuse e Allegato A2 corretto",
+            ("franchini.giulio@gmail.com", "1a11c4a0973b970b"):
+                "Re: PerRifArci – lettere A2 ricevute e aggiornamento scuole",
         }
         expected_subject = verified_threads.get((recipient, thread_id))
         if expected_subject is None:
@@ -60,12 +69,17 @@ def create_manual_draft(
         if subject != expected_subject:
             raise DraftPreparationError("reply_subject_mismatch")
     if support_bundle:
-        if recipient != "irene.conca@arcimilano.it" or cc != "franchini.giulio@gmail.com":
+        if (recipient, cc) != (("franchini.giulio@gmail.com", "irene.conca@arcimilano.it") if p7m_update else ("irene.conca@arcimilano.it", "franchini.giulio@gmail.com")):
             raise DraftPreparationError("arci_recipients_unverified")
         if message.count("Cc verificata: " + cc) != 1:
             raise DraftPreparationError("arci_cc_unverified")
     elif cc:
         raise DraftPreparationError("cc_requires_explicit_bundle")
+    if accogliersi_docs:
+        if recipient != "associazioneaccogliersi@gmail.com" or subject != "Re: PerRifArci – richiesta di sostegno ad AccoglierSi":
+            raise DraftPreparationError("accogliersi_recipient_subject_unverified")
+        if "Conferma documenti AccoglierSi 20261009" not in message:
+            raise DraftPreparationError("accogliersi_docs_confirmation_missing")
     if not (0 < len(subject) <= 200 and 0 < len(body) <= 4000):
         raise DraftPreparationError("draft_shape_invalid")
     if not isinstance(attachments, (list, tuple)) or (len(attachments) != 4 if support_bundle else len(attachments) != 2):
@@ -77,7 +91,7 @@ def create_manual_draft(
         path = Path(str(item.get("path") or ""))
         name = str(item.get("name") or "")
         sha = str(item.get("sha256") or "").lower()
-        allowed_suffixes = (".docx", ".pdf", ".jpg") if support_bundle else (".docx", ".pdf")
+        allowed_suffixes = (".docx", ".pdf", ".jpg", ".p7m") if (support_bundle and p7m_update) else ((".docx", ".pdf", ".jpg") if support_bundle else (".docx", ".pdf"))
         if path.parent != WORKSPACE or path.name != name or path.suffix.lower() not in allowed_suffixes:
             raise DraftPreparationError("attachment_outside_workspace")
         if not re.fullmatch(r"[0-9a-f]{64}", sha) or not path.is_file():
@@ -92,13 +106,57 @@ def create_manual_draft(
             "CI Irene Pani fronte.jpg",
             "CI Irene Pani retro.jpg",
         }
+        if p7m_update:
+            expected = {
+                "A2_ARCI_07ott2026_PiGreco.pdf.p7m",
+                "arci 2.pdf",
+                "C.I Nuova A Calabria.pdf",
+                "C.I Nuova B Calabria.pdf",
+            }
         if {x["name"] for x in normalized} != expected:
             raise DraftPreparationError("arci_bundle_files_invalid")
     else:
-        if {Path(x["name"]).suffix for x in normalized} != {".docx", ".pdf"}:
+        # The cinema enrollment and ARCI membership forms are two distinct PDFs.
+        # Keep the legacy Word+PDF rule for every other request.
+        cinema_pdf_pair = (
+            recipient == "acagnoprod@gmail.com"
+            and subject == "Corso di cinema al Trotter – moduli di iscrizione e tesseramento Tiremm"
+            and not accogliersi_docs
+            and {x["name"] for x in normalized} == {
+                "01_Iscrizione_corso_cinema_Trotter.pdf",
+                "02_Domanda_ammissione_Tiremm_ARCI_minori.pdf",
+            }
+        )
+        if not cinema_pdf_pair and {Path(x["name"]).suffix for x in normalized} != {".docx", ".pdf"}:
             raise DraftPreparationError("word_and_pdf_required")
-        if len({Path(x["name"]).stem for x in normalized}) != 1:
+        if accogliersi_docs:
+            expected_hashes = {
+                "PerRifArci_Abstract.pdf": "7ae315080bae587fa4c468baf45dadce777406455355bb5c9b282334a30b5955",
+                "NOME ENTE Allegato A2 Dichiarazione di adesione alla rete di sostegno - Educativa.docx": "f9cbbf06821ef03b6b028a8c5704b0f846a6dbdc4e2a513632a8f62104239d29",
+            }
+            if {x["name"] for x in normalized} != set(expected_hashes):
+                raise DraftPreparationError("accogliersi_docs_invalid")
+            if any(x["sha256"] != expected_hashes[x["name"]] for x in normalized):
+                raise DraftPreparationError("accogliersi_docs_hash_mismatch")
+        elif not cinema_pdf_pair and len({Path(x["name"]).stem for x in normalized}) != 1:
             raise DraftPreparationError("attachments_not_matching")
+
+    if p7m_update:
+        checked_hashes = {
+            "A2_ARCI_07ott2026_PiGreco.pdf.p7m": "7a332c1136553509316c50c8d46af0aad6d7baf86640e06120139cbae436a76f",
+            "arci 2.pdf": "cf22af26c3fe653b5334f95c5abf5722643cd5bf835355ab466ef2bd49871a85",
+            "C.I Nuova A Calabria.pdf": "8d29cc8c5c70b53e39fcb2df427865a970767bee7e6316714af0fb87bd4bb7c6",
+            "C.I Nuova B Calabria.pdf": "bc045a91117062fdf72d1bfaaf76405854a0ee4bb335fe9ac203386fe555a2a0",
+        }
+        for filename, known_good in checked_hashes.items():
+            if hashlib.sha256((WORKSPACE / filename).read_bytes()).hexdigest() != known_good:
+                raise DraftPreparationError("known_good_attachment_mismatch")
+        signed = WORKSPACE / "A2_ARCI_07ott2026_PiGreco.pdf.p7m"
+        try:
+            subprocess.run(["openssl", "cms", "-verify", "-inform", "DER", "-in", str(signed),
+                            "-noverify", "-out", "/dev/null"], capture_output=True, check=True, timeout=15)
+        except (subprocess.CalledProcessError, OSError, subprocess.TimeoutExpired) as exc:
+            raise DraftPreparationError("p7m_invalid") from exc
 
     builder = EmailWorkingMemoryBuilder(MemoryRouter(), UnifiedRegistryFacade().domain("email"))
     working = builder.build(objective=message, recipient=recipient, subject=subject)
