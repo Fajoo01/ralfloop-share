@@ -52,6 +52,20 @@ def create_manual_draft(
         raise DraftPreparationError("p7m_bundle_required")
     cc = str(context.get("email_exact_cc") or "").strip().lower()
     thread_id = str(context.get("email_reply_thread_id") or "").strip()
+    logo_membership_update = context.get("email_membership_logo_update") is True
+    existing_draft_id = str(context.get("email_existing_draft_id") or "").strip()
+    if existing_draft_id and not logo_membership_update:
+        raise DraftPreparationError("draft_update_scope_denied")
+    if logo_membership_update:
+        if not (
+            recipient == "acagnoprod@gmail.com"
+            and subject == "Re: Corso di cinema al Trotter – IBAN e quota di iscrizione"
+            and thread_id == "1a127677cbfd26d7"
+            and existing_draft_id == "r-7136097804289011347"
+            and message.count("Bozza verificata: " + existing_draft_id) == 1
+            and not (support_bundle or accogliersi_docs or p7m_update)
+        ):
+            raise DraftPreparationError("cinema_membership_update_unverified")
     if thread_id:
         verified_threads = {
             ("amicitrotter@gmail.com", "1a11b26d538e3ca8"):
@@ -84,7 +98,8 @@ def create_manual_draft(
             raise DraftPreparationError("accogliersi_docs_confirmation_missing")
     if not (0 < len(subject) <= 200 and 0 < len(body) <= 4000):
         raise DraftPreparationError("draft_shape_invalid")
-    if not isinstance(attachments, (list, tuple)) or (len(attachments) != 4 if support_bundle else len(attachments) != 2):
+    expected_count = 1 if logo_membership_update else (4 if support_bundle else 2)
+    if not isinstance(attachments, (list, tuple)) or len(attachments) != expected_count:
         raise DraftPreparationError("attachment_count_invalid")
     normalized = []
     for item in attachments:
@@ -132,7 +147,10 @@ def create_manual_draft(
                 "02_Domanda_ammissione_Tiremm_ARCI_minori.pdf",
             }
         )
-        if not cinema_pdf_pair and {Path(x["name"]).suffix for x in normalized} != {".docx", ".pdf"}:
+        logo_membership_pdf = logo_membership_update and {x["name"] for x in normalized} == {"02_Domanda_ammissione_Tiremm_ARCI_minori.pdf"}
+        if logo_membership_update and not logo_membership_pdf:
+            raise DraftPreparationError("cinema_membership_attachment_unverified")
+        if not (cinema_pdf_pair or logo_membership_pdf) and {Path(x["name"]).suffix for x in normalized} != {".docx", ".pdf"}:
             raise DraftPreparationError("word_and_pdf_required")
         if accogliersi_docs:
             expected_hashes = {
@@ -143,7 +161,7 @@ def create_manual_draft(
                 raise DraftPreparationError("accogliersi_docs_invalid")
             if any(x["sha256"] != expected_hashes[x["name"]] for x in normalized):
                 raise DraftPreparationError("accogliersi_docs_hash_mismatch")
-        elif not cinema_pdf_pair and len({Path(x["name"]).stem for x in normalized}) != 1:
+        elif not (cinema_pdf_pair or logo_membership_pdf) and len({Path(x["name"]).stem for x in normalized}) != 1:
             raise DraftPreparationError("attachments_not_matching")
 
     if p7m_update:
@@ -172,9 +190,12 @@ def create_manual_draft(
     synced = sync_factory().upsert(
         to=recipient, cc=cc, subject=subject, body=body,
         thread_id=thread_id, attachments=tuple(normalized),
+        draft_id=existing_draft_id if logo_membership_update else "",
     )
     if not synced.get("draftId") or synced.get("sent") is not False:
         raise DraftPreparationError("draft_not_confirmed")
+    if logo_membership_update and str(synced["draftId"]) != existing_draft_id:
+        raise DraftPreparationError("draft_update_id_changed")
     return {
         "status": "draft_only", "gmail_draft_id": str(synced["draftId"]),
         "gmail_raw_sha256": str(synced.get("rawSha256") or ""),

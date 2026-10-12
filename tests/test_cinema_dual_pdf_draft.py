@@ -69,3 +69,34 @@ def test_unverified_cinema_thread_denied():
     with pytest.raises(DraftPreparationError,match="reply_thread_unverified"):
         create_manual_draft(m,c,sync_factory=lambda:fake)
     assert fake.writes==[]
+
+def test_membership_logo_update_only_existing_draft():
+    m,c=request()
+    c["email_exact_subject"]="Re: Corso di cinema al Trotter – IBAN e quota di iscrizione"
+    c["email_reply_thread_id"]="1a127677cbfd26d7"
+    c["email_membership_logo_update"]=True
+    c["email_existing_draft_id"]="r-7136097804289011347"
+    c["email_attachments"]=c["email_attachments"][1:]
+    m += " Thread verificato: 1a127677cbfd26d7. Bozza verificata: r-7136097804289011347."
+    class Recorder(DraftRecorder):
+        def upsert(self, **kwargs):
+            self.writes.append(kwargs)
+            return {"draftId": "r-7136097804289011347", "rawSha256":"a"*64, "sent":False}
+    fake=Recorder()
+    res=create_manual_draft(m,c,sync_factory=lambda:fake)
+    assert res["sent"] is False and res["send_calls"]==0
+    assert res["attachment_names"]==["02_Domanda_ammissione_Tiremm_ARCI_minori.pdf"]
+    assert fake.writes[0]["draft_id"]=="r-7136097804289011347"
+    assert fake.writes[0]["thread_id"]=="1a127677cbfd26d7"
+
+def test_membership_logo_update_other_draft_denied():
+    m,c=request()
+    c.update(email_exact_subject="Re: Corso di cinema al Trotter – IBAN e quota di iscrizione",
+             email_reply_thread_id="1a127677cbfd26d7", email_membership_logo_update=True,
+             email_existing_draft_id="r-WRONG")
+    c["email_attachments"]=c["email_attachments"][1:]
+    m += " Thread verificato: 1a127677cbfd26d7. Bozza verificata: r-WRONG."
+    fake=DraftRecorder()
+    with pytest.raises(DraftPreparationError,match="cinema_membership_update_unverified"):
+        create_manual_draft(m,c,sync_factory=lambda:fake)
+    assert fake.writes == []
