@@ -1,8 +1,8 @@
-"""Verified single-photo Gmail draft creation/update; never sends messages.
+"""Verified single-photo Gmail draft creation and safe replacement; never sends.
 
-Preserves the protected Gmail broker/UID boundary and the existing exact-body
-domain guard. Draft update requires a previously observed draft identifier and
-raw MIME digest, both repeated in the operator's instruction.
+Preserves the protected Gmail broker/UID boundary and existing exact-body
+domain guard. Prior draft proof is required for replacement, but the original
+draft is never modified or deleted on this path.
 """
 from __future__ import annotations
 import hashlib
@@ -95,19 +95,23 @@ def create_photo_draft(
     checked = GenericEmailPipeline().validate_exact(working, body)
     if checked.hard_guard != "passed" or checked.final_validator != "passed":
         raise DraftPreparationError("body_validation_failed:" + checked.hard_guard)
+    # Gmail drafts.update may invalidate a draft before acknowledgement.
+    # Never issue a destructive PUT from this path. Create a replacement
+    # and preserve the prior draft until independent Gmail verification.
     result = sync_factory().upsert(
-        to=recipient, cc=cc, subject=subject, body=body, draft_id=draft_id,
-        attachments=(image,),
+        to=recipient, cc=cc, subject=subject, body=body, attachments=(image,),
     )
     if result.get("sent") is not False or not result.get("draftId"):
         raise DraftPreparationError("draft_not_confirmed")
-    if draft_id and str(result["draftId"]) != draft_id:
-        raise DraftPreparationError("draft_update_id_changed")
+    if draft_id and str(result["draftId"]) == draft_id:
+        raise DraftPreparationError("replacement_draft_identity_reused")
     return {
         "status": "draft_only", "gmail_draft_id": str(result["draftId"]),
         "gmail_raw_sha256": str(result.get("rawSha256") or ""),
         "recipient": recipient, "cc": cc, "subject": subject,
         "attachment_names": [image["name"]],
         "send_calls": 0, "writes": 1, "sent": False,
-        "updated_existing": bool(draft_id),
+        "updated_existing": False,
+        "replacement_of": draft_id,
+        "previous_draft_retained": bool(draft_id),
     }

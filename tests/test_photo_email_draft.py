@@ -60,13 +60,15 @@ def test_single_photo_automatically_uses_safe_draft_route(tmp_path, monkeypatch)
     assert result["sent"] is False
 
 
-def test_update_exact_existing_photo_draft(tmp_path, monkeypatch):
+def test_replace_photo_draft_non_destructively(tmp_path, monkeypatch):
     msg, ctx = sample(tmp_path, monkeypatch, update=True)
     fake = FakeSync()
     res = create_manual_draft(msg, ctx, sync_factory=lambda: fake)
-    assert res["updated_existing"] is True
-    assert res["gmail_draft_id"] == DRAFT
-    assert fake.calls[0]["draft_id"] == DRAFT
+    assert res["updated_existing"] is False
+    assert res["replacement_of"] == DRAFT
+    assert res["previous_draft_retained"] is True
+    assert res["gmail_draft_id"] != DRAFT
+    assert fake.calls[0].get("draft_id") is None
 
 
 @pytest.mark.parametrize("edit,error", [

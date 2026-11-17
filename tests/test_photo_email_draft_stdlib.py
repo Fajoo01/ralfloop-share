@@ -54,7 +54,7 @@ class TestPhotoDraft(unittest.TestCase):
         class FakeSync:
             def upsert(self, **kwargs):
                 calls.append(kwargs)
-                return {"draftId": kwargs.get("draft_id") or "r-123456789", "sent": False,
+                return {"draftId": kwargs.get("draft_id") or "r-456789123456789", "sent": False,
                         "rawSha256": "a"*64}
         self.factory = FakeSync
 
@@ -64,14 +64,16 @@ class TestPhotoDraft(unittest.TestCase):
         self.assertEqual(out["send_calls"], 0)
         self.assertEqual(self.calls[0]["attachments"][0]["name"], "evidence.jpg")
 
-    def test_update_existing_id(self):
+    def test_existing_id_is_never_put_updated(self):
         draft = "r-123456789"
         before = "a"*64
         self.ctx.update(email_existing_draft_id=draft, email_existing_draft_raw_sha256=before)
         self.msg += " Bozza verificata: " + draft + ". SHA256 MIME precedente: " + before
         out = self.mod.create_photo_draft(self.msg, self.ctx, "example@example.com", self.factory)
-        self.assertEqual(out["gmail_draft_id"], draft)
-        self.assertTrue(out["updated_existing"])
+        self.assertNotEqual(out["gmail_draft_id"], draft)
+        self.assertEqual(out["replacement_of"], draft)
+        self.assertTrue(out["previous_draft_retained"])
+        self.assertNotIn("draft_id", self.calls[0])
 
     def test_bad_digest_rejected_without_write(self):
         self.ctx["email_attachments"][0]["sha256"] = "0"*64
