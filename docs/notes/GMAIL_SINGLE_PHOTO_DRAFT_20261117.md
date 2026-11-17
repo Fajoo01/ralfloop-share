@@ -15,3 +15,15 @@ Per sostituire in sicurezza una bozza precedente: `email_existing_draft_id` e `e
 - Rollback production: preservare il target di `/home/sibilla-cumana/ralfloop-production/current` prima del cambio; riapplicarlo se health o draft guard falliscono. Nessun riavvio di router, altri servizi o GPU.
 
 Questo ramo contiene soltanto codice, guardie, test e documentazione. Mai utilizzare UID fittizi o chiamare `send_email_draft` durante il test.
+
+
+## Esecuzione reale 17/11/2026 — verifiche in Gmail
+- Ramo su Forgejo locale `fix/gmail-single-photo-draft-20261117`, commit `5e99ac788fcd124d7be0449565e08bd75daba24d`.
+- Test su Sibilla: 35 pytest PASS, 4 unittest stdlib PASS, compilazione PASS.
+- Forgejo Actions self-hosted run **#3461 SUCCESS** sul commit esatto: checkout, 4 canarie, compilazione, 3/3 step.
+- Tentativo con API `drafts.update` sul vecchio draft `r-994362734047347362`: `MCPError`; successivamente draft non più presente. Diagnosi: aggiornamento in-place non sicuro. Recupero senza invio creando draft testo `r5708497896604398104`.
+- Creazione di NUOVA bozza Gmail con foto (non PUT): ID `r3204828384592282300`, message ID `1a1e930b2de58c6e`, `sent=false`, `attachment_names=['amsa_reclamo_20261117_photo.jpg']`, Google Workspace MCP READ conferma label `DRAFT`, un JPG 86,3 KB e corpo corretto.
+- Verifica Gmail trova anche un **messaggio già inviato alle 11:53 del 17/11** al Sindaco (message ID `1a1e9242db735247`, label SENT, fotografia `1000055732.jpg` 1596 KB). È precedente alla nostra creazione di bozza fotografica; non attribuirlo al codice testato. Non inviare ulteriori copie senza nuova istruzione.
+- Due bozze restano su Gmail (testo e foto); **nessuna eliminazione automatica**. La correzione permanente usa solo `POST drafts.create` per le foto e preserva tutte le bozze precedenti.
+- Release production attuale `/home/sibilla-cumana/ralfloop-production/releases/agent-gmail-photo-safe-20261117-5e99ac78`: `MANIFEST.sha256` verificato, import fail-closed e guard anti-PUT verificata, `ralfloop-backend.service` active, `GET /health` e `GET /assistant/v1/status` OK. Rollback preparato verso `agent-standing-auth-20261114-db2f8c8`.
+- **Non** modificati permessi di invio, GUP/REA, URI Gmail, credenziali, altri servizi; nessuna GitHub Action o ulteriore email inviata da questi collaudi.
