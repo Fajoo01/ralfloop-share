@@ -17,13 +17,10 @@ from ralfloop_agent.unified_assistant.email_pipeline import GenericEmailPipeline
 from ralfloop_agent.unified_assistant.gmail_draft_sync import GoogleWorkspaceGmailDraftSync
 from ralfloop_agent.unified_assistant.memory import MemoryRouter
 from ralfloop_agent.unified_assistant.registry import UnifiedRegistryFacade
+from .photo_email_draft import create_photo_draft as _create_photo_draft, DraftPreparationError
 
 ADDRESS = re.compile(r"Destinatario verificato:\s*([a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})", re.I)
 WORKSPACE = Path("/home/bandi/.local/share/google-workspace-mcp/workspace")
-
-
-class DraftPreparationError(ValueError):
-    pass
 
 
 def create_manual_draft(
@@ -43,6 +40,15 @@ def create_manual_draft(
     subject = str(context.get("email_exact_subject") or "").strip()
     body = str(context.get("email_exact_body") or "").strip()
     attachments = context.get("email_attachments")
+    one_photo = (
+        isinstance(attachments, (list, tuple))
+        and len(attachments) == 1
+        and isinstance(attachments[0], Mapping)
+        and Path(str(attachments[0].get("name") or "")).suffix.lower()
+        in {".jpg", ".jpeg", ".png", ".webp"}
+    )
+    if context.get("email_photo_draft") is True or one_photo:
+        return _create_photo_draft(message, context, recipient, sync_factory)
     support_bundle = context.get("email_support_bundle") is True
     p7m_update = context.get("email_pigreco_p7m_update") is True
     accogliersi_docs = context.get("email_accogliersi_docs") is True

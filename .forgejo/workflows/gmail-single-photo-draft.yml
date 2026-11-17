@@ -1,0 +1,22 @@
+name: Bot-tazzi Gmail single-photo draft guards
+on:
+  push:
+    branches:
+      - fix/gmail-single-photo-draft-20261117
+    paths:
+      - "openshell_backend/manual_email_draft.py"
+      - "openshell_backend/photo_email_draft.py"
+      - "tests/test_photo_email_draft*.py"
+      - ".forgejo/workflows/gmail-single-photo-draft.yml"
+      - "docs/notes/GMAIL_SINGLE_PHOTO_DRAFT_20261117.md"
+  workflow_dispatch:
+jobs:
+  offline-contract:
+    runs-on: docker
+    steps:
+      - name: Checkout from local Forgejo
+        uses: https://data.forgejo.org/actions/checkout@v6
+      - name: Offline photo guard and update receipt tests
+        run: python3 -m unittest discover -s tests -p 'test_photo_email_draft_stdlib.py' -v
+      - name: Compile protected draft modules
+        run: python3 -m py_compile openshell_backend/manual_email_draft.py openshell_backend/photo_email_draft.py
