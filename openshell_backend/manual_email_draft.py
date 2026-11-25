@@ -40,6 +40,9 @@ def create_manual_draft(
     subject = str(context.get("email_exact_subject") or "").strip()
     body = str(context.get("email_exact_body") or "").strip()
     attachments = context.get("email_attachments")
+    if context.get("email_scanner_pdf_draft") is True:
+        from .scanner_email_draft import create_scanner_draft
+        return create_scanner_draft(message, context, recipient, sync_factory)
     one_photo = (
         isinstance(attachments, (list, tuple))
         and len(attachments) == 1
